@@ -165,8 +165,8 @@ const technicianSync = {
                 is_active INTEGER DEFAULT 1 CHECK (is_active IN (0, 1)),
                 area_coverage TEXT,
                 whatsapp_group TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                created_at DATETIME DEFAULT (datetime('now','localtime')),
+                updated_at DATETIME DEFAULT (datetime('now','localtime')),
                 last_login DATETIME
             )`;
             db.run(sql, (createErr) => {
@@ -176,7 +176,7 @@ const technicianSync = {
                 }
                 // Migrate missing columns for older databases
                 const migrations = [
-                    'ALTER TABLE technicians ADD COLUMN join_date DATETIME DEFAULT CURRENT_TIMESTAMP',
+                    'ALTER TABLE technicians ADD COLUMN join_date DATETIME',
                     'ALTER TABLE technicians ADD COLUMN whatsapp_group_id TEXT',
                     'ALTER TABLE technicians ADD COLUMN password TEXT'
                 ];
@@ -218,8 +218,8 @@ const collectorSync = {
                     status TEXT DEFAULT 'active' CHECK(status IN ('active', 'inactive', 'suspended')),
                     commission_rate DECIMAL(5,2) DEFAULT 5.00,
                     password TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime'))
                 )`,
                 // Table: collector_payments
                 `CREATE TABLE IF NOT EXISTS collector_payments (
@@ -230,11 +230,11 @@ const collectorSync = {
                     payment_amount DECIMAL(15,2) NOT NULL,
                     commission_amount DECIMAL(15,2) NOT NULL,
                     payment_method TEXT DEFAULT 'cash' CHECK(payment_method IN ('cash', 'transfer', 'other')),
-                    payment_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    payment_date DATETIME DEFAULT (datetime('now','localtime')),
                     notes TEXT,
                     status TEXT DEFAULT 'completed' CHECK(status IN ('completed', 'pending', 'cancelled')),
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime')),
                     FOREIGN KEY (collector_id) REFERENCES collectors(id),
                     FOREIGN KEY (customer_id) REFERENCES customers(id),
                     FOREIGN KEY (invoice_id) REFERENCES invoices(id)
@@ -244,11 +244,11 @@ const collectorSync = {
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     collector_id INTEGER NOT NULL,
                     customer_id INTEGER NOT NULL,
-                    assigned_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    assigned_date DATETIME DEFAULT (datetime('now','localtime')),
                     status TEXT DEFAULT 'active' CHECK(status IN ('active', 'completed', 'cancelled')),
                     notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime')),
                     FOREIGN KEY (collector_id) REFERENCES collectors(id),
                     FOREIGN KEY (customer_id) REFERENCES customers(id),
                     UNIQUE(collector_id, customer_id)
@@ -258,7 +258,7 @@ const collectorSync = {
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     collector_id INTEGER NOT NULL,
                     area TEXT NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
                     UNIQUE(collector_id, area),
                     FOREIGN KEY (collector_id) REFERENCES collectors(id) ON DELETE CASCADE
                 )`
@@ -279,7 +279,7 @@ const collectorSync = {
 
             // Migrate missing columns for collector_payments
             const paymentMigrations = [
-                'ALTER TABLE collector_payments ADD COLUMN collected_at DATETIME DEFAULT CURRENT_TIMESTAMP',
+                'ALTER TABLE collector_payments ADD COLUMN collected_at DATETIME',
                 'ALTER TABLE collector_payments ADD COLUMN amount DECIMAL(15,2)'
             ];
             paymentMigrations.forEach(m => {
@@ -312,7 +312,7 @@ const voucherSync = {
                 price DECIMAL(10,2) NOT NULL DEFAULT 0,
                 profile TEXT,
                 status TEXT DEFAULT 'unpaid' CHECK(status IN ('unpaid', 'paid')),
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                created_at DATETIME DEFAULT (datetime('now','localtime')),
                 used_at DATETIME,
                 usage_count INTEGER DEFAULT 0,
                 notes TEXT
@@ -365,8 +365,9 @@ const employeeSync = {
                     status TEXT DEFAULT 'aktif' CHECK(status IN ('aktif', 'nonaktif')),
                     gaji_pokok DECIMAL(15,2) DEFAULT 0,
                     foto_path TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    public_code TEXT,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime')),
                     FOREIGN KEY (area_id) REFERENCES areas(id),
                     FOREIGN KEY (shift_id) REFERENCES attendance_shifts(id)
                 )`,
@@ -378,8 +379,8 @@ const employeeSync = {
                     check_out DATETIME,
                     status TEXT CHECK(status IN ('hadir', 'izin', 'sakit', 'alpha')),
                     notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime')),
                     UNIQUE(employee_id, date),
                     FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
                 )`,
@@ -395,8 +396,8 @@ const employeeSync = {
                     total_gaji DECIMAL(15,2) DEFAULT 0,
                     status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'paid')),
                     payment_date DATETIME,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime')),
                     UNIQUE(employee_id, period_month, period_year),
                     FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
                 )`,
@@ -412,8 +413,8 @@ const employeeSync = {
                     approved_by TEXT,
                     approved_at DATETIME,
                     approval_notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime')),
                     FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
                 )`,
                 `CREATE TABLE IF NOT EXISTS attendance_branches (
@@ -422,8 +423,8 @@ const employeeSync = {
                     address TEXT,
                     latitude REAL NOT NULL,
                     longitude REAL NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime'))
                 )`,
                 `CREATE TABLE IF NOT EXISTS attendance_settings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -432,8 +433,8 @@ const employeeSync = {
                     method_selfie INTEGER DEFAULT 0,
                     method_qrcode INTEGER DEFAULT 0,
                     method_gps_tag INTEGER DEFAULT 1,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime'))
                 )`,
                 `CREATE TABLE IF NOT EXISTS attendance_shifts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -441,8 +442,8 @@ const employeeSync = {
                     check_in_time TEXT NOT NULL,
                     check_out_time TEXT NOT NULL,
                     is_active INTEGER DEFAULT 1,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime'))
                 )`
             ];
 
@@ -457,6 +458,14 @@ const employeeSync = {
                 if (err && !err.message.includes('duplicate column')) {
                     console.error('Failed to add shift_id to employees:', err.message);
                 }
+            });
+            db.run('ALTER TABLE employees ADD COLUMN public_code TEXT', (err) => {
+                if (err && !String(err.message).includes('duplicate column')) {
+                    console.error('Failed to add public_code to employees:', err.message);
+                }
+            });
+            db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_public_code ON employees(public_code) WHERE public_code IS NOT NULL', (err) => {
+                if (err) console.error('Failed employees public_code index:', err.message);
             });
         };
         
@@ -481,8 +490,8 @@ const warehouseSync = {
                     unit TEXT DEFAULT '',
                     low_stock_threshold INTEGER NOT NULL DEFAULT 5,
                     is_active INTEGER NOT NULL DEFAULT 1,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime'))
                 )`,
                 `CREATE TABLE IF NOT EXISTS warehouse_inbound_batches (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -490,7 +499,7 @@ const warehouseSync = {
                     quantity INTEGER NOT NULL,
                     reference TEXT,
                     notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime'))
                 )`,
                 `CREATE TABLE IF NOT EXISTS warehouse_units (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -501,7 +510,8 @@ const warehouseSync = {
                     outbound_at DATETIME,
                     outbound_recipient TEXT,
                     outbound_notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    outbound_employee_id INTEGER,
+                    created_at DATETIME DEFAULT (datetime('now','localtime'))
                 )`
             ];
             tables.forEach((sql) => {
@@ -512,6 +522,11 @@ const warehouseSync = {
             db.run('ALTER TABLE warehouse_units ADD COLUMN outbound_recipient TEXT', (err) => {
                 if (err && !String(err.message).includes('duplicate column')) {
                     console.error('Warehouse migrate outbound_recipient:', err.message);
+                }
+            });
+            db.run('ALTER TABLE warehouse_units ADD COLUMN outbound_employee_id INTEGER', (err) => {
+                if (err && !String(err.message).includes('duplicate column')) {
+                    console.error('Warehouse migrate outbound_employee_id:', err.message);
                 }
             });
             const indexes = [
@@ -556,6 +571,7 @@ const apiSettingsRouter = require('./routes/api/settings');
 const apiCollectorsRouter = require('./routes/api/collectors');
 const apiSystemRouter = require('./routes/api/system');
 const apiPublicEndpointRouter = require('./routes/api/public-endpoint');
+const customerPortalV1Router = require('./routes/api/customerPortalV1');
 const unifiedAuthRouter = require('./routes/unifiedAuth');
 
 // Import middleware untuk access control (harus diimport sebelum digunakan)
@@ -583,6 +599,20 @@ if (!fs.existsSync(sessionDataDir)) {
   fs.mkdirSync(sessionDataDir, { recursive: true });
 }
 
+const DEFAULT_ADMIN_SESSION_TIMEOUT_MINUTES = 60;
+function getAdminSessionTimeoutMinutes() {
+  const raw =
+    process.env.ADMIN_SESSION_TIMEOUT_MINUTES ||
+    getSetting('admin_session_timeout_minutes', DEFAULT_ADMIN_SESSION_TIMEOUT_MINUTES);
+  const minutes = Number(raw);
+  if (!Number.isFinite(minutes)) return DEFAULT_ADMIN_SESSION_TIMEOUT_MINUTES;
+  return Math.min(Math.max(Math.round(minutes), 5), 24 * 60);
+}
+
+function getAdminSessionTimeoutMs() {
+  return getAdminSessionTimeoutMinutes() * 60 * 1000;
+}
+
 app.use(session({
   secret: process.env.SESSION_SECRET || getSetting('session_secret', 'kalimasada-billing-secret-key-ganti-ini'),
   store: new SQLiteStore({
@@ -595,12 +625,41 @@ app.use(session({
   rolling: true,
   cookie: {
     secure: false,
-    maxAge: 24 * 60 * 60 * 1000,
+    maxAge: getAdminSessionTimeoutMs(),
     httpOnly: true,
     sameSite: 'lax'
   },
   name: 'admin_session'
 }));
+
+app.use((req, res, next) => {
+  if (!req.session?.isAdmin) {
+    return next();
+  }
+
+  const now = Date.now();
+  const timeoutMs = getAdminSessionTimeoutMs();
+  const lastActivityAt = Number(req.session.lastActivityAt || now);
+  const isExpired = now - lastActivityAt > timeoutMs;
+
+  if (isExpired) {
+    return req.session.destroy(() => {
+      res.clearCookie('admin_session');
+      const wantsJson = req.xhr || req.path.startsWith('/api/') || req.get('accept')?.includes('application/json');
+      if (wantsJson) {
+        return res.status(401).json({
+          success: false,
+          message: 'Sesi login berakhir karena tidak ada aktivitas. Silakan login kembali.'
+        });
+      }
+      return res.redirect('/login?timeout=1');
+    });
+  }
+
+  req.session.lastActivityAt = now;
+  req.session.cookie.maxAge = timeoutMs;
+  return next();
+});
 
 // Route khusus untuk login mobile (harus sebelum semua route admin)
 app.get('/admin/login/mobile', (req, res) => {
@@ -664,9 +723,10 @@ app.post('/admin/login/mobile', async (req, res) => {
         if (username === credentials.username && password === credentials.password) {
             req.session.isAdmin = true;
             req.session.adminUsername = username;
+            req.session.lastActivityAt = Date.now();
 
             if (remember) {
-                req.session.cookie.maxAge = 30 * 24 * 60 * 60 * 1000; // 30 days
+                req.session.cookie.maxAge = getAdminSessionTimeoutMs();
             }
 
             return req.session.save((saveErr) => {
@@ -907,14 +967,45 @@ if (process.env.NODE_ENV === 'production') {
 }
 app.use(express.static(path.join(__dirname, 'public'), {
   maxAge: '7d',
-  etag: true
+  etag: true,
+  setHeaders: (res, filePath) => {
+    const normalized = filePath.replace(/\\/g, '/');
+    // Portal React: selalu ambil index.html & entry terbaru setelah deploy (hindari UI lama di Chrome mobile)
+    if (normalized.includes('/customer-app/index.html')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  },
 }));
+
+// Deep link /customer-app/dashboard — kirim SPA index (setelah static, jika bukan file aset)
+const customerPortalIndexFile = path.join(__dirname, 'public', 'customer-app', 'index.html');
+app.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+  const url = (req.originalUrl || '').split('?')[0];
+  if (!url.startsWith('/customer-app')) return next();
+  const rel = url.replace(/^\/customer-app\/?/, '');
+  if (rel.startsWith('assets/')) return next();
+  if (rel && /\.(js|mjs|cjs|css|map|svg|png|jpg|jpeg|gif|webp|ico|woff2?|ttf|eot|json|webmanifest)$/i.test(rel)) {
+    return next();
+  }
+  const fs = require('fs');
+  if (!fs.existsSync(customerPortalIndexFile)) return next();
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.sendFile(customerPortalIndexFile, (err) => (err ? next(err) : undefined));
+});
 
 // Import dan gunakan route API dashboard traffic
 const apiDashboardRouter = require('./routes/apiDashboard');
 // Mobile adapter harus sebelum app.use('/api', …) agar /api/mobile-adapter/* tidak tertelan router /api lain
 app.use('/api/mobile-adapter', mobileAdapterRouter);
 logger.info('✅ API mobile teknisi: /api/mobile-adapter (cek GET /api/mobile-adapter/health)');
+// Customer portal API harus sebelum app.use('/api', …) agar tidak tertelan router /api lain
+app.use('/api/customer-portal/v1', customerPortalV1Router);
+logger.info('✅ Customer portal API: /api/customer-portal/v1');
 app.use('/api', apiDashboardRouter);
 app.use('/api/auth', apiAuthRouter);
 // NOTE: /login sudah di-mount di baris 555, tidak perlu duplikat di sini
@@ -948,6 +1039,10 @@ app.use('/customer', customerPortal);
 const customerBillingRouter = require('./routes/customerBilling');
 app.use('/customer/billing', customerBillingRouter);
 
+// Alias singkat ke SPA portal pelanggan (sama host:port dengan billing)
+app.get('/portal-pelanggan', (req, res) => res.redirect(302, '/customer-app/'));
+app.get('/portal-pelanggan/', (req, res) => res.redirect(302, '/customer-app/'));
+
 // Import dan gunakan route teknisi portal
 const { router: technicianAuthRouter } = require('./routes/technicianAuth');
 app.use('/technician', technicianAuthRouter);
@@ -966,72 +1061,118 @@ app.use('/technician', technicianCableNetworkRouter);
 // Alias Bahasa Indonesia untuk technician cable network
 app.use('/teknisi', technicianCableNetworkRouter);
 
-// Halaman Isolir - menampilkan info dari settings.json dan auto-resolve nama
-app.get('/isolir', async (req, res) => {
+function normalizeWaNumber(value) {
+    const raw = String(value || '').replace(/\D/g, '');
+    if (!raw) return '';
+    if (raw.startsWith('62')) return raw;
+    if (raw.startsWith('0')) return `62${raw.slice(1)}`;
+    return raw;
+}
+
+function formatDisplayPhone(value) {
+    const raw = String(value || '').replace(/\D/g, '');
+    if (!raw) return '-';
+    if (raw.startsWith('62')) return `0${raw.slice(2)}`;
+    return raw;
+}
+
+async function renderIsolirPage(req, res) {
     try {
         const { getSettingsWithCache, getSetting } = require('./config/settingsManager');
+        const { getPublicAppBaseUrl } = require('./config/public-endpoint');
         const billingManager = require('./config/billing');
 
         const settings = getSettingsWithCache();
         const companyHeader = getSetting('company_header', 'GEMBOK');
-        const adminWA = getSetting('admins.0', '6281234567890'); // format 62...
-        const adminDisplay = adminWA && adminWA.startsWith('62') ? ('0' + adminWA.slice(2)) : (adminWA || '-');
+        const adminWA = normalizeWaNumber(
+            getSetting('contact_whatsapp', '') || getSetting('admins.0', '6281234567890')
+        );
+        const adminDisplay = formatDisplayPhone(adminWA);
+        const billingBaseUrl = getPublicAppBaseUrl();
 
-        // Auto-resolve nama pelanggan: urutan prioritas -> query.nama -> PPPoE username -> session -> '-' 
-        let customerName = (req.query.nama || req.query.name || '').toString().trim();
-        if (!customerName) {
-            // Coba dari session customer_username
+        let customer = null;
+        const resolveCustomer = async () => {
             const sessionUsername = req.session && (req.session.customer_username || req.session.username);
+            const qUser = (req.query.pppoe || req.query.username || req.query.user || '').toString().trim();
+            const qPhone = (req.query.phone || req.query.nohp || '').toString().trim();
+
             if (sessionUsername) {
                 try {
                     const c = await billingManager.getCustomerByUsername(sessionUsername);
-                    if (c && c.name) customerName = c.name;
+                    if (c) return c;
                 } catch {}
             }
-        }
-        if (!customerName) {
-            // Coba dari PPPoE username (query pppoe / username)
-            const qUser = (req.query.pppoe || req.query.username || '').toString().trim();
             if (qUser) {
                 try {
                     const c = await billingManager.getCustomerByPPPoE(qUser);
-                    if (c && c.name) customerName = c.name;
+                    if (c) return c;
+                } catch {}
+                try {
+                    const c = await billingManager.getCustomerByUsername(qUser);
+                    if (c) return c;
                 } catch {}
             }
-        }
-        if (!customerName) {
-            // Coba dari nomor HP (query phone) untuk fallback
-            const qPhone = (req.query.phone || req.query.nohp || '').toString().trim();
             if (qPhone) {
                 try {
                     const c = await billingManager.getCustomerByPhone(qPhone);
-                    if (c && c.name) customerName = c.name;
+                    if (c) return c;
                 } catch {}
             }
-        }
+            return null;
+        };
+
+        customer = await resolveCustomer();
+
+        // Auto-resolve nama pelanggan: query -> data pelanggan -> session -> fallback.
+        let customerName = (req.query.nama || req.query.name || '').toString().trim();
+        if (!customerName && customer && customer.name) customerName = customer.name;
         if (!customerName) customerName = 'Pelanggan';
+
+        let unpaidInvoices = [];
+        if (customer && customer.id) {
+            try {
+                const invoices = await billingManager.getInvoicesByCustomer(customer.id);
+                unpaidInvoices = (invoices || [])
+                    .filter((invoice) => String(invoice.status || '').toLowerCase() === 'unpaid')
+                    .sort((a, b) => new Date(a.due_date || 0) - new Date(b.due_date || 0));
+            } catch (invoiceError) {
+                logger.warn(`[ISOLIR] Gagal mengambil invoice customer ${customer.id}: ${invoiceError.message}`);
+            }
+        }
+        const totalUnpaid = unpaidInvoices.reduce((sum, invoice) => sum + (Number(invoice.amount) || 0), 0);
 
         // Logo path dari settings.json (served via /public or /storage pattern)
         const logoFile = settings.logo_filename || 'logo.png';
-        const logoPath = `/public/img/${logoFile}`;
+        const logoPath = `/img/${logoFile}`;
 
         // Payment accounts from settings.json (bank transfer & cash)
         const paymentAccounts = settings.payment_accounts || {};
+        const qrFile = settings.billing_qr_filename || settings.qr_filename || '';
 
         res.render('isolir', {
             companyHeader,
             adminWA,
             adminDisplay,
             customerName: customerName.slice(0, 64),
+            customer,
+            unpaidInvoices,
+            totalUnpaid,
             logoPath,
             paymentAccounts,
+            qrFile,
+            billingBaseUrl,
+            billingPortalUrl: `${billingBaseUrl}/customer-app/dashboard`,
+            invoiceUrl: `${billingBaseUrl}/customer-app/tagihan`,
             encodeURIComponent
         });
     } catch (error) {
         console.error('Error rendering isolir page:', error);
         res.status(500).send('Gagal memuat halaman isolir');
     }
-});
+}
+
+// Halaman Isolir - tersedia di port utama dan port khusus 8899.
+app.get(['/isolir', '/isolir/'], renderIsolirPage);
 
 // Import dan gunakan route tukang tagih (collector)
 const { router: collectorAuthRouter } = require('./routes/collectorAuth');
@@ -1041,51 +1182,39 @@ app.use('/collector', collectorAuthRouter);
 const collectorDashboardRouter = require('./routes/collectorDashboard');
 app.use('/collector', collectorDashboardRouter);
 
-// Inisialisasi WhatsApp Provider Manager (untuk Wablas/Baileys)
+// Inisialisasi WhatsApp Provider Manager (Baileys/Wablas/Meta/Qontak)
 try {
     const { getProviderManager } = require('./config/whatsapp-provider-manager');
-    const { isWablasEnabled } = require('./config/wablas-config');
+    const { getActiveWhatsAppProvider } = require('./config/whatsapp-provider-settings');
     const providerManager = getProviderManager();
     
     // Initialize provider manager saat startup
     (async () => {
         try {
-            if (isWablasEnabled()) {
-                // Initialize WablasProvider jika enabled
-                await providerManager.initialize({ forceProvider: 'wablas' });
-                logger.info('✅ WablasProvider initialized at startup');
+            const activeProvider = getActiveWhatsAppProvider();
+            await providerManager.initialize();
+            logger.info(`✅ WhatsApp provider initialized at startup: ${providerManager.getProviderType() || activeProvider}`);
                 
-                // Setup message listener untuk Wablas (PENTING untuk command bot!)
-                try {
-                    const WhatsAppCore = require('./config/whatsapp-core');
-                    const WhatsAppCommands = require('./config/whatsapp-commands');
-                    const WhatsAppMessageHandlers = require('./config/whatsapp-message-handlers');
-                    
-                    const whatsappCore = new WhatsAppCore();
-                    const whatsappCommands = new WhatsAppCommands(whatsappCore);
-                    const messageHandlers = new WhatsAppMessageHandlers(whatsappCore, whatsappCommands);
-                    
-                    const provider = providerManager.getProvider();
-                    if (provider) {
-                        provider.onMessage(async (message) => {
-                            logger.debug('📥 Wablas message received, routing to handler');
-                            await messageHandlers.handleIncomingMessage(provider, message);
-                        });
-                        logger.info('✅ Wablas message listener registered for command bot');
-                    }
-                } catch (listenerError) {
-                    logger.error('❌ Error setting up Wablas message listener:', listenerError);
+            // Setup message listener untuk API provider yang mendukung webhook command bot
+            try {
+                const WhatsAppCore = require('./config/whatsapp-core');
+                const WhatsAppCommands = require('./config/whatsapp-commands');
+                const WhatsAppMessageHandlers = require('./config/whatsapp-message-handlers');
+                
+                const whatsappCore = new WhatsAppCore();
+                const whatsappCommands = new WhatsAppCommands(whatsappCore);
+                const messageHandlers = new WhatsAppMessageHandlers(whatsappCore, whatsappCommands);
+                
+                const provider = providerManager.getProvider();
+                if (provider) {
+                    provider.onMessage(async (message) => {
+                        logger.debug('📥 WhatsApp provider message received, routing to handler');
+                        await messageHandlers.handleIncomingMessage(provider, message);
+                    });
+                    logger.info('✅ WhatsApp provider message listener registered for command bot');
                 }
-            } else {
-                // Cek apakah Baileys enabled sebelum initialize
-                const { isBaileysEnabled } = require('./config/baileys-config');
-                if (isBaileysEnabled()) {
-                    // Initialize BaileysProvider (socket akan di-set nanti saat connect)
-                    await providerManager.initialize({ forceProvider: 'baileys' });
-                    logger.info('✅ BaileysProvider initialized at startup (socket will be set on connect)');
-                } else {
-                    logger.info('🚫 Baileys disabled, skipping BaileysProvider initialization');
-                }
+            } catch (listenerError) {
+                logger.error('❌ Error setting up WhatsApp provider message listener:', listenerError);
             }
         } catch (error) {
             logger.error('❌ Error initializing WhatsApp Provider Manager:', error);
@@ -1100,9 +1229,13 @@ try {
     // Cek apakah Baileys enabled sebelum connect
     const { isBaileysEnabled } = require('./config/baileys-config');
     const { isWablasEnabled } = require('./config/wablas-config');
+    const { getActiveWhatsAppProvider } = require('./config/whatsapp-provider-settings');
+    const hasMikrotikSettings = getSetting('mikrotik_host') && getSetting('mikrotik_user') && getSetting('mikrotik_password');
+    const activeProvider = getActiveWhatsAppProvider();
+    const useEnhancedPppoeMonitor = isBaileysEnabled() || (activeProvider === 'baileys' && !isWablasEnabled());
     
     // Hanya connect jika Baileys enabled atau Wablas tidak enabled
-    if (isBaileysEnabled() || !isWablasEnabled()) {
+    if (useEnhancedPppoeMonitor) {
         whatsapp.connectToWhatsApp().then(sock => {
         if (sock) {
             // Set sock instance untuk whatsapp
@@ -1159,7 +1292,7 @@ try {
             });
 
             // Initialize PPPoE monitoring jika MikroTik dikonfigurasi
-            if (getSetting('mikrotik_host') && getSetting('mikrotik_user') && getSetting('mikrotik_password')) {
+            if (hasMikrotikSettings) {
                 pppoeMonitor.initializePPPoEMonitoring().then(() => {
                     logger.info('PPPoE monitoring initialized');
                 }).catch((err) => {
@@ -1195,8 +1328,8 @@ try {
         logger.info('🚫 Baileys disabled and Wablas enabled, skipping Baileys WhatsApp connection');
     }
 
-    // Mulai monitoring PPPoE lama jika dikonfigurasi (fallback)
-    if (getSetting('mikrotik_host') && getSetting('mikrotik_user') && getSetting('mikrotik_password')) {
+    // Jalankan monitor legacy hanya saat monitor PPPoE baru tidak aktif, agar tidak ada polling MikroTik ganda.
+    if (hasMikrotikSettings && !useEnhancedPppoeMonitor) {
         monitorPPPoEConnections().catch(err => {
             logger.error('Error starting legacy PPPoE monitoring:', err);
         });
@@ -1337,6 +1470,42 @@ try {
 // Mulai server dengan port dari konfigurasi
 console.log(`🚀 [BOOTSTRAP] Final port selected: ${port}`);
 startServer(port);
+
+// Portal isolir khusus untuk walled garden Mikrotik.
+// Jalur ini hanya menyajikan halaman isolir dan aset publik agar bisa dibuka di port 8899.
+function startIsolirPortal(portToUse) {
+    const isolirPort = parseInt(portToUse, 10);
+    const mainPort = parseInt(port, 10);
+    if (!isolirPort || Number.isNaN(isolirPort) || isolirPort < 1 || isolirPort > 65535) {
+        logger.warn(`[ISOLIR] Port isolir tidak valid: ${portToUse}`);
+        return;
+    }
+    if (isolirPort === mainPort) {
+        logger.info(`[ISOLIR] Port isolir sama dengan port utama (${isolirPort}), memakai route /isolir di app utama.`);
+        return;
+    }
+
+    const isolirApp = express();
+    isolirApp.set('view engine', 'ejs');
+    isolirApp.set('views', path.join(__dirname, 'views'));
+    isolirApp.use(express.urlencoded({ extended: true, limit: '1mb' }));
+    isolirApp.use(express.json({ limit: '1mb' }));
+    isolirApp.use(express.static(path.join(__dirname, 'public'), {
+        maxAge: '7d',
+        etag: true
+    }));
+    isolirApp.get(['/', '/isolir', '/isolir/'], renderIsolirPage);
+    isolirApp.get('*', renderIsolirPage);
+
+    isolirApp.listen(isolirPort, '0.0.0.0', () => {
+        logger.info(`✅ Portal isolir aktif di http://0.0.0.0:${isolirPort}/isolir`);
+    }).on('error', (err) => {
+        logger.warn(`[ISOLIR] Gagal membuka port ${isolirPort}: ${err.message}`);
+    });
+}
+
+const isolirPort = process.env.ISOLIR_PORT || getSetting('isolir_page_port', 8899);
+startIsolirPortal(isolirPort);
 
 // Auto setup GenieACS DNS untuk development (DISABLED - menggunakan web interface)
 // setTimeout(async () => {

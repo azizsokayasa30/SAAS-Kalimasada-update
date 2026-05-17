@@ -27,11 +27,16 @@
             <%- include('../../partials/admin-responsive-sidebar') %>
             
             <main class="col-md-10 ms-sm-auto col-lg-10 px-md-4 main-content">
-                <div class="page-header d-flex justify-content-between align-items-center mt-4">
+                <div class="page-header d-flex justify-content-between align-items-center mt-4 flex-wrap gap-2">
                     <h1 class="h4 m-0">Data Master Karyawan</h1>
-                    <button class="btn btn-primary" onclick="openModal()">
-                        <i class="bi bi-person-plus-fill me-1"></i> Tambah Karyawan
-                    </button>
+                    <div class="d-flex gap-2 flex-wrap">
+                        <a class="btn btn-outline-secondary" href="/admin/employees/cetak-qr" target="_blank" rel="noopener">
+                            <i class="bi bi-qr-code me-1"></i> Cetak QR Semua
+                        </a>
+                        <button class="btn btn-primary" onclick="openModal()">
+                            <i class="bi bi-person-plus-fill me-1"></i> Tambah Karyawan
+                        </button>
+                    </div>
                 </div>
 
                 <div class="card mb-4 border-0 shadow-sm">
@@ -252,6 +257,7 @@
                     </td>
                     <td class="text-end">
                         <div class="admin-action-btns">
+                            <a class="btn btn-sm btn-outline-secondary" href="/admin/employees/cetak-qr/${e.id}" target="_blank" rel="noopener" title="Cetak QR kartu" aria-label="Cetak QR kartu"><i class="bi bi-qr-code"></i></a>
                             <button type="button" class="btn btn-sm btn-primary" onclick='editData(${JSON.stringify(e).replace(/'/g, "&apos;")})' title="Ubah data karyawan" aria-label="Ubah data karyawan">Edit</button>
                             <button type="button" class="btn btn-sm btn-danger" onclick="deleteData(${e.id})" title="Hapus data karyawan" aria-label="Hapus data karyawan">Hapus</button>
                         </div>

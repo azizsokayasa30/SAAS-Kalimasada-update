@@ -11,6 +11,25 @@ const logger = require('./logger');
 let _singletonConn = null;
 let _singletonPath = null;
 
+/** Serialize all RADIUS DB access (avoids interleaved callbacks on one sqlite3 handle). */
+let _radiusOpQueue = Promise.resolve();
+
+function enqueueRadiusOperation(fn) {
+    const run = _radiusOpQueue.then(() => fn());
+    _radiusOpQueue = run.catch(() => {});
+    return run;
+}
+
+function isSqliteBusyError(err) {
+    if (!err) return false;
+    const msg = String(err.message || '');
+    return err.code === 'SQLITE_BUSY' || /database is locked/i.test(msg);
+}
+
+function delayMs(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Path file SQLite yang dipakai FreeRADIUS harus sama dengan yang dibaca aplikasi.
  * Prioritas: env RADIUS_SQLITE_PATH → path absolut → path relatif data/... dari akar proyek
@@ -56,6 +75,8 @@ class RADIUSDatabase {
         this.dbPath = dbPath;
         this.db = null;
         this._isSingleton = false;
+        /** >0 while inside runInTransaction — skip outer queue to avoid deadlock. */
+        this._txDepth = 0;
     }
 
     async connect() {
@@ -75,9 +96,11 @@ class RADIUSDatabase {
                     logger.info(`[RADIUS-SQLITE] Connected to database: ${this.dbPath}`);
                     // Enable WAL mode for better concurrency
                     this.db.run('PRAGMA journal_mode=WAL', () => {
-                        // 5 second busy timeout so writers wait instead of deadlocking
-                        this.db.run('PRAGMA busy_timeout=5000', () => {
-                            this.initSchema().then(resolve).catch(reject);
+                        // Align with billing.db — wait up to 30s when FreeRADIUS holds the file
+                        this.db.run('PRAGMA busy_timeout=30000', () => {
+                            this.db.run('PRAGMA synchronous=NORMAL', () => {
+                                this.initSchema().then(resolve).catch(reject);
+                            });
                         });
                     });
                 }
@@ -168,7 +191,7 @@ class RADIUSDatabase {
                 username TEXT NOT NULL DEFAULT '',
                 pass TEXT NOT NULL DEFAULT '',
                 reply TEXT NOT NULL DEFAULT '',
-                authdate DATETIME DEFAULT CURRENT_TIMESTAMP
+                authdate DATETIME DEFAULT (datetime('now','localtime'))
             )`,
             `CREATE TABLE IF NOT EXISTS nas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -197,9 +220,7 @@ class RADIUSDatabase {
         logger.info('[RADIUS-SQLITE] Schema initialized');
     }
 
-    async execute(sql, params = []) {
-        if (!this.db) await this.connect();
-
+    _normalizeSql(sql) {
         let sqliteSQL = sql
             .replace(/ON DUPLICATE KEY UPDATE/gi, 'ON CONFLICT DO UPDATE SET')
             .replace(/NOW\(\)/gi, "datetime('now', 'localtime')")
@@ -212,6 +233,11 @@ class RADIUSDatabase {
                 }
             );
         }
+        return sqliteSQL;
+    }
+
+    _executeOnce(sql, params = []) {
+        const sqliteSQL = this._normalizeSql(sql);
 
         return new Promise((resolve, reject) => {
             const sqlUpper = sqliteSQL.trim().toUpperCase();
@@ -238,6 +264,77 @@ class RADIUSDatabase {
                 });
             }
         });
+    }
+
+    async _executeWithRetry(sql, params = [], maxAttempts = 8) {
+        let lastErr;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            try {
+                return await this._executeOnce(sql, params);
+            } catch (err) {
+                lastErr = err;
+                if (!isSqliteBusyError(err) || attempt >= maxAttempts - 1) {
+                    throw err;
+                }
+                const backoff = Math.min(2000, 40 * Math.pow(2, attempt)) + Math.floor(Math.random() * 40);
+                logger.warn(`[RADIUS-SQLITE] SQLITE_BUSY, retry ${attempt + 1}/${maxAttempts - 1} in ${backoff}ms`);
+                await delayMs(backoff);
+            }
+        }
+        throw lastErr;
+    }
+
+    async execute(sql, params = []) {
+        if (!this.db) await this.connect();
+
+        const run = () => this._executeWithRetry(sql, params);
+        if (this._txDepth > 0) {
+            return run();
+        }
+        return enqueueRadiusOperation(run);
+    }
+
+    /**
+     * Run multiple writes atomically with BEGIN IMMEDIATE (reduces SQLITE_BUSY vs separate statements).
+     */
+    async runInTransaction(fn) {
+        if (!this.db) await this.connect();
+
+        const runTx = async () => {
+            const maxAttempts = 8;
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                this._txDepth++;
+                try {
+                    await this._executeOnce('BEGIN IMMEDIATE', []);
+                    try {
+                        const result = await fn(this);
+                        await this._executeOnce('COMMIT', []);
+                        return result;
+                    } catch (innerErr) {
+                        try {
+                            await this._executeOnce('ROLLBACK', []);
+                        } catch (_) {}
+                        throw innerErr;
+                    }
+                } catch (err) {
+                    try {
+                        await this._executeOnce('ROLLBACK', []);
+                    } catch (_) {}
+                    if (isSqliteBusyError(err) && attempt < maxAttempts - 1) {
+                        const backoff = Math.min(2000, 40 * Math.pow(2, attempt)) + Math.floor(Math.random() * 40);
+                        logger.warn(`[RADIUS-SQLITE] transaction busy, retry ${attempt + 1} in ${backoff}ms`);
+                        await delayMs(backoff);
+                        continue;
+                    }
+                    throw err;
+                } finally {
+                    this._txDepth--;
+                }
+            }
+            throw new Error('RADIUS transaction failed after retries');
+        };
+
+        return enqueueRadiusOperation(runTx);
     }
 
     async query(sql, params = []) {

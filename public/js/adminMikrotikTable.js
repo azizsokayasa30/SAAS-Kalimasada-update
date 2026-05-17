@@ -1,5 +1,8 @@
 $(document).ready(function(){
     $('#pppoeTable').DataTable({
+        "deferRender": true,
+        "pageLength": 25,
+        "lengthMenu": [[10, 25, 50, 100, -1], [10, 25, 50, 100, 'Semua']],
         "responsive": true,
         "scrollX": true,
         "columnDefs": [

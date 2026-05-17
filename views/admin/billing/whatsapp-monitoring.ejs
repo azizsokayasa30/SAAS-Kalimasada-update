@@ -25,18 +25,35 @@
             <main class="col-md-10 ms-sm-auto col-lg-10 px-md-4 main-content">
                 <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
                     <h1 class="h2"><i class="bi bi-activity"></i> Monitoring WhatsApp</h1>
-                    <button type="button" class="btn btn-primary" id="btnSaveAll"><i class="bi bi-save"></i> Simpan semua</button>
+                    <div class="btn-group">
+                        <button type="button" class="btn btn-outline-danger" id="btnDisableAll"><i class="bi bi-bell-slash"></i> Matikan semua</button>
+                        <button type="button" class="btn btn-outline-success" id="btnEnableAll"><i class="bi bi-bell"></i> Aktifkan semua</button>
+                        <button type="button" class="btn btn-primary" id="btnSaveAll"><i class="bi bi-save"></i> Simpan semua</button>
+                    </div>
                 </div>
 
                 <div class="alert alert-info">
-                    <strong>Master switch</strong> per sumber notifikasi otomatis. Matikan item yang mengirim WA terus-menerus (interval / scheduler).
-                    Pengaturan template isi pesan tetap di <a href="/admin/billing/whatsapp-settings">Pengaturan WhatsApp</a>.
-                    Setelah simpan, interval GenieACS / PPPoE di-restart otomatis bila tersedia.
+                    <strong>Pusat toggle WhatsApp otomatis.</strong> Matikan fitur yang mengirim WA terus-menerus seperti PPPoE login/logout,
+                    digest perangkat offline, RX power, billing scheduler, isolir, laporan gangguan, dan broadcast grup.
+                    Setelah simpan, setting lama yang masih dipakai proses background ikut disinkronkan dan interval GenieACS / PPPoE di-restart otomatis.
                 </div>
 
                 <div id="monitorRoot" class="mon-card">
                     <p class="text-muted mb-0">Memuat…</p>
                 </div>
+
+                <div class="mon-card">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <div>
+                            <h5 class="mb-1"><i class="bi bi-sliders"></i> Detail Pengaturan Notifikasi WhatsApp</h5>
+                            <p class="text-muted mb-0 small">Interval dan threshold untuk notifikasi otomatis WhatsApp.</p>
+                        </div>
+                    </div>
+                    <div id="waSettingsRoot">
+                        <p class="text-muted mb-0">Memuat pengaturan…</p>
+                    </div>
+                </div>
+
             </main>
         </div>
     </div>
@@ -44,10 +61,59 @@
     <script>
     let monitors = [];
     let switches = {};
+    let settingFields = [];
+    let settingValues = {};
 
     function showToast(msg, type) {
         if (typeof window.showAlert === 'function') window.showAlert(msg, type);
         else alert(msg);
+    }
+
+    function renderSettings() {
+        const root = document.getElementById('waSettingsRoot');
+        if (!settingFields.length) {
+            root.innerHTML = '<p class="text-danger">Gagal memuat pengaturan detail.</p>';
+            return;
+        }
+
+        const byGroup = {};
+        settingFields.forEach(field => {
+            const group = field.group || 'Lainnya';
+            if (!byGroup[group]) byGroup[group] = [];
+            byGroup[group].push(field);
+        });
+
+        let html = '';
+        Object.keys(byGroup).forEach(group => {
+            html += `<div class="cat-heading">${escapeHtml(group)}</div><div class="row g-3">`;
+            byGroup[group].forEach(field => {
+                const value = settingValues[field.key] ?? field.defaultValue ?? '';
+                html += '<div class="col-md-6">';
+                if (field.type === 'boolean') {
+                    const checked = value === true || value === 'true' || value === 'on' ? 'checked' : '';
+                    html += `<div class="form-check form-switch">
+                        <input class="form-check-input wa-setting-input" type="checkbox" id="field_${escapeHtml(field.key)}" data-key="${escapeHtml(field.key)}" ${checked}>
+                        <label class="form-check-label" for="field_${escapeHtml(field.key)}">${escapeHtml(field.label)}</label>
+                    </div>`;
+                } else {
+                    html += `<label class="form-label small fw-semibold" for="field_${escapeHtml(field.key)}">${escapeHtml(field.label)}</label>
+                        <input class="form-control wa-setting-input" type="${field.type || 'text'}" id="field_${escapeHtml(field.key)}" data-key="${escapeHtml(field.key)}" value="${escapeHtml(value)}" ${field.min !== undefined ? `min="${escapeHtml(field.min)}"` : ''} ${field.step !== undefined ? `step="${escapeHtml(field.step)}"` : ''}>`;
+                }
+                html += '</div>';
+            });
+            html += '</div>';
+        });
+
+        root.innerHTML = html;
+        root.querySelectorAll('.wa-setting-input').forEach(input => {
+            input.addEventListener('change', () => {
+                const key = input.getAttribute('data-key');
+                settingValues[key] = input.type === 'checkbox' ? input.checked : input.value;
+            });
+            input.addEventListener('input', () => {
+                if (input.type !== 'checkbox') settingValues[input.getAttribute('data-key')] = input.value;
+            });
+        });
     }
 
     function render() {
@@ -83,25 +149,41 @@
         root.querySelectorAll('.wa-mon-toggle').forEach(el => {
             el.addEventListener('change', () => {
                 switches[el.getAttribute('data-id')] = el.checked;
+                updateSwitchLabel(el);
             });
+            updateSwitchLabel(el);
         });
     }
 
+    function updateSwitchLabel(input) {
+        const label = input.closest('.form-check').querySelector('.form-check-label');
+        if (label) label.textContent = input.checked ? 'Aktif' : 'Mati';
+    }
+
     function escapeHtml(s) {
-        if (!s) return '';
+        if (s === null || s === undefined) return '';
         return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
     async function load() {
         try {
-            const r = await fetch('/admin/billing/whatsapp-monitoring/switches');
-            const d = await r.json();
+            const [switchRes, settingsRes] = await Promise.all([
+                fetch('/admin/billing/whatsapp-monitoring/switches'),
+                fetch('/admin/billing/whatsapp-monitoring/settings')
+            ]);
+            const d = await switchRes.json();
+            const s = await settingsRes.json();
             if (!d.success) throw new Error(d.message || 'Error');
+            if (!s.success) throw new Error(s.message || 'Error');
             monitors = d.monitors || [];
             switches = d.switches || {};
+            settingFields = s.fields || [];
+            settingValues = s.values || {};
             render();
+            renderSettings();
         } catch (e) {
             document.getElementById('monitorRoot').innerHTML = '<p class="text-danger">Gagal memuat: ' + escapeHtml(e.message) + '</p>';
+            document.getElementById('waSettingsRoot').innerHTML = '<p class="text-danger">Gagal memuat: ' + escapeHtml(e.message) + '</p>';
         }
     }
 
@@ -116,9 +198,19 @@
             });
             const d = await r.json();
             if (!d.success) throw new Error(d.message || 'Gagal simpan');
+            const r2 = await fetch('/admin/billing/whatsapp-monitoring/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(settingValues)
+            });
+            const d2 = await r2.json();
+            if (!d2.success) throw new Error(d2.message || 'Gagal simpan pengaturan detail');
             switches = d.switches || switches;
+            settingFields = d2.fields || settingFields;
+            settingValues = d2.values || settingValues;
             showToast('Pengaturan monitoring WhatsApp disimpan.', 'success');
             render();
+            renderSettings();
         } catch (e) {
             showToast(e.message || 'Gagal simpan', 'danger');
         } finally {
@@ -127,6 +219,14 @@
     }
 
     document.getElementById('btnSaveAll').addEventListener('click', save);
+    document.getElementById('btnDisableAll').addEventListener('click', () => {
+        monitors.forEach(m => { switches[m.id] = false; });
+        render();
+    });
+    document.getElementById('btnEnableAll').addEventListener('click', () => {
+        monitors.forEach(m => { switches[m.id] = true; });
+        render();
+    });
     document.addEventListener('DOMContentLoaded', load);
     </script>
 </body>

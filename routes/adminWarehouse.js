@@ -7,7 +7,7 @@ const path = require('path');
 const crypto = require('crypto');
 const sqlite3 = require('sqlite3').verbose();
 const ExcelJS = require('exceljs');
-const { getSetting, getSettingsWithCache } = require('../config/settingsManager');
+const { getSetting, getSettingsWithCache, getLocalTimestamp } = require('../config/settingsManager');
 const { getVersionInfo } = require('../config/version-utils');
 const logger = require('../config/logger');
 
@@ -76,6 +76,68 @@ function normalizeScanCode(raw) {
     return String(raw ?? '')
         .trim()
         .replace(/^\uFEFF/, '');
+}
+
+function parseEmployeeScanForWarehouse(raw) {
+    const trimmed = normalizeScanCode(raw);
+    if (!trimmed) return null;
+    const upper = trimmed.toUpperCase();
+    if (upper.startsWith('EMP')) {
+        return { kind: 'code', value: upper };
+    }
+    try {
+        const j = JSON.parse(trimmed);
+        if (j && j.type === 'employee') {
+            if (j.id != null) return { kind: 'id', value: parseInt(j.id, 10) };
+            if (j.public_code) return { kind: 'code', value: String(j.public_code).trim().toUpperCase() };
+        }
+    } catch (_) {
+        /* bukan JSON */
+    }
+    return null;
+}
+
+async function resolveEmployeeForOutbound(db, reqBody) {
+    const employeeIdRaw = reqBody.employee_id ?? reqBody.employeeId;
+    if (employeeIdRaw != null && String(employeeIdRaw).trim() !== '') {
+        const employeeId = parseInt(employeeIdRaw, 10);
+        if (!Number.isInteger(employeeId)) {
+            return { error: { status: 400, message: 'ID karyawan tidak valid.' } };
+        }
+        const row = await dbGet(
+            db,
+            `SELECT id, nama_lengkap, nik, jabatan, public_code, status FROM employees WHERE id = ?`,
+            [employeeId]
+        );
+        if (!row) return { error: { status: 404, message: 'Karyawan tidak ditemukan.' } };
+        if (row.status !== 'aktif') return { error: { status: 400, message: 'Karyawan tidak aktif.' } };
+        return { employee: row };
+    }
+
+    const parsed = parseEmployeeScanForWarehouse(
+        reqBody.employee_code ?? reqBody.employee_qr ?? reqBody.employeeQr ?? ''
+    );
+    if (!parsed) return { employee: null };
+
+    if (parsed.kind === 'id') {
+        const row = await dbGet(
+            db,
+            `SELECT id, nama_lengkap, nik, jabatan, public_code, status FROM employees WHERE id = ?`,
+            [parsed.value]
+        );
+        if (!row) return { error: { status: 404, message: 'Karyawan tidak ditemukan.' } };
+        if (row.status !== 'aktif') return { error: { status: 400, message: 'Karyawan tidak aktif.' } };
+        return { employee: row };
+    }
+
+    const row = await dbGet(
+        db,
+        `SELECT id, nama_lengkap, nik, jabatan, public_code, status FROM employees WHERE UPPER(TRIM(public_code)) = ?`,
+        [parsed.value]
+    );
+    if (!row) return { error: { status: 404, message: 'Kode karyawan tidak dikenali.' } };
+    if (row.status !== 'aktif') return { error: { status: 400, message: 'Karyawan tidak aktif.' } };
+    return { employee: row };
 }
 
 // ---------- Halaman UI ----------
@@ -237,8 +299,8 @@ router.put('/api/items/:id', async (req, res) => {
     try {
         await dbRun(
             db,
-            `UPDATE warehouse_items SET name = ?, unit = ?, low_stock_threshold = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-            [name, unit, low, is_active, id]
+            `UPDATE warehouse_items SET name = ?, unit = ?, low_stock_threshold = ?, is_active = ?, updated_at = ? WHERE id = ?`,
+            [name, unit, low, is_active, getLocalTimestamp(), id]
         );
         res.json({ success: true });
     } catch (e) {
@@ -283,6 +345,7 @@ router.post('/api/inbound', async (req, res) => {
 
     const db = openDb();
     try {
+        const now = getLocalTimestamp();
         const item = await dbGet(db, `SELECT id FROM warehouse_items WHERE id = ? AND is_active = 1`, [item_id]);
         if (!item) {
             return res.status(400).json({ success: false, message: 'Master barang tidak ditemukan atau nonaktif' });
@@ -290,8 +353,8 @@ router.post('/api/inbound', async (req, res) => {
 
         const { lastID: batchId } = await dbRun(
             db,
-            `INSERT INTO warehouse_inbound_batches (item_id, quantity, reference, notes) VALUES (?,?,?,?)`,
-            [item_id, quantity, reference, notes]
+            `INSERT INTO warehouse_inbound_batches (item_id, quantity, reference, notes, created_at) VALUES (?,?,?,?,?)`,
+            [item_id, quantity, reference, notes, now]
         );
 
         const units = [];
@@ -302,8 +365,8 @@ router.post('/api/inbound', async (req, res) => {
                 try {
                     const r = await dbRun(
                         db,
-                        `INSERT INTO warehouse_units (item_id, inbound_batch_id, public_code, status) VALUES (?,?,?, 'in_stock')`,
-                        [item_id, batchId, code]
+                        `INSERT INTO warehouse_units (item_id, inbound_batch_id, public_code, status, created_at) VALUES (?,?,?, 'in_stock', ?)`,
+                        [item_id, batchId, code, now]
                     );
                     units.push({ id: r.lastID, public_code: code });
                     inserted = true;
@@ -431,6 +494,7 @@ router.put('/api/inbound-batches/:id', async (req, res) => {
             }
         } else if (quantity > oldQ) {
             const add = quantity - oldQ;
+            const now = getLocalTimestamp();
             for (let i = 0; i < add; i++) {
                 let inserted = false;
                 for (let attempt = 0; attempt < 8 && !inserted; attempt++) {
@@ -438,8 +502,8 @@ router.put('/api/inbound-batches/:id', async (req, res) => {
                     try {
                         await dbRun(
                             db,
-                            `INSERT INTO warehouse_units (item_id, inbound_batch_id, public_code, status) VALUES (?,?,?, 'in_stock')`,
-                            [item_id, batchId, code]
+                            `INSERT INTO warehouse_units (item_id, inbound_batch_id, public_code, status, created_at) VALUES (?,?,?, 'in_stock', ?)`,
+                            [item_id, batchId, code, now]
                         );
                         inserted = true;
                     } catch (err) {
@@ -505,13 +569,36 @@ router.post('/api/outbound-scan', async (req, res) => {
     if (!code) {
         return res.status(400).json({ success: false, message: 'Kode QR / barcode kosong' });
     }
-    const recipient = String(req.body.recipient ?? req.body.penerima ?? '').trim().slice(0, 200);
-    if (!recipient) {
-        return res.status(400).json({ success: false, message: 'Nama penerima wajib diisi.' });
+    if (code.startsWith('EMP')) {
+        return res.status(400).json({
+            success: false,
+            message: 'Ini kode karyawan. Scan di kolom karyawan terlebih dahulu.'
+        });
     }
     const outbound_notes = String(req.body.notes ?? '').trim().slice(0, 500);
     const db = openDb();
     try {
+        const empResult = await resolveEmployeeForOutbound(db, req.body);
+        if (empResult.error) {
+            return res.status(empResult.error.status).json({
+                success: false,
+                message: empResult.error.message
+            });
+        }
+
+        let recipient = String(req.body.recipient ?? req.body.penerima ?? '').trim().slice(0, 200);
+        let outboundEmployeeId = null;
+        if (empResult.employee) {
+            outboundEmployeeId = empResult.employee.id;
+            recipient = empResult.employee.nama_lengkap;
+        }
+        if (!recipient) {
+            return res.status(400).json({
+                success: false,
+                message: 'Scan QR karyawan atau isi nama penerima terlebih dahulu.'
+            });
+        }
+
         const row = await dbGet(
             db,
             `SELECT u.id, u.public_code, u.status, u.item_id, i.name AS item_name
@@ -531,15 +618,16 @@ router.post('/api/outbound-scan', async (req, res) => {
         }
         await dbRun(
             db,
-            `UPDATE warehouse_units SET status = 'out', outbound_at = CURRENT_TIMESTAMP, outbound_recipient = ?, outbound_notes = ? WHERE id = ?`,
-            [recipient, outbound_notes, row.id]
+            `UPDATE warehouse_units SET status = 'out', outbound_at = ?, outbound_recipient = ?, outbound_notes = ?, outbound_employee_id = ? WHERE id = ?`,
+            [getLocalTimestamp(), recipient, outbound_notes, outboundEmployeeId, row.id]
         );
         res.json({
             success: true,
             unit: {
                 public_code: row.public_code,
                 item_name: row.item_name,
-                recipient
+                recipient,
+                employee_id: outboundEmployeeId
             }
         });
     } catch (e) {
@@ -556,9 +644,12 @@ router.get('/api/outbound-history', async (req, res) => {
     try {
         const rows = await dbAll(
             db,
-            `SELECT u.id, u.public_code, u.outbound_at, u.outbound_recipient, u.outbound_notes, i.name AS item_name
+            `SELECT u.id, u.public_code, u.outbound_at, u.outbound_recipient, u.outbound_notes,
+                    u.outbound_employee_id, i.name AS item_name,
+                    e.nama_lengkap AS employee_name, e.nik AS employee_nik, e.jabatan AS employee_jabatan
              FROM warehouse_units u
              JOIN warehouse_items i ON i.id = u.item_id
+             LEFT JOIN employees e ON e.id = u.outbound_employee_id
              WHERE u.status = 'out' AND u.outbound_at IS NOT NULL
              ORDER BY u.outbound_at DESC, u.id DESC
              LIMIT ?`,

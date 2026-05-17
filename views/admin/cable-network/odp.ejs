@@ -14,32 +14,105 @@
     <!-- Admin Mobile Optimizations -->
     <link href="/css/admin-mobile.css" rel="stylesheet">
     <style>
+        .odp-stat-card {
+            border: none;
+            border-radius: 12px;
+            padding: 1rem 1.1rem;
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            height: 100%;
+        }
+        .odp-stat-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+        }
+        .odp-stat-card .odp-stat-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255, 255, 255, 0.22);
+            font-size: 1.35rem;
+        }
+        .odp-stat-card .odp-stat-value {
+            font-size: 1.75rem;
+            font-weight: 700;
+            line-height: 1.2;
+            margin: 0.35rem 0 0.15rem;
+        }
+        .odp-stat-card .odp-stat-label {
+            font-size: 0.85rem;
+            font-weight: 500;
+            opacity: 0.92;
+            margin: 0;
+        }
+        .odp-stat-total {
+            background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+        }
+        .odp-stat-active {
+            background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+        }
+        .odp-stat-maintenance {
+            background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
+        }
+        .odp-stat-ports {
+            background: linear-gradient(135deg, #0ea5e9 0%, #38bdf8 100%);
+        }
+        html[data-theme="dark"] .odp-stat-card {
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+        }
+        .odp-search-bar .form-control:focus {
+            border-color: #6366f1;
+            box-shadow: 0 0 0 0.2rem rgba(99, 102, 241, 0.2);
+        }
         .odp-card {
-            transition: transform 0.2s;
+            transition: transform 0.2s, box-shadow 0.2s;
+            border-radius: 10px;
         }
         .odp-card:hover {
             transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.1);
+        }
+        .odp-card .card-body {
+            padding: 0.85rem 0.9rem;
+        }
+        .odp-card h5 {
+            font-size: 0.95rem;
+        }
+        .odp-card .odp-card-actions .btn {
+            padding: 0.2rem 0.45rem;
+            font-size: 0.75rem;
         }
         .capacity-bar {
-            height: 8px;
+            height: 6px;
             border-radius: 4px;
         }
         .status-badge {
-            font-size: 0.75rem;
+            font-size: 0.65rem;
         }
         .odp-icon {
-            width: 40px;
-            height: 40px;
+            width: 32px;
+            height: 32px;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             color: white;
-            font-size: 1.2rem;
+            font-size: 0.95rem;
+            flex-shrink: 0;
         }
         .odp-active { background-color: #28a745; }
         .odp-maintenance { background-color: #ffc107; }
         .odp-inactive { background-color: #6c757d; }
+        .odp-grid-item.odp-hidden {
+            display: none !important;
+        }
+        #odpSearchEmpty {
+            display: none;
+        }
     </style>
 
     <%- include('../../partials/theme-head') %>
@@ -66,63 +139,73 @@
             </div>
         </div>
 
+        <% const _odpActive = odps.filter(o => o.status && o.status === 'active').length; %>
+        <% const _odpMaintenance = odps.filter(o => o.status && o.status === 'maintenance').length; %>
+        <% const _odpUsedPorts = odps.reduce((sum, o) => sum + (o.used_ports || 0), 0); %>
+
         <!-- Statistics Cards -->
-        <div class="row mb-4">
-            <div class="col-md-3">
-                <div class="card bg-primary text-white">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between">
-                            <div>
-                                <h4><%= odps.length %></h4>
-                                <p class="mb-0">Total ODP</p>
-                            </div>
-                            <div class="align-self-center">
-                                <i class="bi bi-broadcast fs-1"></i>
-                            </div>
-                        </div>
-                    </div>
+        <div class="row mb-4 g-3">
+            <div class="col-6 col-md-3">
+                <div class="odp-stat-card odp-stat-total">
+                    <div class="odp-stat-icon"><i class="bi bi-broadcast"></i></div>
+                    <div class="odp-stat-value"><%= odps.length %></div>
+                    <p class="odp-stat-label">Total ODP</p>
                 </div>
             </div>
-            <div class="col-md-3">
-                <div class="card bg-success text-white">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between">
-                            <div>
-                                <h4><%= odps.filter(o => o.status && o.status === 'active').length %></h4>
-                                <p class="mb-0">Active ODP</p>
-                            </div>
-                            <div class="align-self-center">
-                                <i class="bi bi-check-circle-fill fs-1"></i>
-                            </div>
-                        </div>
-                    </div>
+            <div class="col-6 col-md-3">
+                <div class="odp-stat-card odp-stat-active">
+                    <div class="odp-stat-icon"><i class="bi bi-check-circle-fill"></i></div>
+                    <div class="odp-stat-value"><%= _odpActive %></div>
+                    <p class="odp-stat-label">Active ODP</p>
                 </div>
             </div>
-            <div class="col-md-3">
-                <div class="card bg-warning text-white">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between">
-                            <div>
-                                <h4><%= odps.filter(o => o.status && o.status === 'maintenance').length %></h4>
-                                <p class="mb-0">Maintenance</p>
-                            </div>
-                            <div class="align-self-center">
-                                <i class="bi bi-wrench-adjustable fs-1"></i>
-                            </div>
-                        </div>
-                    </div>
+            <div class="col-6 col-md-3">
+                <div class="odp-stat-card odp-stat-maintenance">
+                    <div class="odp-stat-icon"><i class="bi bi-wrench-adjustable"></i></div>
+                    <div class="odp-stat-value"><%= _odpMaintenance %></div>
+                    <p class="odp-stat-label">Maintenance</p>
                 </div>
             </div>
-            <div class="col-md-3">
-                <div class="card bg-info text-white">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between">
-                            <div>
-                                <h4><%= odps.reduce((sum, o) => sum + (o.used_ports || 0), 0) %></h4>
-                                <p class="mb-0">Used Ports</p>
+            <div class="col-6 col-md-3">
+                <div class="odp-stat-card odp-stat-ports">
+                    <div class="odp-stat-icon"><i class="bi bi-plug-fill"></i></div>
+                    <div class="odp-stat-value"><%= _odpUsedPorts %></div>
+                    <p class="odp-stat-label">Used Ports</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Search & filter -->
+        <div class="row mb-3">
+            <div class="col-12">
+                <div class="card odp-search-bar border-0 shadow-sm">
+                    <div class="card-body py-3">
+                        <div class="row g-2 align-items-end">
+                            <div class="col-md-5 col-lg-6">
+                                <label class="form-label small text-muted mb-1">Cari ODP</label>
+                                <div class="input-group">
+                                    <span class="input-group-text bg-transparent"><i class="bi bi-search"></i></span>
+                                    <input type="search" class="form-control" id="odpSearchInput" placeholder="Nama, kode, alamat, parent ODP..." autocomplete="off">
+                                </div>
                             </div>
-                            <div class="align-self-center">
-                                <i class="bi bi-plug-fill fs-1"></i>
+                            <div class="col-md-3 col-lg-2">
+                                <label class="form-label small text-muted mb-1">Status</label>
+                                <select class="form-select" id="odpStatusFilter">
+                                    <option value="">Semua status</option>
+                                    <option value="active">Active</option>
+                                    <option value="maintenance">Maintenance</option>
+                                    <option value="inactive">Inactive</option>
+                                </select>
+                            </div>
+                            <div class="col-md-2 col-lg-2">
+                                <label class="form-label small text-muted mb-1 d-none d-md-block">&nbsp;</label>
+                                <button type="button" class="btn btn-outline-secondary w-100" id="odpSearchClear">
+                                    <i class="bi bi-x-lg"></i> Reset
+                                </button>
+                            </div>
+                            <div class="col-md-2 col-lg-2 text-md-end">
+                                <label class="form-label small text-muted mb-1 d-none d-md-block">&nbsp;</label>
+                                <span class="badge bg-light text-dark border w-100 py-2" id="odpSearchCount"><%= odps.length %> ODP</span>
                             </div>
                         </div>
                     </div>
@@ -131,17 +214,17 @@
         </div>
 
         <!-- ODP List -->
-        <div class="row">
+        <div class="row g-3" id="odpGrid">
             <% odps.forEach(odp => { %>
-            <div class="col-md-6 col-lg-4 mb-4">
+            <div class="col-6 col-md-4 col-lg-3 odp-grid-item" data-odp-id="<%= odp.id %>" data-status="<%= odp.status || '' %>" data-search="<%= [odp.name, odp.code, odp.address, odp.status, odp.parent_name, odp.parent_code].filter(Boolean).join(' ').toLowerCase() %>">
                 <div class="card odp-card h-100" data-odp-id="<%= odp.id %>">
                     <div class="card-body">
-                        <div class="d-flex justify-content-between align-items-start mb-3">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
                             <div class="d-flex align-items-center">
                                 <div class="odp-icon <%= 'odp-' + odp.status %>">
                                     <i class="bi bi-broadcast"></i>
                                 </div>
-                                <div class="ms-3">
+                                <div class="ms-2">
                                     <h5 class="mb-0" data-field="name"><%= odp.name %></h5>
                                     <small class="text-muted" data-field="code"><%= odp.code %></small>
                                 </div>
@@ -151,8 +234,8 @@
                             </span>
                         </div>
 
-                        <div class="mb-3">
-                            <small class="text-muted d-block">Address</small>
+                        <div class="mb-2">
+                            <small class="text-muted d-block" style="font-size:0.7rem">Address</small>
                             <p class="mb-1" data-field="address"><%= odp.address || 'No address' %></p>
                             <% if (odp.parent_name) { %>
                                 <small class="text-info d-block">
@@ -172,10 +255,10 @@
                             <span data-field="notes" style="display: none;"><%= odp.notes || '' %></span>
                         </div>
 
-                        <div class="mb-3">
+                        <div class="mb-2">
                             <div class="d-flex justify-content-between align-items-center mb-1">
-                                <small class="text-muted">Port Usage</small>
-                                <small class="text-muted"><%= odp.used_ports || 0 %>/<span data-field="capacity"><%= odp.capacity || 0 %></span></small>
+                                <small class="text-muted" style="font-size:0.7rem">Port Usage</small>
+                                <small class="text-muted" style="font-size:0.7rem"><%= odp.used_ports || 0 %>/<span data-field="capacity"><%= odp.capacity || 0 %></span></small>
                             </div>
                             <div class="progress">
                                 <div class="progress-bar capacity-bar <%= 
@@ -186,8 +269,8 @@
                             </div>
                         </div>
 
-                        <div class="mb-3">
-                            <div class="row text-center">
+                        <div class="mb-2">
+                            <div class="row text-center g-0">
                                 <div class="col-6">
                                     <div class="border-end">
                                         <h6 class="mb-0 text-primary"><%= odp.connected_customers || 0 %></h6>
@@ -201,7 +284,7 @@
                             </div>
                         </div>
 
-                        <div class="d-flex justify-content-between">
+                        <div class="d-flex justify-content-between odp-card-actions gap-1">
                             <button class="btn btn-sm btn-outline-primary" onclick="editODP(<%= odp.id %>)">
                                 <i class="bi bi-pencil-fill"></i> Edit
                             </button>
@@ -216,6 +299,10 @@
                 </div>
             </div>
             <% }); %>
+            <div id="odpSearchEmpty" class="col-12 text-center text-muted py-5">
+                <i class="bi bi-search fs-1 d-block mb-2"></i>
+                <p class="mb-0">Tidak ada ODP yang cocok dengan pencarian.</p>
+            </div>
         </div>
     </div>
 
@@ -856,19 +943,19 @@
             
             // Define tile layers
             const lightLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                attribution: '© OpenStreetMap contributors © CARTO',
+                attribution: 'ï¿½ OpenStreetMap contributors ï¿½ CARTO',
                 subdomains: 'abcd',
                 maxZoom: 20
             });
             
             const darkLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-                attribution: '© OpenStreetMap contributors © CARTO',
+                attribution: 'ï¿½ OpenStreetMap contributors ï¿½ CARTO',
                 subdomains: 'abcd',
                 maxZoom: 20
             });
             
             const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-                attribution: '© Esri — Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+                attribution: 'ï¿½ Esri ï¿½ Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
                 maxZoom: 20
             });
             
@@ -1035,6 +1122,14 @@
             safeSetValue('editODPParentId', parentOdpElement ? parentOdpElement.textContent : '');
             safeSetValue('editODPNotes', notesElement ? notesElement.textContent : '');
             
+            const parentSel = document.getElementById('editODPParentId');
+            if (parentSel) {
+                const sid = String(id);
+                parentSel.querySelectorAll('option[value]').forEach(function (opt) {
+                    opt.disabled = String(opt.value) === sid;
+                });
+            }
+            
             // Tampilkan modal
             const editModal = new bootstrap.Modal(document.getElementById('editODPModal'));
             editModal.show();
@@ -1072,19 +1167,19 @@
             
             // Define tile layers
             const lightLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                attribution: '© OpenStreetMap contributors © CARTO',
+                attribution: 'ï¿½ OpenStreetMap contributors ï¿½ CARTO',
                 subdomains: 'abcd',
                 maxZoom: 20
             });
             
             const darkLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-                attribution: '© OpenStreetMap contributors © CARTO',
+                attribution: 'ï¿½ OpenStreetMap contributors ï¿½ CARTO',
                 subdomains: 'abcd',
                 maxZoom: 20
             });
             
             const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-                attribution: '© Esri — Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+                attribution: 'ï¿½ Esri ï¿½ Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
                 maxZoom: 20
             });
             
@@ -1326,6 +1421,34 @@
                 showAlert('danger', 'Error: ' + error.message);
             }
         };
+
+
+        function filterOdpGrid() {
+            const q = (document.getElementById('odpSearchInput')?.value || '').trim().toLowerCase();
+            const status = (document.getElementById('odpStatusFilter')?.value || '').trim().toLowerCase();
+            const items = document.querySelectorAll('#odpGrid .odp-grid-item');
+            let visible = 0;
+            items.forEach((el) => {
+                const hay = el.getAttribute('data-search') || '';
+                const st = (el.getAttribute('data-status') || '').toLowerCase();
+                const show = (!q || hay.includes(q)) && (!status || st === status);
+                el.classList.toggle('odp-hidden', !show);
+                if (show) visible++;
+            });
+            const countEl = document.getElementById('odpSearchCount');
+            if (countEl) countEl.textContent = visible + ' ODP';
+            const emptyEl = document.getElementById('odpSearchEmpty');
+            if (emptyEl) emptyEl.style.display = items.length && visible === 0 ? 'block' : 'none';
+        }
+        document.getElementById('odpSearchInput')?.addEventListener('input', filterOdpGrid);
+        document.getElementById('odpStatusFilter')?.addEventListener('change', filterOdpGrid);
+        document.getElementById('odpSearchClear')?.addEventListener('click', () => {
+            const inp = document.getElementById('odpSearchInput');
+            const sel = document.getElementById('odpStatusFilter');
+            if (inp) inp.value = '';
+            if (sel) sel.value = '';
+            filterOdpGrid();
+        });
 
         // Show Alert
         function showAlert(type, message) {

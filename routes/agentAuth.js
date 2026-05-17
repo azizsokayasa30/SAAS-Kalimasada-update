@@ -345,7 +345,7 @@ router.post('/profile', requireAgentAuth, async (req, res) => {
         
         const updateSql = `
             UPDATE agents 
-            SET name = ?, email = ?, address = ?, phone = ?, updated_at = CURRENT_TIMESTAMP 
+            SET name = ?, email = ?, address = ?, phone = ?, updated_at = datetime('now','localtime') 
             WHERE id = ?
         `;
         
@@ -408,7 +408,7 @@ router.post('/change-password', requireAgentAuth, async (req, res) => {
             
             // Update password
             const hashedPassword = await bcrypt.hash(newPassword, 10);
-            const updateSql = 'UPDATE agents SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?';
+            const updateSql = "UPDATE agents SET password = ?, updated_at = datetime('now','localtime') WHERE id = ?";
             
             db.run(updateSql, [hashedPassword, agentId], function(err) {
                 db.close();

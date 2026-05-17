@@ -17,8 +17,8 @@ function initializeLicenseTable() {
                 trial_start_date DATETIME,
                 trial_end_date DATETIME,
                 activated_at DATETIME,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at DATETIME DEFAULT (datetime('now','localtime')),
+                updated_at DATETIME DEFAULT (datetime('now','localtime'))
             )
         `, (err) => {
             if (err) {
@@ -92,7 +92,7 @@ async function updateLicenseStatus(status) {
         const db = new sqlite3.Database(dbPath);
         db.run(`
             UPDATE license 
-            SET status = ?, updated_at = CURRENT_TIMESTAMP
+            SET status = ?, updated_at = datetime('now','localtime')
             WHERE id = (SELECT id FROM license ORDER BY id DESC LIMIT 1)
         `, [status], function(err) {
             db.close();
@@ -178,7 +178,7 @@ async function activateLicense(key) {
                 SET license_key = ?, 
                     status = 'active', 
                     activated_at = ?,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = datetime('now','localtime')
                 WHERE id = (SELECT id FROM license ORDER BY id DESC LIMIT 1)
             `, [key, activatedAt], function(err) {
                 if (err) reject(err);

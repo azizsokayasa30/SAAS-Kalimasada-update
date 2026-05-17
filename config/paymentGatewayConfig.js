@@ -155,7 +155,7 @@ async function savePaymentGatewayConfig(config) {
         const normalized = applyDefaults(config);
         db.run(
             `INSERT OR REPLACE INTO app_settings (key, value, updated_at)
-             VALUES (?, ?, CURRENT_TIMESTAMP)`,
+             VALUES (?, ?, datetime('now','localtime'))`,
             ['payment_gateway', JSON.stringify(normalized)],
             (err) => {
                 db.close();

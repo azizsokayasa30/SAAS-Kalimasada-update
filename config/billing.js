@@ -215,7 +215,7 @@
             // Cek secara sinkron 1 kali di awal, lalu jadwalkan tiap 24 jam
             const cleanUpTask = () => {
                 try {
-                    const sql = "SELECT id, payment_proof FROM payments WHERE payment_proof IS NOT NULL AND payment_date <= datetime('now', '-60 days')";
+                    const sql = "SELECT id, payment_proof FROM payments WHERE payment_proof IS NOT NULL AND payment_date <= datetime('now','localtime', '-60 days')";
                     
                     this.db.all(sql, [], (err, rows) => {
                         if (err || !rows) return;
@@ -417,22 +417,40 @@
             }
         }
 
-        async setCustomerStatusById(id, status) {
+        async setSuspendReasonById(id, suspendReason) {
+            return new Promise((resolve, reject) => {
+                this.db.run(
+                    `UPDATE customers SET suspend_reason = ? WHERE id = ?`,
+                    [suspendReason || null, id],
+                    (err) => (err ? reject(err) : resolve())
+                );
+            });
+        }
+
+        async setCustomerStatusById(id, status, options = {}) {
             return new Promise(async (resolve, reject) => {
                 try {
                     const existing = await this.getCustomerById(id);
                     if (!existing) return reject(new Error('Customer not found'));
                     const oldStatus = existing.status;
-                    const sql = `UPDATE customers SET status = ? WHERE id = ?`;
-                    this.db.run(sql, [status, id], async (err) => {
+                    const skipRadiusSync = Boolean(options && (options.skipRadiusSync || options.skipExternalSync));
+                    const st = String(status || '').toLowerCase();
+                    const clearSuspendReason = st === 'active' || st === 'inactive' || st === 'register';
+                    const sql = clearSuspendReason
+                        ? `UPDATE customers SET status = ?, suspend_reason = NULL WHERE id = ?`
+                        : `UPDATE customers SET status = ? WHERE id = ?`;
+                    const params = clearSuspendReason ? [status, id] : [status, id];
+                    this.db.run(sql, params, async (err) => {
                         if (err) return reject(err);
                         try {
                             logger.info(`[BILLING] setCustomerStatusById: id=${id}, username=${existing.username}, from=${oldStatus} -> to=${status}`);
                             
-                            // PENTING: Auto-sync ke RADIUS jika status berubah menjadi 'suspended' atau 'active'
-                            await this._autoSyncStatusToRadius(existing, oldStatus, status);
+                            // Auto-sync hanya untuk perubahan status langsung dari billing.
+                            // Orchestrator isolir/restore memakai skipRadiusSync agar aksi jaringan tidak dobel.
+                            if (!skipRadiusSync) {
+                                await this._autoSyncStatusToRadius(existing, oldStatus, status);
+                            }
                         } catch (_) {}
-                        const st = String(status || '').toLowerCase();
                         const oldSt = String(oldStatus || '').toLowerCase();
                         const nowIsolir = st === 'suspended' || st === 'isolir';
                         const wasIsolir = oldSt === 'suspended' || oldSt === 'isolir';
@@ -573,7 +591,7 @@
                                         console.log(`🔧 ODP: ${odp_id !== undefined ? odp_id : existingRoute.odp_id}, Port: ${port_number !== undefined ? port_number : existingRoute.port_number}`);
                                         const updateSql = `
                                             UPDATE cable_routes 
-                                            SET odp_id = ?, cable_type = ?, cable_length = ?, port_number = ?, status = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+                                            SET odp_id = ?, cable_type = ?, cable_length = ?, port_number = ?, status = ?, notes = ?, updated_at = datetime('now','localtime')
                                             WHERE customer_id = ?
                                         `;
                                         
@@ -698,7 +716,7 @@
                     burst_threshold TEXT,
                     burst_time TEXT,
                     is_active BOOLEAN DEFAULT 1,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
                     FOREIGN KEY (router_id) REFERENCES routers(id)
                 )`,
 
@@ -716,7 +734,7 @@
                     package_id INTEGER,
                     pppoe_profile TEXT,
                     status TEXT DEFAULT 'active',
-                    join_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    join_date DATETIME DEFAULT (datetime('now','localtime')),
                     -- Cable connection fields
                     cable_type TEXT,
                     cable_length INTEGER,
@@ -753,7 +771,7 @@
                     burst_threshold TEXT,
                     burst_time TEXT,
                     is_active BOOLEAN DEFAULT 1,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime'))
                 )`,
 
                 // Tabel Members (mirip dengan customers untuk PPPoE, tapi menggunakan Hotspot)
@@ -770,7 +788,7 @@
                     package_id INTEGER,
                     hotspot_profile TEXT,
                     status TEXT DEFAULT 'active',
-                    join_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    join_date DATETIME DEFAULT (datetime('now','localtime')),
                     server_hotspot TEXT,
                     auto_suspension BOOLEAN DEFAULT 1,
                     billing_day INTEGER DEFAULT 15,
@@ -798,7 +816,7 @@
                     collector_id INTEGER NOT NULL,
                     customer_id INTEGER NULL,
                     member_id INTEGER NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
                     UNIQUE(collector_id, customer_id),
                     UNIQUE(collector_id, member_id),
                     FOREIGN KEY (collector_id) REFERENCES collectors(id) ON DELETE CASCADE,
@@ -812,7 +830,7 @@
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     collector_id INTEGER NOT NULL,
                     area TEXT NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
                     UNIQUE(collector_id, area),
                     FOREIGN KEY (collector_id) REFERENCES collectors(id) ON DELETE CASCADE
                 )`,
@@ -839,7 +857,7 @@
                     package_name TEXT,
                     base_amount DECIMAL(10,2),
                     tax_rate DECIMAL(5,2),
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
                     FOREIGN KEY (customer_id) REFERENCES customers (id),
                     FOREIGN KEY (member_id) REFERENCES members (id),
                     FOREIGN KEY (package_id) REFERENCES packages (id),
@@ -851,7 +869,7 @@
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     invoice_id INTEGER NOT NULL,
                     amount DECIMAL(10,2) NOT NULL,
-                    payment_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    payment_date DATETIME DEFAULT (datetime('now','localtime')),
                     payment_method TEXT NOT NULL,
                     reference_number TEXT,
                     notes TEXT,
@@ -870,8 +888,8 @@
                     status TEXT DEFAULT 'pending',
                     payment_type TEXT,
                     fraud_status TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime')),
                     FOREIGN KEY (invoice_id) REFERENCES invoices (id)
                 )`,
 
@@ -885,8 +903,8 @@
                     expense_date DATE NOT NULL,
                     payment_method TEXT,
                     notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime'))
                 )`,
 
                 // Tabel income (pemasukan)
@@ -898,8 +916,8 @@
                     income_date DATE NOT NULL,
                     payment_method TEXT,
                     notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime'))
                 )`,
 
                 // Tabel kategori keuangan (pemasukan dan pengeluaran dinamis)
@@ -908,8 +926,8 @@
                     type TEXT NOT NULL, -- 'income' atau 'expense'
                     name TEXT NOT NULL,
                     subcategories TEXT, -- JSON array of strings for expense account_expenses
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime'))
                 )`,
 
                 // Tabel Goods Invoices (Invoice Barang)
@@ -926,8 +944,8 @@
                     payment_method TEXT,
                     payment_date DATETIME,
                     notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime'))
                 )`,
 
                 // Tabel Goods Invoice Items (Item Barang)
@@ -948,7 +966,7 @@
                     price DECIMAL(10,2) NOT NULL DEFAULT 0,
                     profile TEXT,
                     status TEXT DEFAULT 'unpaid' CHECK(status IN ('unpaid', 'paid')),
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
                     used_at DATETIME,
                     usage_count INTEGER DEFAULT 0,
                     notes TEXT
@@ -967,8 +985,8 @@
                     status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'maintenance', 'inactive')),
                     installation_date DATE,
                     notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime'))
                 )`,
 
                 // Tabel Cable Routes (Jalur Kabel dari ODP ke Pelanggan)
@@ -982,8 +1000,8 @@
                     status VARCHAR(20) DEFAULT 'connected' CHECK (status IN ('connected', 'disconnected', 'maintenance', 'damaged')),
                     port_number INTEGER,
                     notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime')),
                     FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE,
                     FOREIGN KEY (odp_id) REFERENCES odps(id) ON DELETE CASCADE
                 )`,
@@ -999,8 +1017,8 @@
                     status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'maintenance', 'damaged', 'inactive')),
                     installation_date DATE,
                     notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime')),
                     FOREIGN KEY (start_odp_id) REFERENCES odps(id) ON DELETE CASCADE,
                     FOREIGN KEY (end_odp_id) REFERENCES odps(id) ON DELETE CASCADE
                 )`,
@@ -1016,8 +1034,8 @@
                     status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'maintenance', 'inactive', 'damaged')),
                     installation_date DATE,
                     notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime')),
                     FOREIGN KEY (from_odp_id) REFERENCES odps(id) ON DELETE CASCADE,
                     FOREIGN KEY (to_odp_id) REFERENCES odps(id) ON DELETE CASCADE,
                     UNIQUE(from_odp_id, to_odp_id)
@@ -1035,9 +1053,35 @@
                     duration_hours DECIMAL(4,2),
                     cost DECIMAL(12,2),
                     notes TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
                     FOREIGN KEY (cable_route_id) REFERENCES cable_routes(id) ON DELETE CASCADE,
                     FOREIGN KEY (network_segment_id) REFERENCES network_segments(id) ON DELETE CASCADE
+                )`,
+
+                // Pesan/broadcast admin → portal pelanggan (daftar di dashboard & gabung notifikasi)
+                `CREATE TABLE IF NOT EXISTS customer_portal_broadcasts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    is_active INTEGER DEFAULT 1
+                )`,
+
+                `CREATE TABLE IF NOT EXISTS customer_portal_package_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    customer_id INTEGER NOT NULL,
+                    customer_username TEXT,
+                    customer_name TEXT,
+                    customer_phone TEXT,
+                    current_package_name TEXT,
+                    current_speed TEXT,
+                    target_package_name TEXT NOT NULL,
+                    target_speed TEXT,
+                    target_price_rupiah INTEGER,
+                    note TEXT,
+                    status TEXT DEFAULT 'pending',
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    FOREIGN KEY (customer_id) REFERENCES customers(id)
                 )`
             ];
 
@@ -1079,6 +1123,40 @@
                 } else if (!err) {
                     console.log('Added auto_suspension column to customers table');
                 }
+            });
+
+            // Alasan isolir: overdue (telat bayar) vs manual — mengontrol auto-restore
+            this.db.run("ALTER TABLE customers ADD COLUMN suspend_reason TEXT", (err) => {
+                if (err && !err.message.includes('duplicate column name')) {
+                    console.error('Error adding suspend_reason column:', err);
+                } else if (!err) {
+                    console.log('Added suspend_reason column to customers table');
+                }
+                // Backfill sekali: pelanggan isolir tanpa tagihan overdue → manual
+                this.db.run(
+                    `UPDATE customers SET suspend_reason = 'manual'
+                     WHERE status IN ('suspended', 'isolir')
+                     AND (suspend_reason IS NULL OR suspend_reason = '')
+                     AND id NOT IN (
+                         SELECT customer_id FROM invoices
+                         WHERE status = 'unpaid' AND date(due_date) < date('now','localtime')
+                     )`,
+                    (uErr) => {
+                        if (uErr) {
+                            console.warn('Backfill suspend_reason (manual) skipped:', uErr.message);
+                        }
+                        this.db.run(
+                            `UPDATE customers SET suspend_reason = 'overdue'
+                             WHERE status IN ('suspended', 'isolir')
+                             AND (suspend_reason IS NULL OR suspend_reason = '')`,
+                            (u2Err) => {
+                                if (u2Err) {
+                                    console.warn('Backfill suspend_reason (overdue) skipped:', u2Err.message);
+                                }
+                            }
+                        );
+                    }
+                );
             });
 
             // Tambahkan kolom billing_day ke customers jika belum ada
@@ -1188,6 +1266,30 @@
     }
 
     addColumnsAndCreateIndexes() {
+        this.db.run(
+            `CREATE TABLE IF NOT EXISTS customer_portal_package_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                customer_id INTEGER NOT NULL,
+                customer_username TEXT,
+                customer_name TEXT,
+                customer_phone TEXT,
+                current_package_name TEXT,
+                current_speed TEXT,
+                target_package_name TEXT NOT NULL,
+                target_speed TEXT,
+                target_price_rupiah INTEGER,
+                note TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at DATETIME DEFAULT (datetime('now','localtime')),
+                FOREIGN KEY (customer_id) REFERENCES customers(id)
+            )`,
+            (err) => {
+                if (err && !String(err.message || '').includes('already exists')) {
+                    console.error('Error ensuring customer_portal_package_requests:', err.message);
+                }
+            }
+        );
+
         // Tambahkan kolom customer_id jika belum ada (ID Pelanggan 6 digit)
         this.db.run("ALTER TABLE customers ADD COLUMN customer_id TEXT UNIQUE", (err) => {
             if (err && !err.message.includes('duplicate column name')) {
@@ -1433,28 +1535,28 @@
                 AFTER UPDATE ON odps
                 FOR EACH ROW
             BEGIN
-                UPDATE odps SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+                UPDATE odps SET updated_at = datetime('now','localtime') WHERE id = NEW.id;
             END`,
             
             `CREATE TRIGGER IF NOT EXISTS update_cable_routes_updated_at 
                 AFTER UPDATE ON cable_routes
                 FOR EACH ROW
             BEGIN
-                UPDATE cable_routes SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+                UPDATE cable_routes SET updated_at = datetime('now','localtime') WHERE id = NEW.id;
             END`,
             
             `CREATE TRIGGER IF NOT EXISTS update_network_segments_updated_at 
                 AFTER UPDATE ON network_segments
                 FOR EACH ROW
             BEGIN
-                UPDATE network_segments SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+                UPDATE network_segments SET updated_at = datetime('now','localtime') WHERE id = NEW.id;
             END`,
             
             `CREATE TRIGGER IF NOT EXISTS update_odp_connections_updated_at 
                 AFTER UPDATE ON odp_connections
                 FOR EACH ROW
             BEGIN
-                UPDATE odp_connections SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+                UPDATE odp_connections SET updated_at = datetime('now','localtime') WHERE id = NEW.id;
             END`,
             
             // Triggers untuk update used_ports di ODP
@@ -2024,7 +2126,7 @@ ${year && month ? `
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
                                AND i.status = 'unpaid' 
-                               AND i.due_date < date('now')
+                               AND i.due_date < date('now','localtime')
                            ) THEN 'overdue'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
@@ -2117,7 +2219,7 @@ ${year && month ? `
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
                                AND i.status = 'unpaid' 
-                               AND i.due_date < date('now')
+                               AND i.due_date < date('now','localtime')
                            ) THEN 'overdue'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
@@ -2413,7 +2515,7 @@ ${year && month ? `
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
                                AND i.status = 'unpaid' 
-                               AND i.due_date < date('now')
+                               AND i.due_date < date('now','localtime')
                            ) THEN 'overdue'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
@@ -2591,7 +2693,7 @@ ${year && month ? `
     async getCustomerById(id) {
         return new Promise((resolve, reject) => {
             const sql = `
-                SELECT c.*, p.name as package_name, p.speed, p.price, p.image as package_image
+                SELECT c.*, p.name as package_name, p.speed, p.price, p.image as package_image, p.tax_rate
                 FROM customers c
                 LEFT JOIN packages p ON c.package_id = p.id
                 WHERE c.id = ?
@@ -2646,7 +2748,7 @@ ${year && month ? `
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
                                AND i.status = 'unpaid' 
-                               AND i.due_date < date('now')
+                               AND i.due_date < date('now','localtime')
                            ) THEN 'overdue'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
@@ -2695,7 +2797,7 @@ ${year && month ? `
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
                                AND i.status = 'unpaid' 
-                               AND i.due_date < date('now')
+                               AND i.due_date < date('now','localtime')
                            ) THEN 'overdue'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
@@ -2762,7 +2864,7 @@ ${year && month ? `
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
                                AND i.status = 'unpaid' 
-                               AND i.due_date < date('now')
+                               AND i.due_date < date('now','localtime')
                            ) THEN 'overdue'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
@@ -2968,7 +3070,7 @@ ${year && month ? `
                                     console.log(`🔧 ODP: ${odp_id !== undefined ? odp_id : existingRoute.odp_id}, Port: ${port_number !== undefined ? port_number : existingRoute.port_number}`);
                                     const updateSql = `
                                         UPDATE cable_routes 
-                                        SET odp_id = ?, cable_type = ?, cable_length = ?, port_number = ?, status = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+                                        SET odp_id = ?, cable_type = ?, cable_length = ?, port_number = ?, status = ?, notes = ?, updated_at = datetime('now','localtime')
                                         WHERE customer_id = ?
                                     `;
                                     
@@ -3604,6 +3706,101 @@ ${year && month ? `
         });
     }
 
+    /**
+     * Tagihan pelanggan (portal) — filter customer_id, tidak hanya username.
+     * Dipakai notifikasi agar tagihan baru selalu ikut pelanggan yang login.
+     */
+    async getInvoicesByCustomerId(customerId, limit = 80) {
+        const cid = parseInt(customerId, 10);
+        const lim = Math.min(200, Math.max(1, parseInt(limit, 10) || 80));
+        if (!Number.isFinite(cid) || cid <= 0) {
+            return [];
+        }
+        return new Promise((resolve, reject) => {
+            const sql = `
+                SELECT i.*,
+                    c.username,
+                    c.name AS customer_name,
+                    c.phone AS customer_phone,
+                    p.name AS package_name,
+                    p.speed AS package_speed
+                FROM invoices i
+                JOIN customers c ON i.customer_id = c.id
+                LEFT JOIN packages p ON i.package_id = p.id
+                WHERE c.id = ?
+                ORDER BY datetime(i.created_at) DESC
+                LIMIT ?
+            `;
+            this.db.all(sql, [cid, lim], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows || []);
+            });
+        });
+    }
+
+    /**
+     * Tagihan untuk feed notifikasi portal: semua baris dengan customer_id ini,
+     * plus tagihan member (member_id) bila username login = hotspot/username member (case-insensitive).
+     */
+    async getPortalFeedInvoices(customerId, username, limit = 160) {
+        const cid = parseInt(customerId, 10);
+        const lim = Math.min(250, Math.max(1, parseInt(limit, 10) || 160));
+        if (!Number.isFinite(cid) || cid <= 0) {
+            return [];
+        }
+        const uname = String(username || '').trim();
+
+        return new Promise((resolve, reject) => {
+            this.db.all(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='members'",
+                (mErr, mtRows) => {
+                    if (mErr) {
+                        reject(mErr);
+                        return;
+                    }
+                    const hasMembers = mtRows && mtRows.length > 0;
+                    const pkgSel = hasMembers
+                        ? 'COALESCE(p.name, mp.name) as package_name, COALESCE(p.speed, mp.speed) as package_speed'
+                        : 'p.name as package_name, p.speed as package_speed';
+
+                    let sql = `
+                        SELECT i.*,
+                            COALESCE(c.username, m.hotspot_username, m.username) as username,
+                            COALESCE(c.name, m.name) as customer_name,
+                            COALESCE(c.phone, m.phone) as customer_phone,
+                            ${pkgSel}
+                        FROM invoices i
+                        LEFT JOIN customers c ON i.customer_id = c.id
+                        LEFT JOIN members m ON i.member_id = m.id
+                        LEFT JOIN packages p ON (i.customer_id IS NOT NULL AND i.package_id = p.id)
+                    `;
+                    const params = [];
+                    if (hasMembers) {
+                        sql += ' LEFT JOIN member_packages mp ON (i.member_id IS NOT NULL AND i.package_id = mp.id)';
+                    }
+                    sql += ' WHERE i.customer_id = ?';
+                    params.push(cid);
+                    if (uname && hasMembers) {
+                        sql += ` OR (
+                            i.member_id IS NOT NULL AND m.id IS NOT NULL AND (
+                                LOWER(TRIM(COALESCE(m.hotspot_username,''))) = LOWER(?)
+                                OR LOWER(TRIM(COALESCE(m.username,''))) = LOWER(?)
+                            )
+                        )`;
+                        params.push(uname, uname);
+                    }
+                    sql += ' ORDER BY datetime(i.created_at) DESC LIMIT ?';
+                    params.push(lim);
+
+                    this.db.all(sql, params, (err, rows) => {
+                        if (err) reject(err);
+                        else resolve(rows || []);
+                    });
+                }
+            );
+        });
+    }
+
     async getUnpaidInvoices() {
         return new Promise((resolve, reject) => {
             const sql = `
@@ -3874,6 +4071,13 @@ ${year && month ? `
     async updateInvoiceStatus(id, status, paymentMethod = null) {
         return new Promise(async (resolve, reject) => {
             try {
+                let prevInv = null;
+                try {
+                    prevInv = await this.getInvoiceById(id);
+                } catch (_) {
+                    prevInv = null;
+                }
+                const wasUnpaid = prevInv && String(prevInv.status || '').toLowerCase() !== 'paid';
                 const paymentDate = status === 'paid' ? new Date().toISOString() : null;
                 const sql = `UPDATE invoices SET status = ?, payment_date = ?, payment_method = ? WHERE id = ?`;
                 
@@ -3881,6 +4085,20 @@ ${year && month ? `
                     if (err) {
                         reject(err);
                         return;
+                    }
+
+                    if (status === 'paid' && paymentDate && wasUnpaid && prevInv && prevInv.customer_id) {
+                        setImmediate(() => {
+                            try {
+                                const cfn = require('./collectorFieldNotifications');
+                                cfn.notifyInvoicePaid(
+                                    Number(prevInv.customer_id),
+                                    id,
+                                    prevInv.invoice_number,
+                                    Number(prevInv.amount) || 0
+                                );
+                            } catch (_) {}
+                        });
                     }
                     
                     // If invoice is marked as paid, sync billing date for renewal customers and restore service if needed
@@ -3910,7 +4128,8 @@ ${year && month ? `
                                     }
                                     
                                     // Check if customer is suspended and restore service if no unpaid invoices
-                                    if (customer.status === 'suspended') {
+                                    const { shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
+                                    if (shouldAutoRestoreCustomer(customer)) {
                                         try {
                                             const customerInvoices = await this.getInvoicesByCustomer(customer.id);
                                             const unpaidInvoices = customerInvoices.filter(i => i.status === 'unpaid');
@@ -4236,7 +4455,7 @@ ${year && month ? `
             const sql = `INSERT INTO collector_payments (
                 collector_id, customer_id, amount, payment_amount, commission_amount,
                 payment_method, notes, status, collected_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`;
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))`;
             
             this.db.run(sql, [
                 collector_id, customer_id, amount, payment_amount, commission_amount,
@@ -4509,7 +4728,7 @@ ${year && month ? `
                     p.payment_method,
                     p.notes,
                     'completed' AS status,
-                    COALESCE(p.payment_date, CURRENT_TIMESTAMP) AS collected_at,
+                    COALESCE(p.payment_date, datetime('now','localtime')) AS collected_at,
                     c.name AS customer_name,
                     c.phone AS customer_phone
                 FROM payments p
@@ -4556,7 +4775,7 @@ ${year && month ? `
             this.db.get(`
                 SELECT COUNT(*) as count 
                 FROM invoices 
-                WHERE status = 'unpaid' AND due_date <= date('now')
+                WHERE status = 'unpaid' AND due_date <= date('now','localtime')
             `, [], (err, row) => {
                 if (err) reject(err);
                 else resolve(parseInt(row ? row.count : 0));
@@ -4620,7 +4839,7 @@ ${year && month ? `
                 INSERT OR REPLACE INTO collector_monthly_summary (
                     collector_id, year, month, total_payments, total_commission, 
                     payment_count, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                ) VALUES (?, ?, ?, ?, ?, ?, datetime('now','localtime'), datetime('now','localtime'))
             `;
             
             this.db.run(sql, [
@@ -5260,7 +5479,8 @@ ${year && month ? `
                 } else {
                     // Handle customer payment
                     const customer = await this.getCustomerById(invoice.customer_id);
-                    if (customer && customer.status === 'suspended') {
+                    const { shouldAutoRestoreCustomer: shouldRestoreDirect } = require('../utils/customerSuspendReason');
+                    if (shouldRestoreDirect(customer)) {
                         const invoices = await this.getInvoicesByCustomer(customer.id);
                         const unpaid = invoices.filter(i => i.status === 'unpaid');
                         if (unpaid.length === 0) {
@@ -5598,10 +5818,10 @@ ${year && month ? `
                      GROUP BY phone
                  )`,
                 
-                // 2. Update status customers yang tidak valid (tapi jangan ubah 'register')
+                // 2. Update status customers yang tidak valid (tapi jangan ubah 'register' / 'isolir')
                 `UPDATE customers 
                  SET status = 'inactive' 
-                 WHERE status NOT IN ('active', 'inactive', 'suspended', 'register')`,
+                 WHERE status NOT IN ('active', 'inactive', 'suspended', 'isolir', 'register')`,
                 
                 // 3. Update status invoices yang tidak valid
                 `UPDATE invoices 
@@ -6001,8 +6221,8 @@ ${year && month ? `
                     total_payments REAL NOT NULL DEFAULT 0,
                     total_commission REAL NOT NULL DEFAULT 0,
                     payment_count INTEGER NOT NULL DEFAULT 0,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime')),
                     UNIQUE(collector_id, year, month)
                 )
             `, (err) => {
@@ -6107,7 +6327,7 @@ ${year && month ? `
                         this.db.get(`
                             SELECT COUNT(*) as count 
                             FROM customers 
-                            WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
+                            WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', 'localtime')
                         `, [], (err, row) => {
                             if (err) {
                                 console.error('Error getting new customers this month:', err);
@@ -6122,7 +6342,7 @@ ${year && month ? `
                         this.db.get(`
                             SELECT COUNT(*) as count 
                             FROM invoices 
-                            WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
+                            WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', 'localtime')
                         `, [], (err, row) => {
                             if (err) {
                                 console.error('Error getting invoices this month:', err);
@@ -6535,7 +6755,8 @@ async handlePaymentWebhook(payload, gateway) {
                             } else {
                                 // Handle customer payment
                                 const customer = await this.getCustomerById(invoice.customer_id);
-                                if (customer && customer.status === 'suspended') {
+                                const { shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
+                                if (shouldAutoRestoreCustomer(customer)) {
                                     const invoices = await this.getInvoicesByCustomer(customer.id);
                                     const unpaid = invoices.filter(i => i.status === 'unpaid');
                                     if (unpaid.length === 0) {
@@ -6555,7 +6776,7 @@ async handlePaymentWebhook(payload, gateway) {
                 // Update transaction status
                 const updateSql = `
                     UPDATE payment_gateway_transactions
-                    SET status = ?, payment_type = ?, fraud_status = ?, updated_at = CURRENT_TIMESTAMP
+                    SET status = ?, payment_type = ?, fraud_status = ?, updated_at = datetime('now','localtime')
                     WHERE id = ?
                 `;
                 this.db.run(updateSql, [
@@ -6653,7 +6874,8 @@ async handlePaymentWebhook(payload, gateway) {
                                 }
                                 try {
                                     const refreshed = await this.getCustomerById(invoice.customer_id);
-                                    if (refreshed && refreshed.status === 'suspended') {
+                                    const { shouldAutoRestoreCustomer: shouldAutoRestore } = require('../utils/customerSuspendReason');
+                                    if (shouldAutoRestore(refreshed)) {
                                         const invoices = await this.getInvoicesByCustomer(refreshed.id);
                                         const unpaid = invoices.filter(i => i.status === 'unpaid');
                                         if (unpaid.length === 0) {
@@ -7083,7 +7305,7 @@ async handlePaymentWebhook(payload, gateway) {
         return new Promise((resolve, reject) => {
             const { amount, category, account_expenses, expense_date, payment_method, notes } = expenseData;
             
-            const sql = `UPDATE expenses SET description = ?, amount = ?, category = ?, account_expenses = ?, expense_date = ?, payment_method = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`;
+            const sql = `UPDATE expenses SET description = ?, amount = ?, category = ?, account_expenses = ?, expense_date = ?, payment_method = ?, notes = ?, updated_at = datetime('now','localtime') WHERE id = ?`;
             
             // Description dibuat dari account_expenses jika ada, atau dari category
             const description = account_expenses || category || '';
@@ -7330,7 +7552,7 @@ async handlePaymentWebhook(payload, gateway) {
         return new Promise((resolve, reject) => {
             const { description, amount, category, income_date, payment_method, notes } = incomeData;
             
-            const sql = `UPDATE income SET description = ?, amount = ?, category = ?, income_date = ?, payment_method = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`;
+            const sql = `UPDATE income SET description = ?, amount = ?, category = ?, income_date = ?, payment_method = ?, notes = ?, updated_at = datetime('now','localtime') WHERE id = ?`;
             
             this.db.run(sql, [description, amount, category, income_date, payment_method, notes, id], function(err) {
                 if (err) {
@@ -7636,7 +7858,7 @@ async handlePaymentWebhook(payload, gateway) {
                 payment_method TEXT,
                 notes TEXT,
                 received_at TEXT NOT NULL,
-                created_at TEXT DEFAULT (datetime('now')),
+                created_at TEXT DEFAULT (datetime('now','localtime')),
                 FOREIGN KEY (collector_id) REFERENCES collectors(id)
             )`;
             this.db.run(sql, (err) => {
@@ -8775,6 +8997,454 @@ billingManager.deleteMember = function(id) {
             }
         });
     });
+};
+
+/** Broadcast teks admin ke portal pelanggan (tabel customer_portal_broadcasts). */
+billingManager.getPortalBroadcasts = function (limit = 10) {
+    const lim = Math.min(50, Math.max(1, parseInt(limit, 10) || 10));
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT id, title, body, created_at
+            FROM customer_portal_broadcasts
+            WHERE is_active = 1
+            ORDER BY datetime(created_at) DESC
+            LIMIT ?
+        `;
+        this.db.all(sql, [lim], (err, rows) => {
+            if (err) {
+                if (String(err.message || '').includes('no such table')) {
+                    return resolve([]);
+                }
+                return reject(err);
+            }
+            resolve(rows || []);
+        });
+    });
+};
+
+/** Sisip pengumuman portal (admin / skrip). */
+billingManager.insertPortalBroadcast = function (title, body) {
+    const t = String(title || '').trim();
+    const b = String(body || '').trim();
+    if (!t || !b) {
+        return Promise.reject(new Error('title dan body wajib'));
+    }
+    return new Promise((resolve, reject) => {
+        this.db.run(
+            'INSERT INTO customer_portal_broadcasts (title, body) VALUES (?, ?)',
+            [t, b],
+            function (err) {
+                if (err) return reject(err);
+                resolve({ id: this.lastID });
+            }
+        );
+    });
+};
+
+/** Permintaan ubah paket dari portal pelanggan → admin dashboard. */
+billingManager.insertPortalPackageRequest = function (row) {
+    const cid = parseInt(row.customer_id, 10);
+    if (!Number.isFinite(cid) || cid <= 0) {
+        return Promise.reject(new Error('customer_id tidak valid'));
+    }
+    const targetName = String(row.target_package_name || '').trim();
+    if (!targetName) {
+        return Promise.reject(new Error('target paket wajib'));
+    }
+    const sql = `INSERT INTO customer_portal_package_requests (
+        customer_id, customer_username, customer_name, customer_phone,
+        current_package_name, current_speed,
+        target_package_name, target_speed, target_price_rupiah, note, status
+    ) VALUES (?,?,?,?,?,?,?,?,?,?, 'pending')`;
+    const params = [
+        cid,
+        String(row.customer_username || '').trim() || null,
+        String(row.customer_name || '').trim() || null,
+        String(row.customer_phone || '').trim() || null,
+        String(row.current_package_name || '').trim() || null,
+        String(row.current_speed || '').trim() || null,
+        targetName,
+        String(row.target_speed || '').trim() || null,
+        row.target_price_rupiah != null && row.target_price_rupiah !== ''
+            ? parseInt(row.target_price_rupiah, 10)
+            : null,
+        String(row.note || '').trim() || null,
+    ];
+    return new Promise((resolve, reject) => {
+        this.db.run(sql, params, function (err) {
+            if (err) return reject(err);
+            resolve({ id: this.lastID });
+        });
+    });
+};
+
+billingManager.listPortalPackageRequestsPending = function (limit = 20) {
+    const lim = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT r.*, datetime(r.created_at) as created_at_sort
+            FROM customer_portal_package_requests r
+            WHERE COALESCE(r.status, 'pending') = 'pending'
+            ORDER BY datetime(r.created_at) DESC
+            LIMIT ?
+        `;
+        this.db.all(sql, [lim], (err, rows) => {
+            if (err) {
+                if (String(err.message || '').includes('no such table')) {
+                    return resolve([]);
+                }
+                return reject(err);
+            }
+            resolve(rows || []);
+        });
+    });
+};
+
+/** Jumlah baris permintaan ubah paket portal yang masih pending (setelah reconcile di route lain). */
+billingManager.countPortalPackageRequestsPending = function () {
+    return new Promise((resolve, reject) => {
+        this.db.get(
+            `SELECT COUNT(*) AS n FROM customer_portal_package_requests WHERE COALESCE(status, 'pending') = 'pending'`,
+            [],
+            (err, row) => {
+                if (err) {
+                    if (String(err.message || '').includes('no such table')) return resolve(0);
+                    return reject(err);
+                }
+                resolve(Number(row && row.n) || 0);
+            }
+        );
+    });
+};
+
+/** Tandai permintaan ubah paket selesai jika paket pelanggan sudah sesuai target (nama atau kecepatan). */
+billingManager.reconcilePortalPackageRequestsFulfilled = async function () {
+    const normName = (s) =>
+        String(s || '')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim();
+    const speedMbpsNum = (s) => {
+        const m = String(s || '').match(/(\d+)\s*(?:mb|mbps|mega)/i);
+        return m ? parseInt(m[1], 10) : null;
+    };
+
+    const rows = await new Promise((resolve, reject) => {
+        this.db.all(
+            `SELECT id, customer_id, target_package_name, target_speed
+             FROM customer_portal_package_requests
+             WHERE COALESCE(status, 'pending') = 'pending'`,
+            [],
+            (err, r) => {
+                if (err) {
+                    if (String(err.message || '').includes('no such table')) return resolve([]);
+                    return reject(err);
+                }
+                resolve(r || []);
+            }
+        );
+    });
+
+    let closed = 0;
+    for (const row of rows) {
+        try {
+            const cust = await billingManager.getCustomerById(row.customer_id);
+            if (!cust) continue;
+            let curName = String(cust.package_name || '').trim();
+            let curSpeed = String(cust.package_speed || '').trim();
+            if (cust.package_id) {
+                try {
+                    const pkg = await billingManager.getPackageById(cust.package_id);
+                    if (pkg) {
+                        if (pkg.name) curName = String(pkg.name).trim();
+                        if (pkg.speed) curSpeed = String(pkg.speed).trim();
+                    }
+                } catch (_) {
+                    /* ignore */
+                }
+            }
+            const nameMatch = normName(curName) === normName(row.target_package_name);
+            const tn = speedMbpsNum(row.target_speed);
+            const cn = speedMbpsNum(curSpeed);
+            const speedMatch =
+                tn != null && cn != null && tn === cn && tn > 0;
+
+            if (nameMatch || speedMatch) {
+                await new Promise((resolve, reject) => {
+                    this.db.run(
+                        `UPDATE customer_portal_package_requests SET status = 'fulfilled' WHERE id = ?`,
+                        [row.id],
+                        (e) => (e ? reject(e) : resolve())
+                    );
+                });
+                closed += 1;
+            }
+        } catch (_) {
+            /* baris berikutnya */
+        }
+    }
+    return closed;
+};
+
+/** Jumlah badge pusat notifikasi admin: teknisi (belum dibaca) + kolektor (isolir/lunas saja) + portal (paket + laporan gangguan: telepon cocok atau customer_id). */
+billingManager.getAdminNotificationBadgeCount = function () {
+    const countOne = (sql) =>
+        new Promise((resolve) => {
+            this.db.get(sql, [], (err, row) => {
+                if (err) {
+                    if (String(err.message || '').includes('no such table')) return resolve(0);
+                    return resolve(0);
+                }
+                if (!row) return resolve(0);
+                resolve(Number(row.n) || 0);
+            });
+        });
+    const troubleJoinPhoneMatch =
+        `REPLACE(REPLACE(REPLACE(TRIM(COALESCE(c.phone,'')),' ',''),'-',''),'+','') = REPLACE(REPLACE(REPLACE(TRIM(COALESCE(tr.phone,'')),' ',''),'-',''),'+','')`;
+    const troubleCustomerJoin = `(
+               (LENGTH(TRIM(COALESCE(c.phone,''))) > 5 AND ${troubleJoinPhoneMatch})
+               OR (COALESCE(tr.customer_id, 0) > 0 AND CAST(tr.customer_id AS INTEGER) = CAST(c.id AS INTEGER))
+             )`;
+    return Promise.all([
+        countOne(`SELECT COUNT(*) AS n FROM technician_field_notifications WHERE read_at IS NULL`),
+        countOne(
+            `SELECT COUNT(*) AS n FROM collector_field_notifications
+             WHERE read_at IS NULL
+               AND UPPER(TRIM(COALESCE(kind,''))) IN ('ISOLIR','INVOICE_PAID')`
+        ),
+        countOne(
+            `SELECT COUNT(*) AS n FROM customer_portal_package_requests WHERE COALESCE(status, 'pending') = 'pending'`
+        ),
+        countOne(
+            `SELECT COUNT(*) AS n FROM trouble_reports tr
+             INNER JOIN customers c ON ${troubleCustomerJoin}
+             WHERE LOWER(COALESCE(tr.status,'')) IN ('open','in_progress')`
+        ),
+    ]).then((parts) => parts.reduce((a, b) => a + b, 0));
+};
+
+/**
+ * Feed notifikasi terpusat admin (disaring): pekerjaan teknisi; pelanggan lunas & isolir (kolektor);
+ * permintaan paket + laporan gangguan (nomor telepon cocok **atau** `trouble_reports.customer_id` = pelanggan).
+ */
+billingManager.getAdminUnifiedNotificationFeed = function (limit = 40) {
+    const lim = Math.min(200, Math.max(10, parseInt(limit, 10) || 40));
+    const chunk = Math.max(15, Math.ceil(lim * 0.28));
+    const db = this.db;
+    const troubleJoinPhoneMatch =
+        `REPLACE(REPLACE(REPLACE(TRIM(COALESCE(c.phone,'')),' ',''),'-',''),'+','') = REPLACE(REPLACE(REPLACE(TRIM(COALESCE(tr.phone,'')),' ',''),'-',''),'+','')`;
+    const troubleCustomerJoin = `(
+               (LENGTH(TRIM(COALESCE(c.phone,''))) > 5 AND ${troubleJoinPhoneMatch})
+               OR (COALESCE(tr.customer_id, 0) > 0 AND CAST(tr.customer_id AS INTEGER) = CAST(c.id AS INTEGER))
+             )`;
+
+    const safeAll = (sql, params) =>
+        new Promise((res, rej) => {
+            db.all(sql, params, (e, rows) => {
+                if (e) {
+                    if (String(e.message || '').includes('no such table')) return res([]);
+                    return rej(e);
+                }
+                res(rows || []);
+            });
+        });
+
+    return Promise.all([
+        safeAll(
+            `
+            SELECT 'technician' AS source, n.id AS item_id, n.title, n.body, n.created_at, n.read_at,
+                   n.kind, n.ref_id, n.technician_id AS actor_id,
+                   COALESCE(t.name, '') AS actor_name, '' AS customer_phone,
+                   NULL AS portal_username, NULL AS cur_pkg, NULL AS cur_spd, NULL AS tgt_pkg, NULL AS tgt_spd,
+                   NULL AS tgt_price, NULL AS portal_note, NULL AS tr_location, NULL AS tr_desc_full, NULL AS tr_status,
+                   NULL AS tr_category, NULL AS tr_created
+            FROM technician_field_notifications n
+            LEFT JOIN technicians t ON t.id = n.technician_id
+            WHERE n.read_at IS NULL
+            ORDER BY datetime(n.created_at) DESC
+            LIMIT ?`,
+            [chunk]
+        ),
+        safeAll(
+            `
+            SELECT 'collector' AS source, n.id AS item_id, n.title, n.body, n.created_at, n.read_at,
+                   n.kind, n.ref_id, n.collector_id AS actor_id,
+                   COALESCE(c.name, '') AS actor_name, '' AS customer_phone,
+                   NULL AS portal_username, NULL AS cur_pkg, NULL AS cur_spd, NULL AS tgt_pkg, NULL AS tgt_spd,
+                   NULL AS tgt_price, NULL AS portal_note, NULL AS tr_location, NULL AS tr_desc_full, NULL AS tr_status,
+                   NULL AS tr_category, NULL AS tr_created
+            FROM collector_field_notifications n
+            LEFT JOIN collectors c ON c.id = n.collector_id
+            WHERE n.read_at IS NULL
+              AND UPPER(TRIM(COALESCE(n.kind,''))) IN ('ISOLIR','INVOICE_PAID')
+            ORDER BY datetime(n.created_at) DESC
+            LIMIT ?`,
+            [chunk]
+        ),
+        safeAll(
+            `
+            SELECT 'portal' AS source, r.id AS item_id,
+                   'Permintaan ubah paket' AS title,
+                   (COALESCE(r.customer_name,'') || ' → ' || COALESCE(r.target_package_name,'')) AS body,
+                   r.created_at, NULL AS read_at,
+                   'PKGREQ' AS kind, CAST(r.id AS TEXT) AS ref_id, r.customer_id AS actor_id,
+                   COALESCE(r.customer_name,'') AS actor_name, COALESCE(r.customer_phone,'') AS customer_phone,
+                   r.customer_username AS portal_username,
+                   r.current_package_name AS cur_pkg, r.current_speed AS cur_spd,
+                   r.target_package_name AS tgt_pkg, r.target_speed AS tgt_spd,
+                   r.target_price_rupiah AS tgt_price, r.note AS portal_note,
+                   NULL AS tr_location, NULL AS tr_desc_full, NULL AS tr_status, NULL AS tr_category, NULL AS tr_created
+            FROM customer_portal_package_requests r
+            WHERE COALESCE(r.status, 'pending') = 'pending'
+            ORDER BY datetime(r.created_at) DESC
+            LIMIT ?`,
+            [chunk]
+        ),
+        safeAll(
+            `
+            SELECT 'portal_report' AS source, tr.id AS item_id,
+                   ('Laporan gangguan · ' || COALESCE(tr.status,'')) AS title,
+                   (COALESCE(tr.category,'') ||
+                    CASE WHEN COALESCE(TRIM(tr.description),'') != '' THEN ': ' || SUBSTR(TRIM(tr.description), 1, 220) ELSE '' END) AS body,
+                   COALESCE(tr.updated_at, tr.created_at) AS created_at, NULL AS read_at,
+                   'TROUBLE' AS kind, CAST(tr.id AS TEXT) AS ref_id, c.id AS actor_id,
+                   COALESCE(tr.name, c.name, '') AS actor_name, COALESCE(tr.phone, c.phone, '') AS customer_phone,
+                   NULL AS portal_username, NULL AS cur_pkg, NULL AS cur_spd, NULL AS tgt_pkg, NULL AS tgt_spd,
+                   NULL AS tgt_price, NULL AS portal_note,
+                   tr.location AS tr_location, tr.description AS tr_desc_full, tr.status AS tr_status,
+                   tr.category AS tr_category, tr.created_at AS tr_created
+            FROM trouble_reports tr
+            INNER JOIN customers c ON ${troubleCustomerJoin}
+            WHERE LOWER(COALESCE(tr.status,'')) IN ('open','in_progress')
+            ORDER BY datetime(COALESCE(tr.updated_at, tr.created_at)) DESC
+            LIMIT ?`,
+            [chunk]
+        ),
+    ])
+        .then(([techRows, colRows, portalRows, troubleRows]) => {
+            const rows = [...techRows, ...colRows, ...portalRows, ...troubleRows];
+            rows.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+
+            const hrefFor = (row) => {
+                if (row.source === 'portal') {
+                    if (row.customer_phone) {
+                        return `/admin/billing/customers?editPhone=${encodeURIComponent(row.customer_phone)}`;
+                    }
+                    return '/admin/billing/customers';
+                }
+                if (row.source === 'portal_report') {
+                    return `/admin/trouble/detail/${encodeURIComponent(row.item_id)}`;
+                }
+                if (row.source === 'collector') {
+                    const k = String(row.kind || '').toUpperCase();
+                    if (k === 'INVOICE_PAID') return '/admin/billing/invoices';
+                    if (k === 'ISOLIR') return '/admin/billing/service-suspension';
+                    return '/admin/billing/collector-remittance';
+                }
+                const k = String(row.kind || '').toUpperCase();
+                if (k === 'INSTALL') return '/admin/installations';
+                if (k === 'LEAVE') return '/admin/employees/leave-requests';
+                if (k === 'TR' && row.ref_id) return `/admin/trouble/detail/${encodeURIComponent(row.ref_id)}`;
+                return '/admin/trouble';
+            };
+
+            const actorLabel = (row) => {
+                if (row.source === 'portal') return 'Pelanggan · permintaan paket';
+                if (row.source === 'portal_report') return 'Pelanggan · laporan gangguan';
+                if (row.source === 'collector') {
+                    const k = String(row.kind || '').toUpperCase();
+                    if (k === 'INVOICE_PAID') return row.actor_name ? `Lunas (kolektor: ${row.actor_name})` : 'Pelanggan lunas';
+                    if (k === 'ISOLIR') return row.actor_name ? `Isolir sistem · ${row.actor_name}` : 'Isolir sistem';
+                    return row.actor_name ? `Kolektor: ${row.actor_name}` : `Kolektor #${row.actor_id}`;
+                }
+                return row.actor_name ? `Teknisi: ${row.actor_name}` : `Teknisi #${row.actor_id}`;
+            };
+
+            const items = rows.slice(0, lim).map((row) => {
+                const base = {
+                    source: row.source,
+                    id: row.item_id,
+                    title: row.title,
+                    body: row.body || '',
+                    created_at: row.created_at,
+                    actor_label: actorLabel(row),
+                    href: hrefFor(row),
+                    kind: row.kind,
+                    ref_id: row.ref_id,
+                    actor_id: row.actor_id,
+                    actor_name: row.actor_name,
+                    customer_phone: row.customer_phone,
+                };
+                if (row.source === 'portal') {
+                    base.detail = {
+                        type: 'portal_package',
+                        customer_username: row.portal_username,
+                        current_package_name: row.cur_pkg,
+                        current_speed: row.cur_spd,
+                        target_package_name: row.tgt_pkg,
+                        target_speed: row.tgt_spd,
+                        target_price_rupiah: row.tgt_price,
+                        note: row.portal_note,
+                    };
+                } else if (row.source === 'portal_report') {
+                    base.detail = {
+                        type: 'portal_trouble',
+                        status: row.tr_status,
+                        category: row.tr_category,
+                        location: row.tr_location,
+                        description: row.tr_desc_full,
+                        report_created_at: row.tr_created,
+                    };
+                } else {
+                    base.detail = { type: row.source === 'collector' ? 'collector' : 'technician', kind: row.kind, ref_id: row.ref_id };
+                }
+                return base;
+            });
+            return { items };
+        })
+        .catch((err) => Promise.reject(err));
+};
+
+/**
+ * Kosongkan pusat notifikasi admin: tandai semua notifikasi teknisi & kolektor sudah dibaca,
+ * dan tiadakan permintaan ubah paket portal yang masih pending (status dismissed).
+ * Laporan gangguan (tiket) tidak diubah — tetap di menu gangguan.
+ */
+billingManager.clearAdminUiNotifications = function (opts = {}) {
+    const dismissPortal = opts.dismissPortalRequests !== false;
+    const runUpdate = (sql) =>
+        new Promise((resolve, reject) => {
+            this.db.run(sql, [], function (err) {
+                if (err) {
+                    if (String(err.message || '').includes('no such table')) return resolve(0);
+                    return reject(err);
+                }
+                resolve(Number(this.changes) || 0);
+            });
+        });
+    const seq = dismissPortal
+        ? Promise.resolve()
+            .then(() => runUpdate(`UPDATE technician_field_notifications SET read_at = datetime('now','localtime') WHERE read_at IS NULL`))
+            .then((t) =>
+                runUpdate(`UPDATE collector_field_notifications SET read_at = datetime('now','localtime') WHERE read_at IS NULL`).then(
+                    (c) => ({ t, c })
+                )
+            )
+            .then(({ t, c }) =>
+                runUpdate(
+                    `UPDATE customer_portal_package_requests SET status = 'dismissed' WHERE COALESCE(status,'pending') = 'pending'`
+                ).then((p) => ({ technician_cleared: t, collector_cleared: c, portal_dismissed: p }))
+            )
+        : Promise.resolve()
+            .then(() => runUpdate(`UPDATE technician_field_notifications SET read_at = datetime('now','localtime') WHERE read_at IS NULL`))
+            .then((t) =>
+                runUpdate(`UPDATE collector_field_notifications SET read_at = datetime('now','localtime') WHERE read_at IS NULL`).then((c) => ({
+                    technician_cleared: t,
+                    collector_cleared: c,
+                    portal_dismissed: 0,
+                }))
+            );
+    return seq;
 };
 
 module.exports = billingManager; 

@@ -16,7 +16,7 @@
   },
   "service_disruption": {
     "title": "Gangguan Layanan",
-    "template": "\n🚨 *GANGGUAN LAYANAN*\n\nHalo Pelanggan Setia,\n\nKami informasikan bahwa sedang terjadi gangguan pada jaringan internet:\n\n📡 *Jenis Gangguan:* {disruption_type}\n📍 *Area Terdampak:* {affected_area}\n⏰ *Perkiraan Selesai:* {estimated_resolution}\n📞 *Hotline:* {support_phone}\n\n*Cek Status Di*\nwww.cvlmedia.my.id\n*_Login Dengan No Hp Terdaftar_*\n\n\n*CV. LINTAS MULTIMEDIA*\nˢᵘᵖᵖᵒʳᵗᵉᵈ ᵇʸ\nᴾᵀ.ᴶᴵᴺᴼᴹ ᴺᴱᵀᵂᴼᴿᴷ ᴵᴺᴰᴼᴺᴱˢᴵᴬ",
+    "template": "\n🚨 *GANGGUAN LAYANAN*\n\nHalo Pelanggan Setia,\n\nMohon maaf atas ketindaknyamannya, Kami informasikan bahwa sedang terjadi gangguan pada jaringan internet:\n\n📡 *Jenis Gangguan:* {disruption_type}\n📍 *Area Terdampak:* {affected_area}\n⏰ *Perkiraan Selesai:* {estimated_resolution}\n📞 *Hotline:* {support_phone}\n\nTerimakasih atas kesabaran dan pengertian anda\nUntuk update informasi bisa hubungi nomor  0816411615\n\n*Cek Status Di*\nwww.billlingskynet.kalimasada.id\n*_Login Dengan No Hp Terdaftar_*\n\n\nKALIMASADA INTI SARANA ",
     "enabled": true
   },
   "service_announcement": {
@@ -26,12 +26,12 @@
   },
   "service_suspension": {
     "title": "Service Suspension",
-    "template": "\n⚠️ *LAYANAN INTERNET DINONAKTIFKAN*\n\nHalo {customer_name},\n\nLayanan internet Anda telah dinonaktifkan karena:\n📋 *Alasan:* {reason}\n\n💡 *Cara Mengaktifkan Kembali:*\n1. Lakukan pembayaran tagihan yang tertunggak\n2. Layanan akan aktif otomatis setelah pembayaran dikonfirmasi\n\n*Cek Status Dan Pembayaran Anda Di*\nwww.cvlmedia.my.id\n*_Login Dengan No Hp Terdaftar_*\n\n📞 Butuh Bantuan?\nHubungi kami di: 0813-6888-8498\n\nCV. LINTAS MULTIMEDIA\nˢᵘᵖᵖᵒʳᵗᵉᵈ ᵇʸ\nᴾᵀ.ᴶᴵᴺᴼᴹ ᴺᴱᵀᵂᴼᴿᴷ ᴵᴺᴰᴼᴺᴱˢᴵᴬ\nTerima kasih atas perhatian Anda.",
+    "template": "\n⚠️ *LAYANAN INTERNET DINONAKTIFKAN*\n\nHalo {customer_name},\n\nLayanan internet Anda telah dinonaktifkan karena:\n📋 *Alasan:* {reason}\n\n💡 *Cara Mengaktifkan Kembali:*\n1. Lakukan pembayaran tagihan yang tertunggak\n2. Layanan akan aktif otomatis setelah pembayaran dikonfirmasi\n\n*Cek Status Dan Pembayaran Anda Di*\nwww.billlingskynet.kalimasada.id\n*_Login Dengan No Hp Terdaftar_*\n\n📞 Butuh Bantuan?\nHubungi kami di: 0816411615\n\nKALIMASADA INTI SARANA \nTerima kasih atas perhatian Anda.",
     "enabled": true
   },
   "service_restoration": {
     "title": "Service Restoration",
-    "template": "✅ *LAYANAN INTERNET DIAKTIFKAN*\n\nHalo {customer_name},\n\nSelamat! Layanan internet Anda telah diaktifkan kembali.\n\n📋 *Informasi:*\n• Status: AKTIF ✅\n• Paket: {package_name}\n• Kecepatan: {package_speed}\n\nTerima kasih telah melakukan pembayaran tepat waktu.\n\n*JINOM-HOMENET*\nInfo: 0813-6888-8498",
+    "template": "✅ *LAYANAN INTERNET DIAKTIFKAN*\n\nHalo {customer_name},\n\nSelamat! Layanan internet Anda telah diaktifkan kembali.\n\n📋 *Informasi:*\n• Status: AKTIF ✅\n• Paket: {package_name}\n• Kecepatan: {package_speed}\n\nTerima kasih telah melakukan pembayaran tepat waktu.\n\n*JINOM-HOMENET*\nInfo: 0816411615",
     "enabled": true
   },
   "welcome_message": {

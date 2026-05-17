@@ -133,17 +133,22 @@ router.get('/odp', adminAuth, getAppSettings, async (req, res) => {
             });
         });
 
-        // Ambil data parent ODP untuk dropdown (hanya ODP yang tidak memiliki parent)
+        // Kandidat parent / sumber koneksi: semua ODP (hindari filter parent_odp_id IS NULL — itu membuat daftar tidak lengkap untuk hierarki & ODP aktif non-root).
+        // Saat edit, opsi dengan id = ODP yang sedang diedit dinonaktifkan di klien agar tidak memilih diri sendiri sebagai parent.
         const parentOdps = await new Promise((resolve, reject) => {
-            db.all(`
-                SELECT id, name, code, capacity, used_ports, status
-                FROM odps 
-                WHERE parent_odp_id IS NULL AND status = 'active'
-                ORDER BY name
-            `, [], (err, rows) => {
-                if (err) reject(err);
-                else resolve(rows);
-            });
+            db.all(
+                `
+                SELECT id, name, code, capacity, used_ports, status,
+                       latitude, longitude
+                FROM odps
+                ORDER BY name COLLATE NOCASE
+            `,
+                [],
+                (err, rows) => {
+                    if (err) reject(err);
+                    else resolve(rows);
+                }
+            );
         });
         
         db.close();
@@ -318,6 +323,18 @@ router.put('/odp/:id', adminAuth, async (req, res) => {
                 message: 'ODP tidak ditemukan'
             });
         }
+
+        const parentId =
+            parent_odp_id != null && String(parent_odp_id).trim() !== ''
+                ? Number(parent_odp_id)
+                : null;
+        if (parentId != null && !Number.isNaN(parentId) && parentId === Number(id)) {
+            db.close();
+            return res.status(400).json({
+                success: false,
+                message: 'ODP tidak boleh menjadi parent dirinya sendiri'
+            });
+        }
         
         console.log('Existing ODP before update:', existingODP);
         
@@ -325,9 +342,9 @@ router.put('/odp/:id', adminAuth, async (req, res) => {
             db.run(`
                 UPDATE odps 
                 SET name = ?, code = ?, parent_odp_id = ?, latitude = ?, longitude = ?, address = ?, 
-                    capacity = ?, status = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+                    capacity = ?, status = ?, notes = ?, updated_at = datetime('now','localtime')
                 WHERE id = ?
-            `, [name, code, parent_odp_id || null, latitude, longitude, address, capacity, status || 'active', notes, id], function(err) {
+            `, [name, code, parentId != null && !Number.isNaN(parentId) ? parentId : null, latitude, longitude, address, capacity, status || 'active', notes, id], function(err) {
                 if (err) reject(err);
                 else resolve(this.changes);
             });
@@ -476,18 +493,24 @@ router.get('/cables', adminAuth, getAppSettings, async (req, res) => {
             });
         });
         
-        // Ambil data customers tanpa cable route
+        // Pelanggan tanpa route = tidak ada baris di cable_routes (sumber kebenaran).
+        // Jangan pakai OR cable_status = 'unrouted' — kolom itu bisa stale vs cable_routes.
         const customersWithoutCable = await new Promise((resolve, reject) => {
-            db.all(`
-                SELECT c.* FROM customers c
-                LEFT JOIN cable_routes cr ON c.id = cr.customer_id
-                WHERE cr.id IS NULL OR c.cable_status = 'unrouted'
-                GROUP BY c.id
+            db.all(
+                `
+                SELECT c.*
+                FROM customers c
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM cable_routes cr WHERE cr.customer_id = c.id
+                )
                 ORDER BY c.name
-            `, [], (err, rows) => {
-                if (err) reject(err);
-                else resolve(rows);
-            });
+            `,
+                [],
+                (err, rows) => {
+                    if (err) reject(err);
+                    else resolve(rows);
+                }
+            );
         });
         
         db.close();
@@ -576,6 +599,18 @@ router.post('/cables', adminAuth, async (req, res) => {
                 else resolve(this.lastID);
             });
         });
+
+        // Samakan flag di customers agar filter/UX lain tidak salah baca (best-effort).
+        await new Promise((resolve, reject) => {
+            db.run(
+                `UPDATE customers SET cable_status = 'connected', odp_id = ? WHERE id = ?`,
+                [odp_id, customer_id],
+                (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                }
+            );
+        });
         
         db.close();
         
@@ -608,7 +643,7 @@ router.put('/cables/:id/status', adminAuth, async (req, res) => {
         await new Promise((resolve, reject) => {
             db.run(`
                 UPDATE cable_routes 
-                SET status = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+                SET status = ?, notes = ?, updated_at = datetime('now','localtime')
                 WHERE id = ?
             `, [status, notes, id], function(err) {
                 if (err) reject(err);
@@ -665,7 +700,7 @@ router.put('/cables/:id', adminAuth, async (req, res) => {
         const result = await new Promise((resolve, reject) => {
             db.run(`
                 UPDATE cable_routes 
-                SET cable_type = ?, cable_length = ?, port_number = ?, status = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+                SET cable_type = ?, cable_length = ?, port_number = ?, status = ?, notes = ?, updated_at = datetime('now','localtime')
                 WHERE id = ?
             `, [cable_type, cable_length, port_number, status || 'connected', notes, id], function(err) {
                 if (err) reject(err);
@@ -1242,7 +1277,7 @@ router.put('/api/odp-connections/:id', adminAuth, async (req, res) => {
             db.run(`
                 UPDATE odp_connections 
                 SET from_odp_id = ?, to_odp_id = ?, connection_type = ?, cable_length = ?, 
-                    cable_capacity = ?, status = ?, installation_date = ?, notes = ?, polyline_geojson = ?, updated_at = CURRENT_TIMESTAMP
+                    cable_capacity = ?, status = ?, installation_date = ?, notes = ?, polyline_geojson = ?, updated_at = datetime('now','localtime')
                 WHERE id = ?
             `, [from_odp_id, to_odp_id, connection_type, cable_length, cable_capacity, status, installation_date, notes, polyline_geojson || null, id], function(err) {
                 if (err) reject(err);

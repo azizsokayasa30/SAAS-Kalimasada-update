@@ -124,19 +124,6 @@ BEGIN
     UPDATE odps SET used_ports = used_ports - 1 WHERE id = OLD.odp_id;
 END;
 
--- Sample data untuk testing (opsional)
-INSERT OR IGNORE INTO odps (name, code, latitude, longitude, address, capacity, status) VALUES 
-('ODP-Central-01', 'ODP-C01', -6.2088, 106.8456, 'Jl. Sudirman No. 1, Jakarta Pusat', 64, 'active'),
-('ODP-Branch-01', 'ODP-B01', -6.2200, 106.8500, 'Jl. Thamrin No. 10, Jakarta Pusat', 32, 'active'),
-('ODP-Residential-01', 'ODP-R01', -6.2000, 106.8400, 'Jl. Kebon Jeruk No. 5, Jakarta Barat', 16, 'active');
-
--- Sample cable routes (akan terisi otomatis saat ada customer)
--- INSERT OR IGNORE INTO cable_routes (customer_id, odp_id, cable_length, status, port_number) VALUES 
--- (1, 1, 150.50, 'connected', 1),
--- (2, 1, 200.75, 'connected', 2),
--- (3, 2, 100.25, 'connected', 1);
-
--- Sample network segments
-INSERT OR IGNORE INTO network_segments (name, start_odp_id, end_odp_id, segment_type, cable_length, status) VALUES 
-('Backbone-Central-Branch', 1, 2, 'Backbone', 500.00, 'active'),
-('Distribution-Branch-Residential', 2, 3, 'Distribution', 300.00, 'active');
+-- Data demo ODP tidak disisipkan di migration (INSERT OR IGNORE membuat baris terhapus
+-- muncul lagi setiap migrasi dijalankan ulang). Untuk lingkungan dev saja:
+--   node scripts/add-sample-odp-cable-data.js

@@ -358,6 +358,11 @@
                             </div>
       <% } %>
 
+      <div class="alert alert-info d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3" role="alert">
+        <span><i class="bi bi-layout-text-window-reverse me-2"></i>Tampilan portal pelanggan baru (responsif) — login dengan kredensial billing yang sama.</span>
+        <a class="btn btn-sm btn-primary" href="/customer-app/">Buka portal baru</a>
+      </div>
+
       <% if (customer) { %>
       <div class="card">
         <div class="card-header">
@@ -1062,8 +1067,8 @@
       }
     }
 
-    // Refresh logo every 5 seconds
-    setInterval(refreshLogo, 5000);
+    // Refresh logo every 10 seconds
+    setInterval(refreshLogo, 10000);
   });
 
   // QR Code toggle function

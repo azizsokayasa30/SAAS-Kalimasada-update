@@ -18,7 +18,7 @@ db.run(
         title TEXT NOT NULL,
         body TEXT,
         read_at TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
+        created_at TEXT DEFAULT (datetime('now','localtime')),
         UNIQUE(technician_id, kind, ref_id)
     )`,
     (err) => {
@@ -37,12 +37,12 @@ function upsertTaskNotification(technicianId, kind, refId, title, body) {
     return new Promise((resolve, reject) => {
         db.run(
             `INSERT INTO technician_field_notifications (technician_id, kind, ref_id, title, body, read_at, created_at)
-             VALUES (?, ?, ?, ?, ?, NULL, datetime('now'))
+             VALUES (?, ?, ?, ?, ?, NULL, datetime('now','localtime'))
              ON CONFLICT(technician_id, kind, ref_id) DO UPDATE SET
                title = excluded.title,
                body = excluded.body,
                read_at = NULL,
-               created_at = datetime('now')`,
+               created_at = datetime('now','localtime')`,
             [tid, String(kind).toUpperCase(), rid, String(title || 'Tugas baru'), body || null],
             function (e) {
                 if (e) {

@@ -73,4 +73,3 @@ router.get('/license/generate', adminAuth, async (req, res) => {
 });
 
 module.exports = router;
-

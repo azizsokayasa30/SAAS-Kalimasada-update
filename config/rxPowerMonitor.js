@@ -5,6 +5,7 @@ const axios = require('axios');
 
 // Import sock dari whatsapp.js
 let sock = null;
+const MIN_MONITORING_INTERVAL_MS = 10 * 1000;
 
 // Fungsi untuk set sock instance
 function setSock(sockInstance) {
@@ -316,10 +317,22 @@ async function sendToTechnicians(message, priority = 'normal') {
 
 // Fungsi untuk memulai monitoring RX Power
 function startRXPowerMonitoring() {
+  try {
+    const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
+    if (!isWaSystemMonitorEnabled('rx_power_threshold_wa')) {
+      console.log('📊 RX Power WA monitoring is DISABLED by master switch');
+      return;
+    }
+  } catch (_) { /* ignore */ }
+
   const notificationEnabled = getSetting('rx_power_notification_enable', true);
   
   // Ambil interval dalam millisecond langsung dari settings
-  const intervalMs = parseInt(getSetting('rx_power_warning_interval', 36000000)); // Default 10 jam
+  const configuredIntervalMs = parseInt(getSetting('rx_power_warning_interval', 36000000), 10); // Default 10 jam
+  const intervalMs = Math.max(
+    Number.isFinite(configuredIntervalMs) && configuredIntervalMs > 0 ? configuredIntervalMs : 36000000,
+    MIN_MONITORING_INTERVAL_MS
+  );
   const intervalHours = Math.round(intervalMs / (1000 * 60 * 60));
   const interval = intervalMs;
   

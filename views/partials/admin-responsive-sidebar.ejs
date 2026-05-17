@@ -675,7 +675,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
                     const startPolling = () => {
                         let polls = 0;
-                        const maxPolls = Math.ceil(60000 / 1500); // 60 detik max
+                        const maxPolls = Math.ceil(60000 / 10000); // 60 detik max
                         const pollId = setInterval(async () => {
                             polls += 1;
                             try {
@@ -696,7 +696,7 @@ document.addEventListener('DOMContentLoaded', function () {
                                 restartBtn.style.opacity = '';
                                 toast.textContent = 'Restart sudah dieksekusi, tapi server belum siap dalam 60 detik. Silakan coba lagi.';
                             }
-                        }, 1500);
+                        }, 10000);
                     };
 
                     const intervalId = setInterval(() => {
@@ -718,7 +718,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
                     const startPolling = () => {
                         let polls = 0;
-                        const maxPolls = Math.ceil(60000 / 1500); // 60 detik max
+                        const maxPolls = Math.ceil(60000 / 10000); // 60 detik max
                         const pollId = setInterval(async () => {
                             polls += 1;
                             try {
@@ -739,7 +739,7 @@ document.addEventListener('DOMContentLoaded', function () {
                                 restartBtn.style.opacity = '';
                                 toast.textContent = 'Restart sudah diminta, tapi server belum siap dalam 60 detik. Silakan coba lagi.';
                             }
-                        }, 1500);
+                        }, 10000);
                     };
 
                     const intervalId = setInterval(() => {

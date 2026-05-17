@@ -9,6 +9,9 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.min.css" rel="stylesheet">
     <link href="/css/admin-mobile.css" rel="stylesheet">
     <%- include('../../partials/theme-head') %>
+    <style>
+        .emp-locked { background: #e8f4fd; border: 1px solid #b6d4fe; border-radius: 8px; padding: 12px 14px; }
+    </style>
 </head>
 <body>
 <div class="container-fluid">
@@ -19,20 +22,51 @@
                 <h1 class="h2"><i class="bi bi-box-arrow-up"></i> Barang Keluar</h1>
             </div>
 
-            <div class="alert alert-warning">
-                <strong>Wajib scan QR unit.</strong> Pengeluaran hanya dengan kode unik per unit (sama dengan isi QR saat barang masuk). Scanner USB HID: fokus ke kolom scan, scan — biasanya kode + Enter terkirim otomatis. <strong>Nama penerima wajib diisi</strong> sebelum memproses keluar.
+            <div class="alert alert-info">
+                <strong>Alur:</strong> (1) Scan QR kartu karyawan (<code>EMP...</code>) — (2) Scan QR unit barang (<code>WH...</code>) berulang untuk setiap unit.
+                Scanner USB: fokus ke kolom scan, scan — biasanya kode + Enter otomatis.
+                Tanpa kartu QR, pilih karyawan dari daftar atau isi nama manual.
             </div>
 
             <div class="card shadow-sm mb-4">
                 <div class="card-body">
                     <div id="alOut"></div>
-                    <label class="form-label fw-semibold">Penerima <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control mb-3" id="outRecipient" maxlength="200" required autocomplete="name" placeholder="Nama orang / tim yang menerima barang">
-                    <label class="form-label fw-semibold">Scan / tempel kode QR</label>
-                    <input type="text" class="form-control form-control-lg mb-2" id="scanInput" autocomplete="off" placeholder="WH..." autofocus>
+
+                    <label class="form-label fw-semibold">1. Karyawan / penerima <span class="text-danger">*</span></label>
+                    <div id="empLockedBox" class="emp-locked mb-3 d-none">
+                        <div class="d-flex justify-content-between align-items-start gap-2">
+                            <div>
+                                <div class="small text-muted mb-1">Karyawan terpilih (scan QR)</div>
+                                <div class="fw-semibold" id="empLockedName">—</div>
+                                <div class="small text-muted" id="empLockedMeta">—</div>
+                            </div>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="btnClearEmp">Ganti</button>
+                        </div>
+                    </div>
+                    <div id="empPickBox" class="mb-3">
+                        <div class="row g-2">
+                            <div class="col-md-6">
+                                <label class="form-label small text-muted">Scan QR karyawan</label>
+                                <input type="text" class="form-control" id="empScanInput" autocomplete="off" placeholder="EMP...">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small text-muted">Atau pilih dari daftar</label>
+                                <select class="form-select" id="empSelect">
+                                    <option value="">— Pilih karyawan aktif —</option>
+                                </select>
+                            </div>
+                        </div>
+                        <label class="form-label small text-muted mt-2">Atau ketik nama manual</label>
+                        <input type="text" class="form-control" id="outRecipient" maxlength="200" autocomplete="name" placeholder="Nama penerima (jika tanpa QR karyawan)">
+                    </div>
+
+                    <hr class="my-3">
+
+                    <label class="form-label fw-semibold">2. Scan / tempel kode QR barang</label>
+                    <input type="text" class="form-control form-control-lg mb-2" id="scanInput" autocomplete="off" placeholder="WH..." disabled>
                     <label class="form-label">Catatan keluar (opsional)</label>
                     <input type="text" class="form-control mb-3" id="outNotes" maxlength="500" placeholder="Tujuan, proyek, dll.">
-                    <button type="button" class="btn btn-primary" id="btnOut"><i class="bi bi-upc-scan"></i> Proses keluar</button>
+                    <button type="button" class="btn btn-primary" id="btnOut" disabled><i class="bi bi-upc-scan"></i> Proses keluar</button>
                 </div>
             </div>
 
@@ -43,9 +77,10 @@
                         <table class="table table-sm table-hover mb-0">
                             <thead class="table-light">
                             <tr>
-                                <th>Waktu</th>
+                                <th>Waktu (WIB)</th>
                                 <th>Barang</th>
                                 <th>Kode unit</th>
+                                <th>Karyawan</th>
                                 <th>Penerima</th>
                                 <th>Catatan</th>
                             </tr>
@@ -63,14 +98,111 @@
 (function () {
     const scanInput = document.getElementById('scanInput');
     const outRecipient = document.getElementById('outRecipient');
+    const empScanInput = document.getElementById('empScanInput');
+    const empSelect = document.getElementById('empSelect');
+    const empLockedBox = document.getElementById('empLockedBox');
+    const empPickBox = document.getElementById('empPickBox');
     const alOut = document.getElementById('alOut');
     const tbOut = document.getElementById('tbOut');
+    const btnOut = document.getElementById('btnOut');
+
+    let selectedEmployee = null;
+    let employeeById = {};
 
     function esc(s) {
         const d = document.createElement('div');
         d.textContent = s == null ? '' : String(s);
         return d.innerHTML;
     }
+
+    function hasRecipient() {
+        return !!(selectedEmployee || outRecipient.value.trim());
+    }
+
+    function updateScanEnabled() {
+        const ok = hasRecipient();
+        scanInput.disabled = !ok;
+        btnOut.disabled = !ok;
+        if (ok) scanInput.focus();
+    }
+
+    function showEmployeeLocked(emp) {
+        selectedEmployee = emp;
+        document.getElementById('empLockedName').textContent = emp.nama_lengkap;
+        document.getElementById('empLockedMeta').textContent = (emp.jabatan || '-') + ' · NIK ' + (emp.nik || '-');
+        empLockedBox.classList.remove('d-none');
+        empPickBox.classList.add('d-none');
+        outRecipient.value = '';
+        empScanInput.value = '';
+        empSelect.value = String(emp.id);
+        updateScanEnabled();
+    }
+
+    function clearEmployee() {
+        selectedEmployee = null;
+        empLockedBox.classList.add('d-none');
+        empPickBox.classList.remove('d-none');
+        empScanInput.value = '';
+        empSelect.value = '';
+        updateScanEnabled();
+        empScanInput.focus();
+    }
+
+    async function loadEmployees() {
+        try {
+            const r = await fetch('/admin/employees/api/data');
+            const j = await r.json();
+            if (!j.success) return;
+            const aktif = (j.data || []).filter(e => e.status === 'aktif');
+            employeeById = {};
+            aktif.forEach(e => { employeeById[e.id] = e; });
+            empSelect.innerHTML = '<option value="">— Pilih karyawan aktif —</option>' +
+                aktif.map(e => `<option value="${e.id}">${e.nama_lengkap} (${e.jabatan || '-'})</option>`).join('');
+        } catch (_) { /* ignore */ }
+    }
+
+    async function lookupEmployee(code) {
+        const r = await fetch('/admin/employees/api/lookup-qr?code=' + encodeURIComponent(code));
+        const j = await r.json();
+        if (!j.success) throw new Error(j.message || 'Karyawan tidak ditemukan');
+        return j.employee;
+    }
+
+    async function onEmployeeScan() {
+        alOut.innerHTML = '';
+        const code = empScanInput.value.trim();
+        if (!code) return;
+        try {
+            const emp = await lookupEmployee(code);
+            showEmployeeLocked(emp);
+            alOut.innerHTML = '<div class="alert alert-success py-2">Karyawan: <strong>' + esc(emp.nama_lengkap) + '</strong>. Silakan scan barang.</div>';
+            empScanInput.value = '';
+        } catch (e) {
+            alOut.innerHTML = '<div class="alert alert-danger py-2">' + esc(e.message || 'Gagal') + '</div>';
+            empScanInput.select();
+        }
+    }
+
+    empSelect.addEventListener('change', () => {
+        const id = empSelect.value;
+        if (!id) {
+            if (selectedEmployee) clearEmployee();
+            return;
+        }
+        const emp = employeeById[id];
+        if (emp) showEmployeeLocked(emp);
+        alOut.innerHTML = '';
+        updateScanEnabled();
+    });
+
+    outRecipient.addEventListener('input', () => {
+        if (outRecipient.value.trim() && selectedEmployee) {
+            clearEmployee();
+        }
+        updateScanEnabled();
+    });
+
+    document.getElementById('btnClearEmp').onclick = clearEmployee;
 
     async function loadHist() {
         const r = await fetch('/admin/warehouse/api/outbound-history?limit=200');
@@ -79,33 +211,40 @@
         if (!j.success) return;
         (j.rows || []).forEach(row => {
             const tr = document.createElement('tr');
-            tr.innerHTML = '<td>' + esc(row.outbound_at) + '</td><td>' + esc(row.item_name) + '</td><td><code>' + esc(row.public_code) + '</code></td><td>' + esc(row.outbound_recipient || '—') + '</td><td>' + esc(row.outbound_notes || '—') + '</td>';
+            const karyawan = row.employee_name
+                ? row.employee_name + (row.employee_jabatan ? ' (' + row.employee_jabatan + ')' : '')
+                : '—';
+            tr.innerHTML = '<td>' + esc(row.outbound_at) + '</td><td>' + esc(row.item_name) + '</td><td><code>' + esc(row.public_code) + '</code></td><td>' + esc(karyawan) + '</td><td>' + esc(row.outbound_recipient || '—') + '</td><td>' + esc(row.outbound_notes || '—') + '</td>';
             tbOut.appendChild(tr);
         });
     }
 
     async function submitScan() {
         alOut.innerHTML = '';
-        const recipient = outRecipient.value.trim();
-        if (!recipient) {
-            alOut.innerHTML = '<div class="alert alert-warning">Nama penerima wajib diisi.</div>';
-            outRecipient.focus();
+        if (!hasRecipient()) {
+            alOut.innerHTML = '<div class="alert alert-warning">Scan QR karyawan, pilih dari daftar, atau isi nama penerima.</div>';
+            empScanInput.focus();
             return;
         }
         const code = scanInput.value.trim();
         if (!code) {
-            alOut.innerHTML = '<div class="alert alert-warning">Isi kode hasil scan.</div>';
+            alOut.innerHTML = '<div class="alert alert-warning">Isi kode hasil scan barang.</div>';
             scanInput.focus();
             return;
+        }
+        const body = {
+            code,
+            notes: document.getElementById('outNotes').value.trim()
+        };
+        if (selectedEmployee) {
+            body.employee_id = selectedEmployee.id;
+        } else {
+            body.recipient = outRecipient.value.trim();
         }
         const r = await fetch('/admin/warehouse/api/outbound-scan', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                code,
-                recipient,
-                notes: document.getElementById('outNotes').value.trim()
-            })
+            body: JSON.stringify(body)
         });
         const j = await r.json();
         if (!j.success) {
@@ -113,13 +252,19 @@
             scanInput.select();
             return;
         }
-        alOut.innerHTML = '<div class="alert alert-success">Berhasil keluar ke <strong>' + esc(j.unit.recipient || recipient) + '</strong>: <strong>' + esc(j.unit.item_name) + '</strong> — <code>' + esc(j.unit.public_code) + '</code></div>';
+        alOut.innerHTML = '<div class="alert alert-success">Berhasil keluar ke <strong>' + esc(j.unit.recipient) + '</strong>: <strong>' + esc(j.unit.item_name) + '</strong> — <code>' + esc(j.unit.public_code) + '</code></div>';
         scanInput.value = '';
         scanInput.focus();
         loadHist();
     }
 
-    document.getElementById('btnOut').onclick = submitScan;
+    btnOut.onclick = submitScan;
+    empScanInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            onEmployeeScan();
+        }
+    });
     scanInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
@@ -127,11 +272,9 @@
         }
     });
 
+    loadEmployees();
     loadHist();
-    setTimeout(() => {
-        if (!outRecipient.value.trim()) outRecipient.focus();
-        else scanInput.focus();
-    }, 300);
+    setTimeout(() => empScanInput.focus(), 300);
 })();
 </script>
 </body>

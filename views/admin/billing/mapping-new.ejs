@@ -1492,8 +1492,7 @@
         let networkData = {};
         let showOnlyDownCustomers = false;
         let customerLayer, onuLayer, odpLayer, cableLayer, backboneLayer;
-        let autoRefreshTimer = null;
-        const AUTO_REFRESH_MS = 60000;
+        // Auto-refresh dinonaktifkan — muat ulang data lewat refresh browser atau aksi simpan yang memanggil loadNetworkData().
 
         // Initialize map
         function initMap() {
@@ -3407,11 +3406,6 @@ Please wait a few minutes for the device to come back online.`);
         document.addEventListener('DOMContentLoaded', function() {
             initMap();
             initMobileToggles();
-            autoRefreshTimer = window.setInterval(() => {
-                if (document.hidden) return;
-                console.log('🔄 Auto-refresh mapping data (60s)');
-                loadNetworkData();
-            }, AUTO_REFRESH_MS);
             
             // Inject per-field save buttons for SSID and WiFi password in Edit ONU modal
             try {
@@ -3556,15 +3550,6 @@ Please wait a few minutes for the device to come back online.`);
                 }
             });
         });
-
-        window.addEventListener('beforeunload', function() {
-            if (autoRefreshTimer) {
-                clearInterval(autoRefreshTimer);
-                autoRefreshTimer = null;
-            }
-        });
-        
-        // Functions for popup WiFi editing
         function savePopupSSID(deviceId) {
             const ssidInput = document.getElementById(`popup-ssid-${deviceId}`);
             const ssidVal = ssidInput?.value || '';

@@ -30,6 +30,14 @@
             font-size: 0.8rem;
             padding: 0.5rem 0.75rem;
         }
+        /* Hijau solid — hindari .bg-success agar tidak ditimpa [data-theme] .badge.bg-success (tampak biru/transparan) */
+        .installation-item .badge.status-badge.installation-badge-selesai,
+        html[data-theme="dark"] .main-content .installation-item .badge.installation-badge-selesai,
+        html[data-theme="light"] .main-content .installation-item .badge.installation-badge-selesai {
+            background-color: #198754 !important;
+            color: #ffffff !important;
+            border: 0 !important;
+        }
         
         .installation-item {
             border-left: 4px solid #dee2e6;
@@ -268,13 +276,14 @@
                 <div class="card-body">
                     <% if (typeof installationJobs !== 'undefined' && installationJobs && installationJobs.length > 0) { %>
                         <% installationJobs.forEach(job => { %>
-                            <div class="installation-item <%= job.status %>" data-job-id="<%= job.id %>">
+                            <% const instStatus = String(job.status || '').toLowerCase().trim(); %>
+                            <div class="installation-item <%= instStatus.replace(/\s+/g, '_') %>" data-job-id="<%= job.id %>">
                                 <div class="row align-items-center">
                                     <div class="col-md-1">
                                         <div class="form-check">
                                             <input class="form-check-input job-checkbox" type="checkbox" value="<%= job.id %>" 
                                                    onchange="onJobSelectionChange()" 
-                                                   <%= job.status === 'completed' ? 'disabled' : '' %>>
+                                                   <%= instStatus === 'completed' ? 'disabled' : '' %>>
                                         </div>
                                     </div>
                                     <div class="col-md-2">
@@ -318,17 +327,19 @@
                                         </small>
                                     </div>
                                     <div class="col-md-2">
-                                        <span class="badge status-badge 
-                                            <%= job.status === 'scheduled' ? 'bg-warning' : '' %>
-                                            <%= job.status === 'assigned' ? 'bg-info' : '' %>
-                                            <%= job.status === 'in_progress' ? 'bg-primary' : '' %>
-                                            <%= job.status === 'completed' ? 'bg-success' : '' %>
-                                            <%= job.status === 'cancelled' ? 'bg-danger' : '' %>">
-                                            <%= job.status === 'scheduled' ? 'Terjadwal' : '' %>
-                                            <%= job.status === 'assigned' ? 'Ditugaskan' : '' %>
-                                            <%= job.status === 'in_progress' ? 'Sedang Proses' : '' %>
-                                            <%= job.status === 'completed' ? 'Selesai' : '' %>
-                                            <%= job.status === 'cancelled' ? 'Dibatalkan' : '' %>
+                                        <span class="badge status-badge
+                                            <%= instStatus === 'scheduled' ? 'bg-warning text-dark' : '' %>
+                                            <%= instStatus === 'assigned' ? 'bg-info text-white' : '' %>
+                                            <%= instStatus === 'in_progress' ? 'bg-primary text-white' : '' %>
+                                            <%= instStatus === 'completed' ? 'installation-badge-selesai' : '' %>
+                                            <%= instStatus === 'cancelled' ? 'bg-danger text-white' : '' %>
+                                            <%= !['scheduled','assigned','in_progress','completed','cancelled'].includes(instStatus) ? 'bg-secondary text-white' : '' %>">
+                                            <%= instStatus === 'scheduled' ? 'Terjadwal' : '' %>
+                                            <%= instStatus === 'assigned' ? 'Ditugaskan' : '' %>
+                                            <%= instStatus === 'in_progress' ? 'Sedang Proses' : '' %>
+                                            <%= instStatus === 'completed' ? 'Selesai' : '' %>
+                                            <%= instStatus === 'cancelled' ? 'Dibatalkan' : '' %>
+                                            <%= !['scheduled','assigned','in_progress','completed','cancelled'].includes(instStatus) ? (job.status || '—') : '' %>
                                         </span>
                                         <div class="admin-action-btns justify-content-end mt-2 mt-md-0">
                                             <a class="btn btn-sm btn-info" href="/admin/installations/view/<%= job.id %>" title="Lihat detail pekerjaan instalasi" aria-label="Lihat instalasi">

@@ -30,165 +30,47 @@
         <% } %>
         
         <main id="pjax-container" class="col-md-10 ms-sm-auto main-content">
-            <!-- CONFIGURATION VALIDATION ALERTS -->
-            <% if (configValidation && configValidation.hasValidationRun) { %>
-                <% if (configValidation.summary && configValidation.summary.status !== 'valid') { %>
-                <div class="alert alert-warning alert-dismissible fade show mb-3 auto-dismiss" role="alert" data-auto-dismiss="12000">
-                    <div class="d-flex align-items-center">
-                        <i class="bi bi-exclamation-triangle-fill me-2 fs-5"></i>
-                        <div class="flex-grow-1">
-                            <strong>Konfigurasi Sistem Perlu Diperbaiki</strong>
-                            <div class="mt-1">
-                                <%= configValidation.summary.message %>
-                            </div>
-                            <div class="mt-2">
-                                <strong>Solusi:</strong> Silakan periksa dan perbaiki konfigurasi GenieACS dan Mikrotik di halaman pengaturan.
-                            </div>
-                            <div class="mt-2">
-                                <a href="/admin/settings" class="btn btn-warning btn-sm">
-                                    <i class="bi bi-gear-fill me-1"></i>Perbaiki Konfigurasi Sekarang
-                                </a>
-                                <button type="button" class="btn btn-outline-warning btn-sm ms-2" onclick="clearConfigWarning()">
-                                    <i class="bi bi-eye-slash me-1"></i>Sembunyikan
-                                </button>
-                            </div>
+            <% const _greetUser = typeof dashboardGreetingUser !== 'undefined' ? dashboardGreetingUser : (typeof technician !== 'undefined' && technician && technician.name ? technician.name : 'Admin'); %>
+            <% const _greetDate = typeof dashboardGreetingDate !== 'undefined' ? dashboardGreetingDate : ''; %>
+            <% if (typeof isTechnicianView === 'undefined' || !isTechnicianView) { %>
+            <% const _btc = typeof adminNotifBadgeTotal === 'number' ? adminNotifBadgeTotal : 0; %>
+            <div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-4 dashboard-top-bar">
+                <div class="dashboard-greeting">
+                    <p class="dashboard-greeting-line mb-0">
+                        <span class="dashboard-greeting-title">Hallo <%= _greetUser %>,</span>
+                        <span class="dashboard-greeting-subtitle"><%= _greetDate %></span>
+                    </p>
+                </div>
+                <div class="dropdown ms-auto">
+                    <button class="btn btn-success d-flex align-items-center gap-2 rounded-pill px-3 py-2 border-0 position-relative shadow text-start text-white fw-semibold"
+                            type="button" id="adminNotifBellBtn" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" aria-label="Pusat notifikasi">
+                        <span class="fw-bold text-white lh-sm d-none d-sm-inline" style="font-size:0.95rem; letter-spacing:0.02em;">Pusat notifikasi</span>
+                        <span class="fw-bold text-white lh-sm d-sm-none" style="font-size:0.78rem;">Notifikasi</span>
+                        <i class="bi bi-bell-fill text-white align-middle" style="font-size:2.15rem; line-height:1;"></i>
+                        <span id="adminNotifBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger <%= _btc > 0 ? '' : 'd-none' %>"><%= _btc > 99 ? '99+' : _btc %></span>
+                    </button>
+                    <div class="dropdown-menu dropdown-menu-end shadow-lg border mt-2 p-0 rounded-3 overflow-hidden" style="width:min(440px, 96vw);">
+                        <div class="px-3 py-2 bg-primary bg-opacity-10 border-bottom small fw-bold text-primary d-flex justify-content-between align-items-center flex-wrap gap-1">
+                            <span><i class="bi bi-inboxes me-1"></i>Pratinjau</span>
+                            <span class="text-muted fw-normal" style="font-size:0.72rem;">Teknisi · Lunas/isolir · Portal</span>
+                        </div>
+                        <div id="adminNotifList" class="bg-white" style="max-height:min(380px, 58vh); overflow-y: auto;">
+                            <div class="px-3 py-4 text-muted small text-center">Buka menu untuk memuat…</div>
+                        </div>
+                        <div class="border-top bg-light py-2 px-3 d-grid gap-2">
+                            <a href="/admin/dashboard/notifications" class="btn btn-sm btn-primary w-100">Buka halaman lengkap</a>
+                            <button type="button" class="btn btn-sm btn-outline-secondary w-100" onclick="clearAdminNotificationsShell(event)">Bersihkan notifikasi</button>
                         </div>
                     </div>
-                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
                 </div>
-                <% } %>
-                
-                <% if (configValidation.defaultSettingsWarnings && configValidation.defaultSettingsWarnings.length > 0) { %>
-                <div class="alert alert-info alert-dismissible fade show mb-3 auto-dismiss" role="alert" data-auto-dismiss="6000">
-                    <div class="d-flex align-items-center">
-                        <i class="bi bi-info-circle-fill me-2 fs-5"></i>
-                        <div class="flex-grow-1">
-                            <strong>Rekomendasi Keamanan:</strong>
-                            <ul class="mb-2 mt-1">
-                                <% configValidation.defaultSettingsWarnings.forEach(function(warning) { %>
-                                <li><%= warning %></li>
-                                <% }); %>
-                            </ul>
-                            <div>
-                                <a href="/admin/settings" class="btn btn-outline-info btn-sm">
-                                    <i class="bi bi-shield-check me-1"></i>Update Pengaturan Keamanan
-                                </a>
-                                <button type="button" class="btn btn-outline-secondary btn-sm ms-2" onclick="clearConfigWarning()">
-                                    <i class="bi bi-eye-slash me-1"></i>Sembunyikan
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                </div>
-                <% } %>
-                
-                <% if (configValidation.results && configValidation.results.genieacs && !configValidation.results.genieacs.isValid) { %>
-                <div class="alert alert-danger alert-dismissible fade show mb-3 auto-dismiss" role="alert" data-auto-dismiss="10000">
-                    <div class="d-flex align-items-center">
-                        <i class="bi bi-x-circle-fill me-2 fs-5"></i>
-                        <div class="flex-grow-1">
-                            <strong>GenieACS Bermasalah:</strong>
-                            <div class="mt-1">
-                                <% if (configValidation.results.genieacs.errors.length > 0) { %>
-                                    <ul class="mb-2">
-                                        <% configValidation.results.genieacs.errors.forEach(function(error) { %>
-                                        <li><%= error %></li>
-                                        <% }); %>
-                                    </ul>
-                                <% } %>
-                            </div>
-                            <div>
-                                <a href="/admin/settings" class="btn btn-outline-danger btn-sm">
-                                    <i class="bi bi-wrench me-1"></i>Perbaiki Konfigurasi GenieACS
-                                </a>
-                                <button type="button" class="btn btn-outline-secondary btn-sm ms-2" onclick="clearConfigWarning()">
-                                    <i class="bi bi-eye-slash me-1"></i>Sembunyikan
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                </div>
-                <% } %>
-                
-                <% if (configValidation.results && configValidation.results.mikrotik && !configValidation.results.mikrotik.isValid) { %>
-                <div class="alert alert-danger alert-dismissible fade show mb-3 auto-dismiss" role="alert" data-auto-dismiss="10000">
-                    <div class="d-flex align-items-center">
-                        <i class="bi bi-x-circle-fill me-2 fs-5"></i>
-                        <div class="flex-grow-1">
-                            <strong>Mikrotik Bermasalah:</strong>
-                            <div class="mt-1">
-                                <% if (configValidation.results.mikrotik.errors.length > 0) { %>
-                                    <ul class="mb-2">
-                                        <% configValidation.results.mikrotik.errors.forEach(function(error) { %>
-                                        <li><%= error %></li>
-                                        <% }); %>
-                                    </ul>
-                                <% } %>
-                                <% if (configValidation.results.mikrotik.routerResults && configValidation.results.mikrotik.routerResults.length > 0) { %>
-                                    <div class="mt-2">
-                                        <strong>Detail Router:</strong>
-                                        <ul class="mb-0 mt-1">
-                                            <% configValidation.results.mikrotik.routerResults.forEach(function(router) { %>
-                                            <li>
-                                                <% if (router.success) { %>
-                                                    <i class="bi bi-check-circle text-success me-1"></i>
-                                                    <strong><%= router.router %></strong>: <%= router.message || 'Terhubung' %>
-                                                <% } else { %>
-                                                    <i class="bi bi-x-circle text-danger me-1"></i>
-                                                    <strong><%= router.router %></strong>: <%= router.error || 'Koneksi gagal' %>
-                                                    <% if (router.details) { %>
-                                                        <small class="text-muted d-block ms-4">(<%= router.details %>)</small>
-                                                    <% } %>
-                                                <% } %>
-                                            </li>
-                                            <% }); %>
-                                        </ul>
-                                    </div>
-                                <% } %>
-                            </div>
-                            <div class="mt-2">
-                                <a href="/admin/routers" class="btn btn-outline-danger btn-sm">
-                                    <i class="bi bi-router me-1"></i>Kelola Router Mikrotik
-                                </a>
-                                <button type="button" class="btn btn-outline-secondary btn-sm ms-2" onclick="clearConfigWarning()">
-                                    <i class="bi bi-eye-slash me-1"></i>Sembunyikan
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                </div>
-                <% } %>
-                
-                <% if (configValidation.summary && configValidation.summary.status === 'valid') { %>
-                <div class="alert alert-success alert-dismissible fade show mb-3 auto-dismiss" role="alert" data-auto-dismiss="4000">
-                    <div class="d-flex align-items-center">
-                        <i class="bi bi-check-circle-fill me-2 fs-5"></i>
-                        <div class="flex-grow-1">
-                            <strong>Sistem Siap Digunakan!</strong>
-                            <div class="mt-1">
-                                <%= configValidation.summary.message %>
-                                <% if (configValidation.results && configValidation.results.mikrotik && configValidation.results.mikrotik.routerResults && configValidation.results.mikrotik.routerResults.length > 0) { %>
-                                    <div class="mt-2">
-                                        <strong>Router Mikrotik:</strong>
-                                        <ul class="mb-0 mt-1">
-                                            <% configValidation.results.mikrotik.routerResults.forEach(function(router) { %>
-                                            <li>
-                                                <i class="bi bi-check-circle text-success me-1"></i>
-                                                <strong><%= router.router %></strong>: <%= router.message || 'Terhubung' %>
-                                            </li>
-                                            <% }); %>
-                                        </ul>
-                                    </div>
-                                <% } %>
-                            </div>
-                        </div>
-                    </div>
-                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                </div>
-                <% } %>
+            </div>
+            <% } else { %>
+            <div class="dashboard-greeting mb-4">
+                <p class="dashboard-greeting-line mb-0">
+                    <span class="dashboard-greeting-title">Hallo <%= _greetUser %>,</span>
+                    <span class="dashboard-greeting-subtitle"><%= _greetDate %></span>
+                </p>
+            </div>
             <% } %>
 
             <!-- LICENSE STATUS CARD REMOVED -->
@@ -222,6 +104,69 @@
                     <div class="qa-label">Tambah Pengeluaran</div>
                 </a>
             </div>
+
+            <% const pkgReqs = typeof portalPackageRequests !== 'undefined' && portalPackageRequests ? portalPackageRequests : []; %>
+            <% if (pkgReqs.length > 0) { %>
+            <div id="adminPortalPackageRequestsBlock">
+            <div class="alert alert-primary d-flex align-items-center gap-2 mb-3 py-3 shadow-sm" role="alert">
+                <i class="bi bi-arrow-left-right fs-4"></i>
+                <div>
+                    <strong>Portal pelanggan:</strong> Ada <strong><%= pkgReqs.length %></strong> permintaan ubah paket (upgrade/downgrade) menunggu tindakan.
+                </div>
+            </div>
+            <div class="card border-primary border-opacity-25 shadow-sm mb-4">
+                <div class="card-header bg-primary text-white py-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <span class="fw-bold"><i class="bi bi-box-seam me-2"></i>Permintaan ubah paket (portal)</span>
+                    <span class="badge bg-light text-primary rounded-pill"><%= pkgReqs.length %> pending</span>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle mb-0 small">
+                            <thead class="table-light">
+                                <tr>
+                                    <th class="ps-3">Waktu</th>
+                                    <th>Pelanggan</th>
+                                    <th>Paket sekarang</th>
+                                    <th>Paket diminta</th>
+                                    <th class="pe-3 text-end">Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <% pkgReqs.forEach(function(r) { %>
+                                <tr>
+                                    <td class="ps-3 text-nowrap text-muted"><%= r.created_at ? new Date(r.created_at).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' }) : '-' %></td>
+                                    <td>
+                                        <div class="fw-semibold"><%= r.customer_name || r.customer_username || '—' %></div>
+                                        <div class="text-muted" style="font-size:0.75rem;"><%= r.customer_phone || '' %></div>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-secondary-subtle text-secondary"><%= r.current_package_name || '—' %></span>
+                                        <% if (r.current_speed) { %><div class="text-muted mt-1" style="font-size:0.75rem;"><%= r.current_speed %></div><% } %>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-primary-subtle text-primary"><%= r.target_package_name %></span>
+                                        <div class="mt-1" style="font-size:0.75rem;">
+                                            <%= r.target_speed || '' %>
+                                            <% if (r.target_price_rupiah != null) { %> · Rp <%= Number(r.target_price_rupiah).toLocaleString('id-ID') %><% } %>
+                                        </div>
+                                        <% if (r.note) { %><div class="text-muted mt-1 fst-italic" style="font-size:0.72rem;">“<%= r.note %>”</div><% } %>
+                                    </td>
+                                    <td class="pe-3 text-end text-nowrap">
+                                        <% if (r.customer_phone) { %>
+                                        <a href="/admin/billing/customers?editPhone=<%= encodeURIComponent(r.customer_phone) %>" class="btn btn-sm btn-primary">Edit pelanggan</a>
+                                        <% } else { %>
+                                        <a href="/admin/billing/customers" class="btn btn-sm btn-outline-primary">Daftar pelanggan</a>
+                                        <% } %>
+                                    </td>
+                                </tr>
+                                <% }); %>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            </div>
+            <% } %>
 
             <!-- ====== STAT CARDS ====== -->
             <div class="db-section-label"><i class="bi bi-bar-chart-fill me-2"></i>Statistik Pelanggan & Tagihan</div>
@@ -505,6 +450,30 @@ function showToast(type, title, message, duration = 5000) {
     });
 }
 
+async function clearAdminNotificationsShell(ev) {
+    if (ev && ev.preventDefault) ev.preventDefault();
+    if (!confirm('Tandai semua notifikasi teknisi & kolektor sudah dibaca, dan tiadakan permintaan ubah paket portal yang masih pending? Tiket laporan gangguan tidak ditutup dari sini.')) return;
+    try {
+        const res = await fetch('/admin/dashboard/api/notifications/clear', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ dismissPortal: true })
+        });
+        const data = await res.json();
+        if (!data.success) {
+            alert(data.message || 'Gagal membersihkan notifikasi');
+            return;
+        }
+        if (typeof showToast === 'function') {
+            showToast('success', 'Selesai', 'Notifikasi telah dibersihkan.');
+        }
+        window.location.reload();
+    } catch (e) {
+        alert('Gagal: ' + (e && e.message ? e.message : e));
+    }
+}
+
 $(function() {
   $(document).on('click', '#restartMikrotikBtn', function(e) {
     e.preventDefault();
@@ -539,109 +508,6 @@ $(function() {
     });
   });
   
-  // Handler untuk tombol validasi konfigurasi
-  $('#validateConfigBtn').on('click', function() {
-    const $btn = $(this);
-    const originalText = $btn.html();
-    
-    // Loading state
-    $btn.prop('disabled', true).html('<i class="bi bi-hourglass-split me-1"></i>Memvalidasi...');
-    
-    $.ajax({
-      url: '/admin/config/validate',
-      method: 'GET',
-      success: function(response) {
-        if (response.success) {
-          showToast('success', 'Validasi Selesai', 'Konfigurasi sistem telah divalidasi. Halaman akan di-refresh untuk menampilkan hasil.');
-          
-          // Refresh halaman setelah 2 detik untuk menampilkan hasil validasi
-          setTimeout(() => {
-            window.location.reload();
-          }, 2000);
-        } else {
-          showToast('error', 'Validasi Gagal', response.message || 'Gagal menjalankan validasi konfigurasi');
-        }
-      },
-      error: function(xhr) {
-        const errorMsg = xhr.responseJSON?.message || 'Gagal menghubungi server';
-        showToast('error', 'Error', errorMsg);
-      },
-      complete: function() {
-        // Reset button
-        $btn.prop('disabled', false).html(originalText);
-      }
-    });
-  });
-  
-  // Handler untuk tombol refresh dashboard
-  $('#refreshDashboardBtn').on('click', function() {
-    const $btn = $(this);
-    const originalText = $btn.html();
-    
-    // Loading state
-    $btn.prop('disabled', true).html('<i class="bi bi-hourglass-split me-1"></i>Refresh...');
-    
-    // Refresh halaman
-    setTimeout(() => {
-      window.location.reload();
-    }, 500);
-  });
-  
-  // Auto-dismiss untuk alert konfigurasi
-  function initAutoDismissAlerts() {
-    $('.auto-dismiss').each(function() {
-      const $alert = $(this);
-      const autoDismissTime = parseInt($alert.data('auto-dismiss')) || 5000;
-      
-      // Set timer untuk auto dismiss
-      setTimeout(() => {
-        if ($alert.is(':visible')) {
-          $alert.fadeOut(500, function() {
-            $(this).remove();
-          });
-        }
-      }, autoDismissTime);
-      
-      // Hover pause - jika user hover alert, pause auto dismiss
-      let autoDismissTimer;
-      let isPaused = false;
-      
-      const startTimer = () => {
-        if (!isPaused) {
-          autoDismissTimer = setTimeout(() => {
-            if ($alert.is(':visible')) {
-              $alert.fadeOut(500, function() {
-                $(this).remove();
-              });
-            }
-          }, autoDismissTime);
-        }
-      };
-      
-      const pauseTimer = () => {
-        isPaused = true;
-        if (autoDismissTimer) {
-          clearTimeout(autoDismissTimer);
-        }
-      };
-      
-      const resumeTimer = () => {
-        isPaused = false;
-        startTimer();
-      };
-      
-      // Event handlers
-      $alert.on('mouseenter', pauseTimer);
-      $alert.on('mouseleave', resumeTimer);
-      
-      // Start initial timer
-      startTimer();
-    });
-  }
-  
-  // Initialize auto-dismiss saat halaman load
-  initAutoDismissAlerts();
-  
   // Auto-refresh dashboard data jika ada loading indicators
   function checkAndRefreshDashboard() {
     const loadingElements = $('.fs-3:contains("Loading...")');
@@ -655,32 +521,81 @@ $(function() {
   
   // Check untuk loading indicators setiap 30 detik - dioptimasi untuk mengurangi beban (dari 5 detik)
   setInterval(checkAndRefreshDashboard, 30000);
-});
 
-// Fungsi untuk clear config warning
-function clearConfigWarning() {
-  // Kirim request untuk clear hasil validasi dari session
-  $.ajax({
-    url: '/admin/config/clear',
-    method: 'POST',
-    success: function(response) {
-      if (response.success) {
-        showToast('success', 'Warning Dihapus', 'Hasil validasi konfigurasi telah dihapus. Warning tidak akan muncul lagi sampai konfigurasi berubah.');
-        
-        // Sembunyikan semua alert konfigurasi
-        $('.alert').fadeOut(500, function() {
-          $(this).remove();
-        });
-      } else {
-        showToast('error', 'Gagal', 'Gagal menghapus warning: ' + (response.message || 'Unknown error'));
-      }
-    },
-    error: function(xhr) {
-      const errorMsg = xhr.responseJSON?.message || 'Gagal menghubungi server';
-      showToast('error', 'Error', errorMsg);
+  <% if (typeof isTechnicianView === 'undefined' || !isTechnicianView) { %>
+  (function initAdminNotificationCenter() {
+    const bellBtn = document.getElementById('adminNotifBellBtn');
+    const listEl = document.getElementById('adminNotifList');
+    const badgeEl = document.getElementById('adminNotifBadge');
+    if (!bellBtn || !listEl) return;
+
+    function escapeHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = (s == null || s === undefined) ? '' : String(s);
+      return d.innerHTML;
     }
-  });
-}
+
+    function srcLabel(source) {
+      if (source === 'portal') return 'Portal · paket';
+      if (source === 'portal_report') return 'Portal · laporan';
+      if (source === 'collector') return 'Billing';
+      return 'Teknisi';
+    }
+
+    function renderList(items) {
+      if (!items.length) {
+        listEl.innerHTML = '<div class="px-3 py-4 text-muted small text-center">Tidak ada notifikasi baru.</div>';
+        return;
+      }
+      listEl.innerHTML = items.map(function (it) {
+        var when = '';
+        try {
+          if (it.created_at) when = new Date(it.created_at).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' });
+        } catch (e) { when = ''; }
+        return (
+          '<a class="d-block text-decoration-none px-3 py-2 border-bottom text-dark admin-notif-item" href="' + escapeHtml(it.href) + '">' +
+          '<div class="d-flex justify-content-between gap-2">' +
+          '<span class="badge bg-secondary bg-opacity-25 text-dark">' + escapeHtml(srcLabel(it.source)) + '</span>' +
+          '<small class="text-muted text-nowrap">' + escapeHtml(when) + '</small></div>' +
+          '<div class="fw-semibold small mt-1">' + escapeHtml(it.title) + '</div>' +
+          '<div class="text-muted mt-0" style="font-size:0.8rem;">' + escapeHtml(it.body) + '</div>' +
+          '<div class="text-primary small mt-1">' + escapeHtml(it.actor_label || '') + '</div></a>'
+        );
+      }).join('');
+    }
+
+    async function refreshAdminNotifications() {
+      try {
+        var res = await fetch('/admin/dashboard/api/notifications?limit=80', { credentials: 'same-origin' });
+        var data = await res.json();
+        if (!data.success) return;
+        var n = parseInt(data.badge, 10) || 0;
+        var portalP = parseInt(data.portalPending, 10);
+        if (!Number.isNaN(portalP) && portalP === 0) {
+          var blk = document.getElementById('adminPortalPackageRequestsBlock');
+          if (blk) blk.remove();
+        }
+        if (badgeEl) {
+          badgeEl.textContent = n > 99 ? '99+' : String(n);
+          badgeEl.classList.toggle('d-none', n === 0);
+        }
+        renderList(data.items || []);
+      } catch (e) {
+        console.warn('[Admin notif]', e);
+      }
+    }
+
+    var ddRoot = bellBtn.closest('.dropdown');
+    if (ddRoot) {
+      ddRoot.addEventListener('shown.bs.dropdown', function () { refreshAdminNotifications(); });
+    } else {
+      bellBtn.addEventListener('click', function () { setTimeout(refreshAdminNotifications, 200); });
+    }
+    setInterval(refreshAdminNotifications, 120000);
+    setTimeout(refreshAdminNotifications, 5000);
+  })();
+  <% } %>
+});
 
 // ===== BILLING ACTION FUNCTIONS =====
 async function suspendCustomer(username) {

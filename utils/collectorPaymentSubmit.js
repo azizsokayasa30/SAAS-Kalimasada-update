@@ -234,9 +234,10 @@ async function submitCollectorPayment(opts) {
         const unpaid = (allInvoices || []).filter((i) => i.status === 'unpaid');
         if (unpaid.length === 0) {
             const customer = await billingManager.getCustomerById(customerIdNum);
-            if (customer && String(customer.status || '').toLowerCase().trim() === 'suspended') {
+            const { shouldAutoRestoreCustomer } = require('./customerSuspendReason');
+            if (shouldAutoRestoreCustomer(customer)) {
                 try {
-                    await billingManager.setCustomerStatusById(customerIdNum, 'active');
+                    await billingManager.setCustomerStatusById(customerIdNum, 'active', { skipRadiusSync: true });
                 } catch (e) {
                     console.error('Collector payment: set active after pay failed:', e);
                 }

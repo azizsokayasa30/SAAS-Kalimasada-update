@@ -987,11 +987,18 @@ async function monitorOfflineDevices(thresholdHours = null) {
 
 // Jadwalkan monitoring setiap 6 jam
 function scheduleMonitoring() {
+    const minPollingIntervalMs = 10 * 1000;
+    const normalizeInterval = (value, fallbackMs) => {
+        const parsed = Number(value);
+        const interval = Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackMs;
+        return Math.max(interval, minPollingIntervalMs);
+    };
+
     // Ambil pengaturan dari settings.json
     const rxPowerRecapEnabled = getSetting('rxpower_recap_enable', true) !== false;
-    const rxPowerRecapInterval = getSetting('rxpower_recap_interval', 6 * 60 * 60 * 1000);
+    const rxPowerRecapInterval = normalizeInterval(getSetting('rxpower_recap_interval', 6 * 60 * 60 * 1000), 6 * 60 * 60 * 1000);
     const offlineNotifEnabled = getSetting('offline_notification_enable', true) !== false;
-    const offlineNotifInterval = getSetting('offline_notification_interval', 12 * 60 * 60 * 1000);
+    const offlineNotifInterval = normalizeInterval(getSetting('offline_notification_interval', 12 * 60 * 60 * 1000), 12 * 60 * 60 * 1000);
 
     setTimeout(async () => {
         if (rxPowerRecapEnabled) {

@@ -118,7 +118,7 @@ router.put('/api/update/:id', (req, res) => {
         UPDATE voucher_pricing 
         SET package_name = ?, customer_price = ?, agent_price = ?, commission_amount = ?, 
             duration = ?, duration_type = ?, account_type = ?, hotspot_profile = ?, description = ?, 
-            is_active = ?, voucher_digit_type = ?, voucher_length = ?, updated_at = CURRENT_TIMESTAMP
+            is_active = ?, voucher_digit_type = ?, voucher_length = ?, updated_at = datetime('now','localtime')
         WHERE id = ?
     `;
     

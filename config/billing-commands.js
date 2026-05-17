@@ -710,7 +710,8 @@ class BillingCommands {
                     const allInvoices = await billingManager.getInvoicesByCustomer(customer.id);
                     const unpaid = allInvoices.filter(i => i.status === 'unpaid');
                     logger.info(`[BILLING][WA] PayInvoice cek auto-restore -> status: ${refreshed?.status}, unpaid: ${unpaid.length}`);
-                    if (refreshed && refreshed.status === 'suspended' && unpaid.length === 0) {
+                    const { shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
+                    if (shouldAutoRestoreCustomer(refreshed) && unpaid.length === 0) {
                         logger.info('[BILLING][WA] PayInvoice tidak ada tagihan tertunda. Menjalankan restore layanan...');
                         const restoreRes = await serviceSuspension.restoreCustomerService(refreshed, `Payment via WhatsApp (${method})`);
                         logger.info('[BILLING][WA] PayInvoice hasil restore:', restoreRes);
@@ -868,7 +869,8 @@ class BillingCommands {
                         const allInvoices = await billingManager.getInvoicesByCustomer(customer.id);
                         const unpaid = allInvoices.filter(i => i.status === 'unpaid');
                         logger.info(`[BILLING][WA] Cek auto-restore -> status: ${refreshed?.status}, unpaid: ${unpaid.length}`);
-                        if (refreshed && refreshed.status === 'suspended' && unpaid.length === 0) {
+                        const { shouldAutoRestoreCustomer: shouldRestoreWa } = require('../utils/customerSuspendReason');
+                        if (shouldRestoreWa(refreshed) && unpaid.length === 0) {
                             logger.info('[BILLING][WA] Tidak ada tagihan tertunda. Menjalankan restore layanan...');
                             const restoreRes = await serviceSuspension.restoreCustomerService(refreshed, 'Payment via WhatsApp Admin');
                             logger.info('[BILLING][WA] Hasil restore:', restoreRes);

@@ -18,11 +18,15 @@
     "radius:mirror-clients": "bash scripts/mirror-radius-clients-conf.sh",
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "echo \"No build process required\"",
+    "build:customer-portal": "cd customer-portal-web && npm install && npm run build",
+    "dev:customer-portal": "npm --prefix customer-portal-web run dev",
     "setup": "npm install && node scripts/init-database.js",
     "prepare": "node scripts/git-hooks-install.js",
     "postpull": "bash scripts/post-git-pull.sh",
     "clean:onu-fallback": "node scripts/delete-fallback-onu-devices.js",
-    "clean:onu-fallback:dry": "node scripts/delete-fallback-onu-devices.js --dry-run"
+    "clean:onu-fallback:dry": "node scripts/delete-fallback-onu-devices.js --dry-run",
+    "odp:purge-demo": "node scripts/purge-demo-odp-seed.js",
+    "odp:purge-demo:dry": "node scripts/purge-demo-odp-seed.js --dry-run"
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",

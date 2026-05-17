@@ -430,7 +430,7 @@ router.post('/api/profile/update', collectorAuth, async (req, res) => {
         await new Promise((resolve, reject) => {
             db.run(`
                 UPDATE collectors 
-                SET name = ?, phone = ?, email = ?, updated_at = CURRENT_TIMESTAMP
+                SET name = ?, phone = ?, email = ?, updated_at = datetime('now','localtime')
                 WHERE id = ?
             `, [name.trim(), phone?.trim() || null, email?.trim() || null, collectorId], (err) => {
                 if (err) reject(err);
@@ -511,7 +511,7 @@ router.post('/api/profile/update-password', collectorAuth, async (req, res) => {
         await new Promise((resolve, reject) => {
             db.run(`
                 UPDATE collectors 
-                SET password = ?, updated_at = CURRENT_TIMESTAMP
+                SET password = ?, updated_at = datetime('now','localtime')
                 WHERE id = ?
             `, [hashedNewPassword, collectorId], (err) => {
                 if (err) reject(err);

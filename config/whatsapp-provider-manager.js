@@ -1,25 +1,76 @@
 /**
  * WhatsApp Provider Manager
- * Singleton untuk mengelola provider aktif (Baileys atau Wablas)
+ * Singleton untuk mengelola provider aktif (Baileys, Wablas, Meta, atau Qontak)
  */
 const WhatsAppProvider = require('./whatsapp-provider');
 const BaileysProvider = require('./providers/baileys-provider');
 const WablasProvider = require('./providers/wablas-provider');
+const MetaProvider = require('./providers/meta-provider');
+const QontakProvider = require('./providers/qontak-provider');
 const { getWablasConfig, validateWablasConfig, isWablasEnabled } = require('./wablas-config');
+const {
+    getActiveWhatsAppProvider,
+    isProviderEnabled,
+    validateProviderConfig,
+    normalizeProvider
+} = require('./whatsapp-provider-settings');
 const logger = require('./logger');
 
 class WhatsAppProviderManager {
     constructor() {
         this.provider = null;
-        this.providerType = null; // 'baileys' | 'wablas'
+        this.providerType = null; // 'baileys' | 'wablas' | 'meta' | 'qontak'
         this.initialized = false;
+    }
+
+    async _createProvider(type, options = {}) {
+        if (type === 'wablas') {
+            if (!validateWablasConfig()) {
+                throw new Error('Wablas config is invalid');
+            }
+            this.provider = new WablasProvider();
+            this.providerType = 'wablas';
+            await this.provider.initialize();
+            return this.provider;
+        }
+
+        if (type === 'meta') {
+            if (!validateProviderConfig('meta')) {
+                throw new Error('Meta Cloud API config is invalid');
+            }
+            this.provider = new MetaProvider();
+            this.providerType = 'meta';
+            await this.provider.initialize();
+            return this.provider;
+        }
+
+        if (type === 'qontak') {
+            if (!validateProviderConfig('qontak')) {
+                throw new Error('Qontak config is invalid');
+            }
+            this.provider = new QontakProvider();
+            this.providerType = 'qontak';
+            await this.provider.initialize();
+            return this.provider;
+        }
+
+        if (type === 'baileys') {
+            this.provider = new BaileysProvider(options.baileysSock || options.sock || null);
+            this.providerType = 'baileys';
+            if (options.baileysSock || options.sock) {
+                this.provider.setSock(options.baileysSock || options.sock);
+            }
+            return this.provider;
+        }
+
+        throw new Error(`Unknown provider type: ${type}`);
     }
 
     /**
      * Inisialisasi provider berdasarkan konfigurasi
      * @param {object} options - Opsi inisialisasi
      * @param {object} options.baileysSock - Socket Baileys (jika ingin menggunakan Baileys)
-     * @param {string} options.forceProvider - Force provider tertentu ('baileys' | 'wablas')
+     * @param {string} options.forceProvider - Force provider tertentu ('baileys' | 'wablas' | 'meta' | 'qontak')
      */
     async initialize(options = {}) {
         if (this.initialized) {
@@ -30,44 +81,60 @@ class WhatsAppProviderManager {
         const { baileysSock, forceProvider } = options;
 
         // Jika ada forceProvider, gunakan itu
-        if (forceProvider === 'wablas') {
-            if (!validateWablasConfig()) {
-                throw new Error('Wablas config is invalid');
-            }
-            logger.info('🚀 Initializing WablasProvider (forced)...');
-            this.provider = new WablasProvider();
-            this.providerType = 'wablas';
-            await this.provider.initialize();
+        if (forceProvider) {
+            const forcedProvider = normalizeProvider(forceProvider);
+            logger.info(`🚀 Initializing WhatsApp provider (forced): ${forcedProvider}`);
+            await this._createProvider(forcedProvider, options);
             this.initialized = true;
-            logger.info('✅ WablasProvider initialized');
+            logger.info(`✅ ${this.providerType} provider initialized`);
             return this.provider;
         }
 
-        if (forceProvider === 'baileys' || baileysSock) {
+        if (baileysSock) {
             logger.info('🚀 Initializing BaileysProvider (forced or socket provided)...');
-            this.provider = new BaileysProvider(baileysSock);
-            this.providerType = 'baileys';
-            if (baileysSock) {
-                this.provider.setSock(baileysSock);
-            }
+            await this._createProvider('baileys', { baileysSock });
             this.initialized = true;
             logger.info('✅ BaileysProvider initialized');
             return this.provider;
         }
 
-        // Auto-select berdasarkan konfigurasi
-        if (isWablasEnabled()) {
-            logger.info('🚀 Initializing WablasProvider (auto-selected)...');
-            this.provider = new WablasProvider();
-            this.providerType = 'wablas';
+        // Auto-select berdasarkan provider aktif
+        const activeProvider = getActiveWhatsAppProvider();
+        if (validateProviderConfig(activeProvider)) {
             try {
-                await this.provider.initialize();
+                logger.info(`🚀 Initializing ${activeProvider} provider (active setting)...`);
+                await this._createProvider(activeProvider, options);
+                this.initialized = true;
+                logger.info(`✅ ${activeProvider} provider initialized`);
+                return this.provider;
+            } catch (error) {
+                logger.error(`❌ Failed to initialize active WhatsApp provider (${activeProvider}):`, error);
+            }
+        }
+
+        // Backward compatibility: pakai Wablas jika legacy setting aktif
+        if (isWablasEnabled()) {
+            try {
+                logger.info('🚀 Initializing WablasProvider (legacy auto-selected)...');
+                await this._createProvider('wablas', options);
                 this.initialized = true;
                 logger.info('✅ WablasProvider initialized');
                 return this.provider;
             } catch (error) {
-                logger.error('❌ Failed to initialize WablasProvider, falling back to Baileys:', error);
-                // Fallback ke Baileys jika Wablas gagal
+                logger.error('❌ Failed to initialize WablasProvider, falling back:', error);
+            }
+        }
+
+        // Fallback ke provider API lain yang valid
+        for (const fallbackProvider of ['meta', 'qontak']) {
+            if (!isProviderEnabled(fallbackProvider) || !validateProviderConfig(fallbackProvider)) continue;
+            try {
+                logger.info(`🚀 Initializing ${fallbackProvider} provider (fallback)...`);
+                await this._createProvider(fallbackProvider, options);
+                this.initialized = true;
+                return this.provider;
+            } catch (error) {
+                logger.error(`❌ Failed to initialize fallback provider ${fallbackProvider}:`, error);
             }
         }
 
@@ -75,14 +142,13 @@ class WhatsAppProviderManager {
         const { isBaileysEnabled } = require('./baileys-config');
         if (isBaileysEnabled()) {
             logger.info('🚀 Initializing BaileysProvider (fallback)...');
-            this.provider = new BaileysProvider();
-            this.providerType = 'baileys';
+            await this._createProvider('baileys', options);
             this.initialized = true;
             logger.info('✅ BaileysProvider initialized (fallback mode - requires socket to be set later)');
             return this.provider;
         } else {
             logger.warn('⚠️ Baileys disabled, cannot fallback to BaileysProvider');
-            throw new Error('No WhatsApp provider available: Wablas failed and Baileys is disabled');
+            throw new Error('No WhatsApp provider available');
         }
     }
 
@@ -99,7 +165,7 @@ class WhatsAppProviderManager {
 
     /**
      * Switch provider (untuk testing/migrasi bertahap)
-     * @param {string} type - 'baileys' | 'wablas'
+     * @param {string} type - 'baileys' | 'wablas' | 'meta' | 'qontak'
      * @param {object} options - Opsi tambahan
      */
     async switchProvider(type, options = {}) {
@@ -107,24 +173,9 @@ class WhatsAppProviderManager {
             await this.provider.cleanup();
         }
 
-        if (type === 'wablas') {
-            if (!validateWablasConfig()) {
-                throw new Error('Wablas config is invalid');
-            }
-            this.provider = new WablasProvider();
-            this.providerType = 'wablas';
-            await this.provider.initialize();
-            logger.info('🔄 Switched to WablasProvider');
-        } else if (type === 'baileys') {
-            this.provider = new BaileysProvider(options.sock || null);
-            this.providerType = 'baileys';
-            if (options.sock) {
-                this.provider.setSock(options.sock);
-            }
-            logger.info('🔄 Switched to BaileysProvider');
-        } else {
-            throw new Error(`Unknown provider type: ${type}`);
-        }
+        const providerType = normalizeProvider(type);
+        await this._createProvider(providerType, options);
+        logger.info(`🔄 Switched to ${providerType} provider`);
 
         this.initialized = true;
     }
@@ -144,7 +195,7 @@ class WhatsAppProviderManager {
 
     /**
      * Get provider type
-     * @returns {string} 'baileys' | 'wablas' | null
+     * @returns {string} 'baileys' | 'wablas' | 'meta' | 'qontak' | null
      */
     getProviderType() {
         return this.providerType;

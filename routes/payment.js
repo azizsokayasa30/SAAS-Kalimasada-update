@@ -251,7 +251,8 @@ router.post('/manual-process', async (req, res) => {
                     const refreshedCustomer = await billingManager.getCustomerById(invoice.customer_id);
                     const customerInvoices = await billingManager.getInvoicesByCustomer(invoice.customer_id);
                     const unpaid = customerInvoices.filter(i => i.status === 'unpaid');
-                    if (refreshedCustomer && refreshedCustomer.status === 'suspended' && unpaid.length === 0) {
+                    const { shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
+                    if (shouldAutoRestoreCustomer(refreshedCustomer) && unpaid.length === 0) {
                         await serviceSuspension.restoreCustomerService(refreshedCustomer);
                     }
                 } catch (restoreErr) {

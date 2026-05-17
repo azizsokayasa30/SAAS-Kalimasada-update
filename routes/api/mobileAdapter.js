@@ -1276,7 +1276,7 @@ router.post('/attendance', verifyToken, requireTechnician, (req, res) => {
                                     const notes = `${noteBase}${extra}${lateMeta}${gpsInfo}`;
                                     if (row && row.id) {
                                         return db.run(
-                                            `UPDATE employee_attendance SET status = 'hadir', check_in = ?, check_out = NULL, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+                                            `UPDATE employee_attendance SET status = 'hadir', check_in = ?, check_out = NULL, notes = ?, updated_at = datetime('now','localtime') WHERE id = ?`,
                                             [ts, notes, row.id],
                                             function (upErr) {
                                                 if (upErr) {
@@ -1422,7 +1422,7 @@ router.post('/attendance', verifyToken, requireTechnician, (req, res) => {
                     }
                     const outNotes = row.notes ? `${row.notes} | ${noteBase}` : noteBase;
                     return db.run(
-                        `UPDATE employee_attendance SET check_out = ?, notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+                        `UPDATE employee_attendance SET check_out = ?, notes = ?, updated_at = datetime('now','localtime') WHERE id = ?`,
                         [ts, outNotes, row.id],
                         function (coErr) {
                             if (coErr) {
@@ -1538,7 +1538,7 @@ router.get('/leave-requests/recent', verifyToken, requireTechnician, (req, res) 
                  FROM employee_leave_requests
                  WHERE employee_id = ?
                    AND status IN ('approved', 'rejected')
-                   AND datetime(COALESCE(approved_at, updated_at, created_at)) >= datetime('now', '-30 days')
+                   AND datetime(COALESCE(approved_at, updated_at, created_at)) >= datetime('now','localtime', '-30 days')
                  ORDER BY datetime(COALESCE(approved_at, updated_at)) DESC
                  LIMIT 50`,
                 [eid],
@@ -2111,9 +2111,13 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
             return;
         }
 
-        let dbStatus = rawStatus;
-        if (rawStatus === 'closed' || rawStatus === 'selesai') dbStatus = 'completed';
-        else if (rawStatus === 'mulai' || rawStatus === 'in_progress' || rawStatus === 'start') dbStatus = 'in_progress';
+        const rawNorm = String(status || '')
+            .toLowerCase()
+            .trim()
+            .replace(/\s+/g, '_');
+        let dbStatus = rawNorm;
+        if (rawNorm === 'closed' || rawNorm === 'selesai') dbStatus = 'completed';
+        else if (rawNorm === 'mulai' || rawNorm === 'in_progress' || rawNorm === 'start') dbStatus = 'in_progress';
 
         if (dbStatus === 'completed') {
             const completion_description = String(body.completion_description || '').trim();
@@ -2196,7 +2200,7 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                     }
                     setCols.push(
                         `notes = ?`,
-                        `updated_at = CURRENT_TIMESTAMP`,
+                        `updated_at = datetime('now','localtime')`,
                         `install_cable_length_m = ?`,
                         `install_ont_sticker_photo_path = ?`
                     );
@@ -2303,41 +2307,45 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
         }
 
         if (dbStatus === 'in_progress') {
-            // Pakai jam zona aplikasi (bukan SQLite CURRENT_TIMESTAMP = UTC) agar durasi di app mobile sinkron.
+            // Pakai jam zona aplikasi (bukan SQLite datetime('now','localtime') = UTC) agar durasi di app mobile sinkron.
             const wallNow = getLocalTimestamp();
-            if (isAdminTask) {
-                db.run(
-                    `UPDATE installation_jobs SET status = ?, updated_at = ?,
+            const pickInProgSql = isAdminTask
+                ? `SELECT id, status FROM installation_jobs WHERE id = ?`
+                : `SELECT id, status FROM installation_jobs WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')}`;
+            const pickInProgParams = isAdminTask ? [jobId] : [jobId, techId, String(techId)];
+            db.get(pickInProgSql, pickInProgParams, (gErr, jobRow) => {
+                if (gErr) {
+                    logger.error('[mobile-adapter] install in_progress pick:', gErr);
+                    return res.status(500).json({ success: false, message: gErr.message });
+                }
+                if (!jobRow) {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Tugas tidak ditemukan atau bukan milik Anda'
+                    });
+                }
+                const oldSt = jobRow.status;
+                const oldLower = String(oldSt || '').toLowerCase().trim();
+                if (oldLower === 'in_progress') {
+                    return res.json({ success: true, message: 'Status sudah sedang dikerjakan' });
+                }
+                const updInProgSql = isAdminTask
+                    ? `UPDATE installation_jobs SET status = ?, updated_at = ?,
                      work_started_at = COALESCE(work_started_at, ?)
-                     WHERE id = ?`,
-                    [dbStatus, wallNow, wallNow, jobId],
-                    function (err) {
-                        if (err) {
-                            return res.status(500).json({ success: false, message: err.message });
-                        }
-                        if (this.changes === 0) {
-                            return res.status(404).json({
-                                success: false,
-                                message: 'Tugas tidak ditemukan atau bukan milik Anda'
-                            });
-                        }
-                        res.json({ success: true, message: 'Status diperbarui' });
-                    }
-                );
-                return;
-            }
-            db.run(
-                `UPDATE installation_jobs SET status = ?, updated_at = ?,
+                     WHERE id = ?`
+                    : `UPDATE installation_jobs SET status = ?, updated_at = ?,
                  work_started_at = COALESCE(work_started_at, ?),
                  assigned_technician_id = CASE
                     WHEN IFNULL(TRIM(CAST(assigned_technician_id AS TEXT)), '') IN ('', '0') THEN ?
                     ELSE assigned_technician_id
                  END
-                 WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')}`,
-                [dbStatus, wallNow, wallNow, techId, jobId, techId, String(techId)],
-                function (err) {
-                    if (err) {
-                        return res.status(500).json({ success: false, message: err.message });
+                 WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')}`;
+                const updInProgParams = isAdminTask
+                    ? [dbStatus, wallNow, wallNow, jobId]
+                    : [dbStatus, wallNow, wallNow, techId, jobId, techId, String(techId)];
+                db.run(updInProgSql, updInProgParams, function (uErr) {
+                    if (uErr) {
+                        return res.status(500).json({ success: false, message: uErr.message });
                     }
                     if (this.changes === 0) {
                         return res.status(404).json({
@@ -2345,17 +2353,42 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                             message: 'Tugas tidak ditemukan atau bukan milik Anda'
                         });
                     }
-                    res.json({ success: true, message: 'Status diperbarui' });
-                }
-            );
+                    const histType = isAdminTask ? 'admin' : 'technician';
+                    const histId = isAdminTask ? 0 : actorHistoryId;
+                    let histNotes = 'Pengerjaan di lapangan dimulai (admin).';
+                    if (!isAdminTask) {
+                        if (oldLower === 'assigned') {
+                            histNotes =
+                                'Tugas dijalankan kembali di lapangan (app teknisi) — dilanjutkan setelah pending / jeda.';
+                        } else if (oldLower === 'scheduled') {
+                            histNotes = 'Tugas mulai dikerjakan di lapangan (app teknisi).';
+                        } else {
+                            histNotes = `Pengerjaan dilanjutkan ke sedang dikerjakan (app teknisi). Status sebelumnya: ${oldSt || '-'}.`;
+                        }
+                    }
+                    db.run(
+                        `INSERT INTO installation_job_status_history (
+                            job_id, old_status, new_status, changed_by_type, changed_by_id, notes
+                        ) VALUES (?, ?, ?, ?, ?, ?)`,
+                        [jobId, oldSt, dbStatus, histType, histId, histNotes],
+                        (hErr) => {
+                            if (hErr) {
+                                logger.warn('[mobile-adapter] install in_progress history:', hErr.message);
+                            }
+                            res.json({ success: true, message: 'Status diperbarui' });
+                        }
+                    );
+                });
+            });
             return;
         }
 
         if (isAdminTask) {
+            const wallNow = getLocalTimestamp();
             db.run(
-                `UPDATE installation_jobs SET status = ?, updated_at = CURRENT_TIMESTAMP
+                `UPDATE installation_jobs SET status = ?, updated_at = ?
              WHERE id = ?`,
-                [dbStatus, jobId],
+                [dbStatus, wallNow, jobId],
                 function (err) {
                     if (err) {
                         return res.status(500).json({ success: false, message: err.message });
@@ -2372,14 +2405,19 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
             return;
         }
 
+        const wallNowOther = getLocalTimestamp();
         db.run(
-            `UPDATE installation_jobs SET status = ?, updated_at = CURRENT_TIMESTAMP,
+            `UPDATE installation_jobs SET status = ?, updated_at = ?,
              assigned_technician_id = CASE
                 WHEN IFNULL(TRIM(CAST(assigned_technician_id AS TEXT)), '') IN ('', '0') THEN ?
                 ELSE assigned_technician_id
+             END,
+             work_started_at = CASE
+                WHEN ? = 'in_progress' THEN COALESCE(work_started_at, ?)
+                ELSE work_started_at
              END
              WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')}`,
-            [dbStatus, techId, jobId, techId, String(techId)],
+            [dbStatus, wallNowOther, techId, dbStatus, wallNowOther, jobId, techId, String(techId)],
             function (err) {
                 if (err) {
                     return res.status(500).json({ success: false, message: err.message });
@@ -2433,9 +2471,10 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                         false
                     );
                     await new Promise((resolve, reject) => {
+                        const wallNow = getLocalTimestamp();
                         db.run(
-                            'UPDATE trouble_reports SET work_started_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-                            [id],
+                            'UPDATE trouble_reports SET work_started_at = NULL, updated_at = ? WHERE id = ?',
+                            [wallNow, id],
                             (e2) => (e2 ? reject(e2) : resolve())
                         );
                     });
@@ -2563,19 +2602,21 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
         }
 
         if (isAdminTask) {
+            const wallNow = getLocalTimestamp();
             db.run(
                 `UPDATE trouble_reports
-             SET status = ?, updated_at = CURRENT_TIMESTAMP
+             SET status = ?, updated_at = ?
              WHERE id = ?`,
-                [dbStatus, id],
+                [dbStatus, wallNow, id],
                 done
             );
             return;
         }
 
+        const wallNow = getLocalTimestamp();
         db.run(
             `UPDATE trouble_reports
-             SET status = ?, updated_at = CURRENT_TIMESTAMP,
+             SET status = ?, updated_at = ?,
                  assigned_technician_id = CASE
                     WHEN IFNULL(TRIM(CAST(assigned_technician_id AS TEXT)), '') IN ('', '0') THEN ?
                     ELSE assigned_technician_id
@@ -2586,7 +2627,7 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                     OR CAST(assigned_technician_id AS TEXT) = ?
                     OR IFNULL(TRIM(CAST(assigned_technician_id AS TEXT)), '') IN ('', '0')
                )`,
-            [dbStatus, techId, id, techId, String(techId)],
+            [dbStatus, wallNow, techId, id, techId, String(techId)],
             done
         );
         return;
@@ -2657,7 +2698,7 @@ router.post('/notifications/:notifId/read', verifyToken, requireTechnician, (req
         return res.status(400).json({ success: false, message: 'Data tidak valid' });
     }
     db.run(
-        `UPDATE technician_field_notifications SET read_at = datetime('now')
+        `UPDATE technician_field_notifications SET read_at = datetime('now','localtime')
          WHERE id = ? AND technician_id = ?`,
         [nid, techId],
         function (err) {
@@ -2682,7 +2723,7 @@ router.post('/notifications/read-all', verifyToken, requireTechnician, (req, res
         return res.status(400).json({ success: false, message: 'ID teknisi tidak valid' });
     }
     db.run(
-        `UPDATE technician_field_notifications SET read_at = datetime('now')
+        `UPDATE technician_field_notifications SET read_at = datetime('now','localtime')
          WHERE technician_id = ? AND read_at IS NULL`,
         [techId],
         function (err) {
@@ -2775,6 +2816,41 @@ router.get('/network-map', verifyToken, requireTechnician, async (req, res) => {
             );
         });
 
+        // Garis backbone kuning di app teknisi: dari odp_connections di atas.
+        // Parent ODP di admin hanya mengisi odps.parent_odp_id — tanpa baris odp_connections garis tidak muncul.
+        // Tambahkan segmen parent→child bila belum ada koneksi eksplisit antara pasangan tersebut (dua arah).
+        const backboneFromParent = await new Promise((resolve, reject) => {
+            db.all(
+                `SELECT
+                    ('hier:' || child.id) AS id,
+                    child.parent_odp_id AS from_odp_id,
+                    child.id AS to_odp_id,
+                    'hierarchy' AS connection_type,
+                    'active' AS status,
+                    NULL AS cable_length,
+                    p.name AS from_name,
+                    p.latitude AS from_lat,
+                    p.longitude AS from_lng,
+                    child.name AS to_name,
+                    child.latitude AS to_lat,
+                    child.longitude AS to_lng
+                 FROM odps child
+                 INNER JOIN odps p ON p.id = child.parent_odp_id
+                 WHERE child.parent_odp_id IS NOT NULL
+                   AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
+                   AND child.latitude IS NOT NULL AND child.longitude IS NOT NULL
+                   AND NOT EXISTS (
+                       SELECT 1 FROM odp_connections oc2
+                       WHERE (oc2.from_odp_id = child.parent_odp_id AND oc2.to_odp_id = child.id)
+                          OR (oc2.from_odp_id = child.id AND oc2.to_odp_id = child.parent_odp_id)
+                   )`,
+                [],
+                (err, rows) => (err ? reject(err) : resolve(rows || []))
+            );
+        });
+
+        const backboneMerged = backbone.concat(backboneFromParent);
+
         let onlineLoginSet = new Set();
         let pppoeUptimeByLogin = Object.create(null);
         try {
@@ -2837,7 +2913,7 @@ router.get('/network-map', verifyToken, requireTechnician, async (req, res) => {
                     odp_lat: parseFloat(r.odp_lat),
                     odp_lng: parseFloat(r.odp_lng)
                 })),
-                backbone: backbone.map((r) => ({
+                backbone: backboneMerged.map((r) => ({
                     ...r,
                     from_lat: parseFloat(r.from_lat),
                     from_lng: parseFloat(r.from_lng),
@@ -3022,7 +3098,7 @@ router.put('/odps/:odpId/capacity', verifyToken, requireTechnician, (req, res) =
                 return res.status(404).json({ success: false, message: 'ODP tidak ditemukan' });
             }
             db.run(
-                'UPDATE odps SET capacity = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                "UPDATE odps SET capacity = ?, updated_at = datetime('now','localtime') WHERE id = ?",
                 [cap, row.id],
                 function (e2) {
                     if (e2) {
@@ -3053,7 +3129,7 @@ router.put('/odps/:code/location', verifyToken, requireTechnician, (req, res) =>
             return res.status(500).json({ success: false, message: err.message });
         }
         if (row) {
-            const sets = ['latitude = ?', 'longitude = ?', 'updated_at = CURRENT_TIMESTAMP'];
+            const sets = ['latitude = ?', 'longitude = ?', "updated_at = datetime('now','localtime')"];
             const vals = [lat, lng];
             if (Number.isFinite(cap) && cap > 0) {
                 sets.push('capacity = ?');
@@ -3192,7 +3268,7 @@ router.post('/odps/:odpId/assign', verifyToken, requireTechnician, (req, res) =>
                                     return res.status(500).json({ success: false, message: e2.message });
                                 }
                                 db.run(
-                                    'UPDATE odps SET used_ports = (SELECT COUNT(*) FROM cable_routes WHERE odp_id = ? AND status = "connected"), updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                                    "UPDATE odps SET used_ports = (SELECT COUNT(*) FROM cable_routes WHERE odp_id = ? AND status = \"connected\"), updated_at = datetime('now','localtime') WHERE id = ?",
                                     [odpIntId, odpIntId],
                                     () => res.json({ success: true, message: 'Jalur kabel / port berhasil dipasangkan' })
                                 );
@@ -3288,7 +3364,7 @@ router.post('/collector/notifications/:notifId/read', verifyToken, requireCollec
         return res.status(400).json({ success: false, message: 'Data tidak valid' });
     }
     db.run(
-        `UPDATE collector_field_notifications SET read_at = datetime('now')
+        `UPDATE collector_field_notifications SET read_at = datetime('now','localtime')
          WHERE id = ? AND collector_id = ?`,
         [nid, collectorId],
         function (err) {
@@ -3309,7 +3385,7 @@ router.post('/collector/notifications/read-all', verifyToken, requireCollector, 
         return res.status(400).json({ success: false, message: 'ID kolektor tidak valid' });
     }
     db.run(
-        `UPDATE collector_field_notifications SET read_at = datetime('now')
+        `UPDATE collector_field_notifications SET read_at = datetime('now','localtime')
          WHERE collector_id = ? AND read_at IS NULL`,
         [collectorId],
         function (err) {
@@ -3571,7 +3647,7 @@ router.put('/collector/me', verifyToken, requireCollector, async (req, res) => {
         await new Promise((resolve, reject) => {
             db.run(
                 `UPDATE collectors
-                 SET name = ?, phone = ?, email = ?, address = ?, updated_at = CURRENT_TIMESTAMP
+                 SET name = ?, phone = ?, email = ?, address = ?, updated_at = datetime('now','localtime')
                  WHERE id = ?`,
                 [name, phone, email || null, address || null, collectorId],
                 (err) => {
@@ -3648,7 +3724,7 @@ router.get('/collector/customer-invoice-history/:customerId', verifyToken, requi
                  FROM invoices i
                  LEFT JOIN packages p ON i.package_id = p.id
                  WHERE i.customer_id = ?
-                   AND strftime('%Y', i.created_at) = strftime('%Y', 'now')
+                   AND strftime('%Y', i.created_at) = strftime('%Y', 'now', 'localtime')
                  ORDER BY i.created_at DESC
                  LIMIT 240`,
                 [customerId],
@@ -3749,7 +3825,7 @@ router.post('/collector/customer-isolir/:customerId', verifyToken, requireCollec
                 data: { customerId, details: result && result.results }
             });
         }
-        await billingManager.setCustomerStatusById(customerId, 'suspended');
+        await billingManager.setCustomerStatusById(customerId, 'suspended', { skipRadiusSync: true });
         return res.json({
             success: true,
             message: 'Pelanggan diisolir; notifikasi WA dikirim bila diaktifkan.',

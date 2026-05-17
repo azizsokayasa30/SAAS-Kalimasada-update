@@ -1,6 +1,7 @@
 /**
- * Script untuk menambahkan sample data ODP dan Cable Routes
- * Jika database kosong, script ini akan menambahkan data contoh
+ * DEV ONLY — sample ODP/cable (Jakarta demo). Jangan dijadwalkan di production:
+ * data yang sudah dihapus bisa terlihat "kembali" jika skrip ini dijalankan ulang.
+ * Migrasi schema: node scripts/setup-mapping-database.js (tanpa --seed)
  */
 
 const sqlite3 = require('sqlite3').verbose();

@@ -42,6 +42,18 @@ const MONITOR_DEFINITIONS = [
         description: 'Saat invoice terbuat otomatis (bulanan/harian billing), kirim WA tagihan baru ke pelanggan.'
     },
     {
+        id: 'payment_received_wa',
+        category: 'Billing',
+        title: 'WA pembayaran diterima',
+        description: 'Pesan otomatis ke pelanggan saat pembayaran/tagihan ditandai lunas.'
+    },
+    {
+        id: 'customer_welcome_wa',
+        category: 'Pelanggan',
+        title: 'WA welcome pelanggan baru',
+        description: 'Pesan sambutan otomatis setelah pelanggan dibuat/diaktifkan.'
+    },
+    {
         id: 'isolir_suspension_wa',
         category: 'Isolir & layanan',
         title: 'WA saat layanan diisolir',
@@ -66,6 +78,12 @@ const MONITOR_DEFINITIONS = [
         description: 'Notifikasi tiket baru ke grup teknisi dan update status ke pelanggan (selain toggle per-template).'
     },
     {
+        id: 'installation_job_wa',
+        category: 'Teknisi & instalasi',
+        title: 'WA tugas instalasi / PSB',
+        description: 'Pesan otomatis ke teknisi untuk assignment, update status, dan penyelesaian job instalasi.'
+    },
+    {
         id: 'broadcast_group_wa',
         category: 'Grup & broadcast',
         title: 'Kirim ke grup WA terdaftar',
@@ -73,10 +91,31 @@ const MONITOR_DEFINITIONS = [
     }
 ];
 
+const LEGACY_BOOLEAN_KEYS = {
+    pppoe_login_logout_wa: ['pppoe_monitor_enable', 'pppoe_notifications.enabled'],
+    rx_power_threshold_wa: ['rx_power_notification_enable'],
+    genieacs_rx_recap_wa: ['rxpower_recap_enable'],
+    genieacs_offline_digest_wa: ['offline_notification_enable']
+};
+
+function isExplicitlyFalse(value) {
+    if (value === false || value === 0) return true;
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        return normalized === 'false' || normalized === '0' || normalized === 'off' || normalized === 'no';
+    }
+    return false;
+}
+
 function defaultMonitorsObject() {
     const o = {};
     MONITOR_DEFINITIONS.forEach((m) => {
         o[m.id] = true;
+    });
+    Object.entries(LEGACY_BOOLEAN_KEYS).forEach(([monitorId, settingKeys]) => {
+        if (settingKeys.some((key) => isExplicitlyFalse(getSetting(key, undefined)))) {
+            o[monitorId] = false;
+        }
     });
     return o;
 }
@@ -109,12 +148,29 @@ function setMonitorsPartial(partial) {
         });
     }
     setSetting('whatsapp_system_monitors', current);
+    syncLegacyBooleanSettings(current);
     return getMergedMonitors();
+}
+
+function syncLegacyBooleanSettings(monitors) {
+    Object.entries(LEGACY_BOOLEAN_KEYS).forEach(([monitorId, settingKeys]) => {
+        const enabled = monitors[monitorId] !== false;
+        settingKeys.forEach((key) => setSetting(key, enabled));
+    });
+
+    const currentPppoe = getSetting('pppoe_notifications', {});
+    if (currentPppoe && typeof currentPppoe === 'object' && !Array.isArray(currentPppoe)) {
+        setSetting('pppoe_notifications', {
+            ...currentPppoe,
+            enabled: monitors.pppoe_login_logout_wa !== false
+        });
+    }
 }
 
 module.exports = {
     MONITOR_DEFINITIONS,
     getMergedMonitors,
     isWaSystemMonitorEnabled,
-    setMonitorsPartial
+    setMonitorsPartial,
+    syncLegacyBooleanSettings
 };

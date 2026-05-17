@@ -349,6 +349,7 @@
                                     <th>Kategori</th>
                                     <th>Tanggal Laporan</th>
                                     <th>Status</th>
+                                    <th>Assigned Teknisi</th>
                                     <th>Terakhir Diupdate</th>
                                     <th class="text-end pe-4">Aksi</th>
                                 </tr>
@@ -356,10 +357,14 @@
                             <tbody id="reportTableBody">
                                 <% if (reports && reports.length > 0) { %>
                                     <% reports.sort((a, b) => new Date(b.created_at || b.createdAt || 0) - new Date(a.created_at || a.createdAt || 0)).forEach(report => { %>
+                                        <% 
+                                            const assignedTechnicianId = report.assigned_technician_id || report.assignedTechnicianId;
+                                            const assignedTechnicianName = report.technician_name || report.technicianName || '';
+                                        %>
                                         <tr class="report-row" 
                                             data-status="<%= report.status %>" 
                                             data-category="<%= report.category %>"
-                                            data-search="<%= report.id %> <%= report.name %> <%= report.phone %>">
+                                            data-search="<%= report.id %> <%= report.name %> <%= report.phone %> <%= assignedTechnicianName %>">
                                             <td class="ps-4">
                                                 <span class="fw-bold">#<%= report.id %></span>
                                             </td>
@@ -417,6 +422,22 @@
                                                 </span>
                                             </td>
                                             <td>
+                                                <% if (assignedTechnicianName) { %>
+                                                    <div class="fw-medium"><i class="bi bi-person-check me-1 text-success"></i><%= assignedTechnicianName %></div>
+                                                    <% if (report.technician_phone) { %>
+                                                        <small class="text-muted"><i class="bi bi-telephone me-1"></i><%= report.technician_phone %></small>
+                                                    <% } %>
+                                                <% } else if (assignedTechnicianId) { %>
+                                                    <span class="badge bg-light text-dark rounded-pill px-3 py-2">
+                                                        <i class="bi bi-person me-1"></i>Teknisi #<%= assignedTechnicianId %>
+                                                    </span>
+                                                <% } else { %>
+                                                    <span class="badge bg-secondary rounded-pill px-3 py-2">
+                                                        <i class="bi bi-person-dash me-1"></i>Belum ditugaskan
+                                                    </span>
+                                                <% } %>
+                                            </td>
+                                            <td>
                                                 <div><i class="bi bi-clock-history me-1"></i><%= new Date(report.updated_at || report.updatedAt).toLocaleDateString('id-ID') %></div>
                                                 <small class="text-muted"><%= new Date(report.updated_at || report.updatedAt).toLocaleTimeString('id-ID') %></small>
                                             </td>
@@ -443,7 +464,7 @@
                                     <% }); %>
                                 <% } else { %>
                                     <tr>
-                                        <td colspan="7" class="text-center py-5">
+                                        <td colspan="8" class="text-center py-5">
                                             <div class="empty-state">
                                                 <i class="bi bi-clipboard-x" style="font-size: 3rem; color: #dee2e6;"></i>
                                                 <p class="mt-3 mb-0 text-muted">Belum ada laporan gangguan</p>

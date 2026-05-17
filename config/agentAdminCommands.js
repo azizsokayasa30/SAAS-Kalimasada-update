@@ -474,7 +474,7 @@ Contoh: tolakrequest 1 Data tidak lengkap`);
             
             const updateSql = `
                 UPDATE agent_balance_requests 
-                SET status = 'rejected', processed_at = CURRENT_TIMESTAMP, admin_notes = ?
+                SET status = 'rejected', processed_at = datetime('now','localtime'), admin_notes = ?
                 WHERE id = ?
             `;
             

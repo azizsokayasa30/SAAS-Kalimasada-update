@@ -359,7 +359,7 @@
       const logo=document.getElementById('logoImage');
       if(logo){const src=logo.src.split('?')[0];logo.src=src+'?v='+Date.now();}
     }
-    setInterval(refreshLogo,5000);
+    setInterval(refreshLogo,10000);
     document.addEventListener('DOMContentLoaded',refreshLogo);
   </script>
 </body>

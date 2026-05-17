@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <%- include('../partials/hard-reload') %>
+    <meta charset="UTF-8">
+    <title><%= title || 'Pusat notifikasi' %> — Admin</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+    <link href="/css/responsive-admin.css" rel="stylesheet">
+    <link href="/css/dashboard-modern.css" rel="stylesheet">
+    <%- include('../partials/theme-head') %>
+    <style>
+        .notif-hero {
+            background: linear-gradient(125deg, rgba(13,110,253,0.18) 0%, rgba(13,110,253,0.05) 45%, #fff 100%);
+            border: 1px solid rgba(13,110,253,0.35);
+            border-radius: 1rem;
+        }
+        .notif-card { border-radius: 0.85rem; }
+        .notif-pre { white-space: pre-wrap; font-size: 0.9rem; }
+    </style>
+</head>
+<body>
+<div class="container-fluid">
+    <div class="row">
+        <%- include('../partials/admin-responsive-sidebar', { page: typeof page !== 'undefined' ? page : 'dashboard', settings: settings || {} }) %>
+        <main class="col-md-10 ms-sm-auto main-content">
+            <% const items = typeof notifItems !== 'undefined' && Array.isArray(notifItems) ? notifItems : []; %>
+            <% const badgeN = typeof adminNotifBadgeTotal === 'number' ? adminNotifBadgeTotal : 0; %>
+            <nav aria-label="breadcrumb" class="mb-3">
+                <ol class="breadcrumb small mb-0">
+                    <li class="breadcrumb-item"><a href="/admin/dashboard">Dashboard</a></li>
+                    <li class="breadcrumb-item active" aria-current="page">Pusat notifikasi</li>
+                </ol>
+            </nav>
+
+            <div class="notif-hero p-4 p-md-4 mb-4 shadow-sm">
+                <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">
+                    <div>
+                        <h1 class="h3 fw-bold text-primary mb-1 d-flex align-items-center gap-2">
+                            <i class="bi bi-bell-fill"></i> Pusat notifikasi
+                        </h1>
+                        <p class="text-muted mb-0 small">
+                            Pekerjaan teknisi, pelanggan lunas &amp; isolir sistem, permintaan paket serta laporan gangguan dari portal (nomor cocok dengan data pelanggan).
+                        </p>
+                    </div>
+                    <div class="text-end">
+                        <span class="badge bg-danger rounded-pill <%= badgeN > 0 ? '' : 'd-none' %>" id="notifPageBadge"><%= badgeN > 99 ? '99+' : badgeN %> perlu perhatian</span>
+                        <div class="small text-muted mt-1">Permintaan paket pending: <strong><%= typeof portalPending !== 'undefined' ? portalPending : 0 %></strong></div>
+                        <div class="d-flex flex-wrap gap-2 justify-content-end mt-3">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="window.location.reload()">
+                                <i class="bi bi-arrow-clockwise me-1"></i> Muat ulang
+                            </button>
+                            <button type="button" class="btn btn-sm btn-warning text-dark" id="btnClearAllNotif">
+                                <i class="bi bi-eraser me-1"></i> Bersihkan semua
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <p class="small text-muted mb-3 px-1"><i class="bi bi-info-circle me-1"></i> “Bersihkan” menandai notifikasi teknisi/kolektor sudah dibaca, meniadakan permintaan paket portal yang pending, dan <strong>tidak</strong> menutup tiket gangguan.</p>
+
+            <% if (!items.length) { %>
+            <div class="alert alert-light border text-center py-5 shadow-sm">
+                <i class="bi bi-check2-circle text-success fs-1 d-block mb-2"></i>
+                <strong>Tidak ada notifikasi aktif.</strong>
+                <div class="text-muted small mt-2">Tagihan baru sengaja tidak ditampilkan di pusat ini agar fokus pada tindakan operasional.</div>
+            </div>
+            <% } else { %>
+            <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                <span class="text-muted small">Menampilkan <strong><%= items.length %></strong> entri terbaru</span>
+            </div>
+
+            <div class="vstack gap-3">
+                <% items.forEach(function(it) { %>
+                <% const src = it.source || ''; %>
+                <% const when = it.created_at ? new Date(it.created_at).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }) : '—'; %>
+                <% let pill = { cls: 'bg-secondary', lab: 'Lainnya' }; %>
+                <% if (src === 'technician') { pill = { cls: 'bg-info text-dark', lab: 'Teknisi' }; } %>
+                <% if (src === 'collector') { pill = { cls: 'bg-success', lab: 'Lunas / isolir' }; } %>
+                <% if (src === 'portal') { pill = { cls: 'bg-primary', lab: 'Portal · paket' }; } %>
+                <% if (src === 'portal_report') { pill = { cls: 'bg-danger', lab: 'Portal · laporan' }; } %>
+                <article class="card notif-card shadow-sm border-0">
+                    <div class="card-body">
+                        <div class="d-flex flex-wrap justify-content-between gap-2 align-items-start mb-2">
+                            <div class="d-flex flex-wrap align-items-center gap-2">
+                                <span class="badge rounded-pill <%= pill.cls %>"><%= pill.lab %></span>
+                                <% if (it.kind) { %><span class="badge bg-light text-secondary border"><%= it.kind %></span><% } %>
+                            </div>
+                            <time class="text-muted small text-nowrap"><%= when %></time>
+                        </div>
+                        <h2 class="h5 fw-bold mb-2"><%= it.title || 'Notifikasi' %></h2>
+                        <p class="mb-3 text-body-secondary"><%= it.body || '' %></p>
+                        <div class="small text-muted mb-3">
+                            <i class="bi bi-person-badge me-1"></i><%= it.actor_label || '' %>
+                            <% if (it.customer_phone) { %>
+                            <span class="ms-2"><i class="bi bi-telephone me-1"></i><%= it.customer_phone %></span>
+                            <% } %>
+                        </div>
+
+                        <% const d = it.detail; %>
+                        <% if (d && d.type === 'portal_package') { %>
+                        <div class="border rounded-3 p-3 bg-light small mb-3">
+                            <div class="fw-semibold text-primary mb-2">Detail permintaan paket</div>
+                            <dl class="row mb-0">
+                                <dt class="col-sm-4">Username</dt><dd class="col-sm-8"><%= d.customer_username || '—' %></dd>
+                                <dt class="col-sm-4">Paket saat ini</dt><dd class="col-sm-8"><%= d.current_package_name || '—' %> <% if (d.current_speed) { %><span class="text-muted">(<%= d.current_speed %>)</span><% } %></dd>
+                                <dt class="col-sm-4">Paket diminta</dt><dd class="col-sm-8"><%= d.target_package_name || '—' %> <% if (d.target_speed) { %><span class="text-muted">(<%= d.target_speed %>)</span><% } %></dd>
+                                <% if (d.target_price_rupiah != null && d.target_price_rupiah !== '') { %>
+                                <dt class="col-sm-4">Harga referensi</dt><dd class="col-sm-8">Rp <%= Number(d.target_price_rupiah).toLocaleString('id-ID') %></dd>
+                                <% } %>
+                                <% if (d.note) { %>
+                                <dt class="col-sm-4">Catatan</dt><dd class="col-sm-8 notif-pre"><%= d.note %></dd>
+                                <% } %>
+                            </dl>
+                        </div>
+                        <% } else if (d && d.type === 'portal_trouble') { %>
+                        <div class="border rounded-3 p-3 bg-light small mb-3">
+                            <div class="fw-semibold text-danger mb-2">Detail laporan gangguan</div>
+                            <dl class="row mb-0">
+                                <dt class="col-sm-4">Status</dt><dd class="col-sm-8"><%= d.status || '—' %></dd>
+                                <dt class="col-sm-4">Kategori</dt><dd class="col-sm-8"><%= d.category || '—' %></dd>
+                                <dt class="col-sm-4">Lokasi</dt><dd class="col-sm-8"><%= d.location || '—' %></dd>
+                                <dt class="col-sm-4">Dibuat</dt><dd class="col-sm-8"><%= d.report_created_at ? new Date(d.report_created_at).toLocaleString('id-ID') : '—' %></dd>
+                                <dt class="col-sm-4">Deskripsi</dt><dd class="col-sm-12 notif-pre mt-1"><%= d.description || '—' %></dd>
+                            </dl>
+                        </div>
+                        <% } else if (d && (d.type === 'collector' || d.type === 'technician')) { %>
+                        <div class="border rounded-3 p-3 bg-light small mb-3">
+                            <div class="fw-semibold mb-2">Referensi</div>
+                            <div>Jenis: <code><%= d.kind || '—' %></code> · Ref: <code><%= d.ref_id || '—' %></code></div>
+                        </div>
+                        <% } %>
+
+                        <a href="<%= it.href || '#' %>" class="btn btn-primary btn-sm">
+                            <i class="bi bi-box-arrow-up-right me-1"></i> Buka di modul terkait
+                        </a>
+                    </div>
+                </article>
+                <% }); %>
+            </div>
+            <% } %>
+        </main>
+    </div>
+</div>
+<script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script>
+(function () {
+  var btn = document.getElementById('btnClearAllNotif');
+  if (!btn) return;
+  btn.addEventListener('click', async function () {
+    if (!confirm('Tandai semua notifikasi teknisi & kolektor sudah dibaca, dan tiadakan permintaan ubah paket portal yang masih pending? Tiket laporan gangguan tidak diubah.')) return;
+    btn.disabled = true;
+    try {
+      var res = await fetch('/admin/dashboard/api/notifications/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ dismissPortal: true })
+      });
+      var data = await res.json();
+      if (!data.success) {
+        alert(data.message || 'Gagal membersihkan notifikasi');
+        btn.disabled = false;
+        return;
+      }
+      window.location.reload();
+    } catch (e) {
+      alert('Gagal: ' + (e && e.message ? e.message : e));
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>

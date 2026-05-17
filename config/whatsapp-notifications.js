@@ -31,6 +31,15 @@ class WhatsAppNotificationManager {
         this.sock = sockInstance; // Keep for backward compatibility
     }
 
+    isSystemMonitorEnabled(monitorId) {
+        try {
+            const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
+            return isWaSystemMonitorEnabled(monitorId);
+        } catch (_) {
+            return true;
+        }
+    }
+
     // Get provider instance
     getProvider() {
         if (!this.providerManager) {
@@ -470,6 +479,11 @@ class WhatsAppNotificationManager {
     // Send invoice created notification
     async sendInvoiceCreatedNotification(customerId, invoiceId) {
         try {
+            if (!this.isSystemMonitorEnabled('billing_scheduler_invoice_wa')) {
+                logger.info('billing_scheduler_invoice_wa off — skip invoice created notification');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
+            }
+
             // Check if template is enabled
             if (!this.isTemplateEnabled('invoice_created')) {
                 logger.info('Invoice created notification is disabled, skipping...');
@@ -512,6 +526,11 @@ class WhatsAppNotificationManager {
     // Send due date reminder
     async sendDueDateReminder(invoiceId) {
         try {
+            if (!this.isSystemMonitorEnabled('billing_daily_due_wa')) {
+                logger.info('billing_daily_due_wa off — skip due date reminder notification');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
+            }
+
             // Check if template is enabled
             if (!this.isTemplateEnabled('due_date_reminder')) {
                 logger.info('Due date reminder notification is disabled, skipping...');
@@ -558,6 +577,11 @@ class WhatsAppNotificationManager {
     // Send member invoice created notification
     async sendMemberInvoiceCreatedNotification(memberId, invoiceId) {
         try {
+            if (!this.isSystemMonitorEnabled('billing_scheduler_invoice_wa')) {
+                logger.info('billing_scheduler_invoice_wa off — skip member invoice created notification');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
+            }
+
             if (!this.isTemplateEnabled('invoice_created')) {
                 logger.info('Member invoice created notification is disabled, skipping...');
                 return { success: true, skipped: true, reason: 'Template disabled' };
@@ -598,6 +622,11 @@ class WhatsAppNotificationManager {
     // Send member due date reminder
     async sendMemberDueDateReminder(invoiceId) {
         try {
+            if (!this.isSystemMonitorEnabled('billing_daily_due_wa')) {
+                logger.info('billing_daily_due_wa off — skip member due date reminder notification');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
+            }
+
             if (!this.isTemplateEnabled('due_date_reminder')) {
                 logger.info('Member due date reminder notification is disabled, skipping...');
                 return { success: true, skipped: true, reason: 'Template disabled' };
@@ -678,6 +707,11 @@ Internet Tanpa Batas`;
     // Send payment received notification (overload: by paymentId or by phone + data)
     async sendPaymentReceivedNotification(paymentIdOrPhone, data = null) {
         try {
+            if (!this.isSystemMonitorEnabled('payment_received_wa')) {
+                logger.info('payment_received_wa off — skip payment received notification');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
+            }
+
             // Check if template is enabled
             if (!this.isTemplateEnabled('payment_received')) {
                 logger.info('Payment received notification is disabled, skipping...');
@@ -1047,6 +1081,11 @@ Internet Tanpa Batas`;
     // Send service suspension notification
     async sendServiceSuspensionNotification(customer, reason) {
         try {
+            if (!this.isSystemMonitorEnabled('isolir_suspension_wa')) {
+                logger.info('isolir_suspension_wa off — skip service suspension notification');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
+            }
+
             // Check if template is enabled
             if (!this.isTemplateEnabled('service_suspension')) {
                 logger.info('Service suspension notification is disabled, skipping...');
@@ -1083,6 +1122,11 @@ Internet Tanpa Batas`;
     // Send service restoration notification
     async sendServiceRestorationNotification(customer, reason) {
         try {
+            if (!this.isSystemMonitorEnabled('isolir_restore_wa')) {
+                logger.info('isolir_restore_wa off — skip service restoration notification');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
+            }
+
             // Check if template is enabled
             if (!this.isTemplateEnabled('service_restoration')) {
                 logger.info('Service restoration notification is disabled, skipping...');
@@ -1121,6 +1165,11 @@ Internet Tanpa Batas`;
     // Send welcome message notification
     async sendWelcomeMessage(customer) {
         try {
+            if (!this.isSystemMonitorEnabled('customer_welcome_wa')) {
+                logger.info('customer_welcome_wa off — skip welcome message notification');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
+            }
+
             // Check if template is enabled
             if (!this.isTemplateEnabled('welcome_message')) {
                 logger.info('Welcome message notification is disabled, skipping...');
@@ -1162,6 +1211,11 @@ Internet Tanpa Batas`;
     // Send installation job assignment notification to technician
     async sendInstallationJobNotification(technician, installationJob, customer, packageData) {
         try {
+            if (!this.isSystemMonitorEnabled('installation_job_wa')) {
+                logger.info('installation_job_wa off — skip installation job notification');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
+            }
+
             // Check if template is enabled
             if (!this.isTemplateEnabled('installation_job_assigned')) {
                 logger.info('Installation job notification is disabled, skipping...');
@@ -1215,6 +1269,11 @@ Internet Tanpa Batas`;
     // Send installation status update notification to technician
     async sendInstallationStatusUpdateNotification(technician, installationJob, customer, newStatus, notes) {
         try {
+            if (!this.isSystemMonitorEnabled('installation_job_wa')) {
+                logger.info('installation_job_wa off — skip installation status update notification');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
+            }
+
             // Check if template is enabled
             if (!this.isTemplateEnabled('installation_status_update')) {
                 logger.info('Installation status update notification is disabled, skipping...');
@@ -1264,6 +1323,11 @@ Internet Tanpa Batas`;
     // Send installation completion notification to technician
     async sendInstallationCompletionNotification(technician, installationJob, customer, completionNotes) {
         try {
+            if (!this.isSystemMonitorEnabled('installation_job_wa')) {
+                logger.info('installation_job_wa off — skip installation completion notification');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
+            }
+
             // Check if template is enabled
             if (!this.isTemplateEnabled('installation_completed')) {
                 logger.info('Installation completion notification is disabled, skipping...');
@@ -1303,6 +1367,11 @@ Internet Tanpa Batas`;
     // Send Sales Order notification to technicians
     async sendSalesOrderNotification(customer) {
         try {
+            if (!this.isSystemMonitorEnabled('installation_job_wa')) {
+                logger.info('installation_job_wa off — skip sales order notification to technicians');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
+            }
+
             if (!customer) {
                 logger.warn('No customer data provided for Sales Order notification');
                 return { success: false, error: 'No customer data' };

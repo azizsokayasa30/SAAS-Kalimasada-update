@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
-const { getSetting } = require('../config/settingsManager');
+const { getSetting, getLocalTimestamp } = require('../config/settingsManager');
 const { technicianAuth, authManager } = require('./technicianAuth');
 const logger = require('../config/logger');
 
@@ -1915,16 +1915,30 @@ router.post('/installations/update-status', async (req, res) => {
             });
         }
 
-        // Update installation job status
-        const updateQuery = `
+        // Update installation job status (waktu mulai lapangan = pertama kali masuk in_progress)
+        const wallStart = getLocalTimestamp();
+        const updateQuery =
+            status === 'in_progress'
+                ? `
             UPDATE installation_jobs 
             SET status = ?, 
                 notes = COALESCE(?, notes),
-                updated_at = CURRENT_TIMESTAMP
+                work_started_at = COALESCE(work_started_at, ?),
+                updated_at = datetime('now','localtime')
+            WHERE id = ?
+        `
+                : `
+            UPDATE installation_jobs 
+            SET status = ?, 
+                notes = COALESCE(?, notes),
+                updated_at = datetime('now','localtime')
             WHERE id = ?
         `;
 
-        db.run(updateQuery, [status, notes || null, jobId], function(err) {
+        const updateParams =
+            status === 'in_progress' ? [status, notes || null, wallStart, jobId] : [status, notes || null, jobId];
+
+        db.run(updateQuery, updateParams, function(err) {
             if (err) {
                 console.error('Error updating installation status:', err);
                 return res.status(500).json({ 

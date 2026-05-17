@@ -582,16 +582,17 @@ router.put('/update/:id', adminAuth, async (req, res) => {
 
         // Update installation job
         await new Promise((resolve, reject) => {
+            const now = getLocalTimestamp();
             const updateQuery = assignChanged
                 ? `
                 UPDATE installation_jobs SET
                     customer_id = ?,
                     customer_name = ?, customer_phone = ?, customer_address = ?,
                     package_id = ?, installation_date = ?, installation_time = ?,
-                    assigned_technician_id = ?, assigned_at = CURRENT_TIMESTAMP, priority = ?, notes = ?,
+                    assigned_technician_id = ?, assigned_at = ?, priority = ?, notes = ?,
                     equipment_needed = ?, estimated_duration = ?,
                     customer_latitude = ?, customer_longitude = ?, status = ?,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = ?
                 WHERE id = ?
             `
                 : `
@@ -602,30 +603,33 @@ router.put('/update/:id', adminAuth, async (req, res) => {
                     assigned_technician_id = ?, priority = ?, notes = ?,
                     equipment_needed = ?, estimated_duration = ?,
                     customer_latitude = ?, customer_longitude = ?, status = ?,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = ?
                 WHERE id = ?
             `;
+            const updateParams = [
+                custIdUpdate,
+                syncName,
+                syncPhone,
+                syncAddr,
+                package_id,
+                safeInstallationDate,
+                safeInstallationTime,
+                assigned_technician_id || null,
+                ...(assignChanged ? [now] : []),
+                priority || 'normal',
+                notes || null,
+                equipment_needed || null,
+                estimated_duration || 120,
+                customer_latitude || null,
+                customer_longitude || null,
+                status || currentJob.status,
+                now,
+                jobId
+            ];
 
             db.run(
                 updateQuery,
-                [
-                    custIdUpdate,
-                    syncName,
-                    syncPhone,
-                    syncAddr,
-                    package_id,
-                    safeInstallationDate,
-                    safeInstallationTime,
-                    assigned_technician_id || null,
-                    priority || 'normal',
-                    notes || null,
-                    equipment_needed || null,
-                    estimated_duration || 120,
-                    customer_latitude || null,
-                    customer_longitude || null,
-                    status || currentJob.status,
-                    jobId
-                ],
+                updateParams,
                 (err) => {
                     if (err) reject(err);
                     else resolve();
@@ -757,11 +761,12 @@ router.put('/cancel/:id', adminAuth, async (req, res) => {
 
         // Update status to cancelled
         await new Promise((resolve, reject) => {
+            const now = getLocalTimestamp();
             db.run(`
                 UPDATE installation_jobs
-                SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+                SET status = 'cancelled', updated_at = ?
                 WHERE id = ?
-            `, [jobId], (err) => { if (err) reject(err); else resolve(); });
+            `, [now, jobId], (err) => { if (err) reject(err); else resolve(); });
         });
 
         // Log history
@@ -800,10 +805,18 @@ router.put('/start/:id', adminAuth, async (req, res) => {
             return res.status(400).json({ success: false, message: 'Job tidak dapat dimulai' });
         }
 
+        const wallStart = getLocalTimestamp();
         await new Promise((resolve, reject) => {
-            db.run(`UPDATE installation_jobs SET status = 'in_progress', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [jobId], (err) => {
-                if (err) reject(err); else resolve();
-            });
+            db.run(
+                `UPDATE installation_jobs SET status = 'in_progress',
+                 work_started_at = COALESCE(work_started_at, ?),
+                 updated_at = ? WHERE id = ?`,
+                [wallStart, wallStart, jobId],
+                (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                }
+            );
         });
 
         await new Promise((resolve, reject) => {
@@ -844,7 +857,7 @@ router.put('/complete/:id', adminAuth, async (req, res) => {
         }
 
         await new Promise((resolve, reject) => {
-            db.run(`UPDATE installation_jobs SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [jobId], (err) => {
+            db.run(`UPDATE installation_jobs SET status = 'completed', updated_at = ? WHERE id = ?`, [getLocalTimestamp(), jobId], (err) => {
                 if (err) reject(err); else resolve();
             });
         });
@@ -897,17 +910,18 @@ router.post('/assign/:id', adminAuth, async (req, res) => {
 
         // Update assignment and status
         await new Promise((resolve, reject) => {
+            const now = getLocalTimestamp();
             db.run(`
                 UPDATE installation_jobs SET
                     assigned_technician_id = ?,
-                    assigned_at = CURRENT_TIMESTAMP,
+                    assigned_at = ?,
                     status = CASE 
                         WHEN status = 'scheduled' THEN 'assigned'
                         ELSE status
                     END,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = ?
                 WHERE id = ?
-            `, [technician_id, jobId], (err) => {
+            `, [technician_id, now, now, jobId], (err) => {
                 if (err) reject(err);
                 else resolve();
             });
@@ -1259,18 +1273,19 @@ router.post('/assign-technician', adminAuth, async (req, res) => {
 
         // Update job assignment
         await new Promise((resolve, reject) => {
+            const now = getLocalTimestamp();
             const updateQuery = `
                 UPDATE installation_jobs 
                 SET assigned_technician_id = ?, 
-                    assigned_at = CURRENT_TIMESTAMP,
+                    assigned_at = ?,
                     status = 'assigned',
                     priority = ?,
                     notes = COALESCE(?, notes),
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = ?
                 WHERE id = ?
             `;
             
-            db.run(updateQuery, [technicianId, priority || 'normal', notes || null, jobId], function(err) {
+            db.run(updateQuery, [technicianId, now, priority || 'normal', notes || null, now, jobId], function(err) {
                 if (err) reject(err);
                 else resolve(this);
             });

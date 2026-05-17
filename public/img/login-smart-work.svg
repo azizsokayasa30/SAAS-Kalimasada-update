@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Smart Work Not Difficult Work</title>
+  <desc id="desc">Background illustration for the admin login page with a smart work message.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07111f"/>
+      <stop offset=".52" stop-color="#0f2a44"/>
+      <stop offset="1" stop-color="#083344"/>
+    </linearGradient>
+    <radialGradient id="glow1" cx=".22" cy=".24" r=".45">
+      <stop offset="0" stop-color="#38bdf8" stop-opacity=".44"/>
+      <stop offset="1" stop-color="#38bdf8" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx=".84" cy=".76" r=".48">
+      <stop offset="0" stop-color="#22c55e" stop-opacity=".26"/>
+      <stop offset="1" stop-color="#22c55e" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="24" stdDeviation="30" flood-color="#020617" flood-opacity=".36"/>
+    </filter>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#bg)"/>
+  <rect width="1600" height="1000" fill="url(#glow1)"/>
+  <rect width="1600" height="1000" fill="url(#glow2)"/>
+  <g opacity=".16" stroke="#e0f2fe" stroke-width="1">
+    <path d="M0 180H1600M0 340H1600M0 500H1600M0 660H1600M0 820H1600"/>
+    <path d="M180 0V1000M360 0V1000M540 0V1000M720 0V1000M900 0V1000M1080 0V1000M1260 0V1000M1440 0V1000"/>
+  </g>
+  <g filter="url(#shadow)" transform="translate(930 150)">
+    <rect width="420" height="310" rx="34" fill="#f8fafc" opacity=".95"/>
+    <rect x="34" y="42" width="250" height="20" rx="10" fill="#0f172a" opacity=".18"/>
+    <rect x="34" y="84" width="340" height="18" rx="9" fill="#0ea5e9" opacity=".24"/>
+    <rect x="34" y="124" width="300" height="18" rx="9" fill="#0f172a" opacity=".12"/>
+    <rect x="34" y="184" width="160" height="58" rx="18" fill="#0ea5e9"/>
+    <circle cx="320" cy="210" r="54" fill="#22c55e" opacity=".22"/>
+    <path d="M292 211l22 22 46-58" fill="none" stroke="#16a34a" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <g transform="translate(120 650)" opacity=".92">
+    <text x="0" y="0" fill="#ffffff" font-family="Inter, Arial, sans-serif" font-size="72" font-weight="900" letter-spacing="-3">
+      Smart Work,
+    </text>
+    <text x="0" y="86" fill="#7dd3fc" font-family="Inter, Arial, sans-serif" font-size="72" font-weight="900" letter-spacing="-3">
+      Not Difficult Work
+    </text>
+    <text x="4" y="142" fill="#cbd5e1" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="600">
+      Fokus, tertata, dan konsisten setiap hari.
+    </text>
+  </g>
+  <g transform="translate(160 150)" opacity=".36">
+    <circle cx="0" cy="0" r="8" fill="#7dd3fc"/>
+    <circle cx="90" cy="52" r="5" fill="#86efac"/>
+    <circle cx="172" cy="8" r="7" fill="#fbbf24"/>
+    <path d="M0 0L90 52L172 8" fill="none" stroke="#bae6fd" stroke-width="3"/>
+  </g>
+</svg>

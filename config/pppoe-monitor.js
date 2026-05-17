@@ -5,17 +5,43 @@ const pppoeNotifications = require('./pppoe-notifications');
 let monitorInterval = null;
 let lastActivePPPoE = [];
 let isMonitoring = false;
+const MIN_POLLING_INTERVAL_MS = 10 * 1000;
+
+function normalizePollingIntervalMs(value, fallbackMs = 300000) {
+    const parsed = Number(value);
+    const interval = Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackMs;
+    return Math.max(interval, MIN_POLLING_INTERVAL_MS);
+}
+
+function isPppoeWaMonitorEnabled() {
+    try {
+        const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
+        return isWaSystemMonitorEnabled('pppoe_login_logout_wa');
+    } catch (_) {
+        return true;
+    }
+}
 
 // Start PPPoE monitoring
 async function startPPPoEMonitoring() {
     try {
+        if (!isPppoeWaMonitorEnabled()) {
+            if (monitorInterval) {
+                clearInterval(monitorInterval);
+                monitorInterval = null;
+            }
+            isMonitoring = false;
+            logger.info('PPPoE WA monitoring disabled by master switch');
+            return { success: true, message: 'Monitoring PPPoE WA dinonaktifkan' };
+        }
+
         if (isMonitoring) {
             logger.info('PPPoE monitoring is already running');
             return { success: true, message: 'Monitoring sudah berjalan' };
         }
 
         const settings = pppoeNotifications.getSettings();
-        const interval = settings.monitorInterval || 300000; // Default 5 menit (dioptimasi untuk mengurangi beban API MikroTik)
+        const interval = normalizePollingIntervalMs(settings.monitorInterval); // Default 5 menit, minimum 10 detik
 
         // Clear any existing interval
         if (monitorInterval) {
@@ -85,6 +111,11 @@ async function restartPPPoEMonitoring() {
 // Check for PPPoE login/logout changes
 async function checkPPPoEChanges() {
     try {
+        if (!isPppoeWaMonitorEnabled()) {
+            logger.debug('PPPoE WA monitoring master switch is off, skipping check');
+            return;
+        }
+
         const settings = pppoeNotifications.getSettings();
         
         // Skip if notifications are disabled
@@ -194,7 +225,8 @@ function getMonitoringStatus() {
 async function setMonitoringInterval(intervalMs) {
     try {
         const settings = pppoeNotifications.getSettings();
-        settings.monitorInterval = intervalMs;
+        const safeIntervalMs = normalizePollingIntervalMs(intervalMs);
+        settings.monitorInterval = safeIntervalMs;
         
         if (pppoeNotifications.saveSettings(settings)) {
             // Restart monitoring with new interval if it's running
@@ -202,10 +234,10 @@ async function setMonitoringInterval(intervalMs) {
                 await restartPPPoEMonitoring();
             }
             
-            logger.info(`PPPoE monitoring interval updated to ${intervalMs}ms`);
+            logger.info(`PPPoE monitoring interval updated to ${safeIntervalMs}ms`);
             return { 
                 success: true, 
-                message: `Interval monitoring diubah menjadi ${intervalMs/1000} detik` 
+                message: `Interval monitoring diubah menjadi ${safeIntervalMs/1000} detik` 
             };
         } else {
             return { 

@@ -18,7 +18,7 @@ db.run(
         title TEXT NOT NULL,
         body TEXT,
         read_at TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
+        created_at TEXT DEFAULT (datetime('now','localtime')),
         UNIQUE(collector_id, kind, ref_id)
     )`,
     (err) => {
@@ -37,12 +37,12 @@ function upsertCollectorNotification(collectorId, kind, refId, title, body) {
     return new Promise((resolve, reject) => {
         db.run(
             `INSERT INTO collector_field_notifications (collector_id, kind, ref_id, title, body, read_at, created_at)
-             VALUES (?, ?, ?, ?, ?, NULL, datetime('now'))
+             VALUES (?, ?, ?, ?, ?, NULL, datetime('now','localtime'))
              ON CONFLICT(collector_id, kind, ref_id) DO UPDATE SET
                title = excluded.title,
                body = excluded.body,
                read_at = NULL,
-               created_at = datetime('now')`,
+               created_at = datetime('now','localtime')`,
             [cid, String(kind).toUpperCase(), rid, String(title || 'Notifikasi'), body != null ? String(body) : null],
             function (e) {
                 if (e) {
@@ -82,6 +82,14 @@ function notifyNewInvoice(customerId, invoiceId, invoiceNumber, amountLabel) {
     return notifyCollectorsForCustomerIds(Number(customerId), 'NEW_INVOICE', ref, title, body);
 }
 
+/** Notifikasi pelunasan (untuk pusat notifikasi admin — bukan tagihan baru). */
+function notifyInvoicePaid(customerId, invoiceId, invoiceNumber, amountRp) {
+    const ref = `PAID-${invoiceId}`;
+    const title = 'Tagihan lunas';
+    const body = `${invoiceNumber || 'Invoice'} · Rp ${Number(amountRp || 0).toLocaleString('id-ID')}`;
+    return notifyCollectorsForCustomerIds(Number(customerId), 'INVOICE_PAID', ref, title, body);
+}
+
 function notifyCustomerIsolir(customerId, customerName) {
     const ref = `ISOLIR-${customerId}`;
     const title = 'Isolir / suspended';
@@ -114,6 +122,7 @@ function notifyAdminRecordedCollectorPayment(collectorId, adminPaymentRowId, cus
 module.exports = {
     upsertCollectorNotification,
     notifyNewInvoice,
+    notifyInvoicePaid,
     notifyCustomerIsolir,
     notifyPaymentCancelled,
     notifyAdminRemittanceRecorded,

@@ -351,7 +351,7 @@ router.post('/purchase', async (req, res) => {
             const voucherCustomerId = await getVoucherCustomerId();
             await new Promise((resolve, reject) => {
                 const sql = `INSERT INTO invoices (customer_id, invoice_number, amount, status, created_at, due_date, notes, package_id, package_name, invoice_type)
-                           VALUES (?, ?, ?, 'pending', datetime('now'), ?, ?, ?, ?, 'voucher')`;
+                           VALUES (?, ?, ?, 'pending', datetime('now','localtime'), ?, ?, ?, ?, 'voucher')`;
                 db.run(sql, [voucherCustomerId, invoiceId, totalAmount, dueDate, `Voucher Hotspot ${selectedPackage.name} x${quantity}`, 1, selectedPackage.name], function(err) {
                     if (err) reject(err);
                     else {
@@ -800,7 +800,7 @@ async function handleVoucherWebhook(body, headers) {
                 const updateSql = `UPDATE voucher_purchases 
                                  SET status = 'completed', 
                                      voucher_data = ?, 
-                                     updated_at = datetime('now')
+                                     updated_at = datetime('now','localtime')
                                  WHERE id = ?`;
                 db.run(updateSql, [JSON.stringify(generatedVouchers), purchase.id], (err) => {
                     if (err) reject(err);
@@ -996,7 +996,7 @@ async function logVoucherDelivery(purchaseId, phone, success, message) {
         
         db.run(`
             INSERT INTO voucher_delivery_logs (purchase_id, phone, status, error_message, created_at)
-            VALUES (?, ?, ?, ?, datetime('now'))
+            VALUES (?, ?, ?, ?, datetime('now','localtime'))
         `, [purchaseId, phone, status, message], (err) => {
             if (err) {
                 console.error('Error logging voucher delivery:', err);
@@ -1019,7 +1019,7 @@ async function saveVoucherPurchase(purchaseData) {
             INSERT INTO voucher_purchases (invoice_id, customer_name, customer_phone, voucher_package, 
                                          voucher_profile, voucher_quantity, amount, description, 
                                          voucher_data, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))
         `, [
             purchaseData.invoiceId,
             purchaseData.customerName,

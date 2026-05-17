@@ -234,7 +234,7 @@ router.put('/:id', adminAuth, async (req, res) => {
             const hashedPassword = bcrypt.hashSync(password, 10);
             updateQuery = `
                 UPDATE collectors 
-                SET name = ?, phone = ?, email = ?, address = ?, commission_rate = ?, status = ?, password = ?, updated_at = CURRENT_TIMESTAMP
+                SET name = ?, phone = ?, email = ?, address = ?, commission_rate = ?, status = ?, password = ?, updated_at = datetime('now','localtime')
                 WHERE id = ?
             `;
             updateParams = [name, phone, email, address, commission_rate, status, hashedPassword, id];
@@ -242,7 +242,7 @@ router.put('/:id', adminAuth, async (req, res) => {
             // Update without password
             updateQuery = `
                 UPDATE collectors 
-                SET name = ?, phone = ?, email = ?, address = ?, commission_rate = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+                SET name = ?, phone = ?, email = ?, address = ?, commission_rate = ?, status = ?, updated_at = datetime('now','localtime')
                 WHERE id = ?
             `;
             updateParams = [name, phone, email, address, commission_rate, status, id];

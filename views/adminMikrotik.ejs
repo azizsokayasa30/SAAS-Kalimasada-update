@@ -203,7 +203,7 @@
         <main class="col-md-10 main-content ms-sm-auto">
 
             <h3 class="mb-4">Daftar User PPPoE Mikrotik</h3>
-            
+            <% const _stats = typeof userStats !== 'undefined' ? userStats : { totalUsers: 0, activeUsers: 0, offlineUsers: 0, profileCount: 0 }; %>
             <!-- Statistik User PPPoE -->
             <div class="row mb-4">
                 <div class="col-md-3 mb-3">
@@ -211,7 +211,7 @@
                         <div class="metric-card-icon">
                             <i class="bi bi-people"></i>
                         </div>
-                        <div class="metric-card-value" id="totalUsers">-</div>
+                        <div class="metric-card-value" id="totalUsers"><%= _stats.totalUsers %></div>
                         <div class="metric-card-label">Total User PPPoE</div>
                         <div class="metric-card-subtext">Klik untuk tampilkan semua</div>
                     </div>
@@ -221,7 +221,7 @@
                         <div class="metric-card-icon">
                             <i class="bi bi-person-check"></i>
                         </div>
-                        <div class="metric-card-value" id="activeUsers">-</div>
+                        <div class="metric-card-value" id="activeUsers"><%= _stats.activeUsers %></div>
                         <div class="metric-card-label">User Aktif</div>
                         <div class="metric-card-subtext">Klik untuk filter user aktif</div>
                     </div>
@@ -231,7 +231,7 @@
                         <div class="metric-card-icon">
                             <i class="bi bi-person-x"></i>
                         </div>
-                        <div class="metric-card-value" id="offlineUsers">-</div>
+                        <div class="metric-card-value" id="offlineUsers"><%= _stats.offlineUsers %></div>
                         <div class="metric-card-label">User Offline</div>
                         <div class="metric-card-subtext">Klik untuk filter user offline</div>
                     </div>
@@ -241,7 +241,7 @@
                         <div class="metric-card-icon">
                             <i class="bi bi-sliders"></i>
                         </div>
-                        <div class="metric-card-value" id="profileCount">-</div>
+                        <div class="metric-card-value" id="profileCount"><%= _stats.profileCount %></div>
                         <div class="metric-card-label">Total Profile</div>
                         <div class="metric-card-subtext">Klik untuk buka list profile</div>
                     </div>
@@ -511,9 +511,6 @@ $(function() {
     });
   }
   
-  // Load profiles automatically on page load
-  loadProfiles();
-  
   // Tambah User
   $('#btnTambahUser').on('click', function() {
     const isRadiusMode = <%= typeof authMode !== 'undefined' && authMode === 'radius' ? 'true' : 'false' %>;
@@ -624,42 +621,10 @@ $(function() {
     );
   });
   
-  // Load profiles automatically on page load to update statistics
-  loadProfiles();
-  
-  // Update user statistics with real data
-  function updateUserStats() {
-    $.get('/admin/mikrotik/user-stats', function(res) {
-      if(res.success) {
-        // Update the statistics cards with real data
-        $('#totalUsers').text(res.totalUsers || 0);
-        $('#activeUsers').text(res.activeUsers || 0);
-        $('#offlineUsers').text(res.offlineUsers || 0);
-      } else {
-        console.error('Failed to get user stats:', res.message);
-      }
-    }).fail(function(error) {
-      console.error('Error fetching user stats:', error);
-    });
-  }
-  
-  // Update user statistics on page load
-  updateUserStats();
-  
-  // Refresh statistics every 30 seconds
-  setInterval(function() {
-    loadProfiles();
-    updateUserStats();
-  }, 30000);
-  
-  // Refresh stats button
   $('#btnRefreshStats').on('click', function() {
-    loadProfiles();
-    updateUserStats();
-    $(this).prop('disabled', true).html('<i class="bi bi-arrow-clockwise spin"></i> Loading...');
-    setTimeout(() => {
-      $(this).prop('disabled', false).html('<i class="bi bi-arrow-clockwise"></i> Refresh Stats');
-    }, 2000);
+    const $btn = $(this);
+    $btn.prop('disabled', true).html('<i class="bi bi-arrow-clockwise spin"></i> Memuat...');
+    window.location.href = '/admin/mikrotik?refresh=1';
   });
 });
 </script>

@@ -1,6 +1,7 @@
 const logger = require('./logger');
 const billingManager = require('./billing');
-const { getMikrotikConnectionForCustomer, suspendUserRadius, unsuspendUserRadius } = require('./mikrotik');
+const { getMikrotikConnectionForCustomer, suspendUserRadius, unsuspendUserRadius, updateIsolirPreviousGroupRadius } = require('./mikrotik');
+const { classifySuspendReason, isSuspendedStatus, shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
 const { findDeviceByPhoneNumber, findDeviceByPPPoE, setParameterValues } = require('./genieacs');
 const { getSetting } = require('./settingsManager');
 const staticIPSuspension = require('./staticIPSuspension');
@@ -344,12 +345,22 @@ class ServiceSuspensionManager {
             }
 
             // Update status di billing database
-            const alreadySuspended = String(customer?.status || '').toLowerCase() === 'suspended';
+            const alreadySuspended = isSuspendedStatus(customer?.status);
+            const suspendReasonClass = classifySuspendReason(reason);
+            const persistSuspendReason = async (customerId) => {
+                if (!customerId) return;
+                try {
+                    await billingManager.setSuspendReasonById(customerId, suspendReasonClass);
+                } catch (e) {
+                    logger.warn(`[SUSPEND] Gagal menyimpan suspend_reason untuk id=${customerId}: ${e.message}`);
+                }
+            };
             if (!skipBillingStatus) {
                 try {
                     if (!alreadySuspended && customer.id) {
                         logger.info(`[SUSPEND] Updating billing status by id=${customer.id} to 'suspended' (username=${customer.username||customer.pppoe_username||'-'})`);
-                        await billingManager.setCustomerStatusById(customer.id, 'suspended');
+                        await billingManager.setCustomerStatusById(customer.id, 'suspended', { skipRadiusSync: true });
+                        await persistSuspendReason(customer.id);
                         results.billing = true;
                     } else if (!alreadySuspended) {
                         let resolved = null;
@@ -364,7 +375,8 @@ class ServiceSuspensionManager {
                         }
                         if (resolved && resolved.id) {
                             logger.info(`[SUSPEND] Resolved customer id=${resolved.id} (username=${resolved.pppoe_username||resolved.username||'-'}) → set 'suspended'`);
-                            await billingManager.setCustomerStatusById(resolved.id, 'suspended');
+                            await billingManager.setCustomerStatusById(resolved.id, 'suspended', { skipRadiusSync: true });
+                            await persistSuspendReason(resolved.id);
                             results.billing = true;
                         } else if (customer.phone) {
                             logger.warn(`[SUSPEND] Falling back to update by phone=${customer.phone} (no id resolved)`);
@@ -374,6 +386,7 @@ class ServiceSuspensionManager {
                             logger.error(`[SUSPEND] Unable to resolve customer identifier for status update`);
                         }
                     } else if (alreadySuspended && customer.id) {
+                        await persistSuspendReason(customer.id);
                         results.billing = true;
                     }
                 } catch (billingError) {
@@ -628,7 +641,7 @@ class ServiceSuspensionManager {
             try {
                 if (!alreadyActive && customer.id) {
                     logger.info(`[RESTORE] Updating billing status by id=${customer.id} to 'active' (username=${customer.username||customer.pppoe_username||'-'})`);
-                    await billingManager.setCustomerStatusById(customer.id, 'active');
+                    await billingManager.setCustomerStatusById(customer.id, 'active', { skipRadiusSync: true });
                     results.billing = true;
                 } else if (!alreadyActive) {
                     // Resolve by username first, then phone
@@ -644,7 +657,7 @@ class ServiceSuspensionManager {
                     }
                     if (resolved && resolved.id) {
                         logger.info(`[RESTORE] Resolved customer id=${resolved.id} (username=${resolved.pppoe_username||resolved.username||'-'}) → set 'active'`);
-                        await billingManager.setCustomerStatusById(resolved.id, 'active');
+                        await billingManager.setCustomerStatusById(resolved.id, 'active', { skipRadiusSync: true });
                         results.billing = true;
                     } else if (customer.phone) {
                         logger.warn(`[RESTORE] Falling back to update by phone=${customer.phone} (no id resolved)`);
@@ -763,8 +776,8 @@ class ServiceSuspensionManager {
                         continue;
                     }
 
-                    // Skip jika sudah suspended
-                    if (customer.status === 'suspended') {
+                    // Skip jika sudah suspended/isolir
+                    if (isSuspendedStatus(customer.status)) {
                         logger.info(`Customer ${customer.username} already suspended - skipping`);
                         continue;
                     }
@@ -1174,6 +1187,40 @@ class ServiceSuspensionManager {
     }
 
     /**
+     * Perbarui paket/profil PPPoE untuk pelanggan yang masih isolir tanpa mengubah status billing.
+     */
+    async updatePackageForSuspendedCustomer(customer, reason = 'Package changed while suspended') {
+        try {
+            const pppUser =
+                (customer.pppoe_username && String(customer.pppoe_username).trim()) ||
+                (customer.username && String(customer.username).trim());
+            if (!pppUser) {
+                return { success: true, skipped: true, message: 'No PPPoE username' };
+            }
+            const authMode = await getUserAuthMode();
+            if (authMode === 'radius') {
+                const pkgRow = customer.package_id
+                    ? await billingManager.getPackageById(customer.package_id)
+                    : null;
+                const enriched = {
+                    ...customer,
+                    package_pppoe_profile: pkgRow?.pppoe_profile || customer.package_pppoe_profile
+                };
+                const result = await updateIsolirPreviousGroupRadius(pppUser, enriched);
+                logger.info(
+                    `[SUSPEND] Package/profile updated for suspended ${pppUser} (${reason}): ${result.message || 'ok'}`
+                );
+                return result;
+            }
+            logger.info(`[SUSPEND] Package changed for suspended ${pppUser} (Mikrotik mode) — akan dipakai saat restore`);
+            return { success: true };
+        } catch (error) {
+            logger.error(`updatePackageForSuspendedCustomer failed: ${error.message}`);
+            return { success: false, message: error.message };
+        }
+    }
+
+    /**
      * Check dan restore pelanggan yang sudah bayar
      */
     async checkAndRestorePaidCustomers() {
@@ -1182,17 +1229,26 @@ class ServiceSuspensionManager {
 
             // Ambil semua customer yang suspended
             const customers = await billingManager.getCustomers();
-            const suspendedCustomers = customers.filter(c => c.status === 'suspended');
+            const suspendedCustomers = customers.filter((c) => isSuspendedStatus(c.status));
 
             const results = {
                 checked: suspendedCustomers.length,
                 restored: 0,
+                skipped_manual: 0,
                 errors: 0,
                 details: []
             };
 
             for (const customer of suspendedCustomers) {
                 try {
+                    if (!shouldAutoRestoreCustomer(customer)) {
+                        results.skipped_manual++;
+                        logger.info(
+                            `Customer ${customer.username} isolir manual (suspend_reason=${customer.suspend_reason || 'legacy'}) — skip auto-restore`
+                        );
+                        continue;
+                    }
+
                     // Cek apakah customer punya tagihan yang belum dibayar
                     const invoices = await billingManager.getInvoicesByCustomer(customer.id);
                     const unpaidInvoices = invoices.filter(i => i.status === 'unpaid');

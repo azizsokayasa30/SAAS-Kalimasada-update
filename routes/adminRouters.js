@@ -22,7 +22,7 @@ router.get('/routers', adminAuth, async (req, res) => {
       username TEXT NOT NULL,
       password TEXT NOT NULL,
       description TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      created_at DATETIME DEFAULT (datetime('now','localtime')),
       UNIQUE(url)
     )`, () => resolve()));
     // Get GenieACS servers for dropdown

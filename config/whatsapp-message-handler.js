@@ -170,7 +170,7 @@ class WhatsAppMessageHandler {
                 this.db.run(`
                     UPDATE installation_jobs 
                     SET status = 'assigned', 
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = datetime('now','localtime')
                     WHERE id = ?
                 `, [job.id], (err) => {
                     if (err) reject(err);
@@ -207,7 +207,7 @@ class WhatsAppMessageHandler {
                 this.db.run(`
                     UPDATE installation_jobs 
                     SET status = 'in_progress', 
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = datetime('now','localtime')
                     WHERE id = ?
                 `, [job.id], (err) => {
                     if (err) reject(err);
@@ -248,7 +248,7 @@ class WhatsAppMessageHandler {
                     UPDATE installation_jobs 
                     SET status = 'completed', 
                         notes = COALESCE(?, notes),
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = datetime('now','localtime')
                     WHERE id = ?
                 `, [completionNotes, job.id], (err) => {
                     if (err) reject(err);

@@ -159,7 +159,6 @@ function getRXPowerValue(device) {
                 const numValue = parseFloat(value);
                 if (!isNaN(numValue)) {
                     rxPower = value;
-                    console.log(`📡 Found RXPower: ${rxPower} dBm from path: ${path}`);
                     break;
                 }
             }
@@ -195,7 +194,6 @@ function getTXPowerValue(device) {
                 const numValue = parseFloat(value);
                 if (!isNaN(numValue)) {
                     txPower = value;
-                    console.log(`📡 Found TXPower: ${txPower} dBm from path: ${path}`);
                     break;
                 }
             }
@@ -216,23 +214,22 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
         const dbPath = path.join(__dirname, '../data/billing.db');
         const db = new sqlite3.Database(dbPath);
         
-        // Load data dasar terlebih dahulu (customers, odps, cables, backbone)
-        console.log('🔍 Loading basic data from database...');
-        const [
-            customers,
-            odps,
-            cables,
-            backboneCables
-        ] = await Promise.all([
-            // Load customers
+        // Satu gelombang: query SQLite + batch PPPoE (satu round-trip NAS) + GenieACS cache — hindari N+1 MikroTik & N+1 SQLite per device.
+        console.log('🔍 Loading mapping data (DB + PPPoE batch + GenieACS parallel)...');
+        const [dbResults, pppoeBatch, genieacsDevices] = await Promise.all([
+            Promise.all([
+            // Load customers (join paket & ODP untuk matching GenieACS tanpa query per device)
             new Promise((resolve) => {
-                console.log('🔍 Loading customers from database...');
                 db.all(`
-                    SELECT id, name, phone, pppoe_username, latitude, longitude, 
-                           address, package_id, status, join_date, odp_id
-                    FROM customers 
-                    WHERE latitude IS NOT NULL AND longitude IS NOT NULL
-                    ORDER BY name
+                    SELECT c.id, c.name, c.phone, c.pppoe_username, c.latitude, c.longitude,
+                           c.address, c.package_id, c.status, c.join_date, c.odp_id,
+                           p.name AS package_name,
+                           o.name AS odp_name
+                    FROM customers c
+                    LEFT JOIN packages p ON c.package_id = p.id
+                    LEFT JOIN odps o ON c.odp_id = o.id
+                    WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL
+                    ORDER BY c.name
                 `, [], (err, rows) => {
                     if (err) {
                         console.error('❌ Error loading customers:', err);
@@ -246,7 +243,6 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
             
             // Load ODPs
             new Promise((resolve) => {
-                console.log('🔍 Loading ODPs from database...');
                 db.all(`
                     SELECT id, name, code, latitude, longitude, address, 
                            capacity, used_ports, status, installation_date
@@ -258,11 +254,6 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
                         resolve([]);
                     } else {
                         console.log(`✅ Found ${rows ? rows.length : 0} ODPs`);
-                        if (rows && rows.length > 0) {
-                            console.log('📋 Sample ODP data:', JSON.stringify(rows[0], null, 2));
-                        } else {
-                            console.log('⚠️ No ODPs found in database - this might be why ODPs are not showing on map');
-                        }
                         resolve(rows || []);
                     }
                 });
@@ -270,7 +261,6 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
             
             // Load cables with customer and ODP coordinates
             new Promise((resolve) => {
-                console.log('🔍 Loading cables from database with coordinates...');
                 db.all(`
                     SELECT cr.id, cr.customer_id, cr.odp_id, cr.cable_length, cr.cable_type, 
                            cr.installation_date, cr.status, cr.port_number, cr.notes,
@@ -290,11 +280,6 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
                         resolve([]);
                     } else {
                         console.log(`✅ Found ${rows ? rows.length : 0} cables with coordinates`);
-                        if (rows && rows.length > 0) {
-                            console.log('📋 Sample cable data:', JSON.stringify(rows[0], null, 2));
-                        } else {
-                            console.log('⚠️ No cables found with valid coordinates - this might be why cables are not showing on map');
-                        }
                         resolve(rows || []);
                     }
                 });
@@ -302,9 +287,6 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
             
             // Load network segments and ODP connections (backbone cables) with ODP coordinates
             new Promise((resolve) => {
-                console.log('🔍 Loading network segments and ODP connections from database with coordinates...');
-                
-                // Combine data from both network_segments and odp_connections tables
                 db.all(`
                     SELECT ns.id, ns.name, ns.start_odp_id, ns.end_odp_id, ns.cable_length, 
                            ns.segment_type, ns.installation_date, ns.status, ns.notes,
@@ -337,72 +319,87 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
                     WHERE from_odp.latitude IS NOT NULL AND from_odp.longitude IS NOT NULL 
                       AND to_odp.latitude IS NOT NULL AND to_odp.longitude IS NOT NULL
                       AND oc.status = 'active'
-                    
-                    ORDER BY name
                 `, [], (err, rows) => {
                     if (err) {
                         console.error('❌ Error loading backbone cables:', err);
                         resolve([]);
                     } else {
                         console.log(`✅ Found ${rows ? rows.length : 0} backbone cables (network segments + ODP connections)`);
-                        if (rows && rows.length > 0) {
-                            console.log('📋 Sample backbone cable data:', JSON.stringify(rows[0], null, 2));
-                        } else {
-                            console.log('⚠️ No backbone cables found with valid coordinates');
-                        }
                         resolve(rows || []);
                     }
                 });
             })
+            ]),
+            (async () => {
+                try {
+                    const { getActivePppoeLoginNamesSetWithUptimeMap } = require('../config/mikrotik');
+                    return await getActivePppoeLoginNamesSetWithUptimeMap();
+                } catch (e) {
+                    console.warn('⚠️ PPPoE batch (mapping):', e.message || e);
+                    return { names: new Set(), uptimeByLogin: Object.create(null) };
+                }
+            })(),
+            (async () => {
+                try {
+                    const { getDevicesCached } = require('../config/genieacs');
+                    return await getDevicesCached();
+                } catch (e) {
+                    console.warn('⚠️ GenieACS (mapping):', e.message || e);
+                    return [];
+                }
+            })()
         ]);
 
-        // Enrich customer mapping with realtime PPPoE active status from MikroTik/RADIUS.
-        let enrichedCustomers = Array.isArray(customers) ? [...customers] : [];
-        try {
-            const { getPppoeLoginOnlineStatus } = require('../config/mikrotik');
-            enrichedCustomers = await Promise.all(
-                enrichedCustomers.map(async (customer) => {
-                    const pppoeLogin = customer && customer.pppoe_username ? String(customer.pppoe_username).trim() : '';
-                    if (!pppoeLogin) {
-                        return {
-                            ...customer,
-                            pppoe_active: null,
-                            network_down: false,
-                            down_reason: null
-                        };
-                    }
-                    try {
-                        const status = await getPppoeLoginOnlineStatus(pppoeLogin);
-                        const isActive = Boolean(status && status.online);
-                        return {
-                            ...customer,
-                            pppoe_active: isActive,
-                            network_down: !isActive,
-                            down_reason: isActive ? null : 'PPPoE inactive'
-                        };
-                    } catch (_) {
-                        return {
-                            ...customer,
-                            pppoe_active: null,
-                            network_down: false,
-                            down_reason: null
-                        };
-                    }
-                })
-            );
-        } catch (pppErr) {
-            console.warn('⚠️ Failed to enrich PPPoE active status for customers:', pppErr.message);
+        const [customers, odps, cables, backboneCables] = dbResults;
+        db.close();
+
+        const onlineLoginSet = pppoeBatch.names || new Set();
+        const pppoeUptimeByLogin = pppoeBatch.uptimeByLogin || Object.create(null);
+        const onlineLower = new Set(
+            [...onlineLoginSet].map((n) => String(n).toLowerCase())
+        );
+
+        const customerByPppoeLower = new Map();
+        for (const row of customers || []) {
+            const raw = row && row.pppoe_username != null ? String(row.pppoe_username).trim() : '';
+            if (raw) {
+                const key = raw.toLowerCase();
+                if (!customerByPppoeLower.has(key)) {
+                    customerByPppoeLower.set(key, row);
+                }
+            }
         }
+
+        let enrichedCustomers = (customers || []).map((customer) => {
+            const pppoeLogin =
+                customer && customer.pppoe_username != null
+                    ? String(customer.pppoe_username).trim()
+                    : '';
+            if (!pppoeLogin) {
+                return {
+                    ...customer,
+                    pppoe_active: null,
+                    network_down: false,
+                    down_reason: null,
+                    pppoe_uptime_display: null
+                };
+            }
+            const isActive = onlineLower.has(pppoeLogin.toLowerCase());
+            return {
+                ...customer,
+                pppoe_active: isActive,
+                network_down: !isActive,
+                down_reason: isActive ? null : 'PPPoE inactive',
+                pppoe_uptime_display: isActive
+                    ? pppoeUptimeByLogin[String(pppoeLogin).toLowerCase()] || null
+                    : null
+            };
+        });
         
-        // Load ONU devices secara terpisah setelah customers tersedia
-                    console.log('🔍 Loading ONU devices from GenieACS...');
+        console.log('🔍 Matching GenieACS devices to customers (in-memory)...');
         let onuDevices = [];
         
         try {
-            // Load data asli dari GenieACS
-            const { getDevicesCached } = require('../config/genieacs');
-            const genieacsDevices = await getDevicesCached();
-            
             console.log(`📊 Found ${genieacsDevices.length} devices from GenieACS`);
             
             if (!genieacsDevices || genieacsDevices.length === 0) {
@@ -410,7 +407,6 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
                 throw new Error('No GenieACS data available');
             }
             
-            console.log(`🔍 Processing ${genieacsDevices.length} devices from GenieACS`);
             const devicesWithCoords = [];
             
             for (const device of genieacsDevices) {
@@ -422,72 +418,22 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
                         continue;
                     }
                     
-                        let customerData = null;
-                        let coordinateSource = 'none';
-                        
-                    // 1. Coba cari berdasarkan PPPoE username
-                        const pppoeUsername1 = getParameterValue(device, 'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username');
-                        const pppoeUsername2 = getParameterValue(device, 'VirtualParameters.pppoeUsername');
+                    let customerData = null;
+                    let coordinateSource = 'none';
+
+                    const pppoeUsername1 = getParameterValue(device, 'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username');
+                    const pppoeUsername2 = getParameterValue(device, 'VirtualParameters.pppoeUsername');
                     const pppoeUsername = sanitizePPPoEUsername(pppoeUsername2 || pppoeUsername1);
-                        
-                        console.log(`📋 PPPoE Username (path1): ${pppoeUsername1}`);
-                        console.log(`📋 PPPoE Username (path2): ${pppoeUsername2}`);
-                        console.log(`📋 PPPoE Username (final): ${pppoeUsername}`);
-                    
-                    // Debug RXPower extraction
-                    const rxPowerValue = getRXPowerValue(device);
-                    console.log(`📡 RXPower for device ${deviceId}: ${rxPowerValue}`);
-                    
-                    // Debug TXPower extraction
-                    const txPowerValue = getTXPowerValue(device);
-                    console.log(`📡 TXPower for device ${deviceId}: ${txPowerValue}`);
-                        
-                        // Special logging for "santo" customer
-                    if (pppoeUsername && pppoeUsername.includes && pppoeUsername.includes('santo')) {
-                            console.log(`🎯 Found device with "santo" PPPoE: ${pppoeUsername}`);
-                        console.log(`🎯 Device ID: ${deviceId}`);
+
+                    if (pppoeUsername && pppoeUsername !== '-') {
+                        const customer = customerByPppoeLower.get(pppoeUsername.toLowerCase()) || null;
+                        if (customer) {
+                            customerData = customer;
+                            coordinateSource = 'pppoe_username';
                         }
-                        
-                        if (pppoeUsername && pppoeUsername !== '-') {
-                            const customer = await new Promise((resolve, reject) => {
-                                db.get(`
-                                    SELECT c.id, c.name, c.phone, c.pppoe_username, c.latitude, c.longitude, 
-                                           c.address, c.status, c.package_id,
-                                           p.name as package_name,
-                                           o.name as odp_name
-                                    FROM customers c
-                                    LEFT JOIN packages p ON c.package_id = p.id
-                                    LEFT JOIN odps o ON c.odp_id = o.id
-                                    WHERE c.pppoe_username = ? AND c.latitude IS NOT NULL AND c.longitude IS NOT NULL
-                                `, [pppoeUsername], (err, row) => {
-                                    if (err) {
-                                        console.error('Error finding customer by PPPoE:', err);
-                                        resolve(null);
-                                    } else {
-                                        resolve(row);
-                                    }
-                                });
-                            });
-                            
-                            if (customer) {
-                                customerData = customer;
-                                coordinateSource = 'pppoe_username';
-                                console.log(`✅ Found customer by PPPoE: ${customer.name}`);
-                                
-                                // Special logging for "santo" customer
-                            if (pppoeUsername && pppoeUsername.includes && pppoeUsername.includes('santo')) {
-                                    console.log(`🎯 Successfully matched "santo" device with customer: ${customer.name}`);
-                                    console.log(`🎯 Customer coordinates: ${customer.latitude}, ${customer.longitude}`);
-                                }
-                            } else {
-                                console.log(`❌ No customer found for PPPoE: ${pppoeUsername}`);
-                            }
-                        }
-                        
-                        console.log(`📊 Final customer data: ${customerData ? customerData.name : 'None'}`);
-                        
-                        // Jika customer ditemukan, tambahkan device dengan koordinat
-                        if (customerData) {
+                    }
+
+                    if (customerData) {
                             const deviceWithCoords = {
                                    id: deviceId,
                                    serialNumber: getParameterValue(device, 'VirtualParameters.getSerialNumber') || 
@@ -544,10 +490,7 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
                             };
                             
                             devicesWithCoords.push(deviceWithCoords);
-                        console.log(`✅ Added device to list: ${deviceWithCoords.id}`);
-                        } else {
-                        console.log(`❌ Skipped device: ${deviceId} - no customer coordinates`);
-                    }
+                        }
                     
                 } catch (deviceError) {
                     console.error(`❌ Error processing device ${device._id}:`, deviceError.message);
@@ -571,8 +514,6 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
                     onuDevices = [];
                     console.log('ℹ️ BACKEND: Daftar ONU dikosongkan (tanpa simulasi). Perbaiki GenieACS atau koordinat pelanggan.');
                 }
-        
-        db.close();
         
         // Hitung statistik
         const statistics = {
@@ -625,14 +566,15 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
         }));
         
         console.log('✅ New Mapping API - Data loaded successfully:', statistics);
-        
-        // Debug sample data
-        console.log('🔍 Sample data being sent:');
-        console.log('- Sample customer:', enrichedCustomers[0]);
-        console.log('- Sample ODP:', odps[0]);
-        console.log('- Sample formatted cable:', formattedCables[0]);
-        console.log('- Sample formatted backbone cable:', formattedBackboneCables[0]);
-        console.log('- Sample ONU device:', onuDevices[0]);
+        if (process.env.DEBUG_MAPPING === '1') {
+            console.log('🔍 Sample data:', {
+                customer: enrichedCustomers[0],
+                odp: odps[0],
+                cable: formattedCables[0],
+                backbone: formattedBackboneCables[0],
+                onu: onuDevices[0]
+            });
+        }
         
         res.json({
             success: true,
@@ -701,7 +643,7 @@ router.post('/update-onu', adminAuth, async (req, res) => {
                         longitude = ?, 
                         customer_id = ?, 
                         odp_id = ?,
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = datetime('now','localtime')
                     WHERE id = ?
                 `, [name, serial_number, mac_address, ip_address, status, latitude, longitude, customer_id, odp_id, id], function(err) {
                     if (err) {
@@ -719,7 +661,7 @@ router.post('/update-onu', adminAuth, async (req, res) => {
                     INSERT INTO onu_devices (
                         id, name, serial_number, mac_address, ip_address, status, 
                         latitude, longitude, customer_id, odp_id, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'), datetime('now','localtime'))
                 `, [id, name, serial_number, mac_address, ip_address, status, latitude, longitude, customer_id, odp_id], function(err) {
                     if (err) {
                         reject(err);
@@ -905,7 +847,7 @@ router.post('/update-odp', adminAuth, async (req, res) => {
             }
             
             // Tambahkan updated_at
-            fields.push('updated_at = CURRENT_TIMESTAMP');
+            fields.push("updated_at = datetime('now','localtime')");
             
             if (fields.length > 1) { // Lebih dari 1 karena sudah ada updated_at
                 // Update existing ODP
@@ -947,7 +889,7 @@ router.post('/update-odp', adminAuth, async (req, res) => {
                                 `UPDATE odp_connections
                                  SET from_odp_id = ?, to_odp_id = ?, status = COALESCE(status, 'active'),
                                      connection_type = COALESCE(connection_type, 'fiber'),
-                                     updated_at = CURRENT_TIMESTAMP
+                                     updated_at = datetime('now','localtime')
                                  WHERE id = ?`,
                                 [validParentId, childOdpId, existingBackbone.id],
                                 (err) => (err ? reject(err) : resolve())
@@ -982,7 +924,7 @@ router.post('/update-odp', adminAuth, async (req, res) => {
                         id, name, code, capacity, used_ports, status, 
                         address, latitude, longitude, installation_date, 
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'), datetime('now','localtime'))
                 `, [id, name, code, capacity, used_ports || 0, status || 'active', address || '', latitude || 0, longitude || 0, installation_date || null], function(err) {
                     if (err) {
                         reject(err);
@@ -1107,7 +1049,7 @@ router.post('/update-customer', adminAuth, async (req, res) => {
                     await new Promise((resolve, reject) => {
                         db.run(
                             `UPDATE cable_routes
-                             SET odp_id = ?, updated_at = CURRENT_TIMESTAMP
+                             SET odp_id = ?, updated_at = datetime('now','localtime')
                              WHERE customer_id = ?`,
                             [normalizedOdpId, id],
                             (err) => (err ? reject(err) : resolve())
@@ -1255,7 +1197,7 @@ router.post('/restart-onu', adminAuth, async (req, res) => {
                     INSERT INTO device_actions (
                         device_id, device_name, serial_number, customer_name, 
                         action_type, action_status, action_details, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))
                 `, [
                     deviceId, 
                     deviceName || 'Unknown', 

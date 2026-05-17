@@ -39,7 +39,116 @@
         .customer-info {
             background-color: #f8f9fa;
             border-radius: 8px;
-            padding: 10px;
+            padding: 6px 8px;
+        }
+        /* Grid 6 kolom — kartu ringkas */
+        .cable-route-item.filter-hidden,
+        .cable-route-item.page-hidden {
+            display: none !important;
+        }
+        .cable-route-item .cable-card .card-body {
+            padding: 0.65rem 0.75rem;
+        }
+        .cable-route-item .cable-icon {
+            width: 28px;
+            height: 28px;
+            font-size: 0.85rem;
+        }
+        .cable-route-item .card-title,
+        .cable-route-item h6 {
+            font-size: 0.8rem;
+            margin-bottom: 0.15rem;
+        }
+        .cable-route-item .customer-info h6 {
+            font-size: 0.78rem;
+        }
+        .cable-route-item small,
+        .cable-route-item .small {
+            font-size: 0.68rem;
+        }
+        .cable-route-item .btn-sm {
+            padding: 0.15rem 0.35rem;
+            font-size: 0.68rem;
+        }
+        .cable-route-item .status-badge {
+            font-size: 0.62rem;
+        }
+        .cable-route-item .mb-3 {
+            margin-bottom: 0.45rem !important;
+        }
+        .unrouted-customer-col .card-body {
+            padding: 0.55rem 0.65rem;
+        }
+        .unrouted-customer-col .card-title {
+            font-size: 0.8rem;
+            margin-bottom: 0.25rem;
+        }
+        .unrouted-customer-col .card-text {
+            font-size: 0.68rem;
+            margin-bottom: 0.35rem;
+            line-height: 1.35;
+        }
+        .unrouted-customer-col .btn-sm {
+            padding: 0.15rem 0.4rem;
+            font-size: 0.68rem;
+        }
+        .unrouted-customer-col.mb-3 {
+            margin-bottom: 0.5rem !important;
+        }
+        #routedPagination .page-link {
+            padding: 0.25rem 0.55rem;
+            font-size: 0.8rem;
+        }
+        /* Statistik atas — kartu berwarna */
+        .cable-stat-card {
+            border: none;
+            border-radius: 12px;
+            padding: 1rem 1.1rem;
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            height: 100%;
+        }
+        .cable-stat-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+        }
+        .cable-stat-card .cable-stat-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255, 255, 255, 0.22);
+            font-size: 1.35rem;
+        }
+        .cable-stat-card .cable-stat-value {
+            font-size: 1.75rem;
+            font-weight: 700;
+            line-height: 1.2;
+            margin: 0.35rem 0 0.15rem;
+        }
+        .cable-stat-card .cable-stat-label {
+            font-size: 0.85rem;
+            font-weight: 500;
+            opacity: 0.92;
+            margin: 0;
+        }
+        .cable-stat-total {
+            background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+        }
+        .cable-stat-connected {
+            background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+        }
+        .cable-stat-disconnected {
+            background: linear-gradient(135deg, #ef4444 0%, #f97316 100%);
+        }
+        .cable-stat-length {
+            background: linear-gradient(135deg, #0ea5e9 0%, #6366f1 100%);
+        }
+        html[data-theme="dark"] .cable-stat-card {
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
         }
     </style>
 
@@ -67,66 +176,39 @@
             </div>
         </div>
 
+        <% 
+          const _connectedCount = cableRoutes.filter(c => c.status === 'connected').length;
+          const _disconnectedCount = cableRoutes.filter(c => c.status === 'disconnected').length;
+          const _totalLengthKm = (cableRoutes.reduce((sum, c) => sum + (parseFloat(c.cable_length) || 0), 0) / 1000).toFixed(1);
+        %>
         <!-- Statistics Cards -->
-        <div class="row mb-4">
-            <div class="col-md-3">
-                <div class="card bg-primary text-white">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between">
-                            <div>
-                                <h4><%= cableRoutes.length %></h4>
-                                <p class="mb-0">Total Cables</p>
-                            </div>
-                            <div class="align-self-center">
-                                <i class="bi bi-ethernet fs-1"></i>
-                            </div>
-                        </div>
-                    </div>
+        <div class="row mb-4 g-3">
+            <div class="col-6 col-md-3">
+                <div class="cable-stat-card cable-stat-total">
+                    <div class="cable-stat-icon"><i class="bi bi-ethernet"></i></div>
+                    <div class="cable-stat-value"><%= cableRoutes.length %></div>
+                    <p class="cable-stat-label">Total Cables</p>
                 </div>
             </div>
-            <div class="col-md-3">
-                <div class="card bg-success text-white">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between">
-                            <div>
-                                <h4><%= cableRoutes.filter(c => c.status === 'connected').length %></h4>
-                                <p class="mb-0">Connected</p>
-                            </div>
-                            <div class="align-self-center">
-                                <i class="bi bi-check-circle-fill fs-1"></i>
-                            </div>
-                        </div>
-                    </div>
+            <div class="col-6 col-md-3">
+                <div class="cable-stat-card cable-stat-connected">
+                    <div class="cable-stat-icon"><i class="bi bi-check-circle-fill"></i></div>
+                    <div class="cable-stat-value"><%= _connectedCount %></div>
+                    <p class="cable-stat-label">Connected</p>
                 </div>
             </div>
-            <div class="col-md-3">
-                <div class="card bg-danger text-white">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between">
-                            <div>
-                                <h4><%= cableRoutes.filter(c => c.status === 'disconnected').length %></h4>
-                                <p class="mb-0">Disconnected</p>
-                            </div>
-                            <div class="align-self-center">
-                                <i class="bi bi-x-lg-circle fs-1"></i>
-                            </div>
-                        </div>
-                    </div>
+            <div class="col-6 col-md-3">
+                <div class="cable-stat-card cable-stat-disconnected">
+                    <div class="cable-stat-icon"><i class="bi bi-x-circle-fill"></i></div>
+                    <div class="cable-stat-value"><%= _disconnectedCount %></div>
+                    <p class="cable-stat-label">Disconnected</p>
                 </div>
             </div>
-            <div class="col-md-3">
-                <div class="card bg-info text-white">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between">
-                            <div>
-                                <h4><%= (cableRoutes.reduce((sum, c) => sum + (parseFloat(c.cable_length) || 0), 0) / 1000).toFixed(1) %> km</h4>
-                                <p class="mb-0">Total Length</p>
-                            </div>
-                            <div class="align-self-center">
-                                <i class="bi bi-circle fs-1"></i>
-                            </div>
-                        </div>
-                    </div>
+            <div class="col-6 col-md-3">
+                <div class="cable-stat-card cable-stat-length">
+                    <div class="cable-stat-icon"><i class="bi bi-rulers"></i></div>
+                    <div class="cable-stat-value"><%= _totalLengthKm %> km</div>
+                    <p class="cable-stat-label">Total Length</p>
                 </div>
             </div>
         </div>
@@ -172,10 +254,15 @@
             </div>
         </div>
 
-        <!-- Cable Routes List -->
+        <!-- Cable Routes List (Routed) -->
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+            <h5 class="mb-0"><i class="bi bi-diagram-3 me-1"></i> Cable Routed</h5>
+            <small class="text-muted" id="routedPageSummary">Halaman 1</small>
+        </div>
+        <nav class="mb-3" id="routedPagination" aria-label="Paginasi cable routed"></nav>
         <div class="row" id="cableRoutesList">
             <% cableRoutes.forEach(cable => { %>
-            <div class="col-md-6 col-lg-4 mb-4 cable-route-item" 
+            <div class="col-6 col-sm-4 col-md-3 col-lg-2 mb-2 cable-route-item" 
                  data-status="<%= cable.status %>" 
                  data-odp="<%= cable.odp_id %>"
                  data-customer="<%= (cable.customer_name + ' ' + cable.customer_phone).toLowerCase() %>">
@@ -270,13 +357,22 @@
         <div class="row mt-4">
             <div class="col-12">
                 <div class="card">
-                    <div class="card-header">
-                        <h5 class="mb-0">Customers Without Cable Routes (<%= customersWithoutCable.length %>)</h5>
+                    <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+                        <h5 class="mb-0"><i class="bi bi-person-exclamation me-1"></i> Cable Unrouted — Pelanggan belum ada route (<%= customersWithoutCable.length %>)</h5>
+                        <small class="text-muted" id="unroutedSearchSummary">Menampilkan semua</small>
                     </div>
-                    <div class="card-body" style="max-height: 600px; overflow-y: auto;">
-                        <div class="row">
+                    <div class="card-body border-bottom py-3">
+                        <label class="form-label mb-1" for="unroutedCustomerSearch"><i class="bi bi-search me-1"></i>Cari pelanggan (nama, HP, alamat, ID, username login, area)</label>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="unroutedCustomerSearch" placeholder="Ketik untuk menyaring daftar di bawah…" autocomplete="off">
+                            <button type="button" class="btn btn-outline-secondary" id="unroutedCustomerSearchClear" title="Hapus filter">Reset</button>
+                        </div>
+                    </div>
+                    <div class="card-body pt-0 unrouted-scroll-area">
+                        <div class="row" id="unroutedCustomersGrid">
                             <% customersWithoutCable.forEach(customer => { %>
-                            <div class="col-md-6 col-lg-4 mb-3">
+                            <% const _unSearch = [customer.name, customer.phone, customer.address, customer.customer_id, customer.username, customer.area].filter(function (v) { return v != null && String(v).trim() !== ''; }).map(function (v) { return String(v).toLowerCase(); }).join(' '); %>
+                            <div class="col-6 col-sm-4 col-md-3 col-lg-2 mb-2 unrouted-customer-col" data-unrouted-search="<%= _unSearch %>">
                                 <div class="card border-warning">
                                     <div class="card-body">
                                         <h6 class="card-title"><%= customer.name %></h6>
@@ -313,10 +409,12 @@
                             <div class="col-md-6">
                                 <div class="mb-3">
                                     <label class="form-label">Customer *</label>
-                                    <select class="form-select" name="customer_id" required>
+                                    <input type="text" class="form-control mb-2" id="addCableCustomerSearch" placeholder="Cari di daftar pelanggan (nama / HP / alamat)…" autocomplete="off">
+                                    <select class="form-select" name="customer_id" id="addCableCustomerSelect" required>
                                         <option value="">Pilih Customer</option>
                                         <% customersWithoutCable.forEach(customer => { %>
-                                        <option value="<%= customer.id %>"><%= customer.name %> - <%= customer.phone %></option>
+                                        <% const _optSearch = [customer.name, customer.phone, customer.address, customer.customer_id, customer.username, customer.area].filter(function (v) { return v != null && String(v).trim() !== ''; }).map(function (v) { return String(v).toLowerCase(); }).join(' '); %>
+                                        <option value="<%= customer.id %>" data-search-text="<%= _optSearch %>"><%= customer.name %> - <%= customer.phone %></option>
                                         <% }); %>
                                     </select>
                                 </div>
@@ -471,33 +569,105 @@
     <!-- Scripts -->
     <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Filter functionality
+        const ROUTED_PER_PAGE = 12; // 6 kolom × 2 baris
+        let routedCurrentPage = 1;
+
         document.getElementById('statusFilter').addEventListener('change', filterCables);
         document.getElementById('odpFilter').addEventListener('change', filterCables);
         document.getElementById('searchInput').addEventListener('input', filterCables);
 
-        function filterCables() {
+        function getFilteredRoutedItems() {
+            return Array.from(document.querySelectorAll('.cable-route-item')).filter(
+                (el) => !el.classList.contains('filter-hidden')
+            );
+        }
+
+        function renderRoutedPagination(totalItems, totalPages) {
+            const nav = document.getElementById('routedPagination');
+            const summary = document.getElementById('routedPageSummary');
+            if (summary) {
+                if (totalItems === 0) {
+                    summary.textContent = 'Tidak ada data';
+                } else {
+                    const start = (routedCurrentPage - 1) * ROUTED_PER_PAGE + 1;
+                    const end = Math.min(routedCurrentPage * ROUTED_PER_PAGE, totalItems);
+                    summary.textContent = `Halaman ${routedCurrentPage}/${totalPages} · menampilkan ${start}–${end} dari ${totalItems}`;
+                }
+            }
+            if (!nav) return;
+            if (totalPages <= 1) {
+                nav.innerHTML = '';
+                return;
+            }
+            let html = '<ul class="pagination pagination-sm mb-0 flex-wrap">';
+            html += `<li class="page-item ${routedCurrentPage <= 1 ? 'disabled' : ''}">
+                <button type="button" class="page-link" data-routed-page="${routedCurrentPage - 1}">Sebelumnya</button></li>`;
+            for (let p = 1; p <= totalPages; p++) {
+                if (totalPages > 7 && p > 2 && p < totalPages - 1 && Math.abs(p - routedCurrentPage) > 1) {
+                    if (p === 3 || p === totalPages - 2) {
+                        html += '<li class="page-item disabled"><span class="page-link">…</span></li>';
+                    }
+                    continue;
+                }
+                html += `<li class="page-item ${p === routedCurrentPage ? 'active' : ''}">
+                    <button type="button" class="page-link" data-routed-page="${p}">${p}</button></li>`;
+            }
+            html += `<li class="page-item ${routedCurrentPage >= totalPages ? 'disabled' : ''}">
+                <button type="button" class="page-link" data-routed-page="${routedCurrentPage + 1}">Berikutnya</button></li>`;
+            html += '</ul>';
+            nav.innerHTML = html;
+            nav.querySelectorAll('[data-routed-page]').forEach((btn) => {
+                btn.addEventListener('click', function () {
+                    const page = parseInt(this.getAttribute('data-routed-page'), 10);
+                    if (!Number.isNaN(page)) {
+                        routedCurrentPage = page;
+                        applyRoutedFilterAndPagination();
+                    }
+                });
+            });
+        }
+
+        function applyRoutedFilterAndPagination() {
             const statusFilter = document.getElementById('statusFilter').value;
             const odpFilter = document.getElementById('odpFilter').value;
             const searchTerm = document.getElementById('searchInput').value.toLowerCase();
-            
             const cables = document.querySelectorAll('.cable-route-item');
-            
-            cables.forEach(cable => {
+            const matched = [];
+
+            cables.forEach((cable) => {
                 const status = cable.dataset.status;
                 const odp = cable.dataset.odp;
                 const customer = cable.dataset.customer;
-                
                 const statusMatch = !statusFilter || status === statusFilter;
                 const odpMatch = !odpFilter || odp === odpFilter;
                 const searchMatch = !searchTerm || customer.includes(searchTerm);
-                
-                if (statusMatch && odpMatch && searchMatch) {
-                    cable.style.display = 'block';
-                } else {
-                    cable.style.display = 'none';
+                const show = statusMatch && odpMatch && searchMatch;
+                cable.classList.toggle('filter-hidden', !show);
+                if (show) matched.push(cable);
+            });
+
+            const totalPages = Math.max(1, Math.ceil(matched.length / ROUTED_PER_PAGE));
+            if (routedCurrentPage > totalPages) routedCurrentPage = totalPages;
+            if (routedCurrentPage < 1) routedCurrentPage = 1;
+            const start = (routedCurrentPage - 1) * ROUTED_PER_PAGE;
+            const end = start + ROUTED_PER_PAGE;
+
+            matched.forEach((el, idx) => {
+                el.classList.toggle('page-hidden', idx < start || idx >= end);
+            });
+
+            cables.forEach((cable) => {
+                if (cable.classList.contains('filter-hidden')) {
+                    cable.classList.add('page-hidden');
                 }
             });
+
+            renderRoutedPagination(matched.length, totalPages);
+        }
+
+        function filterCables() {
+            routedCurrentPage = 1;
+            applyRoutedFilterAndPagination();
         }
 
         function clearFilters() {
@@ -506,6 +676,72 @@
             document.getElementById('searchInput').value = '';
             filterCables();
         }
+
+        applyRoutedFilterAndPagination();
+
+        function filterUnroutedCustomers() {
+            const input = document.getElementById('unroutedCustomerSearch');
+            const summary = document.getElementById('unroutedSearchSummary');
+            if (!input) return;
+            const q = input.value.toLowerCase().trim();
+            const cols = document.querySelectorAll('.unrouted-customer-col');
+            let visible = 0;
+            cols.forEach((col) => {
+                const hay = (col.getAttribute('data-unrouted-search') || '').toLowerCase();
+                const show = !q || hay.includes(q);
+                col.classList.toggle('d-none', !show);
+                if (show) visible++;
+            });
+            if (summary) {
+                summary.textContent = q
+                    ? `Menampilkan ${visible} dari ${cols.length}`
+                    : `Menampilkan semua (${cols.length})`;
+            }
+        }
+
+        function filterAddCableCustomerOptions() {
+            const input = document.getElementById('addCableCustomerSearch');
+            const sel = document.getElementById('addCableCustomerSelect');
+            if (!input || !sel) return;
+            const q = input.value.toLowerCase().trim();
+            const opts = sel.querySelectorAll('option[value]');
+            opts.forEach((opt) => {
+                const hay = (opt.getAttribute('data-search-text') || opt.textContent || '').toLowerCase();
+                opt.hidden = !!(q && !hay.includes(q));
+            });
+            const selected = sel.options[sel.selectedIndex];
+            if (selected && selected.hidden) {
+                sel.value = '';
+            }
+        }
+
+        (function initUnroutedSearch() {
+            const unroutedInput = document.getElementById('unroutedCustomerSearch');
+            const unroutedClear = document.getElementById('unroutedCustomerSearchClear');
+            if (unroutedInput) {
+                unroutedInput.addEventListener('input', filterUnroutedCustomers);
+            }
+            if (unroutedClear) {
+                unroutedClear.addEventListener('click', function () {
+                    if (unroutedInput) unroutedInput.value = '';
+                    filterUnroutedCustomers();
+                });
+            }
+            const addSearch = document.getElementById('addCableCustomerSearch');
+            if (addSearch) {
+                addSearch.addEventListener('input', filterAddCableCustomerOptions);
+            }
+            const addModal = document.getElementById('addCableModal');
+            if (addModal) {
+                addModal.addEventListener('show.bs.modal', function () {
+                    if (addSearch) {
+                        addSearch.value = '';
+                        filterAddCableCustomerOptions();
+                    }
+                });
+            }
+            filterUnroutedCustomers();
+        })();
 
         // Add Cable Form Handler
         document.getElementById('addCableForm').addEventListener('submit', async function(e) {

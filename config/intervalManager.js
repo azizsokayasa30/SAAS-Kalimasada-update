@@ -5,6 +5,22 @@
 
 const { getSetting } = require('./settingsManager');
 const logger = require('./logger');
+const MIN_MONITORING_INTERVAL_MS = 10 * 1000;
+
+function getSafeIntervalMs(settingKey, defaultMs) {
+    const parsed = parseInt(getSetting(settingKey, defaultMs), 10);
+    const intervalMs = Number.isFinite(parsed) && parsed > 0 ? parsed : defaultMs;
+    return Math.max(intervalMs, MIN_MONITORING_INTERVAL_MS);
+}
+
+function isWaMonitorEnabled(monitorId) {
+    try {
+        const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
+        return isWaSystemMonitorEnabled(monitorId);
+    } catch (_) {
+        return true;
+    }
+}
 
 class IntervalManager {
     constructor() {
@@ -76,6 +92,11 @@ class IntervalManager {
      */
     startRXPowerWarning() {
         try {
+            if (!isWaMonitorEnabled('rx_power_threshold_wa')) {
+                logger.info('RX Power Warning WA monitoring is disabled by master switch');
+                return;
+            }
+
             const notificationEnabled = getSetting('rx_power_notification_enable', true);
             
             if (!notificationEnabled) {
@@ -84,7 +105,7 @@ class IntervalManager {
             }
 
             // Ambil interval dari settings (dalam milliseconds)
-            const intervalMs = parseInt(getSetting('rx_power_warning_interval', 36000000)); // Default 10 jam
+            const intervalMs = getSafeIntervalMs('rx_power_warning_interval', 36000000); // Default 10 jam
             const intervalHours = Math.round(intervalMs / (1000 * 60 * 60));
             
             logger.info(`Starting RX Power Warning monitoring (interval: ${intervalHours} hours)`);
@@ -116,6 +137,11 @@ class IntervalManager {
      */
     startRXPowerRecap() {
         try {
+            if (!isWaMonitorEnabled('genieacs_rx_recap_wa')) {
+                logger.info('RX Power Recap WA monitoring is disabled by master switch');
+                return;
+            }
+
             const recapEnabled = getSetting('rxpower_recap_enable', true);
             
             if (!recapEnabled) {
@@ -124,7 +150,7 @@ class IntervalManager {
             }
 
             // Ambil interval dari settings (dalam milliseconds)
-            const intervalMs = parseInt(getSetting('rxpower_recap_interval', 21600000)); // Default 6 jam
+            const intervalMs = getSafeIntervalMs('rxpower_recap_interval', 21600000); // Default 6 jam
             const intervalHours = Math.round(intervalMs / (1000 * 60 * 60));
             
             logger.info(`Starting RX Power Recap monitoring (interval: ${intervalHours} hours)`);
@@ -156,6 +182,11 @@ class IntervalManager {
      */
     startOfflineNotification() {
         try {
+            if (!isWaMonitorEnabled('genieacs_offline_digest_wa')) {
+                logger.info('Offline Notification WA monitoring is disabled by master switch');
+                return;
+            }
+
             const offlineNotifEnabled = getSetting('offline_notification_enable', true);
             
             if (!offlineNotifEnabled) {
@@ -164,7 +195,7 @@ class IntervalManager {
             }
 
             // Ambil interval dari settings (dalam milliseconds)
-            const intervalMs = parseInt(getSetting('offline_notification_interval', 43200000)); // Default 12 jam
+            const intervalMs = getSafeIntervalMs('offline_notification_interval', 43200000); // Default 12 jam
             const intervalHours = Math.round(intervalMs / (1000 * 60 * 60));
             
             logger.info(`Starting Offline Notification monitoring (interval: ${intervalHours} hours)`);
@@ -263,18 +294,18 @@ class IntervalManager {
         return {
             rxPowerWarning: {
                 enabled: getSetting('rx_power_notification_enable', true),
-                intervalMs: parseInt(getSetting('rx_power_warning_interval', 36000000)),
-                intervalHours: Math.round(parseInt(getSetting('rx_power_warning_interval', 36000000)) / (1000 * 60 * 60))
+                intervalMs: getSafeIntervalMs('rx_power_warning_interval', 36000000),
+                intervalHours: Math.round(getSafeIntervalMs('rx_power_warning_interval', 36000000) / (1000 * 60 * 60))
             },
             rxPowerRecap: {
                 enabled: getSetting('rxpower_recap_enable', true),
-                intervalMs: parseInt(getSetting('rxpower_recap_interval', 21600000)),
-                intervalHours: Math.round(parseInt(getSetting('rxpower_recap_interval', 21600000)) / (1000 * 60 * 60))
+                intervalMs: getSafeIntervalMs('rxpower_recap_interval', 21600000),
+                intervalHours: Math.round(getSafeIntervalMs('rxpower_recap_interval', 21600000) / (1000 * 60 * 60))
             },
             offlineNotification: {
                 enabled: getSetting('offline_notification_enable', true),
-                intervalMs: parseInt(getSetting('offline_notification_interval', 43200000)),
-                intervalHours: Math.round(parseInt(getSetting('offline_notification_interval', 43200000)) / (1000 * 60 * 60))
+                intervalMs: getSafeIntervalMs('offline_notification_interval', 43200000),
+                intervalHours: Math.round(getSafeIntervalMs('offline_notification_interval', 43200000) / (1000 * 60 * 60))
             }
         };
     }

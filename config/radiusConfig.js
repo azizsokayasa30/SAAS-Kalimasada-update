@@ -14,8 +14,8 @@ function ensureAppSettingsTable() {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 key TEXT UNIQUE NOT NULL,
                 value TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at DATETIME DEFAULT (datetime('now','localtime')),
+                updated_at DATETIME DEFAULT (datetime('now','localtime'))
             )
         `, (err) => {
             db.close();
@@ -95,7 +95,7 @@ async function saveRadiusConfig(config) {
             entries.forEach(([key, value]) => {
                 db.run(
                     `INSERT OR REPLACE INTO app_settings (key, value, updated_at) 
-                     VALUES (?, ?, CURRENT_TIMESTAMP)`,
+                     VALUES (?, ?, datetime('now','localtime'))`,
                     [key, value],
                     (err) => {
                         if (err) {

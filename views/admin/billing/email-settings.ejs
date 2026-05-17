@@ -178,11 +178,87 @@
                     </div>
                 </div>
                 
-                <!-- SMTP Configuration Notice -->
+                <!-- SMTP Configuration -->
                 <div class="row">
                     <div class="col-12">
-                        <div class="alert alert-info">
-                            <i class="bi bi-info-circle"></i> <strong>Konfigurasi SMTP:</strong> Untuk menggunakan email notification, silakan konfigurasi SMTP server di <a href="/admin/setting" class="alert-link">Menu Settings</a>. Setelah konfigurasi SMTP, email notification akan otomatis aktif.
+                        <div class="template-card">
+                            <div class="template-header">
+                                <div>
+                                    <h4 class="template-title">
+                                        <i class="bi bi-envelope-gear"></i> SMTP Email Configuration
+                                    </h4>
+                                    <p class="template-description mb-0">Konfigurasi server SMTP untuk pengiriman email tagihan dan notifikasi pelanggan.</p>
+                                </div>
+                            </div>
+
+                            <form id="smtpForm" class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label">SMTP Host</label>
+                                    <input type="text" class="form-control" name="smtp_host" id="smtp_host" placeholder="smtp.gmail.com">
+                                    <div class="form-text">Alamat server SMTP, contoh: smtp.gmail.com atau smtp.mailtrap.io</div>
+                                </div>
+
+                                <div class="col-md-3">
+                                    <label class="form-label">SMTP Port</label>
+                                    <input type="number" class="form-control" name="smtp_port" id="smtp_port" placeholder="587" value="587">
+                                    <div class="form-text">587 untuk TLS, 465 untuk SSL</div>
+                                </div>
+
+                                <div class="col-md-3">
+                                    <label class="form-label">SMTP Secure</label>
+                                    <select class="form-select" name="smtp_secure" id="smtp_secure">
+                                        <option value="false">TLS / STARTTLS</option>
+                                        <option value="true">SSL</option>
+                                    </select>
+                                </div>
+
+                                <div class="col-md-6">
+                                    <label class="form-label">SMTP User</label>
+                                    <input type="text" class="form-control" name="smtp_user" id="smtp_user" placeholder="your-email@gmail.com">
+                                    <div class="form-text">Email atau username untuk autentikasi SMTP</div>
+                                </div>
+
+                                <div class="col-md-6">
+                                    <label class="form-label">SMTP Password</label>
+                                    <input type="password" class="form-control" name="smtp_password" id="smtp_password" placeholder="App password SMTP">
+                                    <div class="form-text text-warning">Untuk Gmail, gunakan App Password, bukan password akun biasa.</div>
+                                </div>
+
+                                <div class="col-md-6">
+                                    <label class="form-label">From Email</label>
+                                    <input type="email" class="form-control" name="smtp_from_email" id="smtp_from_email" placeholder="noreply@yourdomain.com">
+                                    <div class="form-text">Email pengirim. Jika kosong, akan memakai SMTP User.</div>
+                                </div>
+
+                                <div class="col-md-6">
+                                    <label class="form-label">From Name</label>
+                                    <input type="text" class="form-control" name="smtp_from_name" id="smtp_from_name" placeholder="Sistem Billing">
+                                    <div class="form-text">Nama pengirim yang tampil di email pelanggan.</div>
+                                </div>
+
+                                <div class="col-12">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="smtp_reject_unauthorized" id="smtp_reject_unauthorized" checked>
+                                        <label class="form-check-label" for="smtp_reject_unauthorized">
+                                            Reject Unauthorized Certificates
+                                        </label>
+                                    </div>
+                                    <div class="form-text">Nonaktifkan hanya jika menggunakan self-signed certificate.</div>
+                                </div>
+
+                                <div class="col-12 d-flex gap-2 flex-wrap">
+                                    <button type="button" class="btn btn-outline-info" id="btnTestSMTP">
+                                        <i class="bi bi-envelope-check"></i> Test SMTP Connection
+                                    </button>
+                                    <button type="submit" class="btn btn-primary">
+                                        <i class="bi bi-save"></i> Simpan Konfigurasi SMTP
+                                    </button>
+                                </div>
+
+                                <div class="col-12">
+                                    <div id="smtpTestResult" class="alert d-none mb-0"></div>
+                                </div>
+                            </form>
                         </div>
                     </div>
                 </div>
@@ -656,9 +732,113 @@
 
     // Load templates on page load
     document.addEventListener('DOMContentLoaded', function() {
+        loadSmtpSettings();
         loadTemplates();
         loadStatus();
+        const smtpForm = document.getElementById('smtpForm');
+        const testButton = document.getElementById('btnTestSMTP');
+        if (smtpForm) smtpForm.addEventListener('submit', saveSmtpSettings);
+        if (testButton) testButton.addEventListener('click', testSmtpConnection);
     });
+
+    function getSmtpFormData() {
+        return {
+            smtp_host: document.getElementById('smtp_host').value,
+            smtp_port: parseInt(document.getElementById('smtp_port').value, 10) || 587,
+            smtp_secure: document.getElementById('smtp_secure').value === 'true',
+            smtp_user: document.getElementById('smtp_user').value,
+            smtp_password: document.getElementById('smtp_password').value,
+            smtp_from_email: document.getElementById('smtp_from_email').value,
+            smtp_from_name: document.getElementById('smtp_from_name').value,
+            smtp_reject_unauthorized: document.getElementById('smtp_reject_unauthorized').checked
+        };
+    }
+
+    function setSmtpResult(message, type) {
+        const result = document.getElementById('smtpTestResult');
+        if (!result) return;
+        result.className = `alert alert-${type} mb-0`;
+        result.innerHTML = message;
+    }
+
+    async function loadSmtpSettings() {
+        try {
+            const response = await fetch('/admin/billing/email-settings/smtp');
+            const data = await response.json();
+            if (!data.success) throw new Error(data.message || 'Gagal memuat SMTP');
+            const settings = data.settings || {};
+            document.getElementById('smtp_host').value = settings.smtp_host || '';
+            document.getElementById('smtp_port').value = settings.smtp_port || '587';
+            document.getElementById('smtp_secure').value = settings.smtp_secure === true || settings.smtp_secure === 'true' ? 'true' : 'false';
+            document.getElementById('smtp_user').value = settings.smtp_user || '';
+            document.getElementById('smtp_password').value = settings.smtp_password || '';
+            document.getElementById('smtp_from_email').value = settings.smtp_from_email || '';
+            document.getElementById('smtp_from_name').value = settings.smtp_from_name || '';
+            document.getElementById('smtp_reject_unauthorized').checked = settings.smtp_reject_unauthorized !== false && settings.smtp_reject_unauthorized !== 'false';
+        } catch (error) {
+            console.error('Error loading SMTP settings:', error);
+            setSmtpResult('<i class="bi bi-x-circle"></i> Gagal memuat konfigurasi SMTP: ' + error.message, 'danger');
+        }
+    }
+
+    async function saveSmtpSettings(event) {
+        event.preventDefault();
+        const button = event.target.querySelector('button[type="submit"]');
+        const originalText = button.innerHTML;
+        button.disabled = true;
+        button.innerHTML = '<i class="bi bi-hourglass-split"></i> Menyimpan...';
+        try {
+            const response = await fetch('/admin/billing/email-settings/smtp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(getSmtpFormData())
+            });
+            const data = await response.json();
+            if (!data.success) throw new Error(data.message || 'Gagal menyimpan SMTP');
+            setSmtpResult('<i class="bi bi-check-circle"></i> Konfigurasi SMTP berhasil disimpan.', 'success');
+            loadStatus();
+        } catch (error) {
+            setSmtpResult('<i class="bi bi-x-circle"></i> ' + error.message, 'danger');
+        } finally {
+            button.disabled = false;
+            button.innerHTML = originalText;
+        }
+    }
+
+    async function testSmtpConnection() {
+        const button = document.getElementById('btnTestSMTP');
+        const originalText = button.innerHTML;
+        const smtpData = getSmtpFormData();
+        if (!smtpData.smtp_host || !smtpData.smtp_user || !smtpData.smtp_password) {
+            setSmtpResult('<i class="bi bi-x-circle"></i> Harap isi SMTP Host, User, dan Password terlebih dahulu.', 'danger');
+            return;
+        }
+        button.disabled = true;
+        button.innerHTML = '<i class="bi bi-hourglass-split"></i> Testing...';
+        try {
+            const saveResponse = await fetch('/admin/billing/email-settings/smtp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(smtpData)
+            });
+            const saveData = await saveResponse.json();
+            if (!saveData.success) throw new Error(saveData.message || 'Gagal menyimpan SMTP sebelum test');
+
+            const response = await fetch('/admin/billing/email-settings/status', { method: 'POST' });
+            const data = await response.json();
+            if (data.success && data.connectionStatus === 'Connected') {
+                setSmtpResult('<i class="bi bi-check-circle"></i> SMTP Connection Successful. Email notification siap digunakan.', 'success');
+            } else {
+                setSmtpResult('<i class="bi bi-x-circle"></i> SMTP Connection Failed: ' + (data.connectionError || data.message || 'Unknown error'), 'danger');
+            }
+            loadStatus();
+        } catch (error) {
+            setSmtpResult('<i class="bi bi-x-circle"></i> ' + error.message, 'danger');
+        } finally {
+            button.disabled = false;
+            button.innerHTML = originalText;
+        }
+    }
 
     // Load templates from server
     async function loadTemplates() {

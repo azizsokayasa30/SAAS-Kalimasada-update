@@ -132,6 +132,41 @@
             background: var(--bg-secondary, #f8f9fa);
             border-radius: 5px;
         }
+
+        .gateway-card {
+            background: var(--panel-bg, #ffffff);
+            border-radius: 15px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+            border: 1px solid #e9ecef;
+        }
+
+        .status-badge {
+            font-size: 0.95rem;
+            padding: 0.65rem 0.85rem;
+            white-space: normal;
+        }
+
+        #baileysContent {
+            border-top: 1px solid #e9ecef;
+            margin-top: 1rem;
+            padding-top: 1rem;
+        }
+
+        #wa-qr-div canvas,
+        #wa-qr-div img {
+            max-width: 100%;
+            height: auto;
+        }
+
+        .provider-config {
+            background: var(--bg-secondary, #f8f9fa);
+            border: 1px solid #e9ecef;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-top: 1rem;
+        }
     </style>
 
     <%- include('../../partials/theme-head') %>
@@ -174,6 +209,246 @@
                         <div class="status-card">
                             <h5><i class="bi bi-calendar-check text-info"></i> Next Reminder</h5>
                             <p class="mb-0" id="nextReminder">Loading...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- WhatsApp Gateway (Baileys) Section -->
+                <div class="row">
+                    <div class="col-lg-6">
+                        <div class="gateway-card" id="baileysSection">
+                            <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+                                <div>
+                                    <h4 class="template-title mb-2">
+                                        <i class="bi bi-whatsapp text-success"></i> WhatsApp Gateway Gratis (Baileys)
+                                    </h4>
+                                    <p class="template-description mb-0">
+                                        Pilih provider aktif untuk bot WhatsApp dan simpan kredensial API tiap provider.
+                                    </p>
+                                </div>
+                                <div style="min-width: 220px;">
+                                    <label for="whatsappActiveProvider" class="form-label mb-1">Provider Aktif</label>
+                                    <select class="form-select" id="whatsappActiveProvider">
+                                        <option value="baileys">Baileys</option>
+                                        <option value="wablas">Wablas</option>
+                                        <option value="meta">Meta Cloud API</option>
+                                        <option value="qontak">Qontak</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="provider-config">
+                                <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap">
+                                    <div>
+                                        <strong><i class="bi bi-whatsapp text-success"></i> Baileys</strong>
+                                        <div class="form-text">Provider gratis berbasis session QR.</div>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="baileys_enabled">
+                                        <label class="form-check-label" for="baileys_enabled">
+                                            <strong>Enable</strong>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="alert alert-warning mt-3 mb-0">
+                                <div class="d-flex align-items-start">
+                                    <i class="bi bi-exclamation-triangle-fill me-2 mt-1"></i>
+                                    <div>
+                                        <strong>Gunakan nomor bot untuk scan QR.</strong><br>
+                                        <small>Nomor yang discan akan menjadi gateway WhatsApp. Sebaiknya jangan gunakan nomor admin pribadi.</small>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div id="baileysContent" style="display: none;">
+                                <div id="wa-status" class="mb-3"></div>
+                                <div id="wa-qr-container" class="d-flex justify-content-center mb-3 d-none">
+                                    <div class="position-relative text-center">
+                                        <img id="wa-qr" src="#" alt="QR Code WhatsApp" class="img-fluid rounded shadow" style="max-width: 100%; height: auto; display: none;">
+                                        <div id="wa-qr-div" class="d-flex justify-content-center"></div>
+                                    </div>
+                                </div>
+                                <div class="d-flex gap-2 flex-wrap">
+                                    <button class="btn btn-success btn-sm" id="btnRefreshQR" type="button">
+                                        <i class="bi bi-arrow-clockwise"></i> Refresh QR
+                                    </button>
+                                    <button class="btn btn-outline-danger btn-sm" id="btnDeleteSession" type="button">
+                                        <i class="bi bi-trash"></i> Hapus Session
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="provider-config">
+                                <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-3">
+                                    <div>
+                                        <strong><i class="bi bi-cloud-check text-primary"></i> Wablas</strong>
+                                        <div class="form-text">Provider API Wablas untuk pengiriman pesan bot.</div>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="wablas_enabled">
+                                        <label class="form-check-label" for="wablas_enabled"><strong>Enable</strong></label>
+                                    </div>
+                                </div>
+                                <div class="row g-2">
+                                    <div class="col-md-6">
+                                        <label class="form-label">API URL</label>
+                                        <input type="text" class="form-control" id="wablas_api_url" placeholder="https://bdg.wablas.com">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">API Key</label>
+                                        <input type="text" class="form-control" id="wablas_api_key" placeholder="Token Wablas">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Secret Key</label>
+                                        <input type="password" class="form-control" id="wablas_secret_key" placeholder="Secret key">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Device ID</label>
+                                        <input type="text" class="form-control" id="wablas_device_id" placeholder="Device ID">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label">Min Delay (ms)</label>
+                                        <input type="number" class="form-control" id="wablas_min_delay" value="1000">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label">Max Retry</label>
+                                        <input type="number" class="form-control" id="wablas_max_retries" value="3">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label">Retry Delay (ms)</label>
+                                        <input type="number" class="form-control" id="wablas_retry_delay" value="2000">
+                                    </div>
+                                    <div class="col-12">
+                                        <label class="form-label">Webhook Secret</label>
+                                        <input type="password" class="form-control" id="wablas_webhook_secret" placeholder="Webhook secret">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="provider-config">
+                                <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-3">
+                                    <div>
+                                        <strong><i class="bi bi-meta text-primary"></i> Meta Cloud API</strong>
+                                        <div class="form-text">Provider resmi WhatsApp Cloud API dari Meta.</div>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="meta_enabled">
+                                        <label class="form-check-label" for="meta_enabled"><strong>Enable</strong></label>
+                                    </div>
+                                </div>
+                                <div class="row g-2">
+                                    <div class="col-md-6">
+                                        <label class="form-label">Graph API URL</label>
+                                        <input type="text" class="form-control" id="meta_graph_api_url" placeholder="https://graph.facebook.com/v19.0">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Phone Number ID</label>
+                                        <input type="text" class="form-control" id="meta_phone_number_id" placeholder="Phone number ID">
+                                    </div>
+                                    <div class="col-12">
+                                        <label class="form-label">Access Token</label>
+                                        <input type="password" class="form-control" id="meta_access_token" placeholder="Permanent access token">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Business Account ID</label>
+                                        <input type="text" class="form-control" id="meta_business_account_id" placeholder="WABA ID">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Webhook Verify Token</label>
+                                        <input type="password" class="form-control" id="meta_webhook_verify_token" placeholder="Verify token">
+                                    </div>
+                                    <div class="col-12">
+                                        <label class="form-label">App Secret</label>
+                                        <input type="password" class="form-control" id="meta_app_secret" placeholder="App secret">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="provider-config">
+                                <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-3">
+                                    <div>
+                                        <strong><i class="bi bi-chat-square-text text-info"></i> Qontak</strong>
+                                        <div class="form-text">Provider WhatsApp API Qontak/Mekari.</div>
+                                    </div>
+                                    <div class="form-check form-switch">
+                                        <input class="form-check-input" type="checkbox" id="qontak_enabled">
+                                        <label class="form-check-label" for="qontak_enabled"><strong>Enable</strong></label>
+                                    </div>
+                                </div>
+                                <div class="row g-2">
+                                    <div class="col-md-6">
+                                        <label class="form-label">API URL</label>
+                                        <input type="text" class="form-control" id="qontak_api_url" placeholder="https://service-chat.qontak.com">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Channel Integration ID</label>
+                                        <input type="text" class="form-control" id="qontak_channel_integration_id" placeholder="Channel integration ID">
+                                    </div>
+                                    <div class="col-12">
+                                        <label class="form-label">Access Token</label>
+                                        <input type="password" class="form-control" id="qontak_access_token" placeholder="Bearer token">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Namespace</label>
+                                        <input type="text" class="form-control" id="qontak_namespace" placeholder="Namespace template (opsional)">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label">Webhook Secret</label>
+                                        <input type="password" class="form-control" id="qontak_webhook_secret" placeholder="Webhook secret">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="mt-3">
+                                <button type="button" class="btn btn-primary" id="btnSaveGatewaySettings">
+                                    <i class="bi bi-save"></i> Simpan Provider WhatsApp
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-lg-6">
+                        <div class="gateway-card">
+                            <h4 class="template-title mb-2">
+                                <i class="bi bi-megaphone"></i> WA Blast / Broadcast Pesan
+                            </h4>
+                            <p class="template-description">
+                                Kirim pengumuman atau info gangguan ke pelanggan aktif dan group WhatsApp yang sudah disimpan.
+                            </p>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <label class="form-label">Jenis Pesan</label>
+                                    <select class="form-select" id="broadcastType">
+                                        <option value="service_disruption">Gangguan Layanan</option>
+                                        <option value="service_announcement">Pengumuman Layanan</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">Jenis Gangguan</label>
+                                    <input type="text" class="form-control" id="disruptionType" placeholder="Gangguan Jaringan">
+                                </div>
+                            </div>
+                            <div class="row mt-3">
+                                <div class="col-md-6">
+                                    <label class="form-label">Area Terdampak</label>
+                                    <input type="text" class="form-control" id="affectedArea" placeholder="Seluruh Area">
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">Estimasi Selesai</label>
+                                    <input type="text" class="form-control" id="estimatedResolution" placeholder="2 jam">
+                                </div>
+                            </div>
+                            <div class="mt-3">
+                                <label class="form-label">Isi Pesan</label>
+                                <textarea class="form-control" id="broadcastMessage" rows="4" placeholder="Tulis pesan WA blast..."></textarea>
+                            </div>
+                            <div class="mt-3">
+                                <button class="btn btn-danger" onclick="sendBroadcast()" type="button">
+                                    <i class="bi bi-broadcast"></i> Kirim WA Blast
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -790,57 +1065,16 @@
                     </div>
                 </div>
                 
-                <!-- Broadcast Section -->
-                <div class="row">
-                    <div class="col-12">
-                        <div class="template-card">
-                            <h4><i class="bi bi-broadcast"></i> Send Broadcast Message</h4>
-                            <div class="test-section">
-                                <div class="row">
-                                    <div class="col-md-6">
-                                        <label class="form-label">Message Type</label>
-                                        <select class="form-select" id="broadcastType">
-                                            <option value="service_disruption">Service Disruption</option>
-                                            <option value="service_announcement">Service Announcement</option>
-                                        </select>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label">Disruption Type (if applicable)</label>
-                                        <input type="text" class="form-control" id="disruptionType" placeholder="Gangguan Jaringan">
-                                    </div>
-                                </div>
-                                <div class="row mt-3">
-                                    <div class="col-md-6">
-                                        <label class="form-label">Affected Area</label>
-                                        <input type="text" class="form-control" id="affectedArea" placeholder="Seluruh Area">
-                                    </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label">Estimated Resolution</label>
-                                        <input type="text" class="form-control" id="estimatedResolution" placeholder="2 jam">
-                                    </div>
-                                </div>
-                                <div class="row mt-3">
-                                    <div class="col-12">
-                                        <label class="form-label">Message Content</label>
-                                        <textarea class="form-control" id="broadcastMessage" rows="4" placeholder="Enter your message..."></textarea>
-                                    </div>
-                                </div>
-                                <div class="mt-3">
-                                    <button class="btn btn-danger" onclick="sendBroadcast()">
-                                        <i class="bi bi-broadcast"></i> Send Broadcast
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
             </main>
         </div>
     </div>
 
     <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+    <script src="/js/qrcode.min.js"></script>
     <script>
     let templates = {};
+    let waStatusInterval = null;
+    let waRefreshPolling = null;
 
     // Load templates on page load
     document.addEventListener('DOMContentLoaded', function() {
@@ -848,6 +1082,8 @@
         loadStatus();
         loadRateLimitSettings();
         loadWAGroups();
+        loadProviderSettings();
+        bindBaileysControls();
 
         // Auto-save on toggle change: Rate Limit enabled
         const rateToggle = document.getElementById('enableRateLimit');
@@ -871,6 +1107,364 @@
             });
         }
     });
+
+    function isTruthy(value) {
+        return value === true || value === 'true' || value === 'on' || value === 1 || value === '1';
+    }
+
+    function setFieldValue(id, value) {
+        const element = document.getElementById(id);
+        if (element) element.value = value == null ? '' : value;
+    }
+
+    function setFieldChecked(id, value) {
+        const element = document.getElementById(id);
+        if (element) element.checked = isTruthy(value);
+    }
+
+    function getFieldValue(id) {
+        return document.getElementById(id)?.value || '';
+    }
+
+    function getFieldChecked(id) {
+        return !!document.getElementById(id)?.checked;
+    }
+
+    async function loadProviderSettings() {
+        try {
+            const response = await fetch('/admin/billing/whatsapp-settings/gateway');
+            const data = await response.json();
+            if (!data.success) {
+                throw new Error(data.message || 'Gagal memuat provider');
+            }
+
+            applyProviderSettings(data.settings || {});
+            toggleBaileysContent();
+        } catch (error) {
+            console.error('Error loading provider settings:', error);
+            showAlert('Gagal memuat pengaturan provider WhatsApp', 'danger');
+        }
+    }
+
+    function applyProviderSettings(settings) {
+        setFieldValue('whatsappActiveProvider', settings.activeProvider || 'baileys');
+
+        setFieldChecked('baileys_enabled', settings.baileys && settings.baileys.enabled);
+
+        setFieldChecked('wablas_enabled', settings.wablas && settings.wablas.enabled);
+        setFieldValue('wablas_api_url', settings.wablas?.apiUrl || 'https://bdg.wablas.com');
+        setFieldValue('wablas_api_key', settings.wablas?.apiKey || '');
+        setFieldValue('wablas_secret_key', settings.wablas?.secretKey || '');
+        setFieldValue('wablas_device_id', settings.wablas?.deviceId || '');
+        setFieldValue('wablas_webhook_secret', settings.wablas?.webhookSecret || '');
+        setFieldValue('wablas_min_delay', settings.wablas?.minDelay || 1000);
+        setFieldValue('wablas_max_retries', settings.wablas?.maxRetries || 3);
+        setFieldValue('wablas_retry_delay', settings.wablas?.retryDelay || 2000);
+
+        setFieldChecked('meta_enabled', settings.meta && settings.meta.enabled);
+        setFieldValue('meta_graph_api_url', settings.meta?.graphApiUrl || 'https://graph.facebook.com/v19.0');
+        setFieldValue('meta_phone_number_id', settings.meta?.phoneNumberId || '');
+        setFieldValue('meta_access_token', settings.meta?.accessToken || '');
+        setFieldValue('meta_business_account_id', settings.meta?.businessAccountId || '');
+        setFieldValue('meta_app_secret', settings.meta?.appSecret || '');
+        setFieldValue('meta_webhook_verify_token', settings.meta?.webhookVerifyToken || '');
+
+        setFieldChecked('qontak_enabled', settings.qontak && settings.qontak.enabled);
+        setFieldValue('qontak_api_url', settings.qontak?.apiUrl || 'https://service-chat.qontak.com');
+        setFieldValue('qontak_access_token', settings.qontak?.accessToken || '');
+        setFieldValue('qontak_channel_integration_id', settings.qontak?.channelIntegrationId || '');
+        setFieldValue('qontak_namespace', settings.qontak?.namespace || '');
+        setFieldValue('qontak_webhook_secret', settings.qontak?.webhookSecret || '');
+    }
+
+    function collectProviderSettings() {
+        const activeProvider = getFieldValue('whatsappActiveProvider') || 'baileys';
+
+        return {
+            activeProvider,
+            settings: {
+                baileys: {
+                    enabled: getFieldChecked('baileys_enabled') || activeProvider === 'baileys'
+                },
+                wablas: {
+                    enabled: getFieldChecked('wablas_enabled') || activeProvider === 'wablas',
+                    apiUrl: getFieldValue('wablas_api_url') || 'https://bdg.wablas.com',
+                    apiKey: getFieldValue('wablas_api_key'),
+                    secretKey: getFieldValue('wablas_secret_key'),
+                    deviceId: getFieldValue('wablas_device_id'),
+                    webhookSecret: getFieldValue('wablas_webhook_secret'),
+                    minDelay: parseInt(getFieldValue('wablas_min_delay'), 10) || 1000,
+                    maxRetries: parseInt(getFieldValue('wablas_max_retries'), 10) || 3,
+                    retryDelay: parseInt(getFieldValue('wablas_retry_delay'), 10) || 2000
+                },
+                meta: {
+                    enabled: getFieldChecked('meta_enabled') || activeProvider === 'meta',
+                    graphApiUrl: getFieldValue('meta_graph_api_url') || 'https://graph.facebook.com/v19.0',
+                    phoneNumberId: getFieldValue('meta_phone_number_id'),
+                    accessToken: getFieldValue('meta_access_token'),
+                    businessAccountId: getFieldValue('meta_business_account_id'),
+                    appSecret: getFieldValue('meta_app_secret'),
+                    webhookVerifyToken: getFieldValue('meta_webhook_verify_token')
+                },
+                qontak: {
+                    enabled: getFieldChecked('qontak_enabled') || activeProvider === 'qontak',
+                    apiUrl: getFieldValue('qontak_api_url') || 'https://service-chat.qontak.com',
+                    accessToken: getFieldValue('qontak_access_token'),
+                    channelIntegrationId: getFieldValue('qontak_channel_integration_id'),
+                    namespace: getFieldValue('qontak_namespace'),
+                    webhookSecret: getFieldValue('qontak_webhook_secret')
+                }
+            }
+        };
+    }
+
+    function bindBaileysControls() {
+        const toggle = document.getElementById('baileys_enabled');
+        const activeProvider = document.getElementById('whatsappActiveProvider');
+        const saveButton = document.getElementById('btnSaveGatewaySettings');
+        const refreshButton = document.getElementById('btnRefreshQR');
+        const deleteButton = document.getElementById('btnDeleteSession');
+
+        if (toggle) {
+            toggle.addEventListener('change', toggleBaileysContent);
+        }
+
+        if (activeProvider) {
+            activeProvider.addEventListener('change', function() {
+                const selectedProvider = activeProvider.value;
+                setFieldChecked(`${selectedProvider}_enabled`, true);
+                toggleBaileysContent();
+            });
+        }
+
+        if (saveButton) {
+            saveButton.addEventListener('click', saveProviderSettings);
+        }
+
+        if (refreshButton) {
+            refreshButton.addEventListener('click', refreshWAQRCode);
+        }
+
+        if (deleteButton) {
+            deleteButton.addEventListener('click', deleteWASession);
+        }
+    }
+
+    async function saveProviderSettings() {
+        const payload = collectProviderSettings();
+        const button = document.getElementById('btnSaveGatewaySettings');
+        const originalHtml = button ? button.innerHTML : '';
+        if (button) {
+            button.disabled = true;
+            button.innerHTML = '<i class="bi bi-hourglass-split"></i> Menyimpan...';
+        }
+        try {
+            const response = await fetch('/admin/billing/whatsapp-settings/gateway', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                applyProviderSettings(data.settings || {});
+                showAlert('Pengaturan provider WhatsApp berhasil disimpan!', 'success');
+                toggleBaileysContent();
+            } else {
+                showAlert('Gagal menyimpan provider: ' + (data.message || data.error || 'Unknown error'), 'danger');
+            }
+        } catch (error) {
+            console.error('Error saving provider settings:', error);
+            showAlert('Error menyimpan pengaturan provider WhatsApp', 'danger');
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.innerHTML = originalHtml;
+            }
+        }
+    }
+
+    function toggleBaileysContent() {
+        const enabled = document.getElementById('baileys_enabled')?.checked;
+        const content = document.getElementById('baileysContent');
+        const status = document.getElementById('wa-status');
+        const qrContainer = document.getElementById('wa-qr-container');
+
+        if (!content) return;
+
+        if (enabled) {
+            content.style.display = '';
+            loadWAStatus();
+            startWAStatusInterval();
+        } else {
+            content.style.display = 'none';
+            if (status) status.innerHTML = '';
+            if (qrContainer) qrContainer.classList.add('d-none');
+            stopWAStatusInterval();
+        }
+    }
+
+    async function loadWAStatus() {
+        const status = document.getElementById('wa-status');
+        const qrContainer = document.getElementById('wa-qr-container');
+        const qrImage = document.getElementById('wa-qr');
+        const qrDiv = document.getElementById('wa-qr-div');
+
+        if (!status || !qrContainer || !qrDiv) return;
+
+        try {
+            const response = await fetch('/admin/settings/wa-status');
+            const data = await response.json();
+
+            if (data.connected) {
+                const phone = data.phoneNumber ? ` (${data.phoneNumber})` : '';
+                const since = data.connectedSince ? `<br><small>Terhubung sejak: ${new Date(data.connectedSince).toLocaleString()}</small>` : '';
+                status.innerHTML = `<span class="badge bg-success status-badge"><i class="bi bi-check-circle"></i> Terhubung${phone}${since}</span>`;
+                qrContainer.classList.add('d-none');
+                qrDiv.innerHTML = '';
+                return;
+            }
+
+            status.innerHTML = '<span class="badge bg-warning text-dark status-badge"><i class="bi bi-exclamation-triangle"></i> Belum Terhubung</span>';
+            qrContainer.classList.add('d-none');
+            qrDiv.innerHTML = '';
+            if (qrImage) {
+                qrImage.setAttribute('src', '#');
+                qrImage.style.display = 'none';
+            }
+
+            if (data.qr) {
+                qrContainer.classList.remove('d-none');
+                if (data.qrImage && qrImage) {
+                    qrImage.setAttribute('src', data.qrImage);
+                    qrImage.style.display = 'block';
+                    qrDiv.innerHTML = '';
+                    status.insertAdjacentHTML('beforeend', '<div class="text-info small mt-2"><i class="bi bi-info-circle"></i> Scan dari WhatsApp &gt; Perangkat tertaut.</div>');
+                    return;
+                }
+
+                if (typeof QRCode === 'undefined') {
+                    qrDiv.innerHTML = '<div class="alert alert-warning">QR tersedia, tetapi generator QR browser belum termuat. Refresh halaman lalu coba lagi.</div>';
+                    return;
+                }
+
+                try {
+                    new QRCode(qrDiv, {
+                        text: data.qr,
+                        width: 320,
+                        height: 320,
+                        colorDark: '#000000',
+                        colorLight: '#ffffff',
+                        correctLevel: QRCode.CorrectLevel.M || 2
+                    });
+                    status.insertAdjacentHTML('beforeend', '<div class="text-info small mt-2"><i class="bi bi-info-circle"></i> Scan dari WhatsApp &gt; Perangkat tertaut.</div>');
+                } catch (qrError) {
+                    console.error('Error rendering QR code:', qrError);
+                    qrDiv.innerHTML = '<div class="alert alert-warning">QR tersedia, tetapi gagal dirender di browser. Klik Refresh QR atau refresh halaman.</div>';
+                }
+            } else if (data.error) {
+                status.insertAdjacentHTML('beforeend', `<div class="alert alert-danger mt-2">${data.error}</div>`);
+            } else {
+                status.insertAdjacentHTML('beforeend', '<div class="alert alert-info mt-2"><i class="bi bi-hourglass-split"></i> Menunggu QR code. Klik Refresh QR jika belum muncul.</div>');
+            }
+        } catch (error) {
+            console.error('Error getting WhatsApp status:', error);
+            status.innerHTML = '<span class="badge bg-danger status-badge"><i class="bi bi-x-circle"></i> Gagal memuat status</span>';
+            qrContainer.classList.add('d-none');
+        }
+    }
+
+    async function refreshWAQRCode() {
+        if (!document.getElementById('baileys_enabled')?.checked) {
+            showAlert('Baileys belum diaktifkan. Centang Enable Baileys terlebih dahulu.', 'warning');
+            return;
+        }
+
+        const button = document.getElementById('btnRefreshQR');
+        const originalHtml = button ? button.innerHTML : '';
+        if (button) {
+            button.disabled = true;
+            button.innerHTML = '<i class="bi bi-hourglass-split"></i> Refreshing...';
+        }
+
+        try {
+            const response = await fetch('/admin/settings/wa-refresh', { method: 'POST' });
+            const data = await response.json();
+
+            if (!data.success) {
+                showAlert(data.error || data.message || 'Gagal refresh QR', 'danger');
+                return;
+            }
+
+            showAlert(data.message || 'Sesi direset, menunggu QR code baru...', 'info');
+            loadWAStatus();
+
+            if (waRefreshPolling) clearInterval(waRefreshPolling);
+            let attempts = 0;
+            waRefreshPolling = setInterval(() => {
+                attempts += 1;
+                loadWAStatus();
+                const hasQr = document.querySelector('#wa-qr[src^="data:image"], #wa-qr-div canvas, #wa-qr-div img');
+                if (hasQr || attempts >= 4) {
+                    clearInterval(waRefreshPolling);
+                    waRefreshPolling = null;
+                    if (!hasQr && attempts >= 4) {
+                        showAlert('QR belum muncul. Coba refresh sekali lagi atau restart service.', 'warning');
+                    }
+                }
+            }, 10000);
+        } catch (error) {
+            console.error('Error refreshing QR:', error);
+            showAlert('Error refresh QR WhatsApp', 'danger');
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.innerHTML = originalHtml;
+            }
+        }
+    }
+
+    async function deleteWASession() {
+        if (!document.getElementById('baileys_enabled')?.checked) {
+            showAlert('Baileys belum diaktifkan.', 'warning');
+            return;
+        }
+
+        if (!confirm('Yakin hapus sesi WhatsApp?')) return;
+
+        try {
+            const response = await fetch('/admin/settings/wa-delete', { method: 'POST' });
+            const data = await response.json();
+
+            if (data.success) {
+                showAlert(data.message || 'Sesi WhatsApp berhasil dihapus.', 'success');
+                loadWAStatus();
+            } else {
+                showAlert(data.error || data.message || 'Gagal hapus sesi WhatsApp', 'danger');
+            }
+        } catch (error) {
+            console.error('Error deleting WhatsApp session:', error);
+            showAlert('Error hapus sesi WhatsApp', 'danger');
+        }
+    }
+
+    function startWAStatusInterval() {
+        stopWAStatusInterval();
+        waStatusInterval = setInterval(() => {
+            if (document.getElementById('baileys_enabled')?.checked) {
+                loadWAStatus();
+            } else {
+                stopWAStatusInterval();
+            }
+        }, 10000);
+    }
+
+    function stopWAStatusInterval() {
+        if (waStatusInterval) {
+            clearInterval(waStatusInterval);
+            waStatusInterval = null;
+        }
+    }
 
     // Load templates from server
     async function loadTemplates() {
@@ -909,7 +1503,8 @@
             const data = await response.json();
             
             if (data.success) {
-                document.getElementById('whatsappStatus').textContent = data.whatsappStatus;
+                const providerLabel = data.whatsappProvider ? ` (${data.whatsappProvider})` : '';
+                document.getElementById('whatsappStatus').textContent = `${data.whatsappStatus}${providerLabel}`;
                 document.getElementById('activeCustomers').textContent = data.activeCustomers;
                 document.getElementById('pendingInvoices').textContent = data.pendingInvoices;
                 document.getElementById('nextReminder').textContent = data.nextReminder;

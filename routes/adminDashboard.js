@@ -44,6 +44,43 @@ function resolveBestBillingDbPath() {
   return best;
 }
 
+function getJakartaDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jakarta',
+    weekday: 'short',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric'
+  }).formatToParts(date);
+  const map = {};
+  for (const p of parts) {
+    if (p.type !== 'literal') map[p.type] = p.value;
+  }
+  const weekdayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return {
+    dayIndex: weekdayMap[map.weekday] ?? new Date(date).getDay(),
+    day: parseInt(map.day, 10),
+    month: parseInt(map.month, 10) - 1,
+    year: parseInt(map.year, 10)
+  };
+}
+
+function formatDashboardGreetingDate(date = new Date()) {
+  const days = ['minggu', 'senin', 'selasa', 'rabu', 'kamis', 'jumat', 'sabtu'];
+  const months = ['januari', 'februari', 'maret', 'april', 'mei', 'juni', 'juli', 'agustus', 'september', 'oktober', 'november', 'desember'];
+  const { dayIndex, day, month, year } = getJakartaDateParts(date);
+  return `hari ini ${days[dayIndex]}, ${day} ${months[month]} ${year}`;
+}
+
+function resolveDashboardUserName(req, settings = {}) {
+  const sessionName = req.session.adminUsername || req.session.adminUser;
+  if (sessionName && String(sessionName).trim()) {
+    return String(sessionName).trim();
+  }
+  const fallback = settings.admin_display_name || settings.company_owner || settings.company_name;
+  return (fallback && String(fallback).trim()) ? String(fallback).trim() : 'Admin';
+}
+
 // GET: Dashboard admin
 router.get('/dashboard', adminAuth, async (req, res) => {
   let genieacsTotal = 0, genieacsOnline = 0, genieacsOffline = 0;
@@ -145,39 +182,6 @@ router.get('/dashboard', adminAuth, async (req, res) => {
     // Jika error, biarkan value default 0
   }
   
-  // Cek apakah perlu menjalankan validasi konfigurasi ulang
-  const shouldRevalidate = !req.session.configValidation || 
-                          !req.session.configValidation.hasValidationRun ||
-                          req.session.configValidation.lastValidationTime < (Date.now() - 30000); // 30 detik cache
-
-  if (shouldRevalidate) {
-    console.log('🔍 [DASHBOARD] Menjalankan validasi konfigurasi ulang...');
-    
-    // Jalankan validasi konfigurasi secara asinkron
-    setImmediate(async () => {
-      try {
-        const { validateConfiguration, getValidationSummary, checkForDefaultSettings } = require('../config/configValidator');
-        
-        const validationResults = await validateConfiguration();
-        const summary = getValidationSummary();
-        const defaultSettingsWarnings = checkForDefaultSettings();
-        
-        // Update session dengan hasil validasi terbaru
-        req.session.configValidation = {
-          hasValidationRun: true,
-          results: validationResults,
-          summary: summary,
-          defaultSettingsWarnings: defaultSettingsWarnings,
-          lastValidationTime: Date.now()
-        };
-        
-        console.log('✅ [DASHBOARD] Validasi konfigurasi ulang selesai');
-      } catch (error) {
-        console.error('❌ [DASHBOARD] Error saat validasi konfigurasi ulang:', error);
-      }
-    });
-  }
-
   // Check license status untuk ditampilkan di dashboard
   let licenseStatus = null;
   try {
@@ -203,6 +207,27 @@ router.get('/dashboard', adminAuth, async (req, res) => {
   } catch (billingError) {
     console.warn('⚠️ [DASHBOARD] Billing stats tidak dapat dimuat:', billingError.message);
     billingStats = { total_customers: 0, active_customers: 0, total_invoices: 0, paid_invoices: 0, unpaid_invoices: 0, total_revenue: 0, total_unpaid: 0, monthly_revenue: 0, voucher_revenue: 0, monthly_invoices: 0, paid_monthly_invoices: 0, unpaid_monthly_invoices: 0, monthly_unpaid: 0, voucher_invoices: 0, paid_voucher_invoices: 0, unpaid_voucher_invoices: 0, voucher_unpaid: 0 };
+  }
+
+  let portalPackageRequests = [];
+  try {
+    await billingManager.reconcilePortalPackageRequestsFulfilled();
+  } catch (e) {
+    console.warn('⚠️ [DASHBOARD] reconcile portal package requests:', e.message);
+  }
+  try {
+    portalPackageRequests = await billingManager.listPortalPackageRequestsPending(20);
+  } catch (e) {
+    console.warn('⚠️ [DASHBOARD] portal package requests:', e.message);
+    portalPackageRequests = [];
+  }
+
+  let adminNotifBadgeTotal = 0;
+  try {
+    adminNotifBadgeTotal = await billingManager.getAdminNotificationBadgeCount();
+  } catch (e) {
+    console.warn('⚠️ [DASHBOARD] admin notification badge:', e.message);
+    adminNotifBadgeTotal = 0;
   }
 
   // ─── Recent Data Queries ──────────────────────────────────────────────────
@@ -277,7 +302,7 @@ router.get('/dashboard', adminAuth, async (req, res) => {
       }),
       // Pelanggan baru bulan ini
       new Promise((resolve) => {
-        db.get(`SELECT COUNT(*) as cnt FROM customers WHERE strftime('%Y-%m', COALESCE(join_date, datetime('now'))) = ?`, [monthStr], (err, row) => {
+        db.get(`SELECT COUNT(*) as cnt FROM customers WHERE strftime('%Y-%m', COALESCE(join_date, datetime('now','localtime'))) = ?`, [monthStr], (err, row) => {
           if (err) {
             console.warn('⚠️ [DASHBOARD] newCustomersThisMonth query failed:', err.message);
             newCustomersThisMonth = 0;
@@ -363,7 +388,6 @@ router.get('/dashboard', adminAuth, async (req, res) => {
     settings,
     versionInfo: getVersionInfo(),
     versionBadge: getVersionBadge(),
-    configValidation: req.session.configValidation || null,
     licenseStatus: licenseStatus,
     // Billing data
     billingStats: billingStats || {},
@@ -374,8 +398,78 @@ router.get('/dashboard', adminAuth, async (req, res) => {
     recentPaidInvoices,
     recentTickets,
     newCustomersThisMonth,
-    operationalStats
+    operationalStats,
+    portalPackageRequests: portalPackageRequests || [],
+    adminNotifBadgeTotal: adminNotifBadgeTotal || 0,
+    dashboardGreetingUser: resolveDashboardUserName(req, settings),
+    dashboardGreetingDate: formatDashboardGreetingDate()
   });
+});
+
+// Halaman penuh pusat notifikasi admin
+router.get('/dashboard/notifications', adminAuth, async (req, res) => {
+  try {
+    const settings = getSettingsWithCache();
+    try {
+      await billingManager.reconcilePortalPackageRequestsFulfilled();
+    } catch (e) {
+      console.warn('⚠️ [NOTIF PAGE] reconcile portal package requests:', e.message);
+    }
+    const lim = 200;
+    const [feed, badge, portalPending] = await Promise.all([
+      billingManager.getAdminUnifiedNotificationFeed(lim),
+      billingManager.getAdminNotificationBadgeCount(),
+      billingManager.countPortalPackageRequestsPending().catch(() => 0),
+    ]);
+    return res.render('admin/notifications-center', {
+      title: 'Pusat notifikasi',
+      page: 'dashboard',
+      settings: settings || {},
+      notifItems: feed.items || [],
+      adminNotifBadgeTotal: badge || 0,
+      portalPending: portalPending || 0,
+    });
+  } catch (err) {
+    console.error('[NOTIF PAGE]', err);
+    return res.status(500).send('Gagal memuat pusat notifikasi');
+  }
+});
+
+router.get('/dashboard/api/notifications', adminAuth, async (req, res) => {
+  try {
+    try {
+      await billingManager.reconcilePortalPackageRequestsFulfilled();
+    } catch (e) {
+      console.warn('⚠️ [DASHBOARD API] reconcile portal package requests:', e.message);
+    }
+    const lim = Math.min(200, Math.max(10, parseInt(req.query.limit, 10) || 50));
+    const [feed, badge, portalPending] = await Promise.all([
+      billingManager.getAdminUnifiedNotificationFeed(lim),
+      billingManager.getAdminNotificationBadgeCount(),
+      billingManager.countPortalPackageRequestsPending().catch(() => 0),
+    ]);
+    return res.json({
+      success: true,
+      items: feed.items || [],
+      badge: badge || 0,
+      portalPending: portalPending || 0,
+    });
+  } catch (err) {
+    console.error('[DASHBOARD API] notifications', err);
+    return res.status(500).json({ success: false, message: 'Gagal memuat notifikasi' });
+  }
+});
+
+/** Hapus/bersihkan notifikasi admin (baca + permintaan paket pending → dismissed). */
+router.post('/dashboard/api/notifications/clear', adminAuth, async (req, res) => {
+  try {
+    const dismissPortal = req.body && req.body.dismissPortal === false ? false : true;
+    const summary = await billingManager.clearAdminUiNotifications({ dismissPortalRequests: dismissPortal });
+    return res.json({ success: true, summary });
+  } catch (err) {
+    console.error('[DASHBOARD API] notifications/clear', err);
+    return res.status(500).json({ success: false, message: 'Gagal membersihkan notifikasi' });
+  }
 });
 
 // GET: System Information API

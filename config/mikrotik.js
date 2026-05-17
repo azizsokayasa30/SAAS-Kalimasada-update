@@ -11,6 +11,7 @@ const { looksLikePasswordHashNotCleartext } = require('../utils/passwordHashHeur
 let sock = null;
 let mikrotikConnection = null;
 let monitorInterval = null;
+const MIN_MONITOR_INTERVAL_MS = 10 * 1000;
 
 // Connection pool untuk router (reuse koneksi per router)
 const routerConnections = new Map();
@@ -85,6 +86,15 @@ async function getPppoeRadcheckExcludeUsernames() {
 // Fungsi untuk set instance sock
 function setSock(sockInstance) {
     sock = sockInstance;
+}
+
+function isPppoeLoginLogoutWaEnabled() {
+    try {
+        const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
+        return isWaSystemMonitorEnabled('pppoe_login_logout_wa');
+    } catch (_) {
+        return true;
+    }
 }
 
 // Fungsi untuk koneksi ke Mikrotik
@@ -443,6 +453,10 @@ async function getRadcheckCleartextPassword(username) {
 const _pppSecretFullPrintCache = new Map();
 const PPP_SECRET_FULL_CACHE_MS = 40000;
 
+/** Cache `/ppp/active/print` per NAS — dipakai halaman admin Mikrotik. */
+const _pppActivePrintCache = new Map();
+const PPP_ACTIVE_PRINT_CACHE_MS = 40000;
+
 async function getCachedFullPppSecrets(conn, cacheKey) {
     const key = cacheKey != null ? String(cacheKey) : '_';
     const now = Date.now();
@@ -450,10 +464,47 @@ async function getCachedFullPppSecrets(conn, cacheKey) {
     if (hit && now - hit.ts < PPP_SECRET_FULL_CACHE_MS) {
         return hit.rows;
     }
-    const all = await conn.write('/ppp/secret/print');
+    let all;
+    try {
+        all = await conn.write('/ppp/secret/print', ['=.proplist=name,password,profile']);
+    } catch (_) {
+        all = await conn.write('/ppp/secret/print');
+    }
     const rows = Array.isArray(all) ? all : [];
     _pppSecretFullPrintCache.set(key, { ts: now, rows });
     return rows;
+}
+
+async function getCachedPppActivePrint(conn, cacheKey) {
+    const key = cacheKey != null ? String(cacheKey) : '_';
+    const now = Date.now();
+    const hit = _pppActivePrintCache.get(key);
+    if (hit && now - hit.ts < PPP_ACTIVE_PRINT_CACHE_MS) {
+        return hit.rows;
+    }
+    let all;
+    try {
+        all = await conn.write('/ppp/active/print', ['=.proplist=name']);
+    } catch (_) {
+        all = await conn.write('/ppp/active/print');
+    }
+    const rows = Array.isArray(all) ? all : [];
+    _pppActivePrintCache.set(key, { ts: now, rows });
+    return rows;
+}
+
+function clearPppPrintCachesForRouter(routerId) {
+    const prefix = `r${routerId}`;
+    for (const key of _pppSecretFullPrintCache.keys()) {
+        if (String(key).startsWith(prefix) || String(key).includes(`admin_${routerId}`)) {
+            _pppSecretFullPrintCache.delete(key);
+        }
+    }
+    for (const key of _pppActivePrintCache.keys()) {
+        if (String(key).startsWith(prefix) || String(key).includes(`admin_${routerId}`)) {
+            _pppActivePrintCache.delete(key);
+        }
+    }
 }
 
 /**
@@ -991,63 +1042,45 @@ async function getRadiusStatistics() {
 
 // Fungsi untuk menambah user PPPoE ke RADIUS
 async function addPPPoEUserRadius({ username, password, profile = null }) {
-    let conn = null;
     try {
-        conn = await getRadiusConnection();
+        const conn = await getRadiusConnection();
         if (!conn) {
             logger.error(`[RADIUS] Failed to get RADIUS connection for user ${username}`);
             return { success: false, message: 'Koneksi ke database RADIUS gagal', error: 'Connection failed' };
         }
 
         logger.info(`[RADIUS] Adding PPPoE user ${username} with profile ${profile || 'default'}`);
-        
-        // Insert atau update password di radcheck
-        await conn.execute(
-            "INSERT INTO radcheck (username, attribute, op, value) VALUES (?, 'Cleartext-Password', ':=', ?) ON CONFLICT(username, attribute) DO UPDATE SET value = excluded.value",
-            [username, password]
-        );
-        logger.info(`[RADIUS] Password inserted/updated for user ${username}`);
-        
-        // Assign user ke group/package jika profile diberikan
+
+        let profileToUse = null;
         if (profile) {
-            const profileToUse = await resolveRadiusProfileGroupname(conn, profile);
+            profileToUse = await resolveRadiusProfileGroupname(conn, profile);
             if (!profileToUse) {
-                await conn.end();
                 return {
                     success: false,
                     message: `Profil "${String(profile).trim()}" tidak ditemukan di RADIUS (radgroupreply/radgroupcheck). Pilih profil yang valid.`,
                     error: 'unknown_profile'
                 };
             }
-
-            // We do not add Mikrotik-Group to radgroupreply because it forces the router to look for a local profile.
-            // The RADIUS server should provide the actual attributes (Framed-Pool, Rate-Limit, etc.) directly.
-
-            // HAPUS SEMUA groupname untuk username ini terlebih dahulu untuk menghindari duplikasi
-            await conn.execute(
-                "DELETE FROM radusergroup WHERE username = ?",
-                [username]
-            );
-            
-            // Insert groupname yang baru
-            await conn.execute(
-                "INSERT INTO radusergroup (username, groupname, priority) VALUES (?, ?, 1)",
-                [username, profileToUse]
-            );
-            logger.info(`[RADIUS] Groupname ${profileToUse} assigned to user ${username}`);
         }
-        
-        await conn.end();
-        logger.info(`[RADIUS] Successfully added PPPoE user ${username} to RADIUS database`);
-        return { success: true, message: 'User berhasil ditambahkan ke RADIUS' };
-    } catch (error) {
-        if (conn) {
-            try {
-                await conn.end();
-            } catch (e) {
-                // Ignore connection close errors
+
+        const result = await conn.runInTransaction(async (db) => {
+            await db.execute(
+                "INSERT INTO radcheck (username, attribute, op, value) VALUES (?, 'Cleartext-Password', ':=', ?) ON CONFLICT(username, attribute) DO UPDATE SET value = excluded.value",
+                [username, password]
+            );
+            if (profileToUse) {
+                await db.execute('DELETE FROM radusergroup WHERE username = ?', [username]);
+                await db.execute(
+                    'INSERT INTO radusergroup (username, groupname, priority) VALUES (?, ?, 1)',
+                    [username, profileToUse]
+                );
             }
-        }
+            return { success: true, message: 'User berhasil ditambahkan ke RADIUS' };
+        });
+
+        logger.info(`[RADIUS] Successfully added PPPoE user ${username} to RADIUS database`);
+        return result;
+    } catch (error) {
         logger.error(`[RADIUS] Error adding PPPoE user ${username} to RADIUS:`, error);
         logger.error(`[RADIUS] Error stack:`, error.stack);
         return { success: false, message: `Gagal menambahkan user ke RADIUS: ${error.message}`, error: error.message };
@@ -1455,6 +1488,67 @@ async function suspendUserRadius(username) {
         throw error;
     }
 }
+
+/**
+ * Perbarui grup paket yang disimpan (PREVGROUP) untuk pelanggan yang masih di isolir.
+ * Dipakai saat admin mengubah paket tanpa membuka isolir.
+ */
+async function updateIsolirPreviousGroupRadius(username, customer = null) {
+    const conn = await getRadiusConnection();
+    try {
+        const [isolirRow] = await conn.execute(
+            "SELECT groupname FROM radusergroup WHERE username = ? AND groupname = 'isolir' LIMIT 1",
+            [username]
+        );
+        if (!isolirRow || isolirRow.length === 0) {
+            await conn.end();
+            return { success: false, skipped: true, message: 'User tidak sedang di grup isolir' };
+        }
+
+        let profileHint =
+            customer?.pppoe_profile || customer?.package_pppoe_profile || null;
+        if (!profileHint && customer?.package_id) {
+            try {
+                const billingManager = require('./billing');
+                const pkg = await billingManager.getPackageById(customer.package_id);
+                profileHint = pkg?.pppoe_profile || null;
+            } catch (_) {}
+        }
+        if (!profileHint) {
+            profileHint = 'default';
+        }
+
+        let groupToSave = profileHint;
+        if (groupToSave && groupToSave !== 'default') {
+            const resolved = await resolvePppoeProfileHintToRadiusGroup(conn, groupToSave);
+            if (resolved) {
+                groupToSave = resolved;
+            } else {
+                groupToSave = 'default';
+            }
+        }
+
+        await conn.execute(
+            "DELETE FROM radcheck WHERE username = ? AND attribute = 'NT-Password' AND value LIKE 'PREVGROUP:%'",
+            [username]
+        );
+        await conn.execute(
+            "INSERT INTO radcheck (username, attribute, op, value) VALUES (?, 'NT-Password', ':=', ?)",
+            [username, `PREVGROUP:${groupToSave}`]
+        );
+
+        await conn.end();
+        logger.info(`[RADIUS] Updated PREVGROUP for suspended ${username} → ${groupToSave}`);
+        return { success: true, previousGroup: groupToSave };
+    } catch (error) {
+        try {
+            await conn.end();
+        } catch (_) {}
+        logger.error(`Error updating PREVGROUP for ${username}: ${error.message}`);
+        throw error;
+    }
+}
+
 // Fungsi untuk disable hotspot user di RADIUS
 // Menggunakan kombinasi: hapus password dan tambahkan Auth-Type := Reject
 async function disableHotspotUserRadius(username) {
@@ -1721,32 +1815,23 @@ async function unsuspendUserRadius(username) {
 async function deletePPPoEUserRadius(username) {
     const conn = await getRadiusConnection();
     try {
-        // Best-effort: kick sesi PPPoE aktif supaya user yang sudah dihapus dari RADIUS langsung berhenti internet.
         try {
             await disconnectPPPoEUser(username);
         } catch (disconnectErr) {
             logger.warn(`[RADIUS] Failed to disconnect PPPoE sessions for ${username}: ${disconnectErr.message}`);
         }
 
-        // Mark accounting sessions that are still "active" as ended so statistics menjadi konsisten
-        await conn.execute(
-            "UPDATE radacct SET acctstoptime = datetime('now','localtime') WHERE username = ? AND (acctstoptime IS NULL OR acctstoptime = '' OR acctstoptime = '0' OR acctstoptime = '0000-00-00 00:00:00')",
-            [username]
-        );
-
-        // Hapus dari radcheck
-        await conn.execute("DELETE FROM radcheck WHERE username = ?", [username]);
-        
-        // Hapus dari radusergroup
-        await conn.execute("DELETE FROM radusergroup WHERE username = ?", [username]);
-        
-        // Hapus dari radreply (jika ada)
-        await conn.execute("DELETE FROM radreply WHERE username = ?", [username]);
-        
-        await conn.end();
-        return { success: true, message: 'User berhasil dihapus dari RADIUS' };
+        return await conn.runInTransaction(async (db) => {
+            await db.execute(
+                "UPDATE radacct SET acctstoptime = datetime('now','localtime') WHERE username = ? AND (acctstoptime IS NULL OR acctstoptime = '' OR acctstoptime = '0' OR acctstoptime = '0000-00-00 00:00:00')",
+                [username]
+            );
+            await db.execute('DELETE FROM radcheck WHERE username = ?', [username]);
+            await db.execute('DELETE FROM radusergroup WHERE username = ?', [username]);
+            await db.execute('DELETE FROM radreply WHERE username = ?', [username]);
+            return { success: true, message: 'User berhasil dihapus dari RADIUS' };
+        });
     } catch (error) {
-        await conn.end();
         logger.error(`Error deleting PPPoE user from RADIUS: ${error.message}`);
         throw error;
     }
@@ -1756,12 +1841,9 @@ async function deletePPPoEUserRadius(username) {
 async function editPPPoEUserRadius({ oldUsername, username, password, profile = null }) {
     const conn = await getRadiusConnection();
     try {
-        // Jika username berubah, perlu rename user (delete dan insert baru)
         if (oldUsername && username && oldUsername !== username) {
             logger.info(`Renaming user from ${oldUsername} to ${username}`);
-            
-            // 1. Copy data dari user lama ke user baru
-            // Ambil password dari user lama jika password baru tidak diberikan
+
             let passwordToUse = password;
             if (!passwordToUse) {
                 const [oldPasswordRows] = await conn.execute(
@@ -1772,95 +1854,85 @@ async function editPPPoEUserRadius({ oldUsername, username, password, profile = 
                     passwordToUse = oldPasswordRows[0].value;
                 }
             }
-            
-            // Ambil profile dari user lama jika profile baru tidak diberikan
+
             let profileToUse = profile;
             if (!profileToUse) {
                 const [oldProfileRows] = await conn.execute(
-                    "SELECT groupname FROM radusergroup WHERE username = ? LIMIT 1",
+                    'SELECT groupname FROM radusergroup WHERE username = ? LIMIT 1',
                     [oldUsername]
                 );
                 if (oldProfileRows.length > 0) {
                     profileToUse = oldProfileRows[0].groupname;
                 }
             }
-            
-            // 2. Insert user baru dengan username baru
-            if (passwordToUse) {
-                await conn.execute(
-                    "INSERT INTO radcheck (username, attribute, op, value) VALUES (?, 'Cleartext-Password', ':=', ?)",
-                    [username, passwordToUse]
-                );
-            }
-            
+
+            let resolvedGroup = null;
             if (profileToUse) {
-                const resolved = await resolveRadiusProfileGroupname(conn, profileToUse);
-                if (!resolved) {
-                    await conn.end();
+                resolvedGroup = await resolveRadiusProfileGroupname(conn, profileToUse);
+                if (!resolvedGroup) {
                     return {
                         success: false,
                         message: `Profil "${String(profileToUse).trim()}" tidak ditemukan di RADIUS (radgroupreply/radgroupcheck).`,
                         error: 'unknown_profile'
                     };
                 }
-                await conn.execute(
-                    "INSERT INTO radusergroup (username, groupname, priority) VALUES (?, ?, 1)",
-                    [username, resolved]
-                );
             }
-            
-            // 3. Delete user lama
-            await conn.execute("DELETE FROM radcheck WHERE username = ?", [oldUsername]);
-            await conn.execute("DELETE FROM radusergroup WHERE username = ?", [oldUsername]);
-            await conn.execute("DELETE FROM radreply WHERE username = ?", [oldUsername]);
-            
-            await conn.end();
-            return { success: true, message: `User berhasil di-rename dari ${oldUsername} ke ${username}` };
+
+            return await conn.runInTransaction(async (db) => {
+                if (passwordToUse) {
+                    await db.execute(
+                        "INSERT INTO radcheck (username, attribute, op, value) VALUES (?, 'Cleartext-Password', ':=', ?) ON CONFLICT(username, attribute) DO UPDATE SET value = excluded.value",
+                        [username, passwordToUse]
+                    );
+                }
+                if (resolvedGroup) {
+                    await db.execute('DELETE FROM radusergroup WHERE username = ?', [username]);
+                    await db.execute(
+                        'INSERT INTO radusergroup (username, groupname, priority) VALUES (?, ?, 1)',
+                        [username, resolvedGroup]
+                    );
+                }
+                await db.execute('DELETE FROM radcheck WHERE username = ?', [oldUsername]);
+                await db.execute('DELETE FROM radusergroup WHERE username = ?', [oldUsername]);
+                await db.execute('DELETE FROM radreply WHERE username = ?', [oldUsername]);
+                return { success: true, message: `User berhasil di-rename dari ${oldUsername} ke ${username}` };
+            });
         }
-        
-        // Jika username tidak berubah, hanya update password dan/atau profile
+
         const usernameToUpdate = username || oldUsername;
         if (!usernameToUpdate) {
-            await conn.end();
             return { success: false, message: 'Username tidak ditemukan' };
         }
-        
-        // Update password jika diberikan
-        if (password) {
-            await conn.execute(
-                "UPDATE radcheck SET value = ? WHERE username = ? AND attribute = 'Cleartext-Password'",
-                [password, usernameToUpdate]
-            );
-        }
-        
-        // Update package/group jika diberikan (groupname harus sama persis dengan di radgroupreply)
+
+        let resolvedProfile = null;
         if (profile) {
-            const resolved = await resolveRadiusProfileGroupname(conn, profile);
-            if (!resolved) {
-                await conn.end();
+            resolvedProfile = await resolveRadiusProfileGroupname(conn, profile);
+            if (!resolvedProfile) {
                 return {
                     success: false,
                     message: `Profil "${String(profile).trim()}" tidak ditemukan di RADIUS (radgroupreply/radgroupcheck). Pilih profil dari daftar.`,
                     error: 'unknown_profile'
                 };
             }
-
-            // HAPUS SEMUA groupname untuk username ini terlebih dahulu untuk menghindari duplikasi
-            await conn.execute(
-                "DELETE FROM radusergroup WHERE username = ?",
-                [usernameToUpdate]
-            );
-
-            await conn.execute(
-                "INSERT INTO radusergroup (username, groupname, priority) VALUES (?, ?, 1)",
-                [usernameToUpdate, resolved]
-            );
         }
-        
-        await conn.end();
-        return { success: true, message: 'User berhasil di-update di RADIUS' };
+
+        return await conn.runInTransaction(async (db) => {
+            if (password) {
+                await db.execute(
+                    "INSERT INTO radcheck (username, attribute, op, value) VALUES (?, 'Cleartext-Password', ':=', ?) ON CONFLICT(username, attribute) DO UPDATE SET value = excluded.value",
+                    [usernameToUpdate, password]
+                );
+            }
+            if (resolvedProfile) {
+                await db.execute('DELETE FROM radusergroup WHERE username = ?', [usernameToUpdate]);
+                await db.execute(
+                    'INSERT INTO radusergroup (username, groupname, priority) VALUES (?, ?, 1)',
+                    [usernameToUpdate, resolvedProfile]
+                );
+            }
+            return { success: true, message: 'User berhasil di-update di RADIUS' };
+        });
     } catch (error) {
-        await conn.end();
         logger.error(`Error editing PPPoE user in RADIUS: ${error.message}`);
         throw error;
     }
@@ -3459,7 +3531,7 @@ async function addHotspotUser(username, password, profile, comment = null, custo
                             } else {
                                 runResult = await runAsync(`
                                     INSERT INTO voucher_revenue (username, price, profile, created_at, status, notes, server_name, server_metadata)
-                                    VALUES (?, ?, ?, datetime('now'), ?, ?, ?, ?)
+                                    VALUES (?, ?, ?, datetime('now','localtime'), ?, ?, ?, ?)
                                 `, [
                                     username,
                                     voucherPrice,
@@ -3541,7 +3613,7 @@ async function addHotspotUser(username, password, profile, comment = null, custo
                                 } else {
                                     const insertResult = await runAsync(`
                                         INSERT INTO voucher_revenue (username, price, profile, created_at, status, notes, server_name, server_metadata)
-                                        VALUES (?, ?, ?, datetime('now'), ?, ?, ?, ?)
+                                        VALUES (?, ?, ?, datetime('now','localtime'), ?, ?, ?, ?)
                                     `, [
                                         username,
                                         voucherPrice,
@@ -3853,6 +3925,15 @@ async function setPPPoEProfile(username, profile) {
 let lastActivePPPoE = [];
 async function monitorPPPoEConnections() {
     try {
+        if (!isPppoeLoginLogoutWaEnabled()) {
+            if (monitorInterval) {
+                clearInterval(monitorInterval);
+                monitorInterval = null;
+            }
+            logger.info('Legacy PPPoE WA monitoring is disabled by master switch');
+            return;
+        }
+
         // Cek ENV untuk enable/disable monitoring
         const monitorEnableRaw = getSetting('pppoe_monitor_enable', true);
         const monitorEnable = typeof monitorEnableRaw === 'string'
@@ -3863,8 +3944,12 @@ async function monitorPPPoEConnections() {
             return;
         }
         // Dapatkan interval monitoring dari konfigurasi dalam menit, konversi ke milidetik
-        const intervalMinutes = parseFloat(getSetting('pppoe_monitor_interval_minutes', '1'));
-        const interval = intervalMinutes * 60 * 1000; // Convert minutes to milliseconds
+        const configuredIntervalMinutes = parseFloat(getSetting('pppoe_monitor_interval_minutes', '1'));
+        const configuredIntervalMs = Number.isFinite(configuredIntervalMinutes) && configuredIntervalMinutes > 0
+            ? configuredIntervalMinutes * 60 * 1000
+            : 60 * 1000;
+        const interval = Math.max(configuredIntervalMs, MIN_MONITOR_INTERVAL_MS);
+        const intervalMinutes = interval / (60 * 1000);
         
         console.log(`📋 Starting PPPoE monitoring (interval: ${intervalMinutes} menit / ${interval/1000}s)`);
         
@@ -3876,6 +3961,11 @@ async function monitorPPPoEConnections() {
         // Set interval untuk monitoring
         monitorInterval = setInterval(async () => {
             try {
+                if (!isPppoeLoginLogoutWaEnabled()) {
+                    logger.debug('Legacy PPPoE WA monitoring master switch is off, skipping check');
+                    return;
+                }
+
                 // Dapatkan koneksi PPPoE aktif
                 const connections = await getActivePPPoEConnections();
                 if (!connections.success) {
@@ -6612,8 +6702,8 @@ async function ensureHotspotServerProfilesTable(conn) {
                         copy_from TEXT NULL,
                         disabled BOOLEAN DEFAULT 0,
                         comment TEXT NULL,
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                        created_at DATETIME DEFAULT (datetime('now','localtime')),
+                        updated_at DATETIME DEFAULT (datetime('now','localtime'))
                     )
                 `);
                 logger.info('✅ Tabel hotspot_server_profiles berhasil dibuat');
@@ -6755,7 +6845,7 @@ async function editHotspotServerProfileRadius(id, profileData) {
                 name = ?, rate_limit = ?, session_timeout = ?, idle_timeout = ?,
                 shared_users = ?, open_status_page = ?, http_cookie_lifetime = ?,
                 split_user_domain = ?, status_autorefresh = ?, copy_from = ?,
-                disabled = ?, comment = ?, updated_at = CURRENT_TIMESTAMP
+                disabled = ?, comment = ?, updated_at = datetime('now','localtime')
             WHERE id = ?
         `, [
             name,
@@ -6787,7 +6877,7 @@ async function deleteHotspotServerProfileRadius(id) {
     const conn = await getRadiusConnection();
     try {
         await conn.execute(`
-            UPDATE hotspot_server_profiles SET disabled = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+            UPDATE hotspot_server_profiles SET disabled = 1, updated_at = datetime('now','localtime') WHERE id = ?
         `, [id]);
         
         await conn.end();
@@ -6885,8 +6975,8 @@ async function ensureHotspotProfilesMetadataTable(conn) {
                         dns_server TEXT NULL,
                         parent_queue TEXT NULL,
                         address_list TEXT NULL,
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                        created_at DATETIME DEFAULT (datetime('now','localtime')),
+                        updated_at DATETIME DEFAULT (datetime('now','localtime'))
                     )
                 `);
                 logger.info('✅ Tabel hotspot_profiles berhasil dibuat');
@@ -7201,8 +7291,8 @@ async function ensurePPPoEProfilesMetadataTable(conn) {
                         only_one TEXT NOT NULL DEFAULT 'default',
                         change_tcp_mss TEXT NOT NULL DEFAULT 'default',
                         use_upnp TEXT NOT NULL DEFAULT 'default',
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                        created_at DATETIME DEFAULT (datetime('now','localtime')),
+                        updated_at DATETIME DEFAULT (datetime('now','localtime'))
                     )
                 `);
                 logger.info('✅ Tabel pppoe_profiles berhasil dibuat');
@@ -9176,7 +9266,7 @@ async function generateHotspotVouchers(count, prefix, profile, server, limits = 
                                         } else {
                                             const insertResult = await runAsync(`
                                                 INSERT INTO voucher_revenue (username, price, profile, created_at, status, notes, server_name, server_metadata)
-                                                VALUES (?, ?, ?, datetime('now'), ?, ?, ?, ?)
+                                                VALUES (?, ?, ?, datetime('now','localtime'), ?, ?, ?, ?)
                                             `, [
                                                 username,
                                                 finalPrice,
@@ -9898,6 +9988,9 @@ module.exports = {
     connectToMikrotik,
     getMikrotikConnection,
     getMikrotikConnectionForRouter,
+    getCachedFullPppSecrets,
+    getCachedPppActivePrint,
+    clearPppPrintCachesForRouter,
     getMikrotikConnectionForCustomer,
     getRouterForCustomer,
     getPPPoEUsers,
@@ -9993,6 +10086,7 @@ module.exports = {
     assignPackageRadius,
     ensureIsolirProfileRadius,
     suspendUserRadius,
+    updateIsolirPreviousGroupRadius,
     unsuspendUserRadius,
     syncPackageLimitsToRadius,
     syncPackageLimitsToMikrotik,

@@ -24,8 +24,8 @@ class AgentManager {
                 address TEXT,
                 status TEXT DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'suspended')),
                 commission_rate DECIMAL(5,2) DEFAULT 5.00,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at DATETIME DEFAULT (datetime('now','localtime')),
+                updated_at DATETIME DEFAULT (datetime('now','localtime'))
             )`,
 
             // Tabel Saldo Agent
@@ -33,7 +33,7 @@ class AgentManager {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 agent_id INTEGER NOT NULL,
                 balance DECIMAL(15,2) DEFAULT 0.00,
-                last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_updated DATETIME DEFAULT (datetime('now','localtime')),
                 FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
             )`,
 
@@ -46,7 +46,7 @@ class AgentManager {
                 description TEXT,
                 reference_id TEXT,
                 status TEXT DEFAULT 'completed' CHECK (status IN ('pending', 'completed', 'failed', 'cancelled')),
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                created_at DATETIME DEFAULT (datetime('now','localtime')),
                 FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
             )`,
 
@@ -62,7 +62,7 @@ class AgentManager {
                 price DECIMAL(10,2) NOT NULL,
                 commission DECIMAL(10,2) DEFAULT 0.00,
                 status TEXT DEFAULT 'active' CHECK (status IN ('active', 'used', 'expired', 'cancelled')),
-                sold_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                sold_at DATETIME DEFAULT (datetime('now','localtime')),
                 used_at DATETIME,
                 notes TEXT,
                 FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
@@ -75,7 +75,7 @@ class AgentManager {
                 amount DECIMAL(15,2) NOT NULL,
                 status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
                 admin_notes TEXT,
-                requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                requested_at DATETIME DEFAULT (datetime('now','localtime')),
                 processed_at DATETIME,
                 processed_by INTEGER,
                 FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
@@ -92,7 +92,7 @@ class AgentManager {
                 payment_method TEXT DEFAULT 'cash',
                 notes TEXT,
                 status TEXT DEFAULT 'completed' CHECK (status IN ('completed', 'cancelled')),
-                paid_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                paid_at DATETIME DEFAULT (datetime('now','localtime')),
                 FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
                 FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE,
                 FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
@@ -106,7 +106,7 @@ class AgentManager {
                 title TEXT NOT NULL,
                 message TEXT NOT NULL,
                 is_read INTEGER DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                created_at DATETIME DEFAULT (datetime('now','localtime')),
                 FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
             )`,
             // Tabel Notifikasi Admin
@@ -117,7 +117,7 @@ class AgentManager {
                 message TEXT,
                 agent_id INTEGER,
                 status TEXT DEFAULT 'unread',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at DATETIME DEFAULT (datetime('now','localtime'))
             )`
         ];
 
@@ -274,7 +274,7 @@ class AgentManager {
                 // Update balance
                 const updateBalanceSql = `
                     UPDATE agent_balances 
-                    SET balance = balance + ?, last_updated = CURRENT_TIMESTAMP 
+                    SET balance = balance + ?, last_updated = datetime('now','localtime') 
                     WHERE agent_id = ?
                 `;
                 
@@ -369,7 +369,7 @@ class AgentManager {
                         // Update agent balance (deduct agent price)
                         const updateBalanceSql = `
                             UPDATE agent_balances 
-                            SET balance = balance - ?, last_updated = CURRENT_TIMESTAMP 
+                            SET balance = balance - ?, last_updated = datetime('now','localtime') 
                             WHERE agent_id = ?
                         `;
                         
@@ -656,7 +656,7 @@ class AgentManager {
                             // Update agent balance: potong full amount + tambah komisi
                             const updateBalanceSql = `
                                 UPDATE agent_balances 
-                                SET balance = balance - ? + ?, last_updated = CURRENT_TIMESTAMP 
+                                SET balance = balance - ? + ?, last_updated = datetime('now','localtime') 
                                 WHERE agent_id = ?
                             `;
                             
@@ -824,7 +824,7 @@ class AgentManager {
                         }
 
                         // Update invoices to paid
-                        const updateInvoiceSql = 'UPDATE invoices SET status = ?, paid_at = CURRENT_TIMESTAMP WHERE id = ?';
+                        const updateInvoiceSql = "UPDATE invoices SET status = ?, paid_at = datetime('now','localtime') WHERE id = ?";
                         let updateCount = 0;
                         
                         const updateNextInvoice = () => {
@@ -832,7 +832,7 @@ class AgentManager {
                                 // All invoices updated, now update agent balance
                                 const updateBalanceSql = `
                                     UPDATE agent_balances 
-                                    SET balance = balance - ? + ?, last_updated = CURRENT_TIMESTAMP 
+                                    SET balance = balance - ? + ?, last_updated = datetime('now','localtime') 
                                     WHERE agent_id = ?
                                 `;
                                 
@@ -987,7 +987,7 @@ class AgentManager {
                     // Update request status
                     const updateRequestSql = `
                         UPDATE agent_balance_requests 
-                        SET status = 'approved', processed_at = CURRENT_TIMESTAMP, processed_by = ?, admin_notes = ?
+                        SET status = 'approved', processed_at = datetime('now','localtime'), processed_by = ?, admin_notes = ?
                         WHERE id = ?
                     `;
                     
@@ -1001,7 +1001,7 @@ class AgentManager {
                         // Update agent balance
                         const updateBalanceSql = `
                             UPDATE agent_balances 
-                            SET balance = balance + ?, last_updated = CURRENT_TIMESTAMP 
+                            SET balance = balance + ?, last_updated = datetime('now','localtime') 
                             WHERE agent_id = ?
                         `;
                         
@@ -1259,7 +1259,7 @@ class AgentManager {
         return new Promise((resolve, reject) => {
             const sql = `
                 INSERT INTO admin_notifications (type, title, message, agent_id, status, created_at)
-                VALUES (?, ?, ?, ?, 'unread', CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, 'unread', datetime('now','localtime'))
             `;
             this.db.run(sql, [type, title, message, agentId], (err) => {
                 if (err) {
@@ -1274,7 +1274,7 @@ class AgentManager {
     // Update agent status
     async updateAgentStatus(agentId, status) {
         return new Promise((resolve, reject) => {
-            const sql = 'UPDATE agents SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?';
+            const sql = "UPDATE agents SET status = ?, updated_at = datetime('now','localtime') WHERE id = ?";
             this.db.run(sql, [status, agentId], (err) => {
                 if (err) {
                     reject(err);
@@ -1292,7 +1292,7 @@ class AgentManager {
     // Update agent
     async updateAgent(agentId, agentData) {
         return new Promise((resolve, reject) => {
-            let sql = 'UPDATE agents SET username = ?, name = ?, phone = ?, email = ?, address = ?, status = ?, updated_at = CURRENT_TIMESTAMP';
+            let sql = "UPDATE agents SET username = ?, name = ?, phone = ?, email = ?, address = ?, status = ?, updated_at = datetime('now','localtime')";
             let params = [agentData.username, agentData.name, agentData.phone, agentData.email, agentData.address, agentData.status];
             
             // Add password update if provided
@@ -1373,7 +1373,7 @@ class AgentManager {
                         // Update existing balance
                         const updateBalanceSql = `
                             UPDATE agent_balances 
-                            SET balance = balance + ?, last_updated = CURRENT_TIMESTAMP 
+                            SET balance = balance + ?, last_updated = datetime('now','localtime') 
                             WHERE agent_id = ?
                         `;
                         
@@ -1389,7 +1389,7 @@ class AgentManager {
                         // Insert new balance record
                         const insertBalanceSql = `
                             INSERT INTO agent_balances (agent_id, balance, last_updated)
-                            VALUES (?, ?, CURRENT_TIMESTAMP)
+                            VALUES (?, ?, datetime('now','localtime'))
                         `;
                         
                         db.run(insertBalanceSql, [agentId, amount], function(err) {
@@ -1475,8 +1475,8 @@ class AgentManager {
                     (SELECT COALESCE(SUM(amount), 0) FROM agent_balance_requests WHERE agent_id = ? AND status = 'approved') as total_approved_requests,
                     
                     -- Recent activity (last 30 days)
-                    (SELECT COUNT(*) FROM agent_voucher_sales WHERE agent_id = ? AND sold_at >= datetime('now', '-30 days')) as recent_voucher_sales,
-                    (SELECT COUNT(*) FROM agent_monthly_payments WHERE agent_id = ? AND paid_at >= datetime('now', '-30 days')) as recent_payments,
+                    (SELECT COUNT(*) FROM agent_voucher_sales WHERE agent_id = ? AND sold_at >= datetime('now','localtime', '-30 days')) as recent_voucher_sales,
+                    (SELECT COUNT(*) FROM agent_monthly_payments WHERE agent_id = ? AND paid_at >= datetime('now','localtime', '-30 days')) as recent_payments,
                     
                     -- Current balance
                     (SELECT COALESCE(balance, 0) FROM agent_balances WHERE agent_id = ?) as current_balance
@@ -1656,7 +1656,7 @@ class AgentManager {
                 // Update agent balance (add)
                 const updateBalanceSql = `
                     UPDATE agent_balances 
-                    SET balance = balance + ?, last_updated = CURRENT_TIMESTAMP 
+                    SET balance = balance + ?, last_updated = datetime('now','localtime') 
                     WHERE agent_id = ?
                 `;
                 this.db.run(updateBalanceSql, [amount, agentId], (err) => {

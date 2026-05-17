@@ -58,6 +58,20 @@ const billingQrUpload = multer({
 
 const settingsPath = path.join(__dirname, '../settings.json');
 const PAYMENT_GATEWAY_KEY_PREFIX = 'payment_gateway';
+const WHATSAPP_SETTING_PREFIXES = [
+    'whatsapp_',
+    'whatsapp.',
+    'pppoe_notifications',
+    'pppoe_monitor_',
+    'baileys_',
+    'wablas_',
+    'rx_power_warning',
+    'rx_power_critical',
+    'rx_power_notification_',
+    'rxpower_recap_',
+    'offline_notification_',
+    'offline_device_threshold_hours'
+];
 
 function removePaymentGatewayEntries(target) {
     if (!target || typeof target !== 'object') {
@@ -71,6 +85,54 @@ function removePaymentGatewayEntries(target) {
     });
 }
 
+function removeWhatsAppNotificationEntries(target) {
+    if (!target || typeof target !== 'object') {
+        return;
+    }
+
+    Object.keys(target).forEach((key) => {
+        if (WHATSAPP_SETTING_PREFIXES.some((prefix) => key === prefix || key.startsWith(prefix))) {
+            delete target[key];
+        }
+    });
+}
+
+/**
+ * Gabungkan key datar "parent.child" ke objek parent dan hapus duplikatnya.
+ * Contoh: hotspot_config + hotspot_config.wifi_name → satu objek hotspot_config.
+ */
+function collapseDottedKeysIntoObjects(target) {
+    if (!target || typeof target !== 'object') {
+        return;
+    }
+
+    const parents = new Set();
+    Object.keys(target).forEach((key) => {
+        const dot = key.indexOf('.');
+        if (dot > 0) {
+            parents.add(key.slice(0, dot));
+        }
+    });
+
+    parents.forEach((parentKey) => {
+        const parentVal = target[parentKey];
+        if (!parentVal || typeof parentVal !== 'object' || Array.isArray(parentVal)) {
+            return;
+        }
+        Object.keys(target).forEach((key) => {
+            if (!key.startsWith(`${parentKey}.`)) {
+                return;
+            }
+            const subKey = key.slice(parentKey.length + 1);
+            if (!subKey || subKey.includes('.')) {
+                return;
+            }
+            parentVal[subKey] = target[key];
+            delete target[key];
+        });
+    });
+}
+
 // GET: Render halaman Setting
 router.get('/', (req, res) => {
     const settings = getSettingsWithCache();
@@ -81,6 +143,9 @@ router.get('/', (req, res) => {
 router.get('/data', (req, res) => {
     try {
         const settings = { ...getSettingsWithCache() };
+        if (settings.admin_session_timeout_minutes === undefined) {
+            settings.admin_session_timeout_minutes = 60;
+        }
 
         // Hapus legacy payment gateway entries agar tidak tampil lagi di UI ini
         if (settings.payment_gateway) {
@@ -88,6 +153,8 @@ router.get('/data', (req, res) => {
             deleteSetting('payment_gateway');
         }
         removePaymentGatewayEntries(settings);
+        removeWhatsAppNotificationEntries(settings);
+        collapseDottedKeysIntoObjects(settings);
 
         res.json(settings);
     } catch (error) {
@@ -159,7 +226,8 @@ router.post('/save', async (req, res) => {
         // Merge: field baru overwrite field lama, field lama yang tidak ada di form tetap dipertahankan
         const mergedSettings = { ...oldSettings, ...newSettings };
         removePaymentGatewayEntries(mergedSettings);
-        
+        collapseDottedKeysIntoObjects(mergedSettings);
+
         // Hapus user_auth_mode dari settings.json karena sudah dialihkan ke /admin/radius
         // Mode autentikasi sekarang dikelola di /admin/radius dan disimpan di database
         if ('user_auth_mode' in mergedSettings) {
@@ -234,16 +302,9 @@ router.post('/save', async (req, res) => {
             logger.warn('Gagal reload payment gateway setelah simpan settings:', e.message);
         }
 
-        // Clear hasil validasi konfigurasi lama dari session
-        // Ini akan memaksa validasi ulang saat admin kembali ke dashboard
-        if (req.session.configValidation) {
-            console.log('🔄 [SETTINGS] Clearing old config validation results...');
-            delete req.session.configValidation;
-        }
-
-        res.json({ 
-            success: true, 
-            message: 'Pengaturan berhasil disimpan! Hasil validasi konfigurasi akan di-update saat kembali ke dashboard.',
+        res.json({
+            success: true,
+            message: 'Pengaturan berhasil disimpan!',
             missingFields: missing 
         });
 
@@ -561,8 +622,34 @@ router.use((error, req, res, next) => {
 // GET: Status WhatsApp
 router.get('/wa-status', async (req, res) => {
     try {
-        const { getWhatsAppStatus } = require('../config/whatsapp');
-        const status = getWhatsAppStatus();
+        const { getWhatsAppStatus, connectToWhatsApp } = require('../config/whatsapp');
+        const getCurrentStatus = () => getWhatsAppStatus();
+        let status = getCurrentStatus();
+        const buildQrImage = async (qrText) => {
+            if (!qrText) return null;
+            try {
+                const QRCode = require('qrcode');
+                return await QRCode.toDataURL(qrText, {
+                    width: 360,
+                    margin: 2,
+                    errorCorrectionLevel: 'M'
+                });
+            } catch (qrError) {
+                console.warn('Gagal membuat QR image:', qrError.message);
+                return null;
+            }
+        };
+        const waitForQr = async (timeoutMs = 6000) => {
+            const startedAt = Date.now();
+            while (Date.now() - startedAt < timeoutMs) {
+                const current = getCurrentStatus();
+                if (current && (current.qrCode || current.qr)) {
+                    return current;
+                }
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+            return getCurrentStatus();
+        };
         
         // Debug: Log status untuk troubleshooting
         console.log('WhatsApp Status Request:', {
@@ -577,13 +664,33 @@ router.get('/wa-status', async (req, res) => {
                 status: global.whatsappStatus.status
             } : null
         });
+
+        const settings = getSettingsWithCache();
+        const baileysEnabled = settings.baileys_enabled === true || String(settings.baileys_enabled).toLowerCase() === 'true';
+        const activeProvider = String(settings.whatsapp_active_provider || 'baileys').toLowerCase();
+        const hasQr = !!(status && (status.qrCode || status.qr));
+        const isConnected = !!(status && status.connected);
+
+        if (baileysEnabled && activeProvider === 'baileys' && !isConnected && !hasQr) {
+            const now = Date.now();
+            if (!global.__baileysQrKickAt || now - global.__baileysQrKickAt > 10000) {
+                global.__baileysQrKickAt = now;
+                console.log('Memicu koneksi Baileys dari endpoint wa-status karena QR belum tersedia');
+                connectToWhatsApp().catch((connectError) => {
+                    console.warn('Gagal memicu koneksi Baileys dari wa-status:', connectError.message);
+                });
+            }
+            status = await waitForQr();
+        }
         
         // Cek global.whatsappStatus terlebih dahulu (ini yang di-update saat QR code diterima)
         if (global.whatsappStatus && global.whatsappStatus.qrCode) {
             console.log('Using QR code from global.whatsappStatus');
+            const qrImage = await buildQrImage(global.whatsappStatus.qrCode);
             return res.json({
                 connected: false,
                 qr: global.whatsappStatus.qrCode,
+                qrImage,
                 phoneNumber: null,
                 status: global.whatsappStatus.status || 'qr_code',
                 connectedSince: null
@@ -601,6 +708,7 @@ router.get('/wa-status', async (req, res) => {
         res.json({
             connected: status?.connected || false,
             qr: qrCode,
+            qrImage: await buildQrImage(qrCode),
             phoneNumber: status?.phoneNumber || null,
             status: status?.status || 'disconnected',
             connectedSince: status?.connectedSince || null

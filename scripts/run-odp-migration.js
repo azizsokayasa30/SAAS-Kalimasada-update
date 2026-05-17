@@ -186,19 +186,22 @@ async function runMigration() {
             });
         });
         
-        // Jalankan sample data
-        console.log('📊 Inserting sample data...');
-        await new Promise((resolve, reject) => {
-            db.exec(sampleDataSQL, (err) => {
-                if (err) {
-                    console.error('❌ Sample data insertion failed:', err);
-                    reject(err);
-                } else {
-                    console.log('✅ Sample data inserted successfully');
-                    resolve();
-                }
+        if (process.argv.includes('--seed')) {
+            console.log('📊 Inserting sample data (--seed)...');
+            await new Promise((resolve, reject) => {
+                db.exec(sampleDataSQL, (err) => {
+                    if (err) {
+                        console.error('❌ Sample data insertion failed:', err);
+                        reject(err);
+                    } else {
+                        console.log('✅ Sample data inserted successfully');
+                        resolve();
+                    }
+                });
             });
-        });
+        } else {
+            console.log('ℹ️  Sample ODP tidak dimasukkan (hindari data demo kembali setelah dihapus). Pakai --seed jika perlu.');
+        }
         
         // Verifikasi tabel yang dibuat
         console.log('🔍 Verifying created tables...');

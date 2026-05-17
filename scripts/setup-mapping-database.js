@@ -48,19 +48,28 @@ async function setupMappingDatabase() {
                 }
                 
                 console.log('📊 Created tables:', rows.map(r => r.name).join(', '));
-                
-                // Insert sample data if tables are empty
-                insertSampleData(db).then(() => {
+
+                const seedDemo = process.argv.includes('--seed');
+                const afterSetup = () => {
                     db.close((err) => {
                         if (err) {
                             console.error('❌ Error closing database:', err);
                             reject(err);
                         } else {
                             console.log('✅ Database setup completed successfully');
+                            if (!seedDemo) {
+                                console.log('ℹ️  Tanpa data demo. Untuk sample ODP: node scripts/setup-mapping-database.js --seed');
+                            }
                             resolve();
                         }
                     });
-                }).catch(reject);
+                };
+
+                if (seedDemo) {
+                    insertSampleData(db).then(afterSetup).catch(reject);
+                } else {
+                    afterSetup();
+                }
             });
         });
     });

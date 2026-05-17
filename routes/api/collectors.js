@@ -180,7 +180,10 @@ router.post('/payment', verifyToken, async (req, res) => {
                 const unpaid = (await billingManager.getInvoicesByCustomer(Number(customer_id))).filter(i => i.status === 'unpaid');
                 if (unpaid.length === 0) {
                     const cust = await billingManager.getCustomerById(Number(customer_id));
-                    if (cust && cust.status === 'suspended') await serviceSuspension.restoreCustomerService(cust);
+                    const { shouldAutoRestoreCustomer } = require('../../utils/customerSuspendReason');
+                    if (shouldAutoRestoreCustomer(cust)) {
+                        await serviceSuspension.restoreCustomerService(cust);
+                    }
                 }
             }, 1000);
         }

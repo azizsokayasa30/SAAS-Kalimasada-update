@@ -248,7 +248,7 @@ router.patch('/jobs/:id', verifyToken, async (req, res) => {
                     });
                 }
 
-                const updateSql = `UPDATE installation_jobs SET status = ?, notes = ?, odp = ?, sn = ?, signal_level = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND assigned_technician_id = ?`;
+                const updateSql = `UPDATE installation_jobs SET status = ?, notes = ?, odp = ?, sn = ?, signal_level = ?, updated_at = datetime('now','localtime') WHERE id = ? AND assigned_technician_id = ?`;
                 db.run(updateSql, [status, JSON.stringify(currentNotes), odp, sn, signal_level, id, technicianId], function(err) {
                     db.close();
                     if (err) {

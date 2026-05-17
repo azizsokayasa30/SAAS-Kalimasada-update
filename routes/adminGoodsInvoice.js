@@ -211,7 +211,7 @@ router.put('/api/:id/status', adminAuth, (req, res) => {
     const isPaid = status === 'paid';
     const paymentDate = isPaid ? new Date().toISOString() : null;
 
-    db.run(`UPDATE goods_invoices SET status = ?, payment_method = ?, payment_date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, 
+    db.run(`UPDATE goods_invoices SET status = ?, payment_method = ?, payment_date = ?, updated_at = datetime('now','localtime') WHERE id = ?`, 
         [status, payment_method || null, paymentDate, req.params.id], function(err) {
         db.close();
         if (err) return res.status(500).json({ error: err.message });

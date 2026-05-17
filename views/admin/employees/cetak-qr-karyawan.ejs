@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cetak QR Karyawan<%= single ? ' — ' + single.nama_lengkap : '' %></title>
+    <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.min.css" rel="stylesheet">
+    <style>
+        @media print {
+            .no-print { display: none !important; }
+            .qr-cell { break-inside: avoid; page-break-inside: avoid; }
+        }
+        .qr-grid { display: flex; flex-wrap: wrap; gap: 16px; }
+        .qr-cell {
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+            width: 200px;
+        }
+        .qr-cell img { width: 150px; height: 150px; }
+        .qr-code-txt { font-size: 9px; word-break: break-all; font-family: monospace; }
+        .emp-name { font-weight: 600; font-size: 0.95rem; }
+        .emp-meta { font-size: 0.75rem; color: #555; }
+    </style>
+</head>
+<body class="p-3">
+<div class="no-print mb-3 d-flex gap-2 align-items-center flex-wrap">
+    <button type="button" class="btn btn-primary" onclick="window.print()"><i class="bi bi-printer"></i> Cetak</button>
+    <a class="btn btn-outline-secondary" href="/admin/employees">Kembali ke Karyawan</a>
+    <% if (!single) { %>
+        <span class="text-muted small">Semua karyawan aktif — tempel badge di ID card</span>
+    <% } %>
+</div>
+<h5 class="mb-3">QR Kartu Karyawan</h5>
+<div class="qr-grid">
+    <% (employees || []).forEach(function (emp) { %>
+        <div class="qr-cell">
+            <div class="emp-name"><%= emp.nama_lengkap %></div>
+            <div class="emp-meta mb-2"><%= emp.jabatan || '-' %> · NIK <%= emp.nik %></div>
+            <img src="<%= qrBaseUrl %><%= encodeURIComponent(emp.public_code) %>" alt="QR" width="150" height="150">
+            <div class="qr-code-txt mt-2"><%= emp.public_code %></div>
+        </div>
+    <% }); %>
+</div>
+</body>
+</html>

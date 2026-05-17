@@ -137,28 +137,12 @@ function getServerTimezone() {
     }
 }
 
-// Helper function untuk mendapatkan timestamp lokal WIB yang benar
-// Gunakan fungsi ini sebagai pengganti new Date().toISOString() di seluruh aplikasi
-// Format: YYYY-MM-DD HH:mm:ss — zona: settings app_timezone, lalu server (bukan UTC murni), default Asia/Jakarta
+// Helper function untuk mendapatkan timestamp WIB yang konsisten.
+// Gunakan fungsi ini sebagai pengganti new Date().toISOString() / datetime('now','localtime') untuk data aplikasi.
+// Format: YYYY-MM-DD HH:mm:ss — zona tetap Asia/Jakarta (WIB).
 function getLocalTimestamp(date = null) {
     const d = date ? new Date(date) : new Date();
-    let tz = 'Asia/Jakarta';
-    try {
-        const fromSettings = getSetting('app_timezone', '');
-        if (fromSettings && typeof fromSettings === 'string' && fromSettings.trim()) {
-            tz = fromSettings.trim();
-        } else {
-            const serverTz = getServerTimezone() || 'Asia/Jakarta';
-            const lower = serverTz.toLowerCase();
-            if (lower === 'utc' || lower === 'etc/utc' || lower.endsWith('/utc')) {
-                tz = 'Asia/Jakarta';
-            } else {
-                tz = serverTz;
-            }
-        }
-    } catch (e) {
-        tz = 'Asia/Jakarta';
-    }
+    const tz = 'Asia/Jakarta';
     const parts = new Intl.DateTimeFormat('en-CA', {
         timeZone: tz,
         year: 'numeric',

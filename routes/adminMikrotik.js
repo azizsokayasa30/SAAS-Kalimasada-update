@@ -27,7 +27,10 @@ const {
     editHotspotServer,
     deleteHotspotServer,
     getHotspotServerDetail,
-    getMikrotikConnectionForRouter
+    getMikrotikConnectionForRouter,
+    getCachedFullPppSecrets,
+    getCachedPppActivePrint,
+    clearPppPrintCachesForRouter
 } = require('../config/mikrotik');
 const fs = require('fs');
 const path = require('path');
@@ -93,18 +96,71 @@ function convertToSeconds(value, unit) {
   return numValue * multiplier;
 }
 
+const PPPOE_PAGE_CACHE_MS = 45000;
+const ROUTER_QUERY_TIMEOUT_MS = 9000;
+let _pppoeAdminPageCache = null;
+let _pppoeProfilesApiCache = null;
+const PPPOE_PROFILES_CACHE_MS = 60000;
+
+function clearPppoeAdminPageCache() {
+  _pppoeAdminPageCache = null;
+  _pppoeProfilesApiCache = null;
+}
+
+function getPppoeAdminPageCache(authMode) {
+  if (!_pppoeAdminPageCache) return null;
+  if (_pppoeAdminPageCache.authMode !== authMode) return null;
+  if (Date.now() - _pppoeAdminPageCache.ts > PPPOE_PAGE_CACHE_MS) return null;
+  return _pppoeAdminPageCache;
+}
+
+function withRouterTimeout(promise, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timeout (${ROUTER_QUERY_TIMEOUT_MS}ms)`)), ROUTER_QUERY_TIMEOUT_MS)
+    )
+  ]);
+}
+
+function computeUserStats(users) {
+  const list = Array.isArray(users) ? users : [];
+  const activeUsers = list.filter((u) => u && u.active).length;
+  return {
+    totalUsers: list.length,
+    activeUsers,
+    offlineUsers: Math.max(list.length - activeUsers, 0),
+    profileCount: new Set(list.map((u) => (u && u.profile) || '').filter(Boolean)).size
+  };
+}
+
 // GET: List User PPPoE
 router.get('/mikrotik', adminAuth, async (req, res) => {
   try {
     // Check auth mode
     const { getUserAuthModeAsync, getPPPoEUsersRadius, getActivePPPoEConnectionsRadius } = require('../config/mikrotik');
     const authMode = await getUserAuthModeAsync();
-    
-    logger.info(`Loading PPPoE users in ${authMode} mode`);
-    
+    const forceRefresh = String(req.query.refresh || '') === '1';
+
+    const cached = !forceRefresh ? getPppoeAdminPageCache(authMode) : null;
+    if (cached) {
+      const settings = getSettingsWithCache();
+      return res.render('adminMikrotik', {
+        users: cached.combined,
+        routers: cached.routers,
+        authMode,
+        userStats: cached.userStats,
+        settings,
+        versionInfo: getVersionInfo(),
+        versionBadge: getVersionBadge()
+      });
+    }
+
+    logger.info(`Loading PPPoE users in ${authMode} mode${forceRefresh ? ' (refresh)' : ''}`);
+
     let combined = [];
     let routers = [];
-    
+
     if (authMode === 'radius') {
       // RADIUS mode: Get users from RADIUS database
       logger.info('RADIUS mode: Loading users from RADIUS database');
@@ -153,15 +209,16 @@ router.get('/mikrotik', adminAuth, async (req, res) => {
       // OPTIMASI: Query semua router secara parallel (bukan sequential)
       // Sebelum: 5 router × 2 detik = 10 detik
       // Sesudah: Max(2 detik) = 2 detik (5x lebih cepat)
-      const routerQueries = routers.map(async (r) => {
+      const routerQueries = routers.map((r) => withRouterTimeout((async () => {
         try {
           const conn = await getMikrotikConnectionForRouter(r);
+          const cacheKey = `admin_${r.id}`;
           const [secrets, active] = await Promise.all([
-            conn.write('/ppp/secret/print'),
-            conn.write('/ppp/active/print')
+            getCachedFullPppSecrets(conn, cacheKey),
+            getCachedPppActivePrint(conn, cacheKey)
           ]);
-          const activeNames = new Set((active || []).map(a => a.name));
-          const routerUsers = (secrets || []).map(sec => ({
+          const activeNames = new Set((active || []).map((a) => a.name));
+          const routerUsers = (secrets || []).map((sec) => ({
             id: sec['.id'],
             name: sec.name,
             password: sec.password,
@@ -174,10 +231,9 @@ router.get('/mikrotik', adminAuth, async (req, res) => {
           return routerUsers;
         } catch (e) {
           logger.error(`Error getting users from router ${r.name}:`, e.message);
-          // Return empty array jika router gagal, bukan throw error
           return [];
         }
-      });
+      })(), r.name));
 
       // Tunggu semua query selesai secara parallel
       const allRouterResults = await Promise.all(routerQueries);
@@ -186,20 +242,23 @@ router.get('/mikrotik', adminAuth, async (req, res) => {
       combined = allRouterResults.flat();
     }
     
+    const userStats = computeUserStats(combined);
     logger.info(`Total users to display: ${combined.length}`);
-    
-    // Debug: Log first few users
-    if (combined.length > 0) {
-      logger.info(`Sample users: ${JSON.stringify(combined.slice(0, 3).map(u => ({ name: u.name, profile: u.profile })))}`);
-    } else {
-      logger.warn('No users found to display!');
-    }
-    
+
+    _pppoeAdminPageCache = {
+      ts: Date.now(),
+      authMode,
+      combined,
+      routers,
+      userStats
+    };
+
     const settings = getSettingsWithCache();
-    res.render('adminMikrotik', { 
-      users: combined, 
+    res.render('adminMikrotik', {
+      users: combined,
       routers: routers,
-      authMode: authMode, // Pass auth mode to view
+      authMode: authMode,
+      userStats,
       settings,
       versionInfo: getVersionInfo(),
       versionBadge: getVersionBadge()
@@ -208,11 +267,12 @@ router.get('/mikrotik', adminAuth, async (req, res) => {
     logger.error('Error loading PPPoE users:', err);
     logger.error('Error stack:', err.stack);
     const settings = getSettingsWithCache();
-    res.render('adminMikrotik', { 
-      users: [], 
+    res.render('adminMikrotik', {
+      users: [],
       routers: [],
       authMode: 'mikrotik',
-      error: `Gagal mengambil data user PPPoE: ${err.message}`, 
+      userStats: { totalUsers: 0, activeUsers: 0, offlineUsers: 0, profileCount: 0 },
+      error: `Gagal mengambil data user PPPoE: ${err.message}`,
       settings,
       versionInfo: getVersionInfo(),
       versionBadge: getVersionBadge()
@@ -234,6 +294,7 @@ router.post('/mikrotik/add-user', adminAuth, async (req, res) => {
       logger.info('RADIUS mode: Adding user to RADIUS database');
       const result = await addPPPoEUser({ username, password, profile });
       if (result.success) {
+        clearPppoeAdminPageCache();
         return res.json({ success: true, message: result.message });
       } else {
         return res.json({ success: false, message: result.message });
@@ -252,6 +313,8 @@ router.post('/mikrotik/add-user', adminAuth, async (req, res) => {
     }
     
     await addPPPoEUser({ username, password, profile, routerObj: router });
+    clearPppoeAdminPageCache();
+    clearPppPrintCachesForRouter(router.id);
     res.json({ success: true });
   } catch (err) {
     logger.error('Error adding PPPoE user:', err);
@@ -279,6 +342,7 @@ router.post('/mikrotik/edit-user', adminAuth, async (req, res) => {
       logger.info(`RADIUS mode: Updating user in RADIUS database. Old username: ${id}, New username: ${username}`);
       const result = await editPPPoEUser({ id, username, password, profile });
       if (result.success) {
+        clearPppoeAdminPageCache();
         return res.json({ success: true, message: result.message });
       } else {
         return res.json({ success: false, message: result.message });
@@ -289,6 +353,7 @@ router.post('/mikrotik/edit-user', adminAuth, async (req, res) => {
     logger.info(`Mikrotik API mode: Updating user. ID: ${id}, Username: ${username}`);
     const result = await editPPPoEUser({ id, username, password, profile });
     if (result.success) {
+      clearPppoeAdminPageCache();
       return res.json({ success: true, message: result.message || 'User berhasil di-update' });
     } else {
       return res.json({ success: false, message: result.message || 'Gagal mengupdate user' });
@@ -314,6 +379,7 @@ router.post('/mikrotik/delete-user', adminAuth, async (req, res) => {
       logger.info('RADIUS mode: Deleting user from RADIUS database');
       const result = await deletePPPoEUser(id); // In RADIUS mode, id is username
       if (result.success) {
+        clearPppoeAdminPageCache();
         return res.json({ success: true, message: result.message });
       } else {
         return res.json({ success: false, message: result.message });
@@ -322,6 +388,7 @@ router.post('/mikrotik/delete-user', adminAuth, async (req, res) => {
     
     // Mikrotik API mode
     await deletePPPoEUser(id);
+    clearPppoeAdminPageCache();
     res.json({ success: true });
   } catch (err) {
     logger.error('Error deleting PPPoE user:', err);
@@ -422,7 +489,8 @@ router.get('/mikrotik/profiles', adminAuth, async (req, res) => {
 router.get('/mikrotik/profiles/api', adminAuth, async (req, res) => {
   try {
     const { router_id } = req.query;
-    
+    const forceRefresh = String(req.query.refresh || '') === '1';
+
     // Check if system is in RADIUS mode
     const { getUserAuthModeAsync } = require('../config/mikrotik');
     const authMode = await getUserAuthModeAsync();
@@ -450,7 +518,13 @@ router.get('/mikrotik/profiles/api', adminAuth, async (req, res) => {
         });
       }
     }
-    
+
+    if (!router_id && !forceRefresh && _pppoeProfilesApiCache
+        && _pppoeProfilesApiCache.authMode === authMode
+        && Date.now() - _pppoeProfilesApiCache.ts < PPPOE_PROFILES_CACHE_MS) {
+      return res.json(_pppoeProfilesApiCache.payload);
+    }
+
     // If router_id is provided, only fetch from that router
     if (router_id) {
       const routerObj = await new Promise((resolve) => billingManager.db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
@@ -485,44 +559,55 @@ router.get('/mikrotik/profiles/api', adminAuth, async (req, res) => {
         });
       }
       
-      // Try to fetch from routers, aggregate results
+      const profileResults = await Promise.all(
+        routers.map((router) =>
+          withRouterTimeout(
+            getPPPoEProfiles(router).then((result) => ({ router, result })),
+            router.name
+          ).catch((routerError) => ({
+            router,
+            error: routerError.message
+          }))
+        )
+      );
+
       let allProfiles = [];
-      let errors = [];
-      
-      for (const router of routers) {
-        try {
-          const result = await getPPPoEProfiles(router);
-          if (result.success && Array.isArray(result.data)) {
-            allProfiles = allProfiles.concat(result.data.map(prof => ({
+      const errors = [];
+
+      profileResults.forEach((entry) => {
+        if (entry.error) {
+          errors.push(`${entry.router.name}: ${entry.error}`);
+          return;
+        }
+        const { router, result } = entry;
+        if (result.success && Array.isArray(result.data)) {
+          allProfiles = allProfiles.concat(
+            result.data.map((prof) => ({
               ...prof,
               nas_id: router.id,
               nas_name: router.name,
               nas_ip: router.nas_ip
-            })));
-          } else {
-            errors.push(`${router.name}: ${result.message || 'Unknown error'}`);
-          }
-        } catch (routerError) {
-          logger.warn(`Error getting profiles from router ${router.name}:`, routerError.message);
-          errors.push(`${router.name}: ${routerError.message}`);
+            }))
+          );
+        } else {
+          errors.push(`${router.name}: ${result.message || 'Unknown error'}`);
         }
-      }
-      
-      // Return profiles even if some routers failed
-      if (allProfiles.length > 0 || errors.length === 0) {
-        return res.json({ 
-          success: true, 
-          profiles: allProfiles,
-          message: errors.length > 0 ? `Beberapa router tidak dapat diakses: ${errors.join(', ')}` : undefined
-        });
-      } else {
-        // All routers failed, but return empty array to prevent UI blocking
-        return res.json({ 
-          success: true, 
-          profiles: [], 
-          message: `Tidak dapat mengambil profile dari router: ${errors.join(', ')}. Pastikan router dapat diakses dan kredensial benar.` 
-        });
-      }
+      });
+
+      const payload = allProfiles.length > 0 || errors.length === 0
+        ? {
+            success: true,
+            profiles: allProfiles,
+            message: errors.length > 0 ? `Beberapa router tidak dapat diakses: ${errors.join(', ')}` : undefined
+          }
+        : {
+            success: true,
+            profiles: [],
+            message: `Tidak dapat mengambil profile dari router: ${errors.join(', ')}. Pastikan router dapat diakses dan kredensial benar.`
+          };
+
+      _pppoeProfilesApiCache = { ts: Date.now(), authMode, payload };
+      return res.json(payload);
     }
   } catch (err) {
     logger.error('Error in /mikrotik/profiles/api:', err);
@@ -1075,7 +1160,19 @@ router.get('/mikrotik/user-stats', adminAuth, async (req, res) => {
     // Check auth mode
     const { getUserAuthModeAsync, getRadiusStatistics } = require('../config/mikrotik');
     const authMode = await getUserAuthModeAsync();
-    
+    const forceRefresh = String(req.query.refresh || '') === '1';
+
+    const pageCached = !forceRefresh ? getPppoeAdminPageCache(authMode) : null;
+    if (pageCached && pageCached.userStats) {
+      return res.json({
+        success: true,
+        totalUsers: pageCached.userStats.totalUsers,
+        activeUsers: pageCached.userStats.activeUsers,
+        offlineUsers: pageCached.userStats.offlineUsers,
+        profileCount: pageCached.userStats.profileCount
+      });
+    }
+
     if (authMode === 'radius') {
       // RADIUS mode: Get statistics from RADIUS database
       logger.info('RADIUS mode: Getting user statistics from RADIUS database');
@@ -1098,28 +1195,44 @@ router.get('/mikrotik/user-stats', adminAuth, async (req, res) => {
       }
     }
     
-    // Mikrotik API mode: Get statistics from routers
     logger.info('Mikrotik API mode: Getting user statistics from routers');
-    const routers = await new Promise((resolve) => billingManager.db.all('SELECT * FROM routers ORDER BY id', (err, rows) => resolve(rows || [])));
-    let totalUsers = 0, activeUsers = 0;
-    for (const r of routers) {
-      try {
-        const conn = await getMikrotikConnectionForRouter(r);
-        const [secrets, active] = await Promise.all([
-          conn.write('/ppp/secret/print'),
-          conn.write('/ppp/active/print')
-        ]);
-        totalUsers += Array.isArray(secrets) ? secrets.length : 0;
-        activeUsers += Array.isArray(active) ? active.length : 0;
-      } catch (_) {}
-    }
+    const routers = await getAllRoutersHelper();
+    const routerStats = await Promise.all(
+      routers.map((r) =>
+        withRouterTimeout(
+          (async () => {
+            const conn = await getMikrotikConnectionForRouter(r);
+            const cacheKey = `admin_${r.id}`;
+            const [secrets, active] = await Promise.all([
+              getCachedFullPppSecrets(conn, cacheKey),
+              getCachedPppActivePrint(conn, cacheKey)
+            ]);
+            return {
+              total: Array.isArray(secrets) ? secrets.length : 0,
+              active: Array.isArray(active) ? active.length : 0
+            };
+          })(),
+          r.name
+        ).catch(() => ({ total: 0, active: 0 }))
+      )
+    );
+    let totalUsers = 0;
+    let activeUsers = 0;
+    routerStats.forEach((s) => {
+      totalUsers += s.total;
+      activeUsers += s.active;
+    });
     const offlineUsers = Math.max(totalUsers - activeUsers, 0);
-    
-    res.json({ 
-      success: true, 
-      totalUsers, 
-      activeUsers, 
-      offlineUsers 
+    const profileCount = _pppoeProfilesApiCache && _pppoeProfilesApiCache.payload && Array.isArray(_pppoeProfilesApiCache.payload.profiles)
+      ? _pppoeProfilesApiCache.payload.profiles.length
+      : 0;
+
+    res.json({
+      success: true,
+      totalUsers,
+      activeUsers,
+      offlineUsers,
+      profileCount
     });
   } catch (err) {
     logger.error('Error getting PPPoE user stats:', err);
@@ -1161,8 +1274,8 @@ function ensureHotspotServersTable(db) {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE,
         description TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        created_at DATETIME DEFAULT (datetime('now','localtime')),
+        updated_at DATETIME DEFAULT (datetime('now','localtime'))
       )
     `, (err) => {
       if (err) reject(err);
@@ -1786,7 +1899,7 @@ router.post('/mikrotik/hotspot-server-profiles/edit-server', adminAuth, async (r
     // Update server hotspot
     await new Promise((resolve, reject) => {
       billingManager.db.run(
-        'UPDATE hotspot_servers SET name = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        "UPDATE hotspot_servers SET name = ?, description = ?, updated_at = datetime('now','localtime') WHERE id = ?",
         [name.trim(), description ? description.trim() : null, parseInt(id)],
         function(err) {
           if (err) reject(err);

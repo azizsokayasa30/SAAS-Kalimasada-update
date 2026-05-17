@@ -48,6 +48,13 @@
             font-size: 0.75rem;
             padding: 0.3rem 0.5rem;
         }
+        .badge.status-badge.installation-badge-selesai,
+        html[data-theme="dark"] .main-content .badge.installation-badge-selesai,
+        html[data-theme="light"] .main-content .badge.installation-badge-selesai {
+            background-color: #198754 !important;
+            color: #ffffff !important;
+            border: 0 !important;
+        }
 
         .detail-card {
             border: none;
@@ -167,7 +174,8 @@
                 if (h > 0) return h + ' jam';
                 return m + ' menit';
               }
-              const wsRaw = job.work_started_at;
+              /* work_started_at: isi dari app mobile / API; jika NULL tapi status proses, fallback ke updated_at (jalur admin/teknisi web lama). */
+              const wsRaw = job.work_started_at || (String(job.status || '').toLowerCase().trim() === 'in_progress' && job.updated_at ? job.updated_at : null);
               const startInstall = parseDbDateInstall(wsRaw);
               const endInstall = parseDbDateInstall(job.updated_at);
               const mobileDurRaw = job.work_duration_seconds != null && job.work_duration_seconds !== ''
@@ -220,17 +228,18 @@
                         </p>
                     </div>
                     <div class="col-md-4 text-md-end mt-2 mt-md-0">
+                        <% const _hdrSt = String(job.status || '').toLowerCase().trim(); %>
                         <span class="badge status-badge 
-                            <%= job.status === 'scheduled' ? 'bg-warning' : '' %>
-                            <%= job.status === 'assigned' ? 'bg-info' : '' %>
-                            <%= job.status === 'in_progress' ? 'bg-primary' : '' %>
-                            <%= job.status === 'completed' ? 'bg-success' : '' %>
-                            <%= job.status === 'cancelled' ? 'bg-danger' : '' %>">
-                            <%= job.status === 'scheduled' ? 'Terjadwal' : '' %>
-                            <%= job.status === 'assigned' ? 'Ditugaskan' : '' %>
-                            <%= job.status === 'in_progress' ? 'Sedang Proses' : '' %>
-                            <%= job.status === 'completed' ? 'Selesai' : '' %>
-                            <%= job.status === 'cancelled' ? 'Dibatalkan' : '' %>
+                            <%= _hdrSt === 'scheduled' ? 'bg-warning' : '' %>
+                            <%= _hdrSt === 'assigned' ? 'bg-info' : '' %>
+                            <%= _hdrSt === 'in_progress' ? 'bg-primary' : '' %>
+                            <%= _hdrSt === 'completed' ? 'installation-badge-selesai' : '' %>
+                            <%= _hdrSt === 'cancelled' ? 'bg-danger' : '' %>">
+                            <%= _hdrSt === 'scheduled' ? 'Terjadwal' : '' %>
+                            <%= _hdrSt === 'assigned' ? 'Ditugaskan' : '' %>
+                            <%= _hdrSt === 'in_progress' ? 'Sedang Proses' : '' %>
+                            <%= _hdrSt === 'completed' ? 'Selesai' : '' %>
+                            <%= _hdrSt === 'cancelled' ? 'Dibatalkan' : '' %>
                         </span>
                         <% if (job.priority) { %>
                             <br><span class="badge priority-badge priority-<%= job.priority %> mt-1">
@@ -321,8 +330,8 @@
                                 <div class="col-md-6">
                                     <div class="detail-section">
                                         <strong>Waktu mulai di lapangan (app teknisi):</strong><br>
-                                        <%= job.work_started_at ? formatDbLocalWallClock(job.work_started_at) : '—' %>
-                                        <br><small class="text-muted">Dicatat saat teknisi mengetuk mulai / progres di aplikasi mobile.</small>
+                                        <%= wsRaw ? formatDbLocalWallClock(wsRaw) : '—' %>
+                                        <br><small class="text-muted">Dicatat saat teknisi mengetuk mulai / progres di aplikasi mobile.<% if (!job.work_started_at && wsRaw) { %><br><span class="text-warning">Perkiraan dari pembaruan terakhir (kolom waktu mulai sebelumnya kosong).</span><% } %></small>
                                     </div>
                                     <div class="detail-section">
                                         <strong>Durasi pengerjaan:</strong><br>
@@ -454,13 +463,22 @@
                         <div class="card-body">
                             <% if (statusHistory && statusHistory.length > 0) { %>
                                 <% statusHistory.forEach(history => { %>
+                                    <% 
+                                      const _hOld = String(history.old_status || '').toLowerCase().trim();
+                                      const _hNew = String(history.new_status || '').toLowerCase().trim();
+                                      const _hBy = String(history.changed_by_type || '').toLowerCase().trim();
+                                      const _hPendingFromTech = _hOld === 'in_progress' && _hNew === 'assigned' && _hBy === 'technician';
+                                      const _hResumeFromTech = _hNew === 'in_progress' && _hBy === 'technician' && (_hOld === 'assigned' || _hOld === 'scheduled');
+                                      const _hResumeFromAdmin = _hNew === 'in_progress' && _hBy === 'admin';
+                                    %>
                                     <div class="history-item <%= history.new_status %>">
                                         <div class="d-flex justify-content-between align-items-start">
                                             <div>
-                                                <strong>Status berubah dari <%= history.old_status %> ke <%= history.new_status %></strong><br>
+                                                <strong><% if (_hPendingFromTech) { %>Tugas ter-pending — Status berubah dari <%= history.old_status %> ke <%= history.new_status %> lagi<% } else if (_hResumeFromTech) { %>Tugas dijalankan kembali — Status berubah dari <%= history.old_status %> ke <%= history.new_status %><% } else if (_hResumeFromAdmin) { %>Pengerjaan dimulai — Status berubah dari <%= history.old_status %> ke <%= history.new_status %> (admin)<% } else { %>Status berubah dari <%= history.old_status %> ke <%= history.new_status %><% } %></strong><br>
                                                 <small class="text-muted">
                                                     <i class="bi bi-clock me-1"></i>
-                                                    <%= formatDbLocalWallClock(history.created_at) %>
+                                                    <%= formatDbUtcToJakartaDateTime(history.created_at) %>
+                                                    <span class="ms-1">(WIB)</span>
                                                 </small>
                                                 <% if (history.notes) { %>
                                                     <br><small class="text-muted"><%= history.notes %></small>

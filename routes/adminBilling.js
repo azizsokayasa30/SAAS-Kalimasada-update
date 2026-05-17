@@ -607,7 +607,7 @@ router.post('/api/collector-payment', adminAuth, async (req, res) => {
                 INSERT INTO collector_payments (
                     collector_id, customer_id, amount, payment_amount, commission_amount,
                     payment_method, notes, status, collected_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', CURRENT_TIMESTAMP)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', datetime('now','localtime'))
             `, [collector_id, customer_id, paymentAmountNum, paymentAmountNum, commissionAmount, payment_method, notes], function(err) {
                 if (err) reject(err);
                 else resolve(this.lastID);
@@ -1935,7 +1935,7 @@ router.get('/api/revenue/summary', adminAuth, async (req, res) => {
                 db.get(`
                     SELECT COALESCE(SUM(amount),0) AS total
                     FROM payments
-                    WHERE strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now')
+                    WHERE strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now', 'localtime')
                 `, [], (err, row) => err ? reject(err) : resolve(row?.total || 0));
             }),
         ]);
@@ -3256,7 +3256,7 @@ router.post('/import/customers/xlsx', upload.single('file'), async (req, res) =>
                 failed_count INTEGER NOT NULL DEFAULT 0,
                 created_ids_json TEXT NOT NULL DEFAULT '[]',
                 updated_before_json TEXT NOT NULL DEFAULT '[]',
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
             )
         `);
         const useAtomicImport = !importFastMode;
@@ -4014,7 +4014,7 @@ router.post('/import/customers/json', upload.single('file'), async (req, res) =>
                 failed_count INTEGER NOT NULL DEFAULT 0,
                 created_ids_json TEXT NOT NULL DEFAULT '[]',
                 updated_before_json TEXT NOT NULL DEFAULT '[]',
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
             )
         `);
         const useAtomicImport = !importFastMode;
@@ -4566,6 +4566,49 @@ router.get('/whatsapp-settings', getAppSettings, async (req, res) => {
     }
 });
 
+router.get('/whatsapp-settings/gateway', async (req, res) => {
+    try {
+        const { getWhatsAppProviderSettings } = require('../config/whatsapp-provider-settings');
+        const providerSettings = getWhatsAppProviderSettings();
+        res.json({
+            success: true,
+            settings: providerSettings,
+            providers: providerSettings.providers
+        });
+    } catch (error) {
+        logger.error('Error getting WhatsApp gateway settings:', error);
+        res.status(500).json({ success: false, message: 'Error getting WhatsApp gateway settings: ' + error.message });
+    }
+});
+
+router.post('/whatsapp-settings/gateway', async (req, res) => {
+    try {
+        const { saveWhatsAppProviderSettings } = require('../config/whatsapp-provider-settings');
+        const providerSettings = saveWhatsAppProviderSettings(req.body || {});
+        clearSettingsCache();
+
+        try {
+            const { getProviderManager } = require('../config/whatsapp-provider-manager');
+            const providerManager = getProviderManager();
+            if (providerManager.isInitialized()) {
+                await providerManager.switchProvider(providerSettings.activeProvider);
+            }
+        } catch (switchError) {
+            logger.warn('WhatsApp provider saved but could not hot-switch provider:', switchError.message);
+        }
+
+        res.json({
+            success: true,
+            message: 'Pengaturan gateway WhatsApp berhasil disimpan',
+            settings: providerSettings,
+            providers: providerSettings.providers
+        });
+    } catch (error) {
+        logger.error('Error saving WhatsApp gateway settings:', error);
+        res.status(500).json({ success: false, message: 'Error saving WhatsApp gateway settings: ' + error.message });
+    }
+});
+
 // WhatsApp system monitoring (master on/off per automated WA source)
 router.get('/whatsapp-monitoring', getAppSettings, async (req, res) => {
     try {
@@ -4594,6 +4637,73 @@ router.get('/whatsapp-monitoring/switches', getAppSettings, async (req, res) => 
         });
     } catch (error) {
         logger.error('Error reading WA monitoring switches:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+const WHATSAPP_MONITOR_SETTING_FIELDS = [
+    { key: 'pppoe_monitor_interval_minutes', label: 'Interval monitor PPPoE (menit)', type: 'number', min: 0.17, step: 0.01, defaultValue: '5', group: 'PPPoE & MikroTik' },
+    { key: 'pppoe_notifications.includeOfflineList', label: 'Sertakan daftar PPPoE offline di pesan login/logout', type: 'boolean', defaultValue: true, group: 'PPPoE & MikroTik' },
+    { key: 'pppoe_notifications.maxOfflineListCount', label: 'Maksimal user offline di pesan PPPoE', type: 'number', min: 0, step: 1, defaultValue: '20', group: 'PPPoE & MikroTik' },
+    { key: 'rx_power_warning', label: 'Threshold RX warning (dBm)', type: 'number', step: 0.1, defaultValue: '-35', group: 'GenieACS & RX' },
+    { key: 'rx_power_critical', label: 'Threshold RX critical (dBm)', type: 'number', step: 0.1, defaultValue: '-37', group: 'GenieACS & RX' },
+    { key: 'rx_power_notification_interval_hours', label: 'Jeda ulang notifikasi RX threshold (jam)', type: 'number', min: 1, step: 1, defaultValue: '1', group: 'GenieACS & RX' },
+    { key: 'rxpower_recap_interval_hours', label: 'Interval rekap RX GenieACS (jam)', type: 'number', min: 1, step: 1, defaultValue: '6', group: 'GenieACS & RX' },
+    { key: 'offline_notification_interval_hours', label: 'Interval digest perangkat offline (jam)', type: 'number', min: 1, step: 1, defaultValue: '12', group: 'GenieACS & RX' },
+    { key: 'offline_device_threshold_hours', label: 'Perangkat dianggap offline setelah (jam)', type: 'number', min: 1, step: 1, defaultValue: '24', group: 'GenieACS & RX' }
+];
+
+router.get('/whatsapp-monitoring/settings', getAppSettings, async (req, res) => {
+    try {
+        const values = {};
+        WHATSAPP_MONITOR_SETTING_FIELDS.forEach((field) => {
+            values[field.key] = getSetting(field.key, field.defaultValue);
+        });
+
+        res.json({ success: true, fields: WHATSAPP_MONITOR_SETTING_FIELDS, values });
+    } catch (error) {
+        logger.error('Error reading WA monitoring settings:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/whatsapp-monitoring/settings', getAppSettings, async (req, res) => {
+    try {
+        const incoming = req.body && typeof req.body === 'object' ? req.body : {};
+        WHATSAPP_MONITOR_SETTING_FIELDS.forEach((field) => {
+            if (!(field.key in incoming)) return;
+            const rawValue = incoming[field.key];
+            const value = field.type === 'boolean' ? rawValue === true || rawValue === 'true' || rawValue === 'on' : String(rawValue ?? '').trim();
+            setSetting(field.key, value);
+        });
+
+        const rxWarnHours = parseInt(getSetting('rx_power_notification_interval_hours', '1'), 10);
+        const rxRecapHours = parseInt(getSetting('rxpower_recap_interval_hours', '6'), 10);
+        const offlineHours = parseInt(getSetting('offline_notification_interval_hours', '12'), 10);
+        setSetting('rx_power_warning_interval', String(Math.max(rxWarnHours || 1, 1) * 60 * 60 * 1000));
+        setSetting('rxpower_recap_interval', String(Math.max(rxRecapHours || 6, 1) * 60 * 60 * 1000));
+        setSetting('offline_notification_interval', String(Math.max(offlineHours || 12, 1) * 60 * 60 * 1000));
+
+        try {
+            const intervalManager = require('../config/intervalManager');
+            intervalManager.restartAll();
+        } catch (e) {
+            logger.warn('intervalManager.restartAll after WA monitoring settings:', e.message);
+        }
+        try {
+            const pm = require('../config/pppoe-monitor');
+            await pm.restartPPPoEMonitoring();
+        } catch (e) {
+            logger.warn('restartPPPoEMonitoring after WA monitoring settings:', e.message);
+        }
+
+        const values = {};
+        WHATSAPP_MONITOR_SETTING_FIELDS.forEach((field) => {
+            values[field.key] = getSetting(field.key, field.defaultValue);
+        });
+        res.json({ success: true, fields: WHATSAPP_MONITOR_SETTING_FIELDS, values });
+    } catch (error) {
+        logger.error('Error saving WA monitoring settings:', error);
         res.status(500).json({ success: false, message: error.message });
     }
 });
@@ -4639,6 +4749,54 @@ router.get('/email-settings', getAppSettings, async (req, res) => {
             error: error.message,
             appSettings: req.appSettings
         });
+    }
+});
+
+router.get('/email-settings/smtp', async (req, res) => {
+    try {
+        res.json({
+            success: true,
+            settings: {
+                smtp_host: getSetting('smtp_host', ''),
+                smtp_port: getSetting('smtp_port', '587'),
+                smtp_secure: getSetting('smtp_secure', 'false'),
+                smtp_user: getSetting('smtp_user', ''),
+                smtp_password: getSetting('smtp_password', ''),
+                smtp_from_email: getSetting('smtp_from_email', ''),
+                smtp_from_name: getSetting('smtp_from_name', ''),
+                smtp_reject_unauthorized: getSetting('smtp_reject_unauthorized', true)
+            }
+        });
+    } catch (error) {
+        logger.error('Error getting SMTP settings:', error);
+        res.status(500).json({ success: false, message: 'Error getting SMTP settings: ' + error.message });
+    }
+});
+
+router.post('/email-settings/smtp', async (req, res) => {
+    try {
+        const smtpData = req.body || {};
+        setSetting('smtp_host', String(smtpData.smtp_host || '').trim());
+        setSetting('smtp_port', String(parseInt(smtpData.smtp_port, 10) || 587));
+        setSetting('smtp_secure', smtpData.smtp_secure === true || smtpData.smtp_secure === 'true');
+        setSetting('smtp_user', String(smtpData.smtp_user || '').trim());
+        setSetting('smtp_password', String(smtpData.smtp_password || ''));
+        setSetting('smtp_from_email', String(smtpData.smtp_from_email || '').trim());
+        setSetting('smtp_from_name', String(smtpData.smtp_from_name || '').trim());
+        setSetting('smtp_reject_unauthorized', smtpData.smtp_reject_unauthorized !== false && smtpData.smtp_reject_unauthorized !== 'false');
+        clearSettingsCache();
+
+        try {
+            const emailNotifications = require('../config/email-notifications');
+            emailNotifications.reloadTransporter();
+        } catch (e) {
+            logger.warn('Failed to reload email transporter after SMTP save:', e.message);
+        }
+
+        res.json({ success: true, message: 'Konfigurasi SMTP berhasil disimpan' });
+    } catch (error) {
+        logger.error('Error saving SMTP settings:', error);
+        res.status(500).json({ success: false, message: 'Error saving SMTP settings: ' + error.message });
     }
 });
 
@@ -4995,6 +5153,7 @@ router.get('/whatsapp-settings/status', async (req, res) => {
         res.json({
             success: true,
             whatsappStatus: whatsappStatus.connected ? 'Connected' : 'Disconnected',
+            whatsappProvider: whatsappStatus.provider || getSetting('whatsapp_active_provider', 'baileys'),
             activeCustomers: activeCustomers.length,
             pendingInvoices: pendingInvoices.length,
             nextReminder: 'Daily at 09:00'
@@ -6245,7 +6404,7 @@ router.get('/customers', getAppSettings, async (req, res) => {
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
                                AND i.status = 'unpaid' 
-                               AND i.due_date < date('now')
+                               AND i.due_date < date('now','localtime')
                            ) THEN 'overdue'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
@@ -7097,6 +7256,9 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
         const oldStatus = currentCustomer.status;
         const newStatus = status || currentCustomer.status;
         const statusChanged = newStatus !== oldStatus;
+        if (statusChanged && (newStatus === 'suspended' || newStatus === 'active')) {
+            customerData.__skip_radius_sync = true;
+        }
         
         // Use current phone for lookup, allow phone to be updated in customerData
         const result = await billingManager.updateCustomerByPhone(phone, customerData);
@@ -7271,16 +7433,31 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
         // Jika update berhasil dan customer memiliki PPPoE, update profil di Mikrotik (untuk perubahan package)
         if (result && customerData.pppoe_username) {
             try {
-                // Cek apakah paket benar-benar berubah
                 const updatedCustomer = await billingManager.getCustomerByPhone(customerData.phone || phone);
-                if (updatedCustomer && updatedCustomer.package_id !== currentCustomer.package_id) {
-                    logger.info(`[BILLING] Package changed for ${updatedCustomer.username}, updating PPPoE profile...`);
-                    await serviceSuspension.restoreCustomerService(updatedCustomer, 'Package changed');
-                    logger.info(`[BILLING] PPPoE profile updated successfully for ${updatedCustomer.username}`);
+                const packageChanged =
+                    updatedCustomer &&
+                    updatedCustomer.package_id !== currentCustomer.package_id;
+                const profileChanged =
+                    updatedCustomer &&
+                    (updatedCustomer.pppoe_profile || null) !== (currentCustomer.pppoe_profile || null);
+                if (updatedCustomer && (packageChanged || profileChanged)) {
+                    const { isSuspendedStatus } = require('../utils/customerSuspendReason');
+                    if (isSuspendedStatus(updatedCustomer.status)) {
+                        logger.info(
+                            `[BILLING] Package/profile changed for suspended ${updatedCustomer.username} — update PREVGROUP only`
+                        );
+                        await serviceSuspension.updatePackageForSuspendedCustomer(
+                            updatedCustomer,
+                            'Package changed while suspended'
+                        );
+                    } else {
+                        logger.info(`[BILLING] Package changed for ${updatedCustomer.username}, updating PPPoE profile...`);
+                        await serviceSuspension.restoreCustomerService(updatedCustomer, 'Package changed');
+                        logger.info(`[BILLING] PPPoE profile updated successfully for ${updatedCustomer.username}`);
+                    }
                 }
             } catch (mikrotikError) {
                 logger.error(`[BILLING] Failed to update PPPoE profile for ${customerData.username}:`, mikrotikError.message);
-                // Jangan gagal kan update customer jika error
             }
         }
 
@@ -8155,7 +8332,8 @@ router.post('/payments', async (req, res) => {
             const paidInvoice = await billingManager.getInvoiceById(paymentData.invoice_id);
             if (paidInvoice && paidInvoice.customer_id) {
                 const customer = await billingManager.getCustomerById(paidInvoice.customer_id);
-                if (customer && customer.status === 'suspended') {
+                const { shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
+                if (shouldAutoRestoreCustomer(customer)) {
                     const invoices = await billingManager.getInvoicesByCustomer(customer.id);
                     const unpaid = invoices.filter(i => i.status === 'unpaid');
                     if (unpaid.length === 0) {
@@ -9837,7 +10015,7 @@ router.put('/api/finance-categories/:id', async (req, res) => {
         
         const subCatStr = subcategories ? JSON.stringify(subcategories) : null;
         const db = new sqlite3.Database(path.join(__dirname, '../data/billing.db'));
-        db.run('UPDATE finance_categories SET name = ?, subcategories = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [name, subCatStr, id], function(err) {
+        db.run("UPDATE finance_categories SET name = ?, subcategories = ?, updated_at = datetime('now','localtime') WHERE id = ?", [name, subCatStr, id], function(err) {
             db.close();
             if (err) return res.status(500).json({ success: false, message: err.message });
             res.json({ success: true, message: 'Kategori berhasil diupdate' });
@@ -11026,7 +11204,7 @@ router.post('/api/reports/export', adminAuth, async (req, res) => {
                 db.get(`
                     SELECT COALESCE(SUM(amount),0) AS total
                     FROM payments
-                    WHERE strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now')
+                    WHERE strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now', 'localtime')
                 `, [], (err, row) => err ? reject(err) : resolve(row?.total || 0));
             }),
         ]);

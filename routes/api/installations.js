@@ -40,7 +40,7 @@ router.patch('/:id/status', verifyToken, async (req, res) => {
             if (err || !job) return res.status(404).json({ success: false, message: 'Job not found' });
 
             const oldStatus = job.status;
-            db.run(`UPDATE installation_jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [status, jobId], function(err) {
+            db.run(`UPDATE installation_jobs SET status = ?, updated_at = datetime('now','localtime') WHERE id = ?`, [status, jobId], function(err) {
                 if (err) return res.status(500).json({ success: false, message: err.message });
 
                 // Log history

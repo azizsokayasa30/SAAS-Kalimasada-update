@@ -3,6 +3,7 @@ let makeWASocket;
 let DisconnectReason;
 let useMultiFileAuthState;
 let fetchLatestWaWebVersion;
+let baileysLoadPromise = null;
 try {
     const baileys = require('@whiskeysockets/baileys');
     makeWASocket = baileys.default;
@@ -10,7 +11,8 @@ try {
     useMultiFileAuthState = baileys.useMultiFileAuthState;
     fetchLatestWaWebVersion = baileys.fetchLatestWaWebVersion;
 } catch (err) {
-    console.error('[WHATSAPP] Baileys load failed, WhatsApp features disabled:', err.message);
+    // Newer Baileys versions are ESM-only; load lazily with dynamic import in connectToWhatsApp().
+    console.warn('[WHATSAPP] Baileys require() failed, will use dynamic import:', err.message);
 }
 const qrcode = require('qrcode-terminal');
 const path = require('path');
@@ -62,6 +64,30 @@ const whatsappNotifications = require('./whatsapp-notifications');
 
 // Import help messages
 const { getAdminHelpMessage, getCustomerHelpMessage, getGeneralHelpMessage } = require('./help-messages');
+
+async function ensureBaileysLoaded() {
+    if (makeWASocket && DisconnectReason && useMultiFileAuthState && fetchLatestWaWebVersion) {
+        return;
+    }
+
+    if (!baileysLoadPromise) {
+        baileysLoadPromise = import('@whiskeysockets/baileys').then((baileys) => {
+            makeWASocket = baileys.default || baileys.makeWASocket;
+            DisconnectReason = baileys.DisconnectReason;
+            useMultiFileAuthState = baileys.useMultiFileAuthState;
+            fetchLatestWaWebVersion = baileys.fetchLatestWaWebVersion;
+
+            if (!makeWASocket || !useMultiFileAuthState || !fetchLatestWaWebVersion) {
+                throw new Error('Export Baileys tidak lengkap');
+            }
+        }).catch((error) => {
+            baileysLoadPromise = null;
+            throw error;
+        });
+    }
+
+    return baileysLoadPromise;
+}
 
 // Phone helpers: normalize and variants (08..., 62..., +62...)
 function normalizePhone(input) {
@@ -555,6 +581,7 @@ async function connectToWhatsApp() {
     
     try {
         console.log('Memulai koneksi WhatsApp...');
+        await ensureBaileysLoaded();
         
         // Pastikan direktori sesi ada
         const sessionDir = getSetting('whatsapp_session_path', './whatsapp-session');

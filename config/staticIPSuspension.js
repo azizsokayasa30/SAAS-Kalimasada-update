@@ -1,6 +1,57 @@
 const logger = require('./logger');
 const { getMikrotikConnectionForCustomer } = require('./mikrotik');
 const { getSetting } = require('./settingsManager');
+const { getPublicAppBaseUrl } = require('./public-endpoint');
+
+function isIpAddress(value) {
+    return /^(\d{1,3}\.){3}\d{1,3}$/.test(String(value || '').trim());
+}
+
+function getBillingWalledGardenConfig() {
+    let host = String(getSetting('server_host', '') || '').trim();
+    let port = String(getSetting('server_port', process.env.PORT || 4555));
+    try {
+        const url = new URL(getPublicAppBaseUrl());
+        host = url.hostname || host;
+        port = url.port || (url.protocol === 'https:' ? '443' : '80');
+    } catch (_) {}
+
+    const billingServerIp =
+        String(process.env.ISOLIR_BILLING_SERVER_IP || '').trim() ||
+        String(getSetting('isolir_billing_server_ip', '') || '').trim() ||
+        String(getSetting('billing_server_ip', '') || '').trim() ||
+        (isIpAddress(host) ? host : '');
+
+    return {
+        billingServerIp,
+        billingHost: host,
+        billingPorts: Array.from(new Set([
+            String(process.env.ISOLIR_PORT || getSetting('isolir_page_port', 8899)),
+            String(port || ''),
+            '80',
+            '443'
+        ].filter(Boolean))).join(','),
+        whatsappHosts: [
+            'wa.me',
+            'whatsapp.com',
+            'web.whatsapp.com',
+            'api.whatsapp.com',
+            'static.whatsapp.net',
+            'whatsapp.net',
+            'graph.whatsapp.com',
+            'mmg.whatsapp.net',
+            'pps.whatsapp.net',
+            'media.whatsapp.net',
+            'mmg-fna.whatsapp.net',
+            'g.whatsapp.net',
+            'v.whatsapp.net',
+            'scontent.whatsapp.net',
+            'facebook.com',
+            'fbcdn.net',
+            'fbsbx.com'
+        ]
+    };
+}
 
 /**
  * Static IP Suspension Manager
@@ -86,7 +137,7 @@ class StaticIPSuspensionManager {
             if (results.mikrotik) {
                 try {
                     const billingManager = require('./billing');
-                    await billingManager.setCustomerStatusById(customer.id, 'suspended');
+                    await billingManager.setCustomerStatusById(customer.id, 'suspended', { skipRadiusSync: true });
                     results.billing = true;
                     logger.info(`Customer ${customer.username} status updated to suspended in billing`);
                 } catch (billingError) {
@@ -314,7 +365,7 @@ class StaticIPSuspensionManager {
             if (results.mikrotik) {
                 try {
                     const billingManager = require('./billing');
-                    await billingManager.setCustomerStatusById(customer.id, 'active');
+                    await billingManager.setCustomerStatusById(customer.id, 'active', { skipRadiusSync: true });
                     results.billing = true;
                     logger.info(`Customer ${customer.username} status updated to active in billing`);
                 } catch (billingError) {
@@ -457,6 +508,137 @@ class StaticIPSuspensionManager {
     async ensureBlockedCustomersSetup(customer) {
         try {
             const mikrotik = await getMikrotikConnectionForCustomer(customer);
+            const access = getBillingWalledGardenConfig();
+
+            const addAddressListIfMissing = async (list, address, comment) => {
+                if (!address || address === 'GANTI_IP_SERVER_BILLING') return;
+                try {
+                    const existing = await mikrotik.write('/ip/firewall/address-list/print', [
+                        `?list=${list}`,
+                        `?address=${address}`
+                    ]);
+                    if (!existing || existing.length === 0) {
+                        await mikrotik.write('/ip/firewall/address-list/add', [
+                            `=list=${list}`,
+                            `=address=${address}`,
+                            `=comment=${comment}`
+                        ]);
+                    }
+                } catch (error) {
+                    logger.warn(`Failed to add walled-garden address ${address}: ${error.message}`);
+                }
+            };
+
+            const addFilterIfMissing = async (comment, params) => {
+                try {
+                    const existing = await mikrotik.write('/ip/firewall/filter/print', [
+                        `?comment=${comment}`
+                    ]);
+                    if (!existing || existing.length === 0) {
+                        const firstRules = await mikrotik.write('/ip/firewall/filter/print', []);
+                        const firstId = firstRules && firstRules[0] && firstRules[0]['.id'];
+                        await mikrotik.write('/ip/firewall/filter/add', [
+                            ...params,
+                            `=comment=${comment}`,
+                            ...(firstId ? [`=place-before=${firstId}`] : [])
+                        ]);
+                    }
+                } catch (error) {
+                    logger.warn(`Failed to add firewall allow rule "${comment}": ${error.message}`);
+                }
+            };
+
+            await addAddressListIfMissing('isolir-allowed-dst', access.billingServerIp, 'BILLING-ISOLIR billing server');
+            if (access.billingHost && !isIpAddress(access.billingHost)) {
+                await addAddressListIfMissing('isolir-allowed-dst', access.billingHost, 'BILLING-ISOLIR billing host');
+            }
+            for (const host of access.whatsappHosts) {
+                await addAddressListIfMissing('isolir-allowed-dst', host, `BILLING-ISOLIR whatsapp ${host}`);
+            }
+
+            // Whitelist ini harus berada sebelum drop blocked_customers supaya pelanggan isolir
+            // tetap bisa bayar di portal dan mengirim bukti lewat WhatsApp.
+            await addFilterIfMissing('BILLING-ISOLIR static allow established', [
+                '=chain=forward',
+                '=connection-state=established,related',
+                '=action=accept'
+            ]);
+            await addFilterIfMissing('BILLING-ISOLIR static allow dns udp', [
+                '=chain=forward',
+                '=src-address-list=blocked_customers',
+                '=protocol=udp',
+                '=dst-port=53',
+                '=action=accept'
+            ]);
+            await addFilterIfMissing('BILLING-ISOLIR static allow dns tcp', [
+                '=chain=forward',
+                '=src-address-list=blocked_customers',
+                '=protocol=tcp',
+                '=dst-port=53',
+                '=action=accept'
+            ]);
+            if (access.billingServerIp) {
+                await addFilterIfMissing('BILLING-ISOLIR static allow billing app', [
+                    '=chain=forward',
+                    '=src-address-list=blocked_customers',
+                    `=dst-address=${access.billingServerIp}`,
+                    '=protocol=tcp',
+                    `=dst-port=${access.billingPorts}`,
+                    '=action=accept'
+                ]);
+            }
+            await addFilterIfMissing('BILLING-ISOLIR static allow whatsapp', [
+                '=chain=forward',
+                '=src-address-list=blocked_customers',
+                '=dst-address-list=isolir-allowed-dst',
+                '=protocol=tcp',
+                '=dst-port=80,443,5222,5223,5228,4244',
+                '=action=accept'
+            ]);
+
+            const addNatIfMissing = async (comment, params) => {
+                try {
+                    const existing = await mikrotik.write('/ip/firewall/nat/print', [
+                        `?comment=${comment}`
+                    ]);
+                    if (!existing || existing.length === 0) {
+                        const firstRules = await mikrotik.write('/ip/firewall/nat/print', []);
+                        const firstId = firstRules && firstRules[0] && firstRules[0]['.id'];
+                        await mikrotik.write('/ip/firewall/nat/add', [
+                            ...params,
+                            `=comment=${comment}`,
+                            ...(firstId ? [`=place-before=${firstId}`] : [])
+                        ]);
+                    }
+                } catch (error) {
+                    logger.warn(`Failed to add NAT redirect "${comment}": ${error.message}`);
+                }
+            };
+
+            if (access.billingServerIp) {
+                await addNatIfMissing('BILLING-ISOLIR static bypass allowed destinations', [
+                    '=chain=dstnat',
+                    '=src-address-list=blocked_customers',
+                    '=dst-address-list=isolir-allowed-dst',
+                    '=protocol=tcp',
+                    '=action=accept'
+                ]);
+                await addNatIfMissing('BILLING-ISOLIR static force http to isolir page', [
+                    '=chain=dstnat',
+                    '=src-address-list=blocked_customers',
+                    '=protocol=tcp',
+                    '=dst-port=80,8080,8000,8888',
+                    '=action=dst-nat',
+                    `=to-addresses=${access.billingServerIp}`,
+                    `=to-ports=${String(process.env.ISOLIR_PORT || getSetting('isolir_page_port', 8899))}`
+                ]);
+                await addNatIfMissing('BILLING-ISOLIR static masquerade to billing server', [
+                    '=chain=srcnat',
+                    '=src-address-list=blocked_customers',
+                    `=dst-address=${access.billingServerIp}`,
+                    '=action=masquerade'
+                ]);
+            }
 
             // 1. Pastikan firewall rule untuk block address list ada
             const existingRules = await mikrotik.write('/ip/firewall/filter/print', [
@@ -465,12 +647,14 @@ class StaticIPSuspensionManager {
             ]);
 
             if (!existingRules || existingRules.length === 0) {
+                const firstRules = await mikrotik.write('/ip/firewall/filter/print', []);
+                const firstId = firstRules && firstRules[0] && firstRules[0]['.id'];
                 await mikrotik.write('/ip/firewall/filter/add', [
                     '=chain=forward',
                     '=src-address-list=blocked_customers',
                     '=action=drop',
                     '=comment=Block suspended customers (static IP)',
-                    '=place-before=0' // Put at top of chain
+                    ...(firstId ? [`=place-before=${firstId}`] : [])
                 ]);
                 logger.info('Created firewall rule for blocked_customers address list');
             }

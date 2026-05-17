@@ -141,7 +141,7 @@ class TechnicianAuthManager {
                     reject(err);
                 } else {
                     // Update last login teknisi
-                    const updateSql = `UPDATE technicians SET last_login = datetime('now') WHERE id = ?`;
+                    const updateSql = `UPDATE technicians SET last_login = datetime('now','localtime') WHERE id = ?`;
                     db.run(updateSql, [technician.id]);
 
                     resolve({ sessionId, expiresAt, sessionDbId: this.lastID });
@@ -157,7 +157,7 @@ class TechnicianAuthManager {
                 SELECT ts.*, t.* 
                 FROM technician_sessions ts 
                 JOIN technicians t ON ts.technician_id = t.id 
-                WHERE ts.session_id = ? AND ts.expires_at > datetime('now') AND ts.is_active = 1 AND t.is_active = 1
+                WHERE ts.session_id = ? AND ts.expires_at > datetime('now','localtime') AND ts.is_active = 1 AND t.is_active = 1
             `;
             
             db.get(sql, [sessionId], (err, row) => {
@@ -166,7 +166,7 @@ class TechnicianAuthManager {
                 } else {
                     if (row) {
                         // Update last activity
-                        const updateSql = `UPDATE technician_sessions SET last_activity = datetime('now') WHERE session_id = ?`;
+                        const updateSql = `UPDATE technician_sessions SET last_activity = datetime('now','localtime') WHERE session_id = ?`;
                         db.run(updateSql, [sessionId]);
                     }
                     resolve(row || null);

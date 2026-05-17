@@ -215,18 +215,6 @@
             vertical-align: middle;
             width: 1%;
         }
-        /* Kolom login username dipersempit — beri ruang untuk kolom Aksi */
-        #customersTable th.customers-col-username,
-        #customersTable td.customers-col-username {
-            max-width: 6.75rem;
-            width: 6.75rem;
-            min-width: 0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            vertical-align: middle;
-        }
-        
         /* Mobile Responsive Styles */
         @media (max-width: 768px) {
             .main-content {
@@ -874,7 +862,7 @@
                                         </th>
                                         <th>ID Pelanggan</th>
                                         <th>Nama</th>
-                                        <th class="customers-col-username">Username</th>
+                                        <!-- Username login portal: tidak ditampilkan di list (mengurangi sesak); tetap ada di detail / form edit -->
                                         <th>Telepon</th>
                                         <th>PPPoE Username</th>
                                         <th>Profil PPPoE</th>
@@ -901,7 +889,6 @@
                                                     <% } %>
                                                 </td>
                                                 <td><a href="/admin/billing/customers/<%= customer.phone %>" class="text-decoration-none fw-bold"><%= customer.name %></a></td>
-                                                <td class="customers-col-username" title="<%= customer.username || '' %>"><%= customer.username || '-' %></td>
                                                 <td><a href="/admin/billing/customers/<%= customer.phone %>" class="text-decoration-none text-primary"><%= customer.phone %></a></td>
                                                 <td><%= customer.pppoe_username || '-' %></td>
                                                 <td>
@@ -917,7 +904,7 @@
                                                 <td class="cust-status">
                                                     <% if (customer.status === 'active') { %>
                                                         <span class="badge bg-success">Aktif</span>
-                                                    <% } else if (customer.status === 'suspended') { %>
+                                                    <% } else if (customer.status === 'suspended' || customer.status === 'isolir') { %>
                                                         <span class="badge bg-danger">Isolir</span>
                                                     <% } else if (customer.status === 'register') { %>
                                                         <span class="badge" style="background-color: #9900CC; color: white;">Register</span>
@@ -2201,7 +2188,9 @@
             });
 
             const stripHtml = (html) => String(html || '').replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+            const MIN_POLLING_INTERVAL_MS = 10000;
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            const normalizePollingInterval = (ms) => Math.max(Number(ms) || MIN_POLLING_INTERVAL_MS, MIN_POLLING_INTERVAL_MS);
             const composeImportDetails = (summary, errors) => {
                 const s = summary || {};
                 const created = Number(s.created || 0);
@@ -2237,7 +2226,8 @@
                 }
                 return detailLines.join('<br>');
             };
-            const recoverImportResult = async ({ sourceType, sinceMs, maxAttempts = 8, intervalMs = 2000 }) => {
+            const recoverImportResult = async ({ sourceType, sinceMs, maxAttempts = 2, intervalMs = MIN_POLLING_INTERVAL_MS }) => {
+                intervalMs = normalizePollingInterval(intervalMs);
                 for (let attempt = 0; attempt < maxAttempts; attempt++) {
                     try {
                         const qs = new URLSearchParams({
@@ -2259,7 +2249,8 @@
                 }
                 return null;
             };
-            const pollCommitJobStatus = async ({ jobId, maxAttempts = 900, intervalMs = 1000, onProgress }) => {
+            const pollCommitJobStatus = async ({ jobId, maxAttempts = 90, intervalMs = MIN_POLLING_INTERVAL_MS, onProgress }) => {
+                intervalMs = normalizePollingInterval(intervalMs);
                 let transientErrorCount = 0;
                 for (let i = 0; i < maxAttempts; i++) {
                     try {
@@ -2290,7 +2281,7 @@
                     } catch (pollError) {
                         transientErrorCount += 1;
                         // Tolerate temporary network hiccups during long imports.
-                        if (transientErrorCount >= 20) {
+                        if (transientErrorCount >= 3) {
                             throw new Error(`Koneksi ke server tidak stabil saat membaca status import (${transientErrorCount}x gagal berturut-turut).`);
                         }
                     }
@@ -4381,7 +4372,25 @@
             document.body.appendChild(container);
             return container;
         }
-        
+
+        /** Dibuka dari dashboard admin (permintaan ubah paket portal) — ?editPhone=... */
+        window.editCustomerFromPortalRequest = editCustomer;
+        (function openEditFromPortalDashboard() {
+            try {
+                const params = new URLSearchParams(window.location.search);
+                const editPhone = params.get('editPhone');
+                if (!editPhone) return;
+                setTimeout(function () {
+                    editCustomer(editPhone);
+                    params.delete('editPhone');
+                    const q = params.toString();
+                    window.history.replaceState({}, '', window.location.pathname + (q ? `?${q}` : '') + window.location.hash);
+                }, 700);
+            } catch (e) {
+                console.warn('[customers] editPhone query', e);
+            }
+        })();
+
         // WhatsApp Notification Functions
         let currentNotificationData = null;
 

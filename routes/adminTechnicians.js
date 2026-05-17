@@ -148,7 +148,7 @@ router.post('/add', adminAuth, async (req, res) => {
                 const reactivated = await new Promise((resolve, reject) => {
                     const sql = `
                         UPDATE technicians
-                        SET name = ?, role = ?, area_coverage = ?, whatsapp_group_id = ?, password = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
+                        SET name = ?, role = ?, area_coverage = ?, whatsapp_group_id = ?, password = ?, is_active = 1, updated_at = datetime('now','localtime')
                         WHERE id = ?
                     `;
                     db.run(
@@ -187,7 +187,7 @@ router.post('/add', adminAuth, async (req, res) => {
         const result = await new Promise((resolve, reject) => {
             const sql = `
                 INSERT INTO technicians (name, phone, role, area_coverage, whatsapp_group_id, password, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, 1, datetime('now','localtime'), datetime('now','localtime'))
             `;
 
             db.run(sql, [name, cleanPhone, role, notes || 'Area Default', whatsapp_group_id || null, hashedPassword], function(err) {
@@ -311,7 +311,7 @@ router.put('/:id/update', adminAuth, async (req, res) => {
         const result = await new Promise((resolve, reject) => {
             let sql = `
                 UPDATE technicians
-                SET name = ?, phone = ?, role = ?, area_coverage = ?, whatsapp_group_id = ?, updated_at = CURRENT_TIMESTAMP
+                SET name = ?, phone = ?, role = ?, area_coverage = ?, whatsapp_group_id = ?, updated_at = datetime('now','localtime')
             `;
             const params = [name, cleanPhone, role, notes || 'Area Default', whatsapp_group_id || null];
 
@@ -371,7 +371,7 @@ router.post('/:id/toggle-status', adminAuth, async (req, res) => {
         const result = await new Promise((resolve, reject) => {
             const sql = `
                 UPDATE technicians 
-                SET is_active = ?, updated_at = CURRENT_TIMESTAMP
+                SET is_active = ?, updated_at = datetime('now','localtime')
                 WHERE id = ?
             `;
             
@@ -417,7 +417,7 @@ router.post('/bulk/activate', adminAuth, async (req, res) => {
         if (ids.length === 0) return res.status(400).json({ success: false, message: 'Tidak ada ID yang dipilih' });
 
         const placeholders = ids.map(() => '?').join(',');
-        const sql = `UPDATE technicians SET is_active = 1, updated_at = CURRENT_TIMESTAMP WHERE id IN (${placeholders})`;
+        const sql = `UPDATE technicians SET is_active = 1, updated_at = datetime('now','localtime') WHERE id IN (${placeholders})`;
         const result = await new Promise((resolve, reject) => {
             db.run(sql, ids, function(err){ if (err) reject(err); else resolve({ changes: this.changes }); });
         });
@@ -434,7 +434,7 @@ router.post('/bulk/deactivate', adminAuth, async (req, res) => {
         if (ids.length === 0) return res.status(400).json({ success: false, message: 'Tidak ada ID yang dipilih' });
 
         const placeholders = ids.map(() => '?').join(',');
-        const sql = `UPDATE technicians SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id IN (${placeholders})`;
+        const sql = `UPDATE technicians SET is_active = 0, updated_at = datetime('now','localtime') WHERE id IN (${placeholders})`;
         const result = await new Promise((resolve, reject) => {
             db.run(sql, ids, function(err){ if (err) reject(err); else resolve({ changes: this.changes }); });
         });
@@ -465,7 +465,7 @@ router.post('/bulk/delete', adminAuth, async (req, res) => {
         let changes = 0;
         if (canDelete.length) {
             const placeholders = canDelete.map(() => '?').join(',');
-            const sql = `UPDATE technicians SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id IN (${placeholders})`;
+            const sql = `UPDATE technicians SET is_active = 0, updated_at = datetime('now','localtime') WHERE id IN (${placeholders})`;
             const result = await new Promise((resolve, reject) => {
                 db.run(sql, canDelete, function(err){ if (err) reject(err); else resolve({ changes: this.changes }); });
             });
@@ -543,7 +543,7 @@ router.delete('/:id', adminAuth, async (req, res) => {
         const result = await new Promise((resolve, reject) => {
             const sql = `
                 UPDATE technicians 
-                SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+                SET is_active = 0, updated_at = datetime('now','localtime')
                 WHERE id = ?
             `;
             db.run(sql, [technicianId], function(err) {

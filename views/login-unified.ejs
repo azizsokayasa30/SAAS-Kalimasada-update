@@ -2,683 +2,539 @@
 <html lang="id">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login | <%= appSettings.company_header %></title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Login Admin | <%= appSettings.company_header %></title>
     <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    
+    <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+    <%- include('partials/theme-head') %>
     <style>
         :root {
-            --primary: #3b82f6;
-            --primary-hover: #2563eb;
-            --bg-gradient: linear-gradient(135deg, #0f1419 0%, #1a202c 50%, #0f1419 100%);
-            --glass-bg: rgba(26, 32, 44, 0.95);
-            --glass-border: rgba(74, 85, 104, 0.5);
-            --text-primary: #f1f5f9;
-            --text-secondary: #cbd5e1;
-            --text-tertiary: #94a3b8;
+            --bg: #07111f;
+            --panel: rgba(255, 255, 255, .94);
+            --ink: #0f172a;
+            --muted: #64748b;
+            --line: rgba(148, 163, 184, .28);
+            --primary: #0ea5e9;
+            --primary-dark: #0369a1;
+            --accent: #22c55e;
+            --warning: #f59e0b;
         }
+
+        * { box-sizing: border-box; }
 
         body {
-            font-family: 'Plus Jakarta Sans', sans-serif;
-            background: var(--bg-gradient);
+            position: relative;
             min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 40px 20px;
-            color: var(--text-primary);
+            margin: 0;
+            color: var(--ink) !important;
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+            background:
+                radial-gradient(circle at top left, rgba(14, 165, 233, .12), transparent 30rem),
+                radial-gradient(circle at bottom right, rgba(34, 197, 94, .08), transparent 28rem),
+                #0b2235;
         }
 
-        .login-container {
-            width: 100%;
-            max-width: 440px;
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            pointer-events: none;
+            background: url('/img/login-smart-work.svg') center / cover no-repeat;
+            opacity: .86;
+        }
+
+        body::after {
+            content: "";
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            pointer-events: none;
+            background:
+                linear-gradient(90deg, rgba(7, 17, 31, .08), rgba(7, 17, 31, 0) 52%, rgba(8, 47, 73, .03)),
+                radial-gradient(circle at 72% 30%, rgba(14, 165, 233, .03), transparent 24rem);
+        }
+
+        .page {
+            position: relative;
+            z-index: 1;
+            min-height: 100vh;
+            display: grid;
+            grid-template-columns: minmax(0, 1.05fr) minmax(360px, 440px);
+            gap: clamp(24px, 5vw, 72px);
+            align-items: center;
+            width: min(1120px, 100%);
+            margin: 0 auto;
+            padding: clamp(22px, 5vw, 56px);
+        }
+
+        .hero {
+            padding: clamp(10px, 2vw, 18px);
+            color: #fff;
+            text-shadow: 0 2px 18px rgba(2, 6, 23, .72);
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border: 1px solid rgba(255, 255, 255, .16);
+            border-radius: 999px;
+            background: rgba(255, 255, 255, .08);
+            color: rgba(255, 255, 255, .86);
+            font-size: .82rem;
+            font-weight: 650;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+        }
+
+        .hero h1 {
+            max-width: 720px;
+            margin: 24px 0 18px;
+            font-size: clamp(2.25rem, 5.6vw, 4.25rem);
+            line-height: 1.02;
+            font-weight: 750;
+            letter-spacing: -.05em;
+        }
+
+        .hero p {
+            max-width: 620px;
+            margin: 0;
+            color: rgba(226, 232, 240, .84);
+            font-size: clamp(1rem, 2vw, 1.16rem);
+            line-height: 1.75;
+            font-weight: 400;
+        }
+
+        .motivation {
+            display: grid;
+            gap: 12px;
+            max-width: 640px;
+            margin-top: 28px;
+        }
+
+        .motivation-card {
             display: flex;
-            flex-direction: column;
-            gap: 20px;
+            gap: 12px;
+            align-items: flex-start;
+            padding: 16px;
+            border: 1px solid rgba(255, 255, 255, .14);
+            border-radius: 20px;
+            background: rgba(15, 23, 42, .24);
+            box-shadow: 0 14px 34px rgba(0, 0, 0, .12);
+            backdrop-filter: blur(14px);
+        }
+
+        .motivation-card i {
+            display: inline-flex;
+            width: 34px;
+            height: 34px;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 34px;
+            border-radius: 12px;
+            background: rgba(14, 165, 233, .18);
+            color: #7dd3fc;
+        }
+
+        .motivation-card strong {
+            display: block;
+            color: #fff;
+            font-weight: 700;
+            margin-bottom: 2px;
+        }
+
+        .motivation-card span {
+            color: rgba(226, 232, 240, .78);
+            line-height: 1.55;
+            font-size: .94rem;
+            font-weight: 400;
         }
 
         .login-card {
-            background: var(--glass-bg);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid var(--glass-border);
-            border-radius: 24px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-            width: 100%;
+            position: relative;
             overflow: hidden;
-            transition: transform 0.3s ease;
+            width: 100%;
+            border: 1px solid rgba(255, 255, 255, .62);
+            border-radius: 30px;
+            background: var(--panel) !important;
+            color: var(--ink) !important;
+            box-shadow: 0 28px 80px rgba(2, 6, 23, .38);
         }
 
-        .login-header {
-            padding: 40px 40px 20px;
-            text-align: center;
-            border-bottom: 1px solid rgba(74, 85, 104, 0.3);
+        .login-card::before {
+            content: "";
+            position: absolute;
+            inset: 0 0 auto;
+            height: 7px;
+            background: linear-gradient(90deg, var(--primary), var(--accent), var(--warning));
         }
 
-        .logo-box {
-            width: 80px;
-            height: 80px;
-            background: linear-gradient(135deg, #3b82f6, #8b5cf6);
-            border-radius: 20px;
-            margin: 0 auto 20px;
+        .login-inner {
+            padding: clamp(26px, 4vw, 38px);
+        }
+
+        .brand {
             display: flex;
             align-items: center;
+            gap: 13px;
+            margin-bottom: 26px;
+        }
+
+        .brand-logo {
+            width: 58px;
+            height: 58px;
+            display: inline-flex;
+            align-items: center;
             justify-content: center;
-            box-shadow: 0 10px 30px rgba(59, 130, 246, 0.3);
+            border-radius: 18px;
+            background: #fff;
+            border: 1px solid var(--line);
+            box-shadow: 0 12px 28px rgba(15, 23, 42, .08);
         }
 
-        .logo-box img {
-            max-width: 50px;
-            height: auto;
-            filter: brightness(0) invert(1);
+        .brand-logo img {
+            max-width: 42px;
+            max-height: 42px;
+            object-fit: contain;
         }
 
-        .login-header h4 {
-            color: var(--text-primary);
-            font-weight: 700;
+        .brand-title {
             margin: 0;
+            color: var(--ink) !important;
+            font-size: 1.18rem;
+            font-weight: 750;
+            letter-spacing: -.035em;
         }
 
-        .login-header p {
-            color: var(--text-tertiary);
+        .brand-subtitle {
+            margin: 2px 0 0;
+            color: var(--muted) !important;
+            font-size: .86rem;
+            font-weight: 450;
+        }
+
+        .login-heading {
+            margin-bottom: 22px;
+        }
+
+        .login-heading h2 {
+            margin: 0 0 8px;
+            color: var(--ink) !important;
+            font-size: clamp(1.65rem, 3vw, 2.1rem);
+            font-weight: 720;
+            letter-spacing: -.04em;
+        }
+
+        .login-heading p {
             margin: 0;
-        }
-
-        .login-body {
-            padding: 0 40px 40px;
-        }
-
-        .role-selector-container {
-            margin-bottom: 25px;
-        }
-
-        .role-select {
-            appearance: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%23cbd5e1' class='bi bi-chevron-down' viewBox='0 0 16 16'%3E%3Cpath fill-rule='evenodd' d='M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z'/%3E%3C/svg%3E");
-            background-repeat: no-repeat;
-            background-position: right 16px center;
-            background-size: 16px;
-            padding-right: 48px !important;
-            font-weight: 600;
-            cursor: pointer;
-            border: 1.5px solid #404854;
-            background-color: #2d3748;
-            color: var(--text-primary);
-            border-radius: 12px;
-            padding: 12px 16px !important;
-            transition: all 0.2s;
-        }
-
-        .role-select:focus {
-            border-color: var(--primary);
-            background-color: #2d3748;
-            color: var(--text-primary);
-            box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2);
-            outline: none;
-        }
-
-        .role-select option {
-            background-color: #1a202c;
-            color: var(--text-primary);
+            color: var(--muted) !important;
+            line-height: 1.6;
+            font-weight: 400;
         }
 
         .form-label {
-            font-weight: 600;
-            font-size: 14px;
+            color: #334155 !important;
+            font-weight: 650;
+            font-size: .84rem;
             margin-bottom: 8px;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
         }
 
-        .form-control, .form-control:focus {
-            border-radius: 12px;
-            padding: 12px 16px;
-            border: 1.5px solid #404854;
-            background: #2d3748;
-            color: var(--text-primary);
-            transition: all 0.2s;
-            font-weight: 500;
+        .input-wrap {
+            position: relative;
+        }
+
+        .input-wrap i {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #94a3b8 !important;
+            z-index: 2;
+        }
+
+        .form-control {
+            min-height: 52px;
+            border-radius: 16px;
+            border: 1.5px solid #dbe4ef;
+            padding: 13px 16px 13px 45px;
+            color: var(--ink) !important;
+            background: #fff !important;
+            font-weight: 450;
+            transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
         }
 
         .form-control::placeholder {
-            color: var(--text-tertiary);
+            color: #a8b3c4 !important;
+            font-weight: 400;
         }
 
         .form-control:focus {
-            background: #374151;
             border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2);
-            color: var(--text-primary);
-        }
-
-        .input-group-text {
-            background: transparent;
-            border: 1.5px solid #404854;
-            color: var(--text-tertiary);
-            border-radius: 12px;
-        }
-
-        .input-group .form-control {
-            border: 1.5px solid #404854;
+            color: var(--ink) !important;
+            background: #fff !important;
+            box-shadow: 0 0 0 5px rgba(14, 165, 233, .14);
+            transform: translateY(-1px);
         }
 
         .btn-login {
-            background: var(--primary);
-            color: white;
-            border: none;
-            border-radius: 12px;
-            padding: 14px;
-            font-weight: 700;
             width: 100%;
-            margin-top: 10px;
-            transition: all 0.2s;
+            min-height: 54px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 8px;
+            border: 0;
+            border-radius: 17px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: #fff !important;
+            font-weight: 700;
+            letter-spacing: -.01em;
+            box-shadow: 0 18px 34px rgba(14, 165, 233, .28);
+            transition: transform .2s ease, box-shadow .2s ease, filter .2s ease;
+        }
+
+        .btn-login * {
+            color: #fff !important;
         }
 
         .btn-login:hover {
-            background: var(--primary-hover);
-            transform: translateY(-1px);
-            box-shadow: 0 10px 15px -3px rgba(59, 130, 246, 0.4);
-            color: white;
+            color: #fff;
+            filter: brightness(1.04);
+            transform: translateY(-2px);
+            box-shadow: 0 22px 44px rgba(14, 165, 233, .34);
         }
 
-        .btn-otp {
-            border-radius: 12px;
-            font-weight: 600;
-            border: 1.5px solid var(--primary);
-            color: var(--primary);
-            background: transparent;
-            transition: all 0.2s;
+        .btn-login:disabled {
+            opacity: .72;
+            transform: none;
+            box-shadow: none;
         }
 
-        .btn-otp:hover {
-            background: rgba(59, 130, 246, 0.1);
-            border-color: var(--primary-hover);
-            color: var(--primary-hover);
-        }
-
-        .registration-footer {
-            margin-top: 25px;
-            padding-top: 20px;
-            border-top: 1px dashed #404854;
-            text-align: center;
-            font-size: 14px;
-            color: var(--text-tertiary);
-        }
-
-        .registration-footer a {
-            color: var(--primary);
-            text-decoration: none;
-            font-weight: 700;
-            transition: all 0.2s;
-        }
-
-        .registration-footer a:hover {
-            text-decoration: underline;
-            color: var(--primary-hover);
-        }
-
-        .footer {
-            margin-top: 20px;
-            text-align: center;
-            color: var(--text-tertiary);
-            font-size: 13px;
-        }
-
-        /* Custom Tab Styling */
-        .auth-tabs {
-            margin-bottom: 20px;
-        }
-
-        .auth-tabs .nav-tabs {
-            border: none;
-            background: #2d3748;
-            border-radius: 12px;
-            padding: 4px;
+        .security-note {
             display: flex;
-            gap: 0;
+            gap: 10px;
+            margin-top: 18px;
+            padding: 13px;
+            border-radius: 17px;
+            background: #f8fafc !important;
+            color: #64748b !important;
+            font-size: .86rem;
+            line-height: 1.5;
+            font-weight: 400;
         }
 
-        .auth-tabs .nav-tabs .nav-link {
-            border: none;
-            border-radius: 10px;
-            color: var(--text-tertiary);
-            font-weight: 600;
-            font-size: 13px;
-            padding: 10px 16px;
-            transition: all 0.3s ease;
-            flex: 1;
-            text-align: center;
-            background: transparent;
+        .security-note i {
+            color: var(--accent) !important;
+            margin-top: 1px;
         }
 
-        .auth-tabs .nav-tabs .nav-link:hover {
-            color: var(--primary);
-            background: rgba(59, 130, 246, 0.1);
+        .security-note span {
+            color: #64748b !important;
         }
 
-        .auth-tabs .nav-tabs .nav-link.active {
-            background: var(--primary);
-            color: white;
-            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
-        }
-
-        .auth-tabs .nav-tabs .nav-link i {
-            margin-right: 6px;
-        }
-
-        .tab-content {
-            min-height: 120px;
-        }
-
-        .tab-pane {
-            animation: fadeIn 0.3s ease-out;
-        }
-
-        .text-muted {
-            color: var(--text-tertiary) !important;
-        }
-
-        .text-danger {
-            color: #ef4444 !important;
-        }
-
-        .text-success {
-            color: #10b981 !important;
-        }
-
-        .fade-in {
-            animation: fadeIn 0.4s ease-out;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .registration-footer {
-            margin-top: 25px;
-            padding-top: 20px;
-            border-top: 1px dashed #e2e8f0;
-            text-align: center;
-            font-size: 14px;
-            color: #64748b;
-        }
-
-        .registration-footer a {
-            color: var(--primary);
-            text-decoration: none;
+        .alert {
+            border: 0;
+            border-radius: 15px;
             font-weight: 700;
         }
 
-        .registration-footer a:hover {
-            text-decoration: underline;
-        }
-
         .footer {
-            margin-top: 20px;
+            margin-top: 18px;
+            color: rgba(226, 232, 240, .72);
+            font-size: .86rem;
             text-align: center;
-            color: rgba(255, 255, 255, 0.8);
-            font-size: 13px;
         }
 
-        /* Custom Tab Styling */
-        .auth-tabs {
-            margin-bottom: 20px;
-        }
+        @media (max-width: 900px) {
+            .page {
+                grid-template-columns: 1fr;
+                gap: 28px;
+                padding: 22px 16px;
+            }
 
-        .auth-tabs .nav-tabs {
-            border: none;
-            background: #f1f5f9;
-            border-radius: 12px;
-            padding: 4px;
-            display: flex;
-        }
+            .hero {
+                text-align: center;
+            }
 
-        .auth-tabs .nav-tabs .nav-link {
-            border: none;
-            border-radius: 10px;
-            color: #64748b;
-            font-weight: 600;
-            font-size: 13px;
-            padding: 10px 16px;
-            transition: all 0.3s ease;
-            flex: 1;
-            text-align: center;
-            background: transparent;
-        }
+            .hero p,
+            .motivation {
+                margin-left: auto;
+                margin-right: auto;
+            }
 
-        .auth-tabs .nav-tabs .nav-link:hover {
-            color: var(--primary);
-            background: rgba(99, 102, 241, 0.05);
-        }
-
-        .auth-tabs .nav-tabs .nav-link.active {
-            background: white;
-            color: var(--primary);
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-        }
-
-        .auth-tabs .nav-tabs .nav-link i {
-            margin-right: 6px;
-        }
-
-        .tab-content {
-            min-height: 120px;
-        }
-
-        .tab-pane {
-            animation: fadeIn 0.3s ease-out;
+            .motivation {
+                display: none;
+            }
         }
     </style>
-
-    <%- include('partials/theme-head') %>
 </head>
 <body>
-    <div class="login-container">
-        <div class="login-card">
-            <div class="login-header">
-                <div class="logo-box">
-                    <img src="/img/<%= appSettings.logo_filename %>" alt="Logo">
-                </div>
-                <h4 class="fw-bold mb-1"><%= appSettings.company_header %></h4>
-                <p class="text-muted small">Silakan pilih peran dan masukkan kredensial Anda</p>
+    <main class="page">
+        <section class="hero" aria-label="Motivasi kerja">
+            <div class="eyebrow">
+                <i class="bi bi-lightning-charge-fill"></i>
+                Admin Control Center
             </div>
+            <h1>Kerja rapi, layanan cepat, pelanggan senang.</h1>
+            <p>
+                Setiap data yang tertata, setiap tiket yang ditangani, dan setiap pelanggan yang terbantu
+                adalah bagian dari layanan internet yang lebih dipercaya.
+            </p>
 
-            <div class="login-body">
-                <div class="role-selector-container">
-                    <label class="form-label">Masuk Sebagai</label>
-                    <select id="roleSelect" class="form-control role-select">
-                        <option value="customer" data-auth="dual">Pelanggan</option>
-                        <option value="collector" data-auth="password">Collector</option>
-                        <option value="agent" data-auth="password">Agent</option>
-                        <option value="technician" data-auth="password">Teknisi</option>
-                        <option value="admin" data-auth="password">Admin</option>
-                    </select>
+            <div class="motivation">
+                <div class="motivation-card">
+                    <i class="bi bi-bullseye"></i>
+                    <div>
+                        <strong>Mulai hari ini dengan fokus.</strong>
+                        <span>Prioritaskan yang penting, selesaikan satu per satu, dan biarkan hasil kerja berbicara.</span>
+                    </div>
                 </div>
-
-                <form id="loginForm">
-                    <input type="hidden" name="role" id="selectedRole" value="customer">
-
-                    <!-- Auth Method Tabs (Only for Customer - dual mode) -->
-                    <div class="auth-tabs" id="authTabs">
-                        <ul class="nav nav-tabs" role="tablist">
-                            <li class="nav-item" role="presentation">
-                                <button class="nav-link active" id="tab-password" data-bs-toggle="tab" data-bs-target="#pane-password" type="button" role="tab" aria-controls="pane-password" aria-selected="true">
-                                    <i class="bi bi-key"></i>Password
-                                </button>
-                            </li>
-                            <li class="nav-item" role="presentation">
-                                <button class="nav-link" id="tab-otp" data-bs-toggle="tab" data-bs-target="#pane-otp" type="button" role="tab" aria-controls="pane-otp" aria-selected="false">
-                                    <i class="bi bi-whatsapp"></i>OTP WhatsApp
-                                </button>
-                            </li>
-                        </ul>
+                <div class="motivation-card">
+                    <i class="bi bi-people-fill"></i>
+                    <div>
+                        <strong>Layanan baik dimulai dari admin yang sigap.</strong>
+                        <span>Kecepatan respon dan ketelitian data adalah kekuatan utama tim operasional.</span>
                     </div>
-
-                    <div class="tab-content" id="authTabContent">
-                        <!-- Tab Password -->
-                        <div class="tab-pane fade show active" id="pane-password" role="tabpanel" aria-labelledby="tab-password">
-                            <div class="mb-3">
-                                <label class="form-label" id="labelUsernamePassword">Username / No. HP / ID Pelanggan</label>
-                                <div class="input-group">
-                                    <span class="input-group-text bg-transparent border-end-0"><i class="bi bi-person text-muted"></i></span>
-                                    <input type="text" class="form-control border-start-0" id="usernamePassword" name="username" placeholder="Masukkan username atau nomor HP">
-                                </div>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Password</label>
-                                <div class="input-group">
-                                    <span class="input-group-text bg-transparent border-end-0"><i class="bi bi-lock text-muted"></i></span>
-                                    <input type="password" class="form-control border-start-0" id="passwordField" name="password" placeholder="••••••••">
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Tab OTP -->
-                        <div class="tab-pane fade" id="pane-otp" role="tabpanel" aria-labelledby="tab-otp">
-                            <div class="mb-3">
-                                <label class="form-label">Nomor WhatsApp</label>
-                                <div class="input-group">
-                                    <span class="input-group-text bg-transparent border-end-0"><i class="bi bi-whatsapp text-muted"></i></span>
-                                    <input type="text" class="form-control border-start-0" id="phoneOtp" name="phone" placeholder="Contoh: 0812...">
-                                </div>
-                            </div>
-                            <div class="d-grid mb-3">
-                                <button type="button" class="btn btn-outline-primary btn-otp" id="btnSendOTP">
-                                    <i class="bi bi-send me-2"></i>Kirim Kode OTP
-                                </button>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">Kode OTP</label>
-                                <div class="input-group">
-                                    <span class="input-group-text bg-transparent border-end-0"><i class="bi bi-shield-check text-muted"></i></span>
-                                    <input type="text" class="form-control border-start-0" id="otpField" name="otp" placeholder="6 Digit Kode">
-                                </div>
-                            </div>
-                        </div>
+                </div>
+                <div class="motivation-card">
+                    <i class="bi bi-graph-up-arrow"></i>
+                    <div>
+                        <strong>Konsisten hari ini, lebih kuat besok.</strong>
+                        <span>Perbaikan kecil yang dilakukan terus-menerus akan membuat sistem semakin matang.</span>
                     </div>
-
-                    <!-- For password-only roles (no tabs) -->
-                    <div id="passwordOnlyGroup" style="display: none;">
-                        <div class="mb-3">
-                            <label class="form-label" id="labelUsernameSingle">Username / Email</label>
-                            <div class="input-group">
-                                <span class="input-group-text bg-transparent border-end-0"><i class="bi bi-person text-muted"></i></span>
-                                <input type="text" class="form-control border-start-0" id="usernameSingle" placeholder="Masukkan username">
-                            </div>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Password</label>
-                            <div class="input-group">
-                                <span class="input-group-text bg-transparent border-end-0"><i class="bi bi-lock text-muted"></i></span>
-                                <input type="password" class="form-control border-start-0" id="passwordSingle" placeholder="••••••••">
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- For OTP-only roles (no tabs) -->
-                    <div id="otpOnlyGroup" style="display: none;">
-                        <div class="mb-3">
-                            <label class="form-label">Nomor WhatsApp</label>
-                            <div class="input-group">
-                                <span class="input-group-text bg-transparent border-end-0"><i class="bi bi-whatsapp text-muted"></i></span>
-                                <input type="text" class="form-control border-start-0" id="phoneSingle" placeholder="Contoh: 0812...">
-                            </div>
-                        </div>
-                        <div class="d-grid mb-3">
-                            <button type="button" class="btn btn-outline-primary btn-otp" id="btnSendOTPSingle">
-                                <i class="bi bi-send me-2"></i>Kirim Kode OTP
-                            </button>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Kode OTP</label>
-                            <div class="input-group">
-                                <span class="input-group-text bg-transparent border-end-0"><i class="bi bi-shield-check text-muted"></i></span>
-                                <input type="text" class="form-control border-start-0" id="otpSingle" placeholder="6 Digit Kode">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div id="alertPlaceholder"></div>
-
-                    <button type="submit" class="btn-login" id="btnLogin">
-                        <span class="spinner-border spinner-border-sm me-2" style="display: none;" id="loginSpinner"></span>
-                        Login Sekarang
-                    </button>
-                </form>
-
-                <div id="customerLinks" class="registration-footer">
-                    Belum jadi pelanggan? <a href="#">Daftar Sekarang</a>
                 </div>
             </div>
-        </div>
+        </section>
 
-        <div class="footer">
-            <%= appSettings.footer_info %>
-        </div>
-    </div>
+        <section>
+            <div class="login-card">
+                <div class="login-inner">
+                    <div class="brand">
+                        <div class="brand-logo">
+                            <img src="/img/<%= appSettings.logo_filename %>" alt="Logo <%= appSettings.company_header %>" onerror="this.style.display='none'">
+                        </div>
+                        <div>
+                            <p class="brand-title"><%= appSettings.company_header %></p>
+                            <p class="brand-subtitle">Single login khusus admin</p>
+                        </div>
+                    </div>
+
+                    <div class="login-heading">
+                        <h2>Selamat datang kembali</h2>
+                        <p>Masuk ke dashboard admin untuk memantau layanan, billing, pelanggan, dan operasional jaringan.</p>
+                    </div>
+
+                    <% if (timedOut) { %>
+                        <div class="alert alert-warning py-2 small" role="alert">
+                            Sesi login berakhir karena tidak ada aktivitas. Silakan login kembali.
+                        </div>
+                    <% } %>
+
+                    <form id="loginForm" autocomplete="on">
+                        <input type="hidden" name="role" value="admin">
+
+                        <div class="mb-3">
+                            <label class="form-label" for="username">Username Admin</label>
+                            <div class="input-wrap">
+                                <i class="bi bi-person"></i>
+                                <input type="text" class="form-control" id="username" name="username" placeholder="Masukkan username admin" autocomplete="username" required autofocus>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label" for="password">Password</label>
+                            <div class="input-wrap">
+                                <i class="bi bi-lock"></i>
+                                <input type="password" class="form-control" id="password" name="password" placeholder="Masukkan password" autocomplete="current-password" required>
+                            </div>
+                        </div>
+
+                        <div id="alertPlaceholder"></div>
+
+                        <button type="submit" class="btn-login" id="btnLogin">
+                            <span class="spinner-border spinner-border-sm" style="display: none;" id="loginSpinner" aria-hidden="true"></span>
+                            <span id="loginText">Masuk Dashboard</span>
+                            <i class="bi bi-arrow-right-circle"></i>
+                        </button>
+                    </form>
+
+                    <div class="security-note">
+                        <i class="bi bi-shield-check"></i>
+                        <span>Gunakan akun admin resmi. Untuk teknisi, kolektor, agen, dan pelanggan gunakan aplikasi atau portal masing-masing.</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="footer">
+                <%= appSettings.footer_info %>
+            </div>
+        </section>
+    </main>
 
     <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
-    <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
     <script>
-        $(document).ready(function() {
-            // Track current active tab for customer
-            let customerAuthMode = 'password'; // 'password' or 'otp'
+        const form = document.getElementById('loginForm');
+        const alertPlaceholder = document.getElementById('alertPlaceholder');
+        const button = document.getElementById('btnLogin');
+        const spinner = document.getElementById('loginSpinner');
+        const loginText = document.getElementById('loginText');
 
-            // Listen for tab changes
-            $('button[data-bs-toggle="tab"]').on('shown.bs.tab', function(e) {
-                const targetId = $(e.target).attr('id');
-                customerAuthMode = targetId === 'tab-otp' ? 'otp' : 'password';
-                $('#alertPlaceholder').empty();
-            });
+        function showAlert(type, message) {
+            alertPlaceholder.innerHTML = `
+                <div class="alert alert-${type} alert-dismissible fade show py-2 small" role="alert">
+                    ${message}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button>
+                </div>
+            `;
+        }
 
-            // Role Selection Change
-            $('#roleSelect').change(function() {
-                const selectedOption = $(this).find('option:selected');
-                const role = $(this).val();
-                const auth = selectedOption.data('auth');
-                
-                $('#selectedRole').val(role);
-                $('#alertPlaceholder').empty();
+        function setLoading(isLoading) {
+            button.disabled = isLoading;
+            spinner.style.display = isLoading ? 'inline-block' : 'none';
+            loginText.textContent = isLoading ? 'Memeriksa akun...' : 'Masuk Dashboard';
+        }
 
-                // Hide all groups first
-                $('#authTabs, #authTabContent').hide();
-                $('#passwordOnlyGroup').hide();
-                $('#otpOnlyGroup').hide();
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            alertPlaceholder.innerHTML = '';
 
-                if (auth === 'dual') {
-                    // Customer: show tabs
-                    $('#authTabs, #authTabContent').show().addClass('fade-in');
-                } else if (auth === 'password') {
-                    // Collector, Agent, Admin: password only
-                    $('#passwordOnlyGroup').show().addClass('fade-in');
-                    $('#labelUsernameSingle').text(
-                        role === 'admin' ? 'Username Admin' : 'Nomor WhatsApp / Email'
-                    );
-                } else if (auth === 'otp') {
-                    // Technician: OTP only
-                    $('#otpOnlyGroup').show().addClass('fade-in');
-                }
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
 
-                // Customer links visibility
-                $('#customerLinks').toggle(role === 'customer');
-            });
+            if (!username || !password) {
+                showAlert('danger', 'Username dan password admin wajib diisi.');
+                return;
+            }
 
-            // Initialize: show tabs for customer (default)
-            $('#authTabs, #authTabContent').show();
-            $('#passwordOnlyGroup').hide();
-            $('#otpOnlyGroup').hide();
+            setLoading(true);
 
-            // Send OTP Handler (Tab version)
-            $('#btnSendOTP').click(function() {
-                sendOTP($('#phoneOtp').val(), $(this));
-            });
+            try {
+                const body = new URLSearchParams();
+                body.set('role', 'admin');
+                body.set('username', username);
+                body.set('password', password);
 
-            // Send OTP Handler (Single version for technician)
-            $('#btnSendOTPSingle').click(function() {
-                sendOTP($('#phoneSingle').val(), $(this));
-            });
+                const response = await fetch('/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+                    body,
+                });
+                const data = await response.json().catch(() => ({}));
 
-            function sendOTP(phone, $btn) {
-                if (!phone) {
-                    showAlert('danger', 'Silakan masukkan nomor WhatsApp Anda');
+                if (!response.ok || !data.success) {
+                    showAlert('danger', data.message || 'Login gagal. Periksa kembali username dan password.');
+                    setLoading(false);
                     return;
                 }
 
-                $btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm me-2"></span>Mengirim...');
-
-                $.post('/api/auth/request-otp', { phone: phone }, function(res) {
-                    if (res.success) {
-                        showAlert('success', 'Kode OTP telah dikirim ke WhatsApp Anda');
-                    } else {
-                        showAlert('danger', res.message || 'Gagal mengirim OTP');
-                    }
-                }).fail(function(xhr) {
-                    showAlert('danger', xhr.responseJSON?.message || 'Terjadi kesalahan sistem');
-                }).always(function() {
-                    $btn.prop('disabled', false).html('<i class="bi bi-send me-2"></i>Kirim Kode OTP');
-                });
-            }
-
-            // Login Form Handler
-            $('#loginForm').on('submit', function(e) {
-                e.preventDefault();
-                
-                const role = $('#selectedRole').val();
-                const auth = $('#roleSelect option:selected').data('auth');
-                
-                let data = { role: role };
-
-                if (auth === 'dual') {
-                    // Customer with tabs
-                    if (customerAuthMode === 'password') {
-                        data.username = $('#usernamePassword').val();
-                        data.password = $('#passwordField').val();
-                        if (!data.username || !data.password) {
-                            showAlert('danger', 'Silakan isi username dan password');
-                            return;
-                        }
-                    } else {
-                        data.phone = $('#phoneOtp').val();
-                        data.otp = $('#otpField').val();
-                        data.username = $('#phoneOtp').val();
-                        if (!data.phone || !data.otp) {
-                            showAlert('danger', 'Silakan isi nomor WhatsApp dan kode OTP');
-                            return;
-                        }
-                    }
-                } else if (auth === 'password') {
-                    data.username = $('#usernameSingle').val();
-                    data.password = $('#passwordSingle').val();
-                    if (!data.username || !data.password) {
-                        showAlert('danger', 'Silakan isi username dan password admin');
-                        return;
-                    }
-                } else if (auth === 'otp') {
-                    data.phone = $('#phoneSingle').val();
-                    data.otp = $('#otpSingle').val();
-                    data.username = $('#phoneSingle').val();
-                    if (!data.phone || !data.otp) {
-                        showAlert('danger', 'Silakan isi nomor WhatsApp dan kode OTP');
-                        return;
-                    }
-                }
-
-                $('#loginSpinner').show();
-                $('#btnLogin').prop('disabled', true);
-
-                $.ajax({
-                    url: '/login',
-                    method: 'POST',
-                    data: data,
-                    success: function(res) {
-                        if (res.success) {
-                            window.location.href = res.redirect;
-                        } else {
-                            showAlert('danger', res.message || 'Login gagal, periksa kembali kredensial Anda');
-                            $('#loginSpinner').hide();
-                            $('#btnLogin').prop('disabled', false);
-                        }
-                    },
-                    error: function(xhr) {
-                        showAlert('danger', xhr.responseJSON?.message || 'Terjadi kesalahan sistem');
-                        $('#loginSpinner').hide();
-                        $('#btnLogin').prop('disabled', false);
-                    }
-                });
-            });
-
-            function showAlert(type, message) {
-                $('#alertPlaceholder').html(`
-                    <div class="alert alert-${type} alert-dismissible fade show small py-2" role="alert">
-                        ${message}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close" style="padding: 0.5rem;"></button>
-                    </div>
-                `);
+                loginText.textContent = 'Berhasil, mengalihkan...';
+                window.location.href = data.redirect || '/admin/dashboard';
+            } catch (error) {
+                showAlert('danger', 'Tidak dapat terhubung ke server. Silakan coba lagi.');
+                setLoading(false);
             }
         });
     </script>

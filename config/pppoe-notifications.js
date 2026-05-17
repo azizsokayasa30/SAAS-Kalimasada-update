@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const logger = require('./logger');
 const { getMikrotikConnection } = require('./mikrotik');
-const { getSetting, setSetting } = require('./settingsManager');
+const { getSetting, setSetting, getSettingsWithCache, clearSettingsCache } = require('./settingsManager');
 
 // Path to settings.json
 const settingsPath = path.join(__dirname, '../settings.json');
@@ -32,32 +32,83 @@ function setSock(sockInstance) {
 
 // Fungsi untuk mendapatkan pengaturan notifikasi PPPoE dari settings.json
 function getPPPoENotificationSettings() {
-    return getSetting('pppoe_notifications', {
-        enabled: true,
-        loginNotifications: true,
-        logoutNotifications: true,
-        includeOfflineList: true,
-        maxOfflineListCount: 20,
-        monitorInterval: 300000 // 5 menit (dioptimasi untuk mengurangi beban API MikroTik)
+    const objectSettings = getSetting('pppoe_notifications', {});
+    const merged = {
+        ...defaultSettings,
+        ...(objectSettings && typeof objectSettings === 'object' && !Array.isArray(objectSettings) ? objectSettings : {})
+    };
+
+    const flatMappings = {
+        enabled: 'pppoe_notifications.enabled',
+        loginNotifications: 'pppoe_notifications.loginNotifications',
+        logoutNotifications: 'pppoe_notifications.logoutNotifications',
+        includeOfflineList: 'pppoe_notifications.includeOfflineList',
+        maxOfflineListCount: 'pppoe_notifications.maxOfflineListCount',
+        monitorInterval: 'pppoe_notifications.monitorInterval'
+    };
+
+    Object.entries(flatMappings).forEach(([settingName, flatKey]) => {
+        const value = getSetting(flatKey, undefined);
+        if (value !== undefined) {
+            merged[settingName] = value;
+        }
     });
+
+    return {
+        ...merged,
+        enabled: toBoolean(merged.enabled, true),
+        loginNotifications: toBoolean(merged.loginNotifications, true),
+        logoutNotifications: toBoolean(merged.logoutNotifications, true),
+        includeOfflineList: toBoolean(merged.includeOfflineList, true),
+        maxOfflineListCount: toPositiveInteger(merged.maxOfflineListCount, defaultSettings.maxOfflineListCount),
+        monitorInterval: toPositiveInteger(merged.monitorInterval, defaultSettings.monitorInterval)
+    };
+}
+
+function toBoolean(value, fallback) {
+    if (value === undefined || value === null || value === '') return fallback;
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value !== 0;
+    if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (['false', '0', 'off', 'no'].includes(normalized)) return false;
+        if (['true', '1', 'on', 'yes'].includes(normalized)) return true;
+    }
+    return Boolean(value);
+}
+
+function toPositiveInteger(value, fallback) {
+    const parsed = parseInt(value, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 // Save settings to settings.json
 function saveSettings(settings) {
     try {
         // Update settings.json dengan pengaturan PPPoE notifications
-        const { getSettingsWithCache } = require('./settingsManager');
         const currentSettings = getSettingsWithCache();
+        const normalized = {
+            ...defaultSettings,
+            ...settings,
+            enabled: toBoolean(settings.enabled, true),
+            loginNotifications: toBoolean(settings.loginNotifications, true),
+            logoutNotifications: toBoolean(settings.logoutNotifications, true),
+            includeOfflineList: toBoolean(settings.includeOfflineList, true),
+            maxOfflineListCount: toPositiveInteger(settings.maxOfflineListCount, defaultSettings.maxOfflineListCount),
+            monitorInterval: toPositiveInteger(settings.monitorInterval, defaultSettings.monitorInterval)
+        };
         
         // Update pppoe_notifications settings
-        currentSettings['pppoe_notifications.enabled'] = settings.enabled.toString();
-        currentSettings['pppoe_notifications.loginNotifications'] = settings.loginNotifications.toString();
-        currentSettings['pppoe_notifications.logoutNotifications'] = settings.logoutNotifications.toString();
-        currentSettings['pppoe_notifications.includeOfflineList'] = settings.includeOfflineList.toString();
-        currentSettings['pppoe_notifications.maxOfflineListCount'] = settings.maxOfflineListCount.toString();
-        currentSettings['pppoe_notifications.monitorInterval'] = settings.monitorInterval.toString();
+        currentSettings.pppoe_notifications = normalized;
+        currentSettings['pppoe_notifications.enabled'] = normalized.enabled;
+        currentSettings['pppoe_notifications.loginNotifications'] = normalized.loginNotifications;
+        currentSettings['pppoe_notifications.logoutNotifications'] = normalized.logoutNotifications;
+        currentSettings['pppoe_notifications.includeOfflineList'] = normalized.includeOfflineList;
+        currentSettings['pppoe_notifications.maxOfflineListCount'] = String(normalized.maxOfflineListCount);
+        currentSettings['pppoe_notifications.monitorInterval'] = String(normalized.monitorInterval);
         
         fs.writeFileSync(settingsPath, JSON.stringify(currentSettings, null, 2));
+        clearSettingsCache();
         logger.info('PPPoE notification settings saved to settings.json');
         return true;
     } catch (error) {

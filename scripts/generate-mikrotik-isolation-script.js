@@ -1,282 +1,353 @@
 #!/usr/bin/env node
 
 /**
- * Script Generator untuk Mikrotik Isolation System
- * Menghasilkan script Mikrotik untuk isolir pelanggan IP statik
- * 
- * Usage: node scripts/generate-mikrotik-isolation-script.js
+ * Generator script Mikrotik untuk sistem isolir terpusat.
+ *
+ * Hasil script membuat walled garden:
+ * - pelanggan isolir tetap bisa membuka halaman isolir di port 8899,
+ * - pelanggan isolir tetap bisa membuka aplikasi billing utama,
+ * - pelanggan isolir tetap bisa menghubungi WhatsApp,
+ * - traffic lain diarahkan ke halaman isolir atau diblokir.
  */
 
 const fs = require('fs');
 const path = require('path');
 const { getSetting } = require('../config/settingsManager');
+const { getPublicAppBaseUrl } = require('../config/public-endpoint');
+
+function stripProtocol(value) {
+    return String(value || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '').trim();
+}
+
+function isIpAddress(value) {
+    return /^(\d{1,3}\.){3}\d{1,3}$/.test(String(value || '').trim());
+}
+
+function normalizeCidr(value, fallback = '192.168.200.0/24') {
+    const raw = String(value || '').trim();
+    if (!raw) return fallback;
+    if (raw.includes('/')) return raw;
+    if (raw.includes('-')) {
+        const first = raw.split('-')[0].trim();
+        const parts = first.split('.');
+        return parts.length === 4 ? `${parts[0]}.${parts[1]}.${parts[2]}.0/24` : fallback;
+    }
+    if (isIpAddress(raw)) {
+        const parts = raw.split('.');
+        return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+    }
+    return fallback;
+}
+
+function cidrToPoolRange(cidrOrRange) {
+    const raw = String(cidrOrRange || '').trim();
+    if (raw.includes('-')) return raw;
+    if (!raw.includes('/')) {
+        const parts = raw.split('.');
+        return parts.length === 4 ? `${parts[0]}.${parts[1]}.${parts[2]}.2-${parts[0]}.${parts[1]}.${parts[2]}.254` : '192.168.200.2-192.168.200.254';
+    }
+
+    const [ip, prefixRaw] = raw.split('/');
+    const prefix = parseInt(prefixRaw, 10);
+    const parts = ip.split('.').map((n) => parseInt(n, 10));
+    if (parts.length !== 4 || !Number.isFinite(prefix) || prefix < 8 || prefix > 30) {
+        return '192.168.200.2-192.168.200.254';
+    }
+
+    const hostCount = 2 ** (32 - prefix);
+    const start = [...parts];
+    const end = [...parts];
+    start[3] = Math.min(start[3] + 2, 254);
+    end[3] = Math.min(parts[3] + hostCount - 2, 254);
+    return `${start.join('.')}-${end.join('.')}`;
+}
+
+function gatewayFromCidr(cidr) {
+    const raw = String(cidr || '').split('/')[0];
+    const parts = raw.split('.').map((n) => parseInt(n, 10));
+    if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) return '192.168.200.1';
+    parts[3] = Math.min(parts[3] + 1, 254);
+    return parts.join('.');
+}
+
+function parsePublicEndpoint() {
+    const baseUrl = getPublicAppBaseUrl();
+    try {
+        const url = new URL(baseUrl);
+        return {
+            baseUrl,
+            host: url.hostname,
+            port: url.port || (url.protocol === 'https:' ? '443' : '80'),
+            scheme: url.protocol.replace(':', '')
+        };
+    } catch (_) {
+        return {
+            baseUrl,
+            host: stripProtocol(baseUrl) || String(getSetting('server_host', '192.168.1.2')),
+            port: String(getSetting('server_port', process.env.PORT || 4555)),
+            scheme: 'http'
+        };
+    }
+}
 
 class MikrotikIsolationScriptGenerator {
-    constructor() {
+    constructor(options = {}) {
+        const publicEndpoint = parsePublicEndpoint();
+        const configuredServerIp =
+            options.billingServerIp ||
+            process.env.ISOLIR_BILLING_SERVER_IP ||
+            getSetting('isolir_billing_server_ip', '') ||
+            getSetting('billing_server_ip', '') ||
+            (isIpAddress(publicEndpoint.host) ? publicEndpoint.host : '') ||
+            (isIpAddress(getSetting('server_host', '')) ? getSetting('server_host', '') : '');
+
+        this.config = {
+            companyName: getSetting('company_header', 'Billing System'),
+            isolirRange: normalizeCidr(options.isolirRange || getSetting('isolir_ip_range', getSetting('isolir_pool_range', '192.168.200.0/24'))),
+            isolirPoolName: options.isolirPoolName || getSetting('isolir_pool', 'isolir-pool'),
+            isolirProfile: options.isolirProfile || getSetting('isolir_profile', 'isolir'),
+            isolirPagePort: String(options.isolirPagePort || process.env.ISOLIR_PORT || getSetting('isolir_page_port', 8899)),
+            billingAppPort: String(options.billingAppPort || publicEndpoint.port || getSetting('server_port', process.env.PORT || 4555)),
+            billingHost: options.billingHost || publicEndpoint.host || getSetting('server_host', 'billing.local'),
+            billingBaseUrl: publicEndpoint.baseUrl,
+            billingServerIp: configuredServerIp || 'GANTI_IP_SERVER_BILLING',
+            includePppProfile: options.includePppProfile !== false
+        };
+
+        this.config.poolRange = cidrToPoolRange(this.config.isolirRange);
+        this.config.localAddress = gatewayFromCidr(this.config.isolirRange);
         this.scriptContent = [];
-        this.addHeader();
+    }
+
+    add(...lines) {
+        this.scriptContent.push(...lines);
+    }
+
+    filterTop(chain, params) {
+        return [
+            `:local firstFilter [/ip firewall filter find where chain=${chain}]`,
+            ':if ([:len $firstFilter] > 0) do={',
+            '    :local target [:pick $firstFilter 0]',
+            `    /ip firewall filter add chain=${chain} ${params} place-before=$target`,
+            '} else={',
+            `    /ip firewall filter add chain=${chain} ${params}`,
+            '}'
+        ];
+    }
+
+    natTop(chain, params) {
+        return [
+            `:local firstNat [/ip firewall nat find where chain=${chain}]`,
+            ':if ([:len $firstNat] > 0) do={',
+            '    :local target [:pick $firstNat 0]',
+            `    /ip firewall nat add chain=${chain} ${params} place-before=$target`,
+            '} else={',
+            `    /ip firewall nat add chain=${chain} ${params}`,
+            '}'
+        ];
     }
 
     addHeader() {
-        this.scriptContent.push(
+        const c = this.config;
+        this.add(
             '# ========================================',
-            '# MIKROTIK ISOLATION SYSTEM SCRIPT',
+            '# BILLING ISOLIR WALLED GARDEN',
             '# Generated by Gembok Bill System',
-            '# Date: ' + new Date().toISOString(),
+            `# Provider: ${c.companyName}`,
+            `# Generated: ${new Date().toISOString()}`,
             '# ========================================',
             '',
-            '# Script ini berisi konfigurasi untuk isolir pelanggan IP statik',
-            '# Jalankan script ini di Mikrotik RouterOS',
+            '# Tujuan:',
+            '# - Pelanggan isolir tetap bisa membuka portal billing dan halaman isolir.',
+            '# - Pelanggan isolir tetap bisa membuka WhatsApp untuk kirim bukti bayar.',
+            '# - Traffic lain dibatasi/diarahkan ke halaman isolir.',
             '',
-            '# ========================================',
-            '# 1. SETUP ADDRESS LIST',
-            '# ========================================',
+            `# Range isolir       : ${c.isolirRange}`,
+            `# Pool isolir        : ${c.isolirPoolName} (${c.poolRange})`,
+            `# Profile PPP isolir : ${c.isolirProfile}`,
+            `# IP server billing  : ${c.billingServerIp}`,
+            `# Port halaman isolir: ${c.isolirPagePort}`,
+            `# Port billing utama : ${c.billingAppPort}`,
+            `# Host billing       : ${c.billingHost}`,
+            '',
+            '# PENTING: jika IP server billing masih GANTI_IP_SERVER_BILLING, edit dulu sebelum import.',
             ''
         );
     }
 
-    generateAddressListSetup() {
-        this.scriptContent.push(
-            '# Buat address list untuk blocked customers',
-            '/ip firewall address-list add list=blocked_customers address=0.0.0.0 comment="Placeholder - Auto managed by Gembok Bill"',
-            '',
-            '# ========================================',
-            '# 2. FIREWALL RULES',
-            '# ========================================',
+    addCleanup() {
+        this.add(
+            '# 1. Cleanup rule lama dari generator ini',
+            '/ip firewall filter remove [find where comment~"BILLING-ISOLIR"]',
+            '/ip firewall nat remove [find where comment~"BILLING-ISOLIR"]',
+            '/ip firewall address-list remove [find where comment~"BILLING-ISOLIR"]',
+            '# Cleanup rule isolir generator lama yang bisa mendrop sebelum rule baru.',
+            '/ip firewall filter remove [find where comment~"Generate BILLING - Isolir"]',
+            '/ip firewall filter remove [find where comment~"isolir-allow"]',
+            '/ip firewall filter remove [find where comment~"isolir-block"]',
+            '/ip firewall nat remove [find where comment~"Generate BILLING - Isolir"]',
+            '/ip firewall nat remove [find where comment~"isolir-redirect"]',
             ''
         );
     }
 
-    generateFirewallRules() {
-        this.scriptContent.push(
-            '# Rule 1: Block traffic dari blocked customers (FORWARD chain)',
-            '# Place this rule at the TOP of your forward chain',
-            '/ip firewall filter add chain=forward src-address-list=blocked_customers action=drop comment="Block suspended customers (static IP) - Gembok Bill" place-before=0',
-            '',
-            '# Rule 2: Block access to router dari blocked customers (INPUT chain)',
-            '/ip firewall filter add chain=input src-address-list=blocked_customers action=drop comment="Block suspended customers from accessing router (static IP) - Gembok Bill"',
-            '',
-            '# ========================================',
-            '# 3. DHCP SERVER CONFIGURATION (Optional)',
-            '# ========================================',
+    addLists() {
+        const c = this.config;
+        const whatsappHosts = [
+            'wa.me',
+            'whatsapp.com',
+            'web.whatsapp.com',
+            'api.whatsapp.com',
+            'static.whatsapp.net',
+            'whatsapp.net',
+            'graph.whatsapp.com',
+            'mmg.whatsapp.net',
+            'pps.whatsapp.net',
+            'media.whatsapp.net',
+            'mmg-fna.whatsapp.net',
+            'g.whatsapp.net',
+            'v.whatsapp.net',
+            'scontent.whatsapp.net',
+            'facebook.com',
+            'fbcdn.net',
+            'fbsbx.com'
+        ];
+
+        this.add(
+            '# 2. Address-list pelanggan isolir dan tujuan yang boleh diakses',
+            `/ip firewall address-list add list=isolir-users address=${c.isolirRange} comment="BILLING-ISOLIR users range"`,
+            `/ip firewall address-list add list=isolir-allowed-dst address=${c.billingServerIp} comment="BILLING-ISOLIR billing server"`,
+            ...(isIpAddress(c.billingHost)
+                ? []
+                : [`/ip firewall address-list add list=isolir-allowed-dst address=${c.billingHost} comment="BILLING-ISOLIR billing host DNS"`]),
+            ...whatsappHosts.map((host) => `/ip firewall address-list add list=isolir-allowed-dst address=${host} comment="BILLING-ISOLIR whatsapp ${host}"`),
             ''
         );
     }
 
-    generateDHCPConfiguration() {
-        this.scriptContent.push(
-            '# Jika menggunakan DHCP block method, pastikan DHCP server aktif',
-            '# Uncomment dan sesuaikan dengan konfigurasi DHCP Anda:',
-            '',
-            '# /ip dhcp-server setup',
-            '# /ip dhcp-server network add address=192.168.1.0/24 gateway=192.168.1.1 dns=8.8.8.8,8.8.4.4',
-            '',
-            '# ========================================',
-            '# 4. QUEUE CONFIGURATION (Optional)',
-            '# ========================================',
+    addPppProfile() {
+        if (!this.config.includePppProfile) return;
+        const c = this.config;
+        this.add(
+            '# 3. Pool dan profile PPP isolir',
+            `/ip pool remove [find where name="${c.isolirPoolName}"]`,
+            `/ip pool add name="${c.isolirPoolName}" ranges=${c.poolRange} comment="BILLING-ISOLIR pool"`,
+            `/ppp profile remove [find where name="${c.isolirProfile}" and comment~"BILLING-ISOLIR"]`,
+            `/ppp profile add name="${c.isolirProfile}" local-address=${c.localAddress} remote-address=${c.isolirPoolName} only-one=yes comment="BILLING-ISOLIR profile"`,
             ''
         );
     }
 
-    generateQueueConfiguration() {
-        this.scriptContent.push(
-            '# Jika menggunakan bandwidth limit method, buat queue parent:',
-            '# /queue simple add name="suspended_customers" target=192.168.1.0/24 max-limit=1k/1k comment="Suspended customers queue"',
-            '',
-            '# ========================================',
-            '# 5. MONITORING COMMANDS',
-            '# ========================================',
+    addDnsRules() {
+        const c = this.config;
+        this.add(
+            '# 4. DNS untuk pelanggan isolir',
+            '# Jika pelanggan memakai DNS router, rule input ini wajib berada sebelum drop input lain.',
+            ...this.filterTop('input', `src-address=${c.isolirRange} protocol=udp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns udp to router"`),
+            ...this.filterTop('input', `src-address=${c.isolirRange} protocol=tcp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns tcp to router"`),
+            '# Jika pelanggan memakai DNS eksternal, forward DNS tetap dibuka agar FQDN WhatsApp bisa resolve.',
+            ...this.filterTop('forward', `src-address=${c.isolirRange} protocol=udp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns udp forward"`),
+            ...this.filterTop('forward', `src-address=${c.isolirRange} protocol=tcp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns tcp forward"`),
             ''
         );
     }
 
-    generateMonitoringCommands() {
-        this.scriptContent.push(
-            '# Perintah untuk monitoring isolir:',
-            '',
-            '# Cek address list blocked customers:',
-            '# /ip firewall address-list print where list=blocked_customers',
-            '',
-            '# Cek firewall rules:',
-            '# /ip firewall filter print where comment~"Block suspended customers"',
-            '',
-            '# Cek DHCP leases yang diblokir:',
-            '# /ip dhcp-server lease print where blocked=yes',
-            '',
-            '# Cek queue suspended:',
-            '# /queue simple print where name~"suspended"',
-            '',
-            '# ========================================',
-            '# 6. MANUAL ISOLATION COMMANDS',
-            '# ========================================',
+    addNatRules() {
+        const c = this.config;
+        this.add(
+            '# 5. NAT: tujuan yang diizinkan tidak diarahkan, HTTP lain dipaksa ke halaman isolir port 8899',
+            '# Urutan command sengaja: redirect dulu, lalu bypass diinsert ke atas redirect.',
+            ...this.natTop('srcnat', `src-address=${c.isolirRange} dst-address=${c.billingServerIp} action=masquerade comment="BILLING-ISOLIR masquerade to billing server"`),
+            ...this.natTop('dstnat', `src-address=${c.isolirRange} protocol=tcp dst-port=80,8080,8000,8888 action=dst-nat to-addresses=${c.billingServerIp} to-ports=${c.isolirPagePort} comment="BILLING-ISOLIR force http to isolir page"`),
+            ...this.natTop('dstnat', `src-address=${c.isolirRange} dst-address-list=isolir-allowed-dst protocol=tcp action=accept comment="BILLING-ISOLIR bypass allowed destinations"`),
+            '# Catatan HTTPS: browser tidak bisa dipaksa menampilkan halaman HTTP tanpa sertifikat domain tujuan.',
+            '# Karena itu HTTPS non-whitelist diblokir; captive portal/akses HTTP akan menampilkan halaman isolir.',
             ''
         );
     }
 
-    generateManualCommands() {
-        this.scriptContent.push(
-            '# Perintah manual untuk isolir pelanggan:',
+    addFilterRules() {
+        const c = this.config;
+        const billingPorts = Array.from(new Set([c.isolirPagePort, c.billingAppPort, '80', '443'].filter(Boolean))).join(',');
+        this.add(
+            '# 6. Firewall forward: allow yang dibutuhkan, lalu drop sisanya',
+            '# Urutan command sengaja: drop dulu, lalu allow diinsert ke atas drop.',
+            ...this.filterTop('forward', `src-address=${c.isolirRange} action=drop comment="BILLING-ISOLIR drop all other traffic"`),
+            ...this.filterTop('forward', `src-address=${c.isolirRange} dst-address-list=isolir-allowed-dst protocol=tcp dst-port=80,443,5222,5223,5228,4244 action=accept comment="BILLING-ISOLIR allow whatsapp and allowed web"`),
+            ...this.filterTop('forward', `src-address=${c.isolirRange} dst-address=${c.billingServerIp} protocol=tcp dst-port=${billingPorts} action=accept comment="BILLING-ISOLIR allow billing app and isolir page"`),
+            ...this.filterTop('forward', 'connection-state=established,related action=accept comment="BILLING-ISOLIR allow established"'),
             '',
-            '# Isolir pelanggan (ganti IP_ADDRESS dengan IP pelanggan):',
-            '# /ip firewall address-list add list=blocked_customers address=IP_ADDRESS comment="SUSPENDED - [ALASAN] - [TANGGAL]"',
-            '',
-            '# Contoh:',
-            '# /ip firewall address-list add list=blocked_customers address=192.168.1.100 comment="SUSPENDED - Telat bayar - 2024-01-15"',
-            '',
-            '# Restore pelanggan (hapus dari address list):',
-            '# /ip firewall address-list remove [find where address=IP_ADDRESS and list=blocked_customers]',
-            '',
-            '# Contoh:',
-            '# /ip firewall address-list remove [find where address=192.168.1.100 and list=blocked_customers]',
-            '',
-            '# ========================================',
-            '# 7. BULK OPERATIONS',
-            '# ========================================',
+            '# Untuk isolir IP statik, pastikan rule allow di atas berada sebelum rule drop blocked_customers.',
+            '# Jika memakai address-list blocked_customers, contoh rule drop yang aman:',
+            '# /ip firewall filter add chain=forward src-address-list=blocked_customers action=drop comment="BILLING-ISOLIR blocked_customers drop after whitelist"',
             ''
         );
     }
 
-    generateBulkOperations() {
-        this.scriptContent.push(
-            '# Operasi bulk untuk multiple pelanggan:',
-            '',
-            '# Isolir multiple IP sekaligus:',
-            '# :foreach i in={192.168.1.100;192.168.1.101;192.168.1.102} do={/ip firewall address-list add list=blocked_customers address=$i comment="BULK SUSPEND - [TANGGAL]"}',
-            '',
-            '# Restore semua pelanggan yang diisolir:',
-            '# /ip firewall address-list remove [find where list=blocked_customers and comment~"SUSPENDED"]',
-            '',
-            '# ========================================',
-            '# 8. ADVANCED CONFIGURATION',
-            '# ========================================',
-            ''
-        );
-    }
-
-    generateAdvancedConfiguration() {
-        this.scriptContent.push(
-            '# Konfigurasi lanjutan untuk performa optimal:',
-            '',
-            '# Buat address list terpisah untuk monitoring:',
-            '# /ip firewall address-list add list=monitoring_customers address=0.0.0.0 comment="For monitoring purposes"',
-            '',
-            '# Buat rule untuk logging (optional):',
-            '# /ip firewall filter add chain=forward src-address-list=blocked_customers action=log log-prefix="BLOCKED:" comment="Log blocked customers"',
-            '',
-            '# Buat rule untuk allow specific services (jika diperlukan):',
-            '# /ip firewall filter add chain=forward src-address-list=blocked_customers dst-port=53 action=accept comment="Allow DNS for blocked customers"',
-            '',
-            '# ========================================',
-            '# 9. TROUBLESHOOTING',
-            '# ========================================',
-            ''
-        );
-    }
-
-    generateTroubleshooting() {
-        this.scriptContent.push(
-            '# Troubleshooting commands:',
-            '',
-            '# Cek apakah rule firewall aktif:',
-            '# /ip firewall filter print where disabled=no and comment~"Block suspended customers"',
-            '',
-            '# Cek address list entries:',
-            '# /ip firewall address-list print where list=blocked_customers',
-            '',
-            '# Test connectivity dari IP yang diisolir:',
-            '# /ping 8.8.8.8 src-address=IP_YANG_DIISOLIR',
-            '',
-            '# Cek log firewall:',
-            '# /log print where topics~"firewall"',
-            '',
-            '# ========================================',
-            '# END OF SCRIPT',
-            '# ========================================',
-            '',
-            '# Catatan:',
-            '# 1. Pastikan script ini dijalankan dengan akses admin penuh',
-            '# 2. Sesuaikan IP range dengan konfigurasi network Anda',
-            '# 3. Test konfigurasi di environment non-production terlebih dahulu',
-            '# 4. Backup konfigurasi Mikrotik sebelum menjalankan script',
-            '# 5. Monitor log setelah implementasi untuk memastikan berfungsi dengan baik',
+    addVerification() {
+        const c = this.config;
+        this.add(
+            '# 7. Verifikasi',
+            ':put "=== BILLING ISOLIR WALLED GARDEN READY ==="',
+            `:put "Halaman isolir: http://${c.billingServerIp}:${c.isolirPagePort}/isolir"`,
+            `:put "Portal billing : ${c.billingBaseUrl}"`,
+            ':put "Cek address-list: /ip firewall address-list print where comment~\\"BILLING-ISOLIR\\""',
+            ':put "Cek filter      : /ip firewall filter print where comment~\\"BILLING-ISOLIR\\""',
+            ':put "Cek nat         : /ip firewall nat print where comment~\\"BILLING-ISOLIR\\""',
             ''
         );
     }
 
     generateScript() {
-        this.generateAddressListSetup();
-        this.generateFirewallRules();
-        this.generateDHCPConfiguration();
-        this.generateQueueConfiguration();
-        this.generateMonitoringCommands();
-        this.generateManualCommands();
-        this.generateBulkOperations();
-        this.generateAdvancedConfiguration();
-        this.generateTroubleshooting();
-        
+        this.scriptContent = [];
+        this.addHeader();
+        this.addCleanup();
+        this.addLists();
+        this.addPppProfile();
+        this.addDnsRules();
+        this.addNatRules();
+        this.addFilterRules();
+        this.addVerification();
         return this.scriptContent.join('\n');
     }
 
     saveScript(filename = 'mikrotik-isolation-setup.rsc') {
         const script = this.generateScript();
         const filepath = path.join(__dirname, '..', filename);
-        
         fs.writeFileSync(filepath, script, 'utf8');
-        console.log(`✅ Script Mikrotik berhasil dibuat: ${filepath}`);
+        console.log(`Script Mikrotik berhasil dibuat: ${filepath}`);
         return filepath;
     }
 
     printScript() {
-        const script = this.generateScript();
-        console.log('\n' + '='.repeat(60));
-        console.log('MIKROTIK ISOLATION SCRIPT');
-        console.log('='.repeat(60));
-        console.log(script);
-        console.log('='.repeat(60));
+        console.log(this.generateScript());
     }
 }
 
-// Fungsi untuk generate script berdasarkan setting aplikasi
 function generateScriptFromSettings() {
     const generator = new MikrotikIsolationScriptGenerator();
-    
-    // Ambil setting dari aplikasi
-    const suspensionMethod = getSetting('static_ip_suspension_method', 'address_list');
-    const bandwidthLimit = getSetting('suspension_bandwidth_limit', '1k/1k');
-    const isolirProfile = getSetting('isolir_profile', 'isolir');
-    
-    console.log('🔧 Konfigurasi Aplikasi:');
-    console.log(`   Metode Isolir: ${suspensionMethod}`);
-    console.log(`   Bandwidth Limit: ${bandwidthLimit}`);
-    console.log(`   Isolir Profile: ${isolirProfile}`);
+    const c = generator.config;
+    console.log('Konfigurasi isolir:');
+    console.log(`  Range isolir       : ${c.isolirRange}`);
+    console.log(`  IP server billing  : ${c.billingServerIp}`);
+    console.log(`  Port isolir        : ${c.isolirPagePort}`);
+    console.log(`  Port billing utama : ${c.billingAppPort}`);
+    console.log(`  Host billing       : ${c.billingHost}`);
     console.log('');
-    
     return generator;
 }
 
-// Main execution
 if (require.main === module) {
     try {
-        console.log('🚀 Generating Mikrotik Isolation Script...\n');
-        
+        console.log('Generating Mikrotik isolation walled-garden script...\n');
         const generator = generateScriptFromSettings();
         const filepath = generator.saveScript();
-        
-        console.log('\n📋 Script berhasil dibuat!');
-        console.log(`   File: ${filepath}`);
-        console.log('\n📖 Cara menggunakan:');
-        console.log('   1. Copy isi file script ke clipboard');
-        console.log('   2. Login ke Mikrotik RouterOS');
-        console.log('   3. Paste script di terminal Mikrotik');
-        console.log('   4. Atau upload file .rsc ke Mikrotik');
-        console.log('\n⚠️  Pastikan backup konfigurasi Mikrotik terlebih dahulu!');
-        
-        // Tampilkan preview script
-        console.log('\n📄 Preview Script:');
+        console.log(`\nFile: ${filepath}`);
+        console.log('\nCatatan: jika IP server billing belum benar, set setting isolir_billing_server_ip atau env ISOLIR_BILLING_SERVER_IP lalu generate ulang.');
+        console.log('\nPreview:\n');
         generator.printScript();
-        
     } catch (error) {
-        console.error('❌ Error generating script:', error.message);
+        console.error('Error generating script:', error.message);
         process.exit(1);
     }
 }

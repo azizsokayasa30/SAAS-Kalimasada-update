@@ -51,8 +51,8 @@ async function getVoucherOnlineSettings() {
                 profile TEXT NOT NULL,
                 digits INTEGER NOT NULL DEFAULT 5,
                 enabled INTEGER NOT NULL DEFAULT 1,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at DATETIME DEFAULT (datetime('now','localtime')),
+                updated_at DATETIME DEFAULT (datetime('now','localtime'))
             )
         `, (err) => {
             if (err) {
@@ -1566,8 +1566,8 @@ router.get('/voucher', async (req, res) => {
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             name TEXT NOT NULL UNIQUE,
                             description TEXT,
-                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                            created_at DATETIME DEFAULT (datetime('now','localtime')),
+                            updated_at DATETIME DEFAULT (datetime('now','localtime'))
                         )
                     `, (err) => {
                         if (err) reject(err);
@@ -1792,8 +1792,8 @@ router.get('/voucher', async (req, res) => {
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
                     description TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime'))
                 )
             `, (err) => {
                 if (err) reject(err);
@@ -2545,8 +2545,8 @@ router.post('/save-voucher-online-settings', async (req, res) => {
                     profile TEXT NOT NULL,
                     digits INTEGER NOT NULL DEFAULT 5,
                     enabled INTEGER NOT NULL DEFAULT 1,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime'))
                 )
             `, (err) => {
                 if (err) reject(err);
@@ -2561,7 +2561,7 @@ router.post('/save-voucher-online-settings', async (req, res) => {
                 const sql = `
                     INSERT OR REPLACE INTO voucher_online_settings
                     (package_id, name, profile, digits, enabled, updated_at)
-                    VALUES (?, ?, ?, ?, ?, datetime('now'))
+                    VALUES (?, ?, ?, ?, ?, datetime('now','localtime'))
                 `;
                 db.run(sql, [packageId, setting.name || `${packageId} - Paket`, setting.profile, setting.digits || 5, setting.enabled ? 1 : 0], function(err) {
                     if (err) reject(err);
@@ -2603,8 +2603,8 @@ router.get('/voucher-templates', async (req, res) => {
                     template_code TEXT NOT NULL,
                     is_default INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL DEFAULT 'enabled' CHECK (status IN ('enabled', 'disabled')),
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime'))
                 )
             `, (err) => {
                 if (err) reject(err);
@@ -2664,8 +2664,8 @@ router.post('/print-vouchers', async (req, res) => {
                     template_code TEXT NOT NULL,
                     is_default INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL DEFAULT 'enabled' CHECK (status IN ('enabled', 'disabled')),
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime'))
                 )
             `, (err) => {
                 if (err) reject(err);
@@ -3406,8 +3406,8 @@ router.post('/save-voucher-generation-settings', async (req, res) => {
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     setting_key TEXT NOT NULL UNIQUE,
                     setting_value TEXT NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    created_at DATETIME DEFAULT (datetime('now','localtime')),
+                    updated_at DATETIME DEFAULT (datetime('now','localtime'))
                 )
             `, (err) => {
                 if (err) reject(err);
@@ -3421,7 +3421,7 @@ router.post('/save-voucher-generation-settings', async (req, res) => {
                 const sql = `
                     INSERT OR REPLACE INTO voucher_generation_settings
                     (setting_key, setting_value, updated_at)
-                    VALUES (?, ?, datetime('now'))
+                    VALUES (?, ?, datetime('now','localtime'))
                 `;
                 db.run(sql, [key, settings[key]], function(err) {
                     if (err) reject(err);

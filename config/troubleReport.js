@@ -54,7 +54,13 @@ function formatIndonesianDateTime(date = new Date()) {
 async function getAllTroubleReports() {
   return new Promise((resolve, reject) => {
     const db = getDB();
-    db.all("SELECT * FROM trouble_reports ORDER BY created_at DESC", [], (err, rows) => {
+    db.all(`
+      SELECT tr.*, t.name AS technician_name, t.phone AS technician_phone
+      FROM trouble_reports tr
+      LEFT JOIN technicians t
+        ON CAST(tr.assigned_technician_id AS TEXT) = CAST(t.id AS TEXT)
+      ORDER BY tr.created_at DESC
+    `, [], (err, rows) => {
       db.close();
       if (err) {
         logger.error(`Gagal membaca laporan gangguan: ${err.message}`);
