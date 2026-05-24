@@ -563,6 +563,10 @@ $(function() {
   // Submit Tambah/Edit
   $('#userForm').submit(function(e) {
     e.preventDefault();
+    const $form = $(this);
+    const $submitBtn = $form.find('button[type="submit"]');
+    if ($submitBtn.prop('disabled')) return;
+
     const id = $('#userId').val();
     const username = $('#username').val();
     const password = $('#password').val();
@@ -570,28 +574,36 @@ $(function() {
     const router_id = $('#router_id').val();
     const url = id ? '/admin/mikrotik/edit-user' : '/admin/mikrotik/add-user';
     
-    // In RADIUS mode, router_id is not required
     const isRadiusMode = <%= typeof authMode !== 'undefined' && authMode === 'radius' ? 'true' : 'false' %>;
     if (!isRadiusMode && !router_id && !id) {
       showWarningAlert('Peringatan', 'Pilih NAS (router) terlebih dahulu!');
       return;
     }
+
+    const btnHtml = $submitBtn.html();
+    $submitBtn.prop('disabled', true).html(
+      '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Menyimpan...'
+    );
     
-    $.post(url, { id, username, password, profile, router_id }, function(res) {
-      if(res.success) {
-        let message = 'User berhasil disimpan!';
-        if (isRadiusMode) {
-          message += '\n\nMode RADIUS Aktif: User akan disimpan ke database RADIUS di tabel `radcheck` dan `radusergroup`.';
-        }
-        showSuccessAlert('Berhasil!', message, function() {
-          location.reload();
+    $.ajax({
+      url: url,
+      method: 'POST',
+      data: { id, username, password, profile, router_id },
+      timeout: 45000
+    }).done(function(res) {
+      if (res.success) {
+        $('#userModal').modal('hide');
+        showSuccessAlert('Berhasil', res.message || 'User berhasil disimpan.', function() {
+          window.location.href = '/admin/mikrotik?refresh=1';
         });
       } else {
-        showErrorAlert('Gagal Menyimpan', 'Gagal menyimpan user: ' + (res.message || 'Unknown error'));
+        showErrorAlert('Gagal Menyimpan', res.message || 'Unknown error');
       }
     }).fail(function(xhr) {
       const errorMsg = xhr.responseJSON?.message || 'Terjadi kesalahan saat menyimpan user';
       showErrorAlert('Error', errorMsg);
+    }).always(function() {
+      $submitBtn.prop('disabled', false).html(btnHtml);
     });
   });
   // Hapus User PPPoE

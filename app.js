@@ -1308,6 +1308,13 @@ try {
             } catch (err) {
                 logger.error('Error initializing Interval Manager:', err);
             }
+
+            try {
+                const { startRadiusMaintenanceSchedule } = require('./config/radiusMaintenance');
+                startRadiusMaintenanceSchedule();
+            } catch (err) {
+                logger.error('Error starting RADIUS maintenance schedule:', err);
+            }
             
             // Initialize License System
             try {

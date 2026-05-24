@@ -16,6 +16,11 @@ const MIN_MONITOR_INTERVAL_MS = 10 * 1000;
 // Connection pool untuk router (reuse koneksi per router)
 const routerConnections = new Map();
 
+const PPPoe_EXCLUDE_CACHE_KEY = 'radius:pppoe:exclude_usernames';
+const PPPoe_EXCLUDE_CACHE_TTL = 5 * 60 * 1000;
+const ACTIVE_RADIUS_SESSIONS_CACHE_KEY = 'radius:pppoe:active_sessions';
+const ACTIVE_RADIUS_SESSIONS_CACHE_TTL = 45 * 1000;
+
 /**
  * Username yang dikecualikan dari daftar PPPoE admin / query radcheck terkait:
  * - voucher_revenue (hotspot voucher)
@@ -27,6 +32,11 @@ const routerConnections = new Map();
  * dan menyembunyikan pelanggan ISP padahal baris radcheck ada.
  */
 async function getPppoeRadcheckExcludeUsernames() {
+    const cached = cacheManager.get(PPPoe_EXCLUDE_CACHE_KEY);
+    if (cached) {
+        return cached;
+    }
+
     const sqlite3 = require('sqlite3').verbose();
     const dbPath = path.join(__dirname, '../data/billing.db');
     const db = new sqlite3.Database(dbPath);
@@ -77,6 +87,7 @@ async function getPppoeRadcheckExcludeUsernames() {
         } else {
             logger.info(`[PPPoE-exclude] voucher + hotspot_username: ${merged.length} username (tanpa bentrok pelanggan PPPoE)`);
         }
+        cacheManager.set(PPPoe_EXCLUDE_CACHE_KEY, merged, PPPoe_EXCLUDE_CACHE_TTL);
         return merged;
     } finally {
         db.close();
@@ -270,6 +281,16 @@ async function getRadiusConnection() {
     }
 }
 
+/** Setelah tulis ke SQLite billing, salin ke MySQL jika FreeRADIUS memakai MySQL. */
+async function syncRadiusToFreeRadiusMysql() {
+    try {
+        const { syncRadiusSqliteToMysql } = require('./radiusMysqlSync');
+        await syncRadiusSqliteToMysql();
+    } catch (e) {
+        logger.debug(`[RADIUS] sync ke MySQL: ${e.message}`);
+    }
+}
+
 // Predikat atribut sandi di radcheck (case-insensitive; dump FR/Mikrotik bervariasi).
 function sqlRadcheckPasswordPredicate(alias) {
     return `LOWER(TRIM(${alias}.attribute)) IN (
@@ -315,49 +336,48 @@ async function getRadusergroupProfileMap(conn, usernames) {
  * Samakan input profil (form admin) ke groupname persis di RADIUS agar radusergroup konsisten
  * dengan radgroupreply/radgroupcheck (hindari beda kapital/spasi vs label tampilan).
  */
+const _radiusProfileGroupCache = new Map();
+const RADIUS_PROFILE_GROUP_CACHE_MS = 120000;
+
 async function resolveRadiusProfileGroupname(conn, profileInput) {
     const raw = (profileInput != null ? String(profileInput) : '').trim();
     if (!raw) return null;
-    const tryTables = async (sql, params) => {
-        const [rows] = await conn.execute(sql, params);
+
+    const cacheKey = raw.toLowerCase();
+    const cached = _radiusProfileGroupCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < RADIUS_PROFILE_GROUP_CACHE_MS) {
+        return cached.groupname;
+    }
+
+    const simplified = raw.toLowerCase().replace(/\s+/g, '_');
+    const pick = (rows) => {
         const list = Array.isArray(rows) ? rows : [];
         return list.length > 0 ? String(list[0].groupname) : null;
     };
-    let found = await tryTables(
-        'SELECT DISTINCT groupname FROM radgroupreply WHERE groupname = ? LIMIT 1',
-        [raw]
+
+    const [replyRows] = await conn.execute(
+        `SELECT groupname FROM radgroupreply
+         WHERE groupname IN (?, ?) OR LOWER(TRIM(groupname)) = LOWER(TRIM(?))
+         LIMIT 1`,
+        [raw, simplified, raw]
     );
-    if (found) return found;
-    const simplified = raw.toLowerCase().replace(/\s+/g, '_');
-    if (simplified !== raw) {
-        found = await tryTables(
-            'SELECT DISTINCT groupname FROM radgroupreply WHERE groupname = ? LIMIT 1',
-            [simplified]
-        );
-        if (found) return found;
-    }
-    found = await tryTables(
-        'SELECT DISTINCT groupname FROM radgroupreply WHERE LOWER(TRIM(groupname)) = LOWER(TRIM(?)) LIMIT 1',
-        [raw]
-    );
-    if (found) return found;
-    try {
-        found = await tryTables(
-            'SELECT DISTINCT groupname FROM radgroupcheck WHERE groupname = ? LIMIT 1',
-            [raw]
-        );
-        if (found) return found;
-        found = await tryTables(
-            'SELECT DISTINCT groupname FROM radgroupcheck WHERE LOWER(TRIM(groupname)) = LOWER(TRIM(?)) LIMIT 1',
-            [raw]
-        );
-        if (found) return found;
-    } catch (e) {
+    let found = pick(replyRows);
+    if (!found) {
         try {
+            const [checkRows] = await conn.execute(
+                `SELECT groupname FROM radgroupcheck
+                 WHERE groupname IN (?, ?) OR LOWER(TRIM(groupname)) = LOWER(TRIM(?))
+                 LIMIT 1`,
+                [raw, simplified, raw]
+            );
+            found = pick(checkRows);
+        } catch (e) {
             logger.debug(`[resolveRadiusProfileGroupname] radgroupcheck: ${e.message}`);
-        } catch (_) {}
+        }
     }
-    return null;
+
+    _radiusProfileGroupCache.set(cacheKey, { groupname: found, ts: Date.now() });
+    return found;
 }
 
 /** Slug paket billing (paket_10mbps) — bukan grup RADIUS yang seharusnya untuk PPPoE pelanggan. */
@@ -708,7 +728,15 @@ async function getPPPoEUsersRadius() {
 }
 
 // Fungsi untuk mendapatkan active PPPoE connections dari RADIUS (BUKAN hotspot voucher DAN BUKAN member hotspot)
-async function getActivePPPoEConnectionsRadius() {
+async function getActivePPPoEConnectionsRadius(options = {}) {
+    const forceRefresh = options.forceRefresh === true;
+    if (!forceRefresh) {
+        const cached = cacheManager.get(ACTIVE_RADIUS_SESSIONS_CACHE_KEY);
+        if (cached) {
+            return cached;
+        }
+    }
+
     const conn = await getRadiusConnection();
     try {
         const excludeUsernames = await getPppoeRadcheckExcludeUsernames();
@@ -743,7 +771,7 @@ async function getActivePPPoEConnectionsRadius() {
         const activeList = Array.isArray(activeRows) ? activeRows : [];
 
         await conn.end();
-        return activeList.map((row) => ({
+        const result = activeList.map((row) => ({
             name: row.username,
             ip: row.framedipaddress || 'N/A',
             uptime: row.session_time != null && row.session_time !== '' ? row.session_time : 0,
@@ -751,6 +779,8 @@ async function getActivePPPoEConnectionsRadius() {
             'bytes-out': row.acctoutputoctets || 0,
             nasip: row.nasipaddress || 'N/A'
         }));
+        cacheManager.set(ACTIVE_RADIUS_SESSIONS_CACHE_KEY, result, ACTIVE_RADIUS_SESSIONS_CACHE_TTL);
+        return result;
     } catch (error) {
         await conn.end();
         logger.error(`Error getting active PPPoE connections from RADIUS: ${error.message}`);
@@ -1079,6 +1109,7 @@ async function addPPPoEUserRadius({ username, password, profile = null }) {
         });
 
         logger.info(`[RADIUS] Successfully added PPPoE user ${username} to RADIUS database`);
+        if (result && result.success) await syncRadiusToFreeRadiusMysql();
         return result;
     } catch (error) {
         logger.error(`[RADIUS] Error adding PPPoE user ${username} to RADIUS:`, error);
@@ -1363,11 +1394,13 @@ async function ensureIsolirProfileRadius() {
 }
 
 // Fungsi untuk suspend user (pindahkan ke group 'isolir')
-async function suspendUserRadius(username) {
+async function suspendUserRadius(username, options = {}) {
+    const skipEnsureIsolir = options.skipEnsureIsolir === true;
     const conn = await getRadiusConnection();
     try {
-        // PENTING: Pastikan profile isolir ada di RADIUS sebelum suspend
-        await ensureIsolirProfileRadius();
+        if (!skipEnsureIsolir) {
+            await ensureIsolirProfileRadius();
+        }
         
         // Simpan group sebelumnya (jika ada) untuk bisa restore nanti
         // Ambil group yang BUKAN 'isolir' (untuk restore nanti)
@@ -1821,7 +1854,7 @@ async function deletePPPoEUserRadius(username) {
             logger.warn(`[RADIUS] Failed to disconnect PPPoE sessions for ${username}: ${disconnectErr.message}`);
         }
 
-        return await conn.runInTransaction(async (db) => {
+        const result = await conn.runInTransaction(async (db) => {
             await db.execute(
                 "UPDATE radacct SET acctstoptime = datetime('now','localtime') WHERE username = ? AND (acctstoptime IS NULL OR acctstoptime = '' OR acctstoptime = '0' OR acctstoptime = '0000-00-00 00:00:00')",
                 [username]
@@ -1831,6 +1864,8 @@ async function deletePPPoEUserRadius(username) {
             await db.execute('DELETE FROM radreply WHERE username = ?', [username]);
             return { success: true, message: 'User berhasil dihapus dari RADIUS' };
         });
+        if (result && result.success) await syncRadiusToFreeRadiusMysql();
+        return result;
     } catch (error) {
         logger.error(`Error deleting PPPoE user from RADIUS: ${error.message}`);
         throw error;
@@ -1845,25 +1880,17 @@ async function editPPPoEUserRadius({ oldUsername, username, password, profile = 
             logger.info(`Renaming user from ${oldUsername} to ${username}`);
 
             let passwordToUse = password;
-            if (!passwordToUse) {
-                const [oldPasswordRows] = await conn.execute(
-                    "SELECT value FROM radcheck WHERE username = ? AND attribute = 'Cleartext-Password'",
-                    [oldUsername]
-                );
-                if (oldPasswordRows.length > 0) {
-                    passwordToUse = oldPasswordRows[0].value;
-                }
-            }
-
             let profileToUse = profile;
-            if (!profileToUse) {
-                const [oldProfileRows] = await conn.execute(
-                    'SELECT groupname FROM radusergroup WHERE username = ? LIMIT 1',
-                    [oldUsername]
+            if (!passwordToUse || !profileToUse) {
+                const [legacyRows] = await conn.execute(
+                    `SELECT
+                        (SELECT value FROM radcheck WHERE username = ? AND attribute = 'Cleartext-Password' LIMIT 1) AS pwd,
+                        (SELECT groupname FROM radusergroup WHERE username = ? LIMIT 1) AS grp`,
+                    [oldUsername, oldUsername]
                 );
-                if (oldProfileRows.length > 0) {
-                    profileToUse = oldProfileRows[0].groupname;
-                }
+                const legacy = legacyRows && legacyRows[0];
+                if (!passwordToUse && legacy && legacy.pwd) passwordToUse = legacy.pwd;
+                if (!profileToUse && legacy && legacy.grp) profileToUse = legacy.grp;
             }
 
             let resolvedGroup = null;
@@ -1895,7 +1922,11 @@ async function editPPPoEUserRadius({ oldUsername, username, password, profile = 
                 await db.execute('DELETE FROM radcheck WHERE username = ?', [oldUsername]);
                 await db.execute('DELETE FROM radusergroup WHERE username = ?', [oldUsername]);
                 await db.execute('DELETE FROM radreply WHERE username = ?', [oldUsername]);
+                _radiusProfileGroupCache.clear();
                 return { success: true, message: `User berhasil di-rename dari ${oldUsername} ke ${username}` };
+            }).then(async (r) => {
+                if (r && r.success) await syncRadiusToFreeRadiusMysql();
+                return r;
             });
         }
 
@@ -1916,6 +1947,11 @@ async function editPPPoEUserRadius({ oldUsername, username, password, profile = 
             }
         }
 
+        const needsWrite = Boolean(password) || Boolean(resolvedProfile);
+        if (!needsWrite) {
+            return { success: true, message: 'Tidak ada perubahan data user' };
+        }
+
         return await conn.runInTransaction(async (db) => {
             if (password) {
                 await db.execute(
@@ -1930,10 +1966,22 @@ async function editPPPoEUserRadius({ oldUsername, username, password, profile = 
                     [usernameToUpdate, resolvedProfile]
                 );
             }
+            _radiusProfileGroupCache.clear();
             return { success: true, message: 'User berhasil di-update di RADIUS' };
+        }).then(async (r) => {
+            if (r && r.success) await syncRadiusToFreeRadiusMysql();
+            return r;
         });
     } catch (error) {
         logger.error(`Error editing PPPoE user in RADIUS: ${error.message}`);
+        const msg = String(error.message || '');
+        if (error.code === 'SQLITE_BUSY' || /database is locked/i.test(msg)) {
+            return {
+                success: false,
+                message:
+                    'Database RADIUS sedang dipakai FreeRADIUS. Tunggu 2–3 detik lalu simpan lagi, atau kurangi beban auth di router.'
+            };
+        }
         throw error;
     }
 }

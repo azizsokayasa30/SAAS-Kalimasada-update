@@ -137,7 +137,7 @@ set [find] use-radius=yes radius-server=freeradius-server
    - Jika ada beberapa hotspot server, setiap server harus dikonfigurasi untuk menggunakan RADIUS
 
 4. **Timeout:**
-   - Jika masih timeout, tambahkan `timeout=5s` atau `timeout=10s` di konfigurasi Mikrotik
+   - Di Mikrotik set timeout maksimal yang diizinkan RouterOS: `timeout=3s` (bukan 10s — RouterOS membatasi hingga 3 detik). Optimasi server FreeRADIUS wajib agar jawaban < 3s.
 
 ## 🐛 Error Messages
 

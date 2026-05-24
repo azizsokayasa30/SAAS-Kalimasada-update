@@ -1116,7 +1116,8 @@ class ServiceSuspensionManager {
                 return { synced: 0, alreadyIsolir: 0, errors: 0 };
             }
             
-            const { getRadiusConnection, suspendUserRadius, getMikrotikConnectionForCustomer } = require('./mikrotik');
+            const { getRadiusConnection, suspendUserRadius, ensureIsolirProfileRadius } = require('./mikrotik');
+            await ensureIsolirProfileRadius();
             const conn = await getRadiusConnection();
             let synced = 0;
             let alreadyIsolir = 0;
@@ -1131,7 +1132,6 @@ class ServiceSuspensionManager {
                 }
                 
                 try {
-                    // Cek group saat ini di RADIUS
                     const [currentGroup] = await conn.execute(
                         "SELECT groupname FROM radusergroup WHERE username = ? LIMIT 1",
                         [pppUser]
@@ -1140,27 +1140,8 @@ class ServiceSuspensionManager {
                     if (currentGroup && currentGroup.length > 0 && currentGroup[0].groupname === 'isolir') {
                         alreadyIsolir++;
                     } else {
-                        // Disconnect active session TERLEBIH DAHULU
-                        try {
-                            const mikrotik = await getMikrotikConnectionForCustomer(customer);
-                            const activeSessions = await mikrotik.write('/ppp/active/print', [
-                                `?name=${pppUser}`
-                            ]);
-                            
-                            if (activeSessions && activeSessions.length > 0) {
-                                for (const session of activeSessions) {
-                                    await mikrotik.write('/ppp/active/remove', [
-                                        `=.id=${session['.id']}`
-                                    ]);
-                                }
-                                logger.info(`Disconnected ${activeSessions.length} active session(s) for ${pppUser}`);
-                            }
-                        } catch (disconnectError) {
-                            logger.warn(`Failed to disconnect active session for ${pppUser}: ${disconnectError.message}`);
-                        }
-                        
-                        // Pindahkan ke group isolir
-                        const result = await suspendUserRadius(pppUser);
+                        // Cron sync: hanya update RADIUS, tanpa disconnect Mikrotik (hindari beban saat mass reconnect)
+                        const result = await suspendUserRadius(pppUser, { skipEnsureIsolir: true });
                         if (result && result.success) {
                             synced++;
                             logger.info(`Synced ${pppUser} to isolir group`);
@@ -1168,6 +1149,8 @@ class ServiceSuspensionManager {
                             errors++;
                             logger.error(`Failed to sync ${pppUser} to isolir: ${result?.message || 'Unknown error'}`);
                         }
+                        // Jeda singkat antar write agar tidak bentrok dengan auth FreeRADIUS
+                        await new Promise((r) => setTimeout(r, 30));
                     }
                 } catch (error) {
                     errors++;

@@ -44,7 +44,8 @@
 /radius remove [find name="RADIUS-Auth"]
 
 # Tambahkan RADIUS server untuk PPPoE
-/radius add name="RADIUS-Auth" address=$radiusServerIP secret=$radiusSecret service=ppp authentication-port=1812 accounting-port=1813 timeout=10s retry=3
+# RouterOS: timeout maks 3s; tidak ada parameter retry= (resend otomatis via timeout).
+/radius add name="RADIUS-Auth" address=$radiusServerIP secret=$radiusSecret service=ppp authentication-port=1812 accounting-port=1813 timeout=3s
 
 # ============================================
 # KONFIGURASI IP POOL (FALLBACK)

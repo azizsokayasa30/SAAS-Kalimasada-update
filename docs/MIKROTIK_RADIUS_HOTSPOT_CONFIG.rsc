@@ -47,7 +47,8 @@
 /radius remove [find name="RADIUS-Hotspot"]
 
 # Tambahkan RADIUS server untuk Hotspot
-/radius add name="RADIUS-Hotspot" address=$radiusServerIP secret=$radiusSecret service=hotspot authentication-port=1812 accounting-port=1813 timeout=10s retry=3
+# RouterOS: timeout maks 3s; tidak ada parameter retry=
+/radius add name="RADIUS-Hotspot" address=$radiusServerIP secret=$radiusSecret service=hotspot authentication-port=1812 accounting-port=1813 timeout=3s
 
 # ============================================
 # KONFIGURASI IP POOL

@@ -4,21 +4,45 @@ const fs = require('fs');
 const logger = require('./logger');
 
 /**
- * Singleton RADIUS SQLite connection.
- * Using a single persistent connection prevents SQLite SQLITE_BUSY / deadlock
- * issues caused by multiple concurrent connections opening the same database file.
+ * Satu koneksi tulis persisten + antrean operasi (hindari interleaved callback pada satu handle).
+ * SELECT memakai koneksi read-only terpisah agar tidak memblokir tulis FreeRADIUS lebih lama.
  */
 let _singletonConn = null;
 let _singletonPath = null;
 
-/** Serialize all RADIUS DB access (avoids interleaved callbacks on one sqlite3 handle). */
+/** Serialize write/transaction ops (avoids interleaved callbacks on one sqlite3 handle). */
 let _radiusOpQueue = Promise.resolve();
+
+/** Separate read-only connection — SELECT queries bypass write queue (WAL allows concurrent reads). */
+let _readOnlyConn = null;
+let _readOnlyPath = null;
+let _schemaInitialized = false;
+
+/** Retry saat SQLITE_BUSY — cap rendah agar simpan user di UI tidak menunggu puluhan detik. */
+const BUSY_MAX_ATTEMPTS = 3;
+const BUSY_MAX_BACKOFF_MS = 200;
 
 function enqueueRadiusOperation(fn) {
     const run = _radiusOpQueue.then(() => fn());
     _radiusOpQueue = run.catch(() => {});
     return run;
 }
+
+function isReadOnlySql(sql) {
+    const u = String(sql || '').trim().toUpperCase();
+    return u.startsWith('SELECT') || u.startsWith('PRAGMA') || u.startsWith('EXPLAIN');
+}
+
+const RADIUS_PERFORMANCE_PRAGMAS = [
+    ['journal_mode', 'WAL'],
+    // Billing: jangan tunggu 60s per statement (UI terasa hang). FreeRADIUS pakai busy_timeout sendiri di mods-enabled/sql.
+    ['busy_timeout', '3000'],
+    ['synchronous', 'NORMAL'],
+    ['cache_size', '-64000'],
+    ['mmap_size', '268435456'],
+    ['temp_store', 'MEMORY'],
+    ['wal_autocheckpoint', '1000']
+];
 
 function isSqliteBusyError(err) {
     if (!err) return false;
@@ -94,21 +118,32 @@ class RADIUSDatabase {
                     reject(err);
                 } else {
                     logger.info(`[RADIUS-SQLITE] Connected to database: ${this.dbPath}`);
-                    // Enable WAL mode for better concurrency
-                    this.db.run('PRAGMA journal_mode=WAL', () => {
-                        // Align with billing.db — wait up to 30s when FreeRADIUS holds the file
-                        this.db.run('PRAGMA busy_timeout=30000', () => {
-                            this.db.run('PRAGMA synchronous=NORMAL', () => {
-                                this.initSchema().then(resolve).catch(reject);
-                            });
-                        });
-                    });
+                    this._applyPerformancePragmas(this.db)
+                        .then(() => this.initSchema())
+                        .then(resolve)
+                        .catch(reject);
                 }
             });
         });
     }
 
+    _applyPerformancePragmas(db) {
+        return RADIUS_PERFORMANCE_PRAGMAS.reduce(
+            (chain, [key, value]) =>
+                chain.then(
+                    () =>
+                        new Promise((resolve, reject) => {
+                            db.run(`PRAGMA ${key}=${value}`, (err) => (err ? reject(err) : resolve()));
+                        })
+                ),
+            Promise.resolve()
+        );
+    }
+
     async initSchema() {
+        if (_schemaInitialized) {
+            return;
+        }
         const schema = [
             `CREATE TABLE IF NOT EXISTS radcheck (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -186,6 +221,10 @@ class RADIUSDatabase {
                 delegatedipv6prefix TEXT NOT NULL DEFAULT ''
             )`,
             `CREATE INDEX IF NOT EXISTS idx_radacct_active ON radacct (acctstoptime, username, acctstarttime)`,
+            `CREATE INDEX IF NOT EXISTS idx_radacct_stoptime ON radacct (acctstoptime)`,
+            `CREATE INDEX IF NOT EXISTS idx_radacct_username_stoptime ON radacct (username, acctstoptime)`,
+            `CREATE INDEX IF NOT EXISTS idx_radcheck_username_attr ON radcheck (username, attribute)`,
+            `CREATE INDEX IF NOT EXISTS idx_radacct_sessionid ON radacct (acctsessionid)`,
             `CREATE TABLE IF NOT EXISTS radpostauth (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL DEFAULT '',
@@ -217,6 +256,7 @@ class RADIUSDatabase {
                 });
             });
         }
+        _schemaInitialized = true;
         logger.info('[RADIUS-SQLITE] Schema initialized');
     }
 
@@ -240,6 +280,10 @@ class RADIUSDatabase {
         const sqliteSQL = this._normalizeSql(sql);
 
         return new Promise((resolve, reject) => {
+            if (!this.db) {
+                reject(new Error('RADIUS SQLite write connection is not open'));
+                return;
+            }
             const sqlUpper = sqliteSQL.trim().toUpperCase();
             if (sqlUpper.startsWith('SELECT') || sqlUpper.startsWith('PRAGMA') || sqlUpper.startsWith('EXPLAIN')) {
                 this.db.all(sqliteSQL, params, (err, rows) => {
@@ -266,7 +310,10 @@ class RADIUSDatabase {
         });
     }
 
-    async _executeWithRetry(sql, params = [], maxAttempts = 8) {
+    async _executeWithRetry(sql, params = [], maxAttempts = BUSY_MAX_ATTEMPTS) {
+        if (!isReadOnlySql(sql) && !this.db) {
+            await this.connect();
+        }
         let lastErr;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
             try {
@@ -276,7 +323,9 @@ class RADIUSDatabase {
                 if (!isSqliteBusyError(err) || attempt >= maxAttempts - 1) {
                     throw err;
                 }
-                const backoff = Math.min(2000, 40 * Math.pow(2, attempt)) + Math.floor(Math.random() * 40);
+                const backoff =
+                    Math.min(BUSY_MAX_BACKOFF_MS, 25 * Math.pow(2, attempt)) +
+                    Math.floor(Math.random() * 25);
                 logger.warn(`[RADIUS-SQLITE] SQLITE_BUSY, retry ${attempt + 1}/${maxAttempts - 1} in ${backoff}ms`);
                 await delayMs(backoff);
             }
@@ -285,6 +334,16 @@ class RADIUSDatabase {
     }
 
     async execute(sql, params = []) {
+        if (isReadOnlySql(sql)) {
+            const dbPath = this.dbPath || _singletonPath;
+            if (!dbPath) {
+                const resolved = await resolveRadiusSqliteDbPath();
+                this.dbPath = resolved.dbPath;
+            }
+            const readConn = await getRadiusReadConnection(this.dbPath);
+            return readConn._executeWithRetry(sql, params);
+        }
+
         if (!this.db) await this.connect();
 
         const run = () => this._executeWithRetry(sql, params);
@@ -298,30 +357,37 @@ class RADIUSDatabase {
      * Run multiple writes atomically with BEGIN IMMEDIATE (reduces SQLITE_BUSY vs separate statements).
      */
     async runInTransaction(fn) {
-        if (!this.db) await this.connect();
-
         const runTx = async () => {
-            const maxAttempts = 8;
+            if (!this.db) await this.connect();
+            const maxAttempts = BUSY_MAX_ATTEMPTS;
             for (let attempt = 0; attempt < maxAttempts; attempt++) {
                 this._txDepth++;
+                let began = false;
                 try {
                     await this._executeOnce('BEGIN IMMEDIATE', []);
+                    began = true;
                     try {
                         const result = await fn(this);
                         await this._executeOnce('COMMIT', []);
                         return result;
                     } catch (innerErr) {
-                        try {
-                            await this._executeOnce('ROLLBACK', []);
-                        } catch (_) {}
+                        if (began) {
+                            try {
+                                await this._executeOnce('ROLLBACK', []);
+                            } catch (_) {}
+                        }
                         throw innerErr;
                     }
                 } catch (err) {
-                    try {
-                        await this._executeOnce('ROLLBACK', []);
-                    } catch (_) {}
+                    if (began) {
+                        try {
+                            await this._executeOnce('ROLLBACK', []);
+                        } catch (_) {}
+                    }
                     if (isSqliteBusyError(err) && attempt < maxAttempts - 1) {
-                        const backoff = Math.min(2000, 40 * Math.pow(2, attempt)) + Math.floor(Math.random() * 40);
+                        const backoff =
+                            Math.min(BUSY_MAX_BACKOFF_MS, 25 * Math.pow(2, attempt)) +
+                            Math.floor(Math.random() * 25);
                         logger.warn(`[RADIUS-SQLITE] transaction busy, retry ${attempt + 1} in ${backoff}ms`);
                         await delayMs(backoff);
                         continue;
@@ -363,6 +429,64 @@ class RADIUSDatabase {
 }
 
 /**
+ * Read-only singleton for SELECT/PRAGMA — does not block on write queue.
+ */
+async function getRadiusReadConnection(dbPath) {
+    if (_readOnlyConn && _readOnlyPath === dbPath && _readOnlyConn.db) {
+        return _readOnlyConn;
+    }
+    if (_readOnlyConn && _readOnlyConn.db && _readOnlyPath !== dbPath) {
+        try {
+            _readOnlyConn._isSingleton = false;
+            await _readOnlyConn.end();
+        } catch (_) {}
+        _readOnlyConn = null;
+    }
+
+    const conn = new RADIUSDatabase(dbPath);
+    conn._isSingleton = true;
+    await new Promise((resolve, reject) => {
+        conn.db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
+            if (err) {
+                logger.error(`[RADIUS-SQLITE] Read-only open failed: ${err.message}`);
+                reject(err);
+            } else {
+                conn._applyPerformancePragmas(conn.db).then(resolve).catch(reject);
+            }
+        });
+    });
+
+    _readOnlyConn = conn;
+    _readOnlyPath = dbPath;
+    return conn;
+}
+
+/**
+ * Online backup via SQLite backup API — safe while FreeRADIUS is running (no file copy lock).
+ */
+async function backupRadiusDatabaseToPath(targetPath) {
+    const conn = await getRadiusConnection();
+    const dir = path.dirname(targetPath);
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+    return enqueueRadiusOperation(
+        () =>
+            new Promise((resolve, reject) => {
+                conn.db.backup(targetPath, (err) => {
+                    if (err) {
+                        logger.error(`[RADIUS-SQLITE] Online backup failed: ${err.message}`);
+                        reject(err);
+                    } else {
+                        logger.info(`[RADIUS-SQLITE] Online backup completed: ${targetPath}`);
+                        resolve(targetPath);
+                    }
+                });
+            })
+    );
+}
+
+/**
  * Returns the singleton RADIUS connection.
  * Creates once, reuses forever to prevent SQLite locking deadlocks.
  */
@@ -387,9 +511,6 @@ async function getRadiusConnection() {
     conn._isSingleton = true;
     await conn.connect();
 
-    // Verifikasi skema: cukup wajibkan radcheck (file SQLite produksi FreeRADIUS sering
-    // tidak punya tabel `nas` atau subset radgroup* — kalau disyaratkan semua, koneksi gagal
-    // dan seluruh UI RADIUS/PPPoE kosong padahal autentikasi di router jalan).
     const [tables] = await conn.execute("SELECT name FROM sqlite_master WHERE type='table'");
     const existingTables = Array.isArray(tables) ? tables.map((t) => t.name) : [];
     const requiredTables = ['radcheck'];
@@ -447,6 +568,8 @@ async function getRadiusSqliteFileDiagnostics() {
 
 module.exports = {
     getRadiusConnection,
+    getRadiusReadConnection,
+    backupRadiusDatabaseToPath,
     resolveRadiusSqliteDbPath,
     getRadiusSqliteFileDiagnostics
 };

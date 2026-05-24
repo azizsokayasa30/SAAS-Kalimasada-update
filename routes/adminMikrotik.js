@@ -339,7 +339,6 @@ router.post('/mikrotik/edit-user', adminAuth, async (req, res) => {
     if (authMode === 'radius') {
       // RADIUS mode: Update in radcheck and radusergroup
       // id adalah username lama di mode RADIUS
-      logger.info(`RADIUS mode: Updating user in RADIUS database. Old username: ${id}, New username: ${username}`);
       const result = await editPPPoEUser({ id, username, password, profile });
       if (result.success) {
         clearPppoeAdminPageCache();

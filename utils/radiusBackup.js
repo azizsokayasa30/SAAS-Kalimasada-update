@@ -41,8 +41,9 @@ async function backupRadius() {
         
         try {
             await fs.access(sourceDbPath);
-            await fs.copyFile(sourceDbPath, targetDbPath);
-            logger.info('Database backup completed (copied SQLite file)');
+            const { backupRadiusDatabaseToPath } = require('../config/radiusSQLite');
+            await backupRadiusDatabaseToPath(targetDbPath);
+            logger.info('Database backup completed (SQLite online backup)');
         } catch (error) {
             logger.error(`Database file not found at ${sourceDbPath}: ${error.message}`);
             // If file not found, we still continue with config backup

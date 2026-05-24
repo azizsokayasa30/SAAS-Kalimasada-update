@@ -36,11 +36,11 @@ Jalankan command berikut di terminal Mikrotik:
 
 ```bash
 # Tambahkan RADIUS server untuk authentication
-/radius add name="RADIUS-Auth" address=192.168.1.100 secret=testing123 service=ppp authentication-port=1812 accounting-port=1813 timeout=10s retry=3
+/radius add name="RADIUS-Auth" address=192.168.1.100 secret=testing123 service=ppp authentication-port=1812 accounting-port=1813 timeout=3s
 
 # Atau jika menggunakan multiple RADIUS servers (load balancing)
-/radius add name="RADIUS-Auth-1" address=192.168.1.100 secret=testing123 service=ppp authentication-port=1812 accounting-port=1813 timeout=10s retry=3
-/radius add name="RADIUS-Auth-2" address=192.168.1.101 secret=testing123 service=ppp authentication-port=1812 accounting-port=1813 timeout=10s retry=3
+/radius add name="RADIUS-Auth-1" address=192.168.1.100 secret=testing123 service=ppp authentication-port=1812 accounting-port=1813 timeout=3s
+/radius add name="RADIUS-Auth-2" address=192.168.1.101 secret=testing123 service=ppp authentication-port=1812 accounting-port=1813 timeout=3s
 ```
 
 **Penjelasan Parameter:**
@@ -50,8 +50,7 @@ Jalankan command berikut di terminal Mikrotik:
 - `service=ppp`: Service untuk PPP (PPPoE, PPTP, L2TP)
 - `authentication-port`: Port untuk authentication (default: 1812)
 - `accounting-port`: Port untuk accounting (default: 1813)
-- `timeout`: Timeout untuk request (default: 10s)
-- `retry`: Jumlah retry jika gagal (default: 3)
+- `timeout`: Waktu tunggu jawaban RADIUS (**maksimal 3s** di RouterOS). Jika habis tanpa jawaban, router mengirim ulang otomatis (statistik `resends` / `timeouts` di `/radius monitor 0`). **Tidak ada** parameter `retry=` di menu `/radius`.
 
 ### Step 2: Konfigurasi PPPoE Server
 
@@ -130,7 +129,7 @@ IP pool di Mikrotik hanya digunakan sebagai fallback jika RADIUS tidak mengembal
 
 ```bash
 # Tambahkan RADIUS server untuk Hotspot
-/radius add name="RADIUS-Hotspot" address=192.168.1.100 secret=testing123 service=hotspot authentication-port=1812 accounting-port=1813 timeout=10s retry=3
+/radius add name="RADIUS-Hotspot" address=192.168.1.100 secret=testing123 service=hotspot authentication-port=1812 accounting-port=1813 timeout=3s
 ```
 
 **Catatan:**
@@ -229,7 +228,7 @@ Jika menggunakan RouterOS v6.49 atau lebih baru, Anda bisa menggunakan Server Pr
 Flags: X - disabled
  0   name="RADIUS-Auth" address=192.168.1.100 secret="testing123" 
      service=ppp authentication-port=1812 accounting-port=1813 
-     timeout=10s retry=3
+     timeout=3s
 ```
 
 ### 2. Test Koneksi RADIUS
