@@ -282,10 +282,10 @@ async function getRadiusConnection() {
 }
 
 /** Setelah tulis ke SQLite billing, salin ke MySQL jika FreeRADIUS memakai MySQL. */
-async function syncRadiusToFreeRadiusMysql() {
+async function syncRadiusToFreeRadiusMysql(options = {}) {
     try {
         const { syncRadiusSqliteToMysql } = require('./radiusMysqlSync');
-        await syncRadiusSqliteToMysql();
+        await syncRadiusSqliteToMysql({ force: options.force === true });
     } catch (e) {
         logger.debug(`[RADIUS] sync ke MySQL: ${e.message}`);
     }
@@ -1514,7 +1514,12 @@ async function suspendUserRadius(username, options = {}) {
         }
         
         await conn.end();
-        return { success: true, message: 'User berhasil di-suspend (isolir)' };
+        await syncRadiusToFreeRadiusMysql({ force: true });
+        const kick = await disconnectPPPoEUserAllRouters(username);
+        if (kick.disconnected > 0) {
+            logger.info(`[RADIUS] Kicked ${kick.disconnected} PPPoE session(s) for ${username} after isolir (routers: ${kick.routers.join(', ') || '-'})`);
+        }
+        return { success: true, message: 'User berhasil di-suspend (isolir)', disconnected: kick.disconnected };
     } catch (error) {
         await conn.end();
         logger.error(`Error suspending user in RADIUS: ${error.message}`);
@@ -1734,26 +1739,42 @@ async function enableHotspotUserRadius(username) {
 }
 
 // Fungsi untuk unsuspend user (kembalikan ke package sebelumnya)
-async function unsuspendUserRadius(username) {
+async function unsuspendUserRadius(username, customer = null) {
     const conn = await getRadiusConnection();
     try {
+        let groupFromBilling = null;
+        if (customer) {
+            let profileHint = customer.pppoe_profile || customer.package_pppoe_profile || null;
+            if (!profileHint && customer.package_id) {
+                try {
+                    const billingManager = require('./billing');
+                    const pkg = await billingManager.getPackageById(customer.package_id);
+                    profileHint = pkg?.pppoe_profile || null;
+                } catch (_) {}
+            }
+            if (profileHint) {
+                const resolvedBilling = await resolvePppoeProfileHintToRadiusGroup(conn, profileHint);
+                if (resolvedBilling && resolvedBilling !== 'isolir') {
+                    groupFromBilling = resolvedBilling;
+                    logger.info(`[RADIUS] Restore ${username}: pakai profil billing ${groupFromBilling}`);
+                }
+            }
+        }
+
         // Ambil group sebelumnya dari radcheck dengan format PREVGROUP:groupname
-        // (bukan dari radreply karena radreply tidak support custom attributes)
         const [prevGroup] = await conn.execute(
             "SELECT value FROM radcheck WHERE username = ? AND attribute = 'NT-Password' AND value LIKE 'PREVGROUP:%' LIMIT 1",
             [username]
         );
         
-        // HAPUS SEMUA group assignment untuk username ini (termasuk 'isolir')
         await conn.execute(
             "DELETE FROM radusergroup WHERE username = ?",
             [username]
         );
         
-        let previousGroup = null;
+        let previousGroup = groupFromBilling || null;
         
-        if (prevGroup && prevGroup.length > 0) {
-            // Extract group name dari format "PREVGROUP:groupname"
+        if (!previousGroup && prevGroup && prevGroup.length > 0) {
             const prevGroupValue = prevGroup[0].value;
             if (prevGroupValue && prevGroupValue.startsWith('PREVGROUP:')) {
                 previousGroup = prevGroupValue.substring('PREVGROUP:'.length);
@@ -1834,9 +1855,29 @@ async function unsuspendUserRadius(username) {
             "DELETE FROM radcheck WHERE username = ? AND attribute = 'NT-Password' AND value LIKE 'PREVGROUP:%'",
             [username]
         );
+
+        // Pastikan tidak ada atribut isolir per-user yang menimpa grup paket
+        await conn.execute(
+            "DELETE FROM radreply WHERE username = ? AND attribute IN ('Framed-Pool', 'Framed-IP-Address') AND value LIKE '%isolir%'",
+            [username]
+        );
         
         await conn.end();
-        return { success: true, message: `User di-un suspend ke package ${groupToAssign}`, previousGroup: groupToAssign };
+        await syncRadiusToFreeRadiusMysql({ force: true });
+
+        const kick = await disconnectPPPoEUserAllRouters(username);
+        if (kick.disconnected > 0) {
+            logger.info(`[RADIUS] Kicked ${kick.disconnected} PPPoE session(s) for ${username} after restore (routers: ${kick.routers.join(', ') || '-'})`);
+        } else {
+            logger.info(`[RADIUS] No active PPPoE session to kick for ${username} after restore`);
+        }
+
+        return {
+            success: true,
+            message: `User di-un suspend ke package ${groupToAssign}`,
+            previousGroup: groupToAssign,
+            disconnected: kick.disconnected
+        };
     } catch (error) {
         await conn.end();
         logger.error(`Error unsuspending user in RADIUS: ${error.message}`);
@@ -1925,7 +1966,12 @@ async function editPPPoEUserRadius({ oldUsername, username, password, profile = 
                 _radiusProfileGroupCache.clear();
                 return { success: true, message: `User berhasil di-rename dari ${oldUsername} ke ${username}` };
             }).then(async (r) => {
-                if (r && r.success) await syncRadiusToFreeRadiusMysql();
+                if (r && r.success) {
+                    await syncRadiusToFreeRadiusMysql({ force: true });
+                    if (resolvedGroup && resolvedGroup !== 'isolir') {
+                        await disconnectPPPoEUserAllRouters(username);
+                    }
+                }
                 return r;
             });
         }
@@ -1969,7 +2015,12 @@ async function editPPPoEUserRadius({ oldUsername, username, password, profile = 
             _radiusProfileGroupCache.clear();
             return { success: true, message: 'User berhasil di-update di RADIUS' };
         }).then(async (r) => {
-            if (r && r.success) await syncRadiusToFreeRadiusMysql();
+            if (r && r.success) {
+                await syncRadiusToFreeRadiusMysql({ force: true });
+                if (resolvedProfile && resolvedProfile !== 'isolir') {
+                    await disconnectPPPoEUserAllRouters(usernameToUpdate);
+                }
+            }
             return r;
         });
     } catch (error) {
@@ -3925,6 +3976,47 @@ async function disconnectPPPoEUser(username, routerObj = null) {
         logger.error(`Error disconnecting PPPoE user ${username}: ${error.message}`);
         return { success: false, message: `Gagal memutus koneksi PPPoE: ${error.message}`, disconnected: 0 };
     }
+}
+
+/**
+ * Putuskan sesi PPPoE user di SEMUA router NAS (penting untuk restore/isolir multi-NAS).
+ */
+async function disconnectPPPoEUserAllRouters(username) {
+    const u = (username && String(username).trim()) || '';
+    if (!u) {
+        return { success: false, disconnected: 0, routers: [], message: 'Username kosong' };
+    }
+    const sqlite3 = require('sqlite3').verbose();
+    const dbPath = require('path').join(__dirname, '../data/billing.db');
+    const db = new sqlite3.Database(dbPath);
+    const routers = await new Promise((resolve) =>
+        db.all('SELECT * FROM routers ORDER BY id', (err, rows) => {
+            db.close();
+            resolve(rows || []);
+        })
+    );
+    let totalDisconnected = 0;
+    const routersHit = [];
+    for (const router of routers) {
+        try {
+            const result = await disconnectPPPoEUser(u, router);
+            if (result && result.disconnected > 0) {
+                totalDisconnected += result.disconnected;
+                routersHit.push(router.name || router.nas_ip || String(router.id));
+            }
+        } catch (e) {
+            logger.warn(`[PPPoE] disconnect ${u} on ${router.name}: ${e.message}`);
+        }
+    }
+    return {
+        success: true,
+        disconnected: totalDisconnected,
+        routers: routersHit,
+        message:
+            totalDisconnected > 0
+                ? `Diputus dari ${totalDisconnected} sesi di ${routersHit.length} router`
+                : `User ${u} tidak sedang online di router manapun`
+    };
 }
 
 // Fungsi untuk mengubah profile PPPoE
@@ -10058,6 +10150,7 @@ module.exports = {
     deletePPPoESecret,
     setPPPoEProfile,
     disconnectPPPoEUser,
+    disconnectPPPoEUserAllRouters,
     monitorPPPoEConnections,
     getInterfaces,
     getInterfacesForRouter,
@@ -10119,6 +10212,7 @@ module.exports = {
     getInterfaceTraffic,
     // RADIUS functions
     getRadiusConnection,
+    syncRadiusToFreeRadiusMysql,
     getRadcheckCleartextPassword,
     getPppSecretCleartextPasswordFromMikrotikRouters,
     resolveRadiusProfileGroupname,

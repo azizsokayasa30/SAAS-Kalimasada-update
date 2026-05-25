@@ -31,13 +31,15 @@
 4. **Hapus semua group assignment** dari `radusergroup` (termasuk 'isolir')
 5. **Tambahkan previous group** ke `radusergroup`
 6. **Hapus record previous group** dari `radcheck`
-7. **Disconnect PPPoE session** (jika ada) agar user reconnect dengan profil yang benar
+7. **Disconnect PPPoE session di Mikrotik** (jika ada) **setelah** group/profil aktif — agar reconnect langsung dapat IP paket normal (jangan disconnect dulu saat masih isolir)
 
 ## Catatan Penting
 
 - **Previous group HARUS selalu disimpan** saat suspend, bahkan jika user tidak ada di billing database
 - **Jika user tidak ada di billing**, previous group akan menjadi 'default' (ini normal untuk user yang tidak terdaftar di billing)
-- **Disconnect PPPoE dilakukan SEBELUM mengubah group** agar saat reconnect, user langsung mendapat IP dari profil yang benar
+- **Restore:** ubah group/profil aktif **dulu**, sync SQLite → MySQL FreeRADIUS, lalu kick sesi PPPoE di **semua** router NAS
+- **Isolir:** pindah ke group/profil isolir **dulu**, sync MySQL, lalu kick sesi di semua router
+- Halaman `/admin/mikrotik` membaca SQLite; FreeRADIUS memakai MySQL — tanpa sync, profil di UI bisa sudah 10mbps tetapi auth masih isolir
 - **Format previous group**: `PREVGROUP:{groupname}` di `radcheck` dengan attribute `NT-Password`
 
 ## Troubleshooting

@@ -263,69 +263,13 @@
                         
                         if (pppUser) {
                             logger.info(`[BILLING] Auto-syncing ${pppUser} to isolir group in RADIUS...`);
-                            const { suspendUserRadius, getRouterForCustomer, getMikrotikConnectionForRouter, disconnectPPPoEUser } = require('./mikrotik');
+                            const { suspendUserRadius } = require('./mikrotik');
                             
-                            // Disconnect active session TERLEBIH DAHULU
-                            try {
-                                let routerObj = null;
-                                try {
-                                    routerObj = await getRouterForCustomer(customer);
-                                } catch (routerError) {
-                                    // Jika customer tidak punya router mapping, cari di semua router
-                                    logger.warn(`[BILLING] Customer tidak punya router mapping, mencari di semua router untuk ${pppUser}`);
-                                    const sqlite3 = require('sqlite3').verbose();
-                                    const db = new sqlite3.Database(require('path').join(__dirname, '../data/billing.db'));
-                                    const routers = await new Promise((resolve) => 
-                                        db.all('SELECT * FROM routers ORDER BY id', (err, rows) => resolve(rows || []))
-                                    );
-                                    db.close();
-                                    
-                                    // Cari router yang memiliki user aktif
-                                    for (const router of routers) {
-                                        try {
-                                            const conn = await getMikrotikConnectionForRouter(router);
-                                            const activeSessions = await conn.write('/ppp/active/print', [`?name=${pppUser}`]);
-                                            if (activeSessions && activeSessions.length > 0) {
-                                                routerObj = router;
-                                                logger.info(`[BILLING] Found active session for ${pppUser} on router ${router.name}`);
-                                                break;
-                                            }
-                                        } catch (e) {
-                                            // Continue to next router
-                                        }
-                                    }
-                                    
-                                    // Jika tidak ditemukan, gunakan router pertama sebagai fallback
-                                    if (!routerObj && routers.length > 0) {
-                                        routerObj = routers[0];
-                                        logger.warn(`[BILLING] No active session found, using first router as fallback: ${routerObj.name}`);
-                                    }
-                                }
-                                
-                                if (routerObj) {
-                                    const disconnectResult = await disconnectPPPoEUser(pppUser, routerObj);
-                                    
-                                    if (disconnectResult.success && disconnectResult.disconnected > 0) {
-                                        logger.info(`[BILLING] Disconnected ${disconnectResult.disconnected} active session(s) for ${pppUser} before isolir`);
-                                        
-                                        // Tunggu sebentar untuk memastikan disconnect benar-benar selesai
-                                        await new Promise(resolve => setTimeout(resolve, 1000));
-                                    } else if (disconnectResult.disconnected === 0) {
-                                        logger.info(`[BILLING] User ${pppUser} tidak sedang online, langsung isolir`);
-                                    } else {
-                                        logger.warn(`[BILLING] Disconnect result: ${disconnectResult.message}`);
-                                    }
-                                } else {
-                                    logger.warn(`[BILLING] Tidak ada router yang tersedia untuk disconnect ${pppUser}`);
-                                }
-                            } catch (disconnectError) {
-                                logger.warn(`[BILLING] Failed to disconnect active session for ${pppUser}: ${disconnectError.message}`);
-                            }
-                            
-                            // Pindahkan ke group isolir
                             const suspendResult = await suspendUserRadius(pppUser);
                             if (suspendResult && suspendResult.success) {
-                                logger.info(`[BILLING] ✅ ${pppUser} successfully moved to isolir group`);
+                                logger.info(
+                                    `[BILLING] ✅ ${pppUser} isolir (kicked ${suspendResult.disconnected || 0} sesi)`
+                                );
                             } else {
                                 logger.error(`[BILLING] ❌ Failed to move ${pppUser} to isolir: ${suspendResult?.message || 'Unknown error'}`);
                             }
@@ -342,69 +286,13 @@
                         
                         if (pppUser) {
                             logger.info(`[BILLING] Auto-restoring ${pppUser} from isolir group in RADIUS...`);
-                            const { unsuspendUserRadius, getRouterForCustomer, getMikrotikConnectionForRouter, disconnectPPPoEUser } = require('./mikrotik');
+                            const { unsuspendUserRadius } = require('./mikrotik');
                             
-                            // Disconnect active session TERLEBIH DAHULU
-                            try {
-                                let routerObj = null;
-                                try {
-                                    routerObj = await getRouterForCustomer(customer);
-                                } catch (routerError) {
-                                    // Jika customer tidak punya router mapping, cari di semua router
-                                    logger.warn(`[BILLING] Customer tidak punya router mapping, mencari di semua router untuk ${pppUser}`);
-                                    const sqlite3 = require('sqlite3').verbose();
-                                    const db = new sqlite3.Database(require('path').join(__dirname, '../data/billing.db'));
-                                    const routers = await new Promise((resolve) => 
-                                        db.all('SELECT * FROM routers ORDER BY id', (err, rows) => resolve(rows || []))
-                                    );
-                                    db.close();
-                                    
-                                    // Cari router yang memiliki user aktif
-                                    for (const router of routers) {
-                                        try {
-                                            const conn = await getMikrotikConnectionForRouter(router);
-                                            const activeSessions = await conn.write('/ppp/active/print', [`?name=${pppUser}`]);
-                                            if (activeSessions && activeSessions.length > 0) {
-                                                routerObj = router;
-                                                logger.info(`[BILLING] Found active session for ${pppUser} on router ${router.name}`);
-                                                break;
-                                            }
-                                        } catch (e) {
-                                            // Continue to next router
-                                        }
-                                    }
-                                    
-                                    // Jika tidak ditemukan, gunakan router pertama sebagai fallback
-                                    if (!routerObj && routers.length > 0) {
-                                        routerObj = routers[0];
-                                        logger.warn(`[BILLING] No active session found, using first router as fallback: ${routerObj.name}`);
-                                    }
-                                }
-                                
-                                if (routerObj) {
-                                    const disconnectResult = await disconnectPPPoEUser(pppUser, routerObj);
-                                    
-                                    if (disconnectResult.success && disconnectResult.disconnected > 0) {
-                                        logger.info(`[BILLING] Disconnected ${disconnectResult.disconnected} active session(s) for ${pppUser} before restore`);
-                                        
-                                        // Tunggu sebentar untuk memastikan disconnect benar-benar selesai
-                                        await new Promise(resolve => setTimeout(resolve, 1000));
-                                    } else if (disconnectResult.disconnected === 0) {
-                                        logger.info(`[BILLING] User ${pppUser} tidak sedang online, langsung restore`);
-                                    } else {
-                                        logger.warn(`[BILLING] Disconnect result: ${disconnectResult.message}`);
-                                    }
-                                } else {
-                                    logger.warn(`[BILLING] Tidak ada router yang tersedia untuk disconnect ${pppUser}`);
-                                }
-                            } catch (disconnectError) {
-                                logger.warn(`[BILLING] Failed to disconnect active session for ${pppUser}: ${disconnectError.message}`);
-                            }
-                            
-                            // Restore ke package sebelumnya
-                            const restoreResult = await unsuspendUserRadius(pppUser);
+                            const restoreResult = await unsuspendUserRadius(pppUser, customer);
                             if (restoreResult && restoreResult.success) {
-                                logger.info(`[BILLING] ✅ ${pppUser} successfully restored from isolir group`);
+                                logger.info(
+                                    `[BILLING] ✅ ${pppUser} restored ke ${restoreResult.previousGroup || 'paket'} (kicked ${restoreResult.disconnected || 0} sesi)`
+                                );
                             } else {
                                 logger.error(`[BILLING] ❌ Failed to restore ${pppUser} from isolir: ${restoreResult?.message || 'Unknown error'}`);
                             }

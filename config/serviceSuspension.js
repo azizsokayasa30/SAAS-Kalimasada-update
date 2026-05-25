@@ -178,37 +178,11 @@ class ServiceSuspensionManager {
                         if (suspendResult && suspendResult.success) {
                             results.mikrotik = true;
                             results.radius = true;
-                            logger.info(`RADIUS: User ${pppUser} dipindah ke group isolir`);
-                            try {
-                                const { disconnectPPPoEUser } = require('./mikrotik');
-                                const routerObj = await findRouterForPppDisconnect(customer, pppUser);
-
-                                if (routerObj) {
-                                    let disconnectResult;
-                                    try {
-                                        disconnectResult = await withTimeout(
-                                            disconnectPPPoEUser(pppUser, routerObj),
-                                            8000,
-                                            `disconnect PPPoE ${pppUser}`
-                                        );
-                                    } catch (e) {
-                                        disconnectResult = { success: false, disconnected: 0, message: e.message };
-                                        logger.warn(`RADIUS: disconnect timeout/error untuk ${pppUser}: ${e.message}`);
-                                    }
-
-                                    if (disconnectResult.success && disconnectResult.disconnected > 0) {
-                                        logger.info(`RADIUS: Disconnected ${disconnectResult.disconnected} active PPPoE session(s) for ${pppUser} after isolir group`);
-                                        await new Promise((resolve) => setTimeout(resolve, POST_DISCONNECT_SETTLE_MS));
-                                    } else if (disconnectResult.disconnected === 0) {
-                                        logger.info(`RADIUS: User ${pppUser} tidak sedang online setelah ubah group isolir`);
-                                    } else {
-                                        logger.warn(`RADIUS: Disconnect result: ${disconnectResult.message}`);
-                                    }
-                                } else {
-                                    logger.warn(`RADIUS: Tidak ada router yang tersedia untuk disconnect ${pppUser}`);
-                                }
-                            } catch (disconnectError) {
-                                logger.warn(`RADIUS: Failed to disconnect active session for ${pppUser}: ${disconnectError.message}`);
+                            logger.info(
+                                `RADIUS: User ${pppUser} dipindah ke group isolir (kicked ${suspendResult.disconnected || 0} sesi)`
+                            );
+                            if ((suspendResult.disconnected || 0) > 0) {
+                                await new Promise((resolve) => setTimeout(resolve, POST_DISCONNECT_SETTLE_MS));
                             }
                         } else {
                             logger.error(`RADIUS: Suspension failed for ${pppUser}`);
@@ -462,46 +436,18 @@ class ServiceSuspensionManager {
                 // Check jika menggunakan RADIUS mode
                 if (authMode === 'radius') {
                     try {
-                        // PENTING: Putuskan koneksi PPPoE aktif TERLEBIH DAHULU sebelum mengubah group
-                        // Agar saat reconnect, langsung dapat IP dari package yang benar
-                        try {
-                            const { disconnectPPPoEUser } = require('./mikrotik');
-                            const routerObj = await findRouterForPppDisconnect(customer, pppUser);
-
-                            if (routerObj) {
-                                let disconnectResult;
-                                try {
-                                    disconnectResult = await withTimeout(
-                                        disconnectPPPoEUser(pppUser, routerObj),
-                                        8000,
-                                        `disconnect PPPoE ${pppUser}`
-                                    );
-                                } catch (e) {
-                                    disconnectResult = { success: false, disconnected: 0, message: e.message };
-                                    logger.warn(`RADIUS: disconnect timeout/error untuk ${pppUser}: ${e.message}`);
-                                }
-
-                                if (disconnectResult.success && disconnectResult.disconnected > 0) {
-                                    logger.info(`RADIUS: Disconnected ${disconnectResult.disconnected} active PPPoE session(s) for ${pppUser} before restoring to previous package`);
-                                    await new Promise((resolve) => setTimeout(resolve, POST_DISCONNECT_SETTLE_MS));
-                                } else if (disconnectResult.disconnected === 0) {
-                                    logger.info(`RADIUS: User ${pppUser} tidak sedang online, langsung ubah group ke package sebelumnya`);
-                                } else {
-                                    logger.warn(`RADIUS: Disconnect result: ${disconnectResult.message}`);
-                                }
-                            } else {
-                                logger.warn(`RADIUS: Tidak ada router yang tersedia untuk disconnect ${pppUser}`);
-                            }
-                        } catch (disconnectError) {
-                            logger.warn(`RADIUS: Failed to disconnect active session for ${pppUser}: ${disconnectError.message}`);
-                        }
-                        
-                        // Setelah disconnect, baru ubah group kembali ke package sebelumnya
-                        const unsuspendResult = await unsuspendUserRadius(pppUser);
+                        // PENTING: Ubah group ke paket aktif DULU, baru putus sesi PPPoE (sama seperti alur isolir).
+                        // Jika disconnect dulu saat masih group isolir, CPE bisa reconnect dan tetap dapat IP isolir.
+                        const unsuspendResult = await unsuspendUserRadius(pppUser, customer);
                         if (unsuspendResult && unsuspendResult.success) {
                             results.mikrotik = true;
                             results.radius = true;
-                            logger.info(`RADIUS: Successfully unsuspended user ${pppUser} (restored to previous package, will get package IP on reconnect)`);
+                            logger.info(
+                                `RADIUS: Restored ${pppUser} to ${unsuspendResult.previousGroup || 'package'} (kicked ${unsuspendResult.disconnected || 0} sesi, MySQL synced)`
+                            );
+                            if ((unsuspendResult.disconnected || 0) > 0) {
+                                await new Promise((resolve) => setTimeout(resolve, POST_DISCONNECT_SETTLE_MS));
+                            }
                         } else {
                             logger.error(`RADIUS: Unsuspend failed for ${pppUser}`);
                         }
@@ -521,32 +467,8 @@ class ServiceSuspensionManager {
                             profileToUse = packageData?.pppoe_profile || getSetting('default_pppoe_profile', 'default');
                         }
                         
-                        // PENTING: Putuskan koneksi PPPoE aktif TERLEBIH DAHULU sebelum mengubah profile
-                        // Agar saat reconnect, langsung dapat IP dari package yang benar
-                        const { disconnectPPPoEUser } = require('./mikrotik');
-                        let disconnectResult;
-                        try {
-                            disconnectResult = await withTimeout(
-                                disconnectPPPoEUser(pppUser, mikrotik),
-                                8000,
-                                `disconnect PPPoE API ${pppUser}`
-                            );
-                        } catch (e) {
-                            disconnectResult = { success: false, disconnected: 0, message: e.message };
-                            logger.warn(`Mikrotik: disconnect timeout/error untuk ${pppUser}: ${e.message}`);
-                        }
-
-                        if (disconnectResult.success && disconnectResult.disconnected > 0) {
-                            logger.info(`Mikrotik: Disconnected ${disconnectResult.disconnected} active PPPoE session(s) for ${customer.pppoe_username} before restoring to ${profileToUse} profile`);
-                            await new Promise((resolve) => setTimeout(resolve, POST_DISCONNECT_SETTLE_MS));
-                        } else if (disconnectResult.disconnected === 0) {
-                            logger.info(`Mikrotik: User ${customer.pppoe_username} tidak sedang online, langsung ubah profile ke ${profileToUse}`);
-                        } else {
-                            logger.warn(`Mikrotik: Disconnect result: ${disconnectResult.message}`);
-                        }
-
-                        // Setelah disconnect, baru ubah profile ke package normal
-                        // Cari .id secret berdasarkan name terlebih dahulu
+                        // PENTING: Ubah profile secret DULU, baru putus sesi aktif (sama seperti alur isolir).
+                        // Jika disconnect dulu saat secret masih profil isolir, CPE reconnect dan tetap dapat IP isolir.
                         let secretId = null;
                         try {
                             const secrets = await mikrotik.write('/ppp/secret/print', [
@@ -559,13 +481,34 @@ class ServiceSuspensionManager {
                             logger.warn(`Mikrotik: failed to lookup secret id for ${customer.pppoe_username}: ${lookupErr.message}`);
                         }
 
-                        // Update PPPoE user dengan profile normal, gunakan .id bila tersedia, fallback ke =name=
                         const setParams = secretId
                             ? [`=.id=${secretId}`, `=profile=${profileToUse}`, `=comment=ACTIVE - ${reason}`]
                             : [`=name=${pppUser}`, `=profile=${profileToUse}`, `=comment=ACTIVE - ${reason}`];
 
                         await mikrotik.write('/ppp/secret/set', setParams);
-                        logger.info(`Mikrotik: Restored profile to '${profileToUse}' for ${customer.pppoe_username} (${secretId ? 'by .id' : 'by name'}) - will get package IP on reconnect`);
+                        logger.info(`Mikrotik: Restored profile to '${profileToUse}' for ${customer.pppoe_username} (${secretId ? 'by .id' : 'by name'})`);
+
+                        const { disconnectPPPoEUserAllRouters } = require('./mikrotik');
+                        let disconnectResult;
+                        try {
+                            disconnectResult = await withTimeout(
+                                disconnectPPPoEUserAllRouters(pppUser),
+                                15000,
+                                `disconnect PPPoE all routers ${pppUser}`
+                            );
+                        } catch (e) {
+                            disconnectResult = { success: false, disconnected: 0, message: e.message };
+                            logger.warn(`Mikrotik: disconnect timeout/error untuk ${pppUser}: ${e.message}`);
+                        }
+
+                        if (disconnectResult.disconnected > 0) {
+                            logger.info(
+                                `Mikrotik: Disconnected ${disconnectResult.disconnected} session(s) for ${customer.pppoe_username} after restore to ${profileToUse} (routers: ${(disconnectResult.routers || []).join(', ')})`
+                            );
+                            await new Promise((resolve) => setTimeout(resolve, POST_DISCONNECT_SETTLE_MS));
+                        } else {
+                            logger.info(`Mikrotik: User ${customer.pppoe_username} tidak sedang online setelah ubah profile ke ${profileToUse}`);
+                        }
 
                         results.mikrotik = true;
                         logger.info(`Mikrotik: Successfully restored PPPoE user ${customer.pppoe_username} with ${profileToUse} profile`);

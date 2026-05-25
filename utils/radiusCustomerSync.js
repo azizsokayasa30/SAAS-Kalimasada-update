@@ -2,7 +2,8 @@ const logger = require('../config/logger');
 const {
     getUserAuthModeAsync,
     getRadiusConnection,
-    resolvePppoeProfileHintToRadiusGroup
+    resolvePppoeProfileHintToRadiusGroup,
+    syncRadiusToFreeRadiusMysql
 } = require('../config/mikrotik');
 
 function pickFirstProfileHint(options, customer) {
@@ -94,7 +95,8 @@ async function syncCustomerToRadius(customer, options = {}) {
             );
         }
 
-        logger.info(`[RADIUS-SYNC] Synced billing customer ${pppoeUsername} to RADIUS`);
+        await syncRadiusToFreeRadiusMysql({ force: true });
+        logger.info(`[RADIUS-SYNC] Synced billing customer ${pppoeUsername} to RADIUS (+ MySQL)`);
         return { success: true, username: pppoeUsername };
     } catch (error) {
         logger.error(`[RADIUS-SYNC] Failed sync for ${pppoeUsername}: ${error.message}`);
