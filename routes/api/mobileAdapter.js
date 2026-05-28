@@ -591,46 +591,10 @@ function sqlTroubleTicketCustomerMatch(cu, tr) {
     )`;
 }
 
-/** Simpan foto base64 (opsional) ke public/img/field-completion — kembalikan path relatif `/img/...` */
-function decodeAndSaveCompletionPhoto(base64Input) {
-    if (base64Input == null || base64Input === '') return null;
-    let raw = String(base64Input).trim();
-    if (!raw) return null;
-    if (raw.includes(',')) raw = raw.split(',').pop();
-    let buf;
-    try {
-        buf = Buffer.from(raw, 'base64');
-    } catch (e) {
-        throw new Error('Format foto tidak valid');
-    }
-    if (!buf || buf.length < 24) throw new Error('Foto tidak valid');
-    if (buf.length > 4 * 1024 * 1024) throw new Error('Foto terlalu besar (maks 4MB)');
-    const dir = path.join(__dirname, '../../public/img/field-completion');
-    fs.mkdirSync(dir, { recursive: true });
-    const name = `fc-${Date.now()}-${Math.random().toString(36).substring(2, 8)}.jpg`;
-    fs.writeFileSync(path.join(dir, name), buf);
-    return `/img/field-completion/${name}`;
-}
-
-function decodeAndSaveStickerPhoto(base64Input) {
-    if (base64Input == null || base64Input === '') return null;
-    let raw = String(base64Input).trim();
-    if (!raw) return null;
-    if (raw.includes(',')) raw = raw.split(',').pop();
-    let buf;
-    try {
-        buf = Buffer.from(raw, 'base64');
-    } catch (e) {
-        throw new Error('Format foto stiker tidak valid');
-    }
-    if (!buf || buf.length < 24) throw new Error('Foto stiker tidak valid');
-    if (buf.length > 4 * 1024 * 1024) throw new Error('Foto stiker terlalu besar (maks 4MB)');
-    const dir = path.join(__dirname, '../../public/img/field-completion');
-    fs.mkdirSync(dir, { recursive: true });
-    const name = `ont-sticker-${Date.now()}-${Math.random().toString(36).substring(2, 8)}.jpg`;
-    fs.writeFileSync(path.join(dir, name), buf);
-    return `/img/field-completion/${name}`;
-}
+const {
+    saveCompletionPhotoFromBase64: decodeAndSaveCompletionPhoto,
+    saveStickerPhotoFromBase64: decodeAndSaveStickerPhoto
+} = require('../../utils/fieldCompletionStorage');
 
 // --- Customers (pagination) ---
 router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
@@ -2256,45 +2220,28 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                             const phone = (job.customer_phone || '').replace(/\D/g, '');
                             res.json({ success: true, message: 'Instalasi diselesaikan' });
 
+                            setImmediate(() => {
+                                const { cleanupFieldCompletionImages } = require('../../utils/fieldCompletionStorage');
+                                cleanupFieldCompletionImages({ aggressive: false, syncDb: true }).catch(() => {});
+                            });
+
                             // WhatsApp jangan menahan respons API (koneksi WA bisa lama / timeout).
                             if (phone) {
-                                const waPhone = job.customer_phone;
-                                const waName = job.customer_name;
-                                const waJobNo = job.job_number || String(jobId);
-                                const waDesc = completion_description;
-                                const waCable = cableM;
-                                const waPhotoPath = photoPath;
-                                const waStickerPath = stickerPath;
+                                const jobForWa = { ...job, customer_id: job.customer_id };
                                 setImmediate(() => {
                                     (async () => {
                                         try {
-                                            const { sendMessage } = require('../../config/sendMessage');
-                                            const header = getSetting('company_header', 'ISP');
-                                            const base = (process.env.PUBLIC_APP_BASE_URL || '').trim();
-                                            const photoLine =
-                                                waPhotoPath && base
-                                                    ? `\n📷 Dokumentasi: ${String(base).replace(/\/$/, '')}${waPhotoPath}`
-                                                    : waPhotoPath
-                                                      ? `\n📷 Dokumentasi tersimpan di sistem.`
-                                                      : '';
-                                            const stickerLine =
-                                                waStickerPath && base
-                                                    ? `\n📷 Stiker ONT: ${String(base).replace(/\/$/, '')}${waStickerPath}`
-                                                    : waStickerPath
-                                                      ? `\n📷 Stiker ONT tersimpan di sistem.`
-                                                      : '';
-                                            const msg =
-                                                `✅ *INSTALASI SELESAI*\n\n` +
-                                                `Halo ${waName || 'Pelanggan'},\n\n` +
-                                                `Pemasangan untuk job *${waJobNo}* telah ditandai selesai oleh teknisi.\n\n` +
-                                                `📝 *Ringkasan pekerjaan:*\n${waDesc}` +
-                                                `\n📏 *Panjang kabel:* ${waCable} m` +
-                                                `${photoLine}` +
-                                                `${stickerLine}\n\n` +
-                                                `Terima kasih atas kepercayaan Anda.\n\n_*${header}*_`;
-                                            await sendMessage(waPhone, msg);
+                                            const whatsappNotifications = require('../../config/whatsapp-notifications');
+                                            const waResult = await whatsappNotifications.sendWelcomeMessageOnInstallComplete(jobForWa);
+                                            if (waResult && waResult.success && !waResult.skipped) {
+                                                logger.info('[mobile-adapter] Welcome message terkirim setelah PSB selesai');
+                                            } else if (waResult && waResult.skipped) {
+                                                logger.info('[mobile-adapter] Welcome message dilewati:', waResult.reason);
+                                            } else {
+                                                logger.warn('[mobile-adapter] Welcome message gagal:', waResult?.error);
+                                            }
                                         } catch (waErr) {
-                                            logger.warn('[mobile-adapter] WA pelanggan PSB (bg):', waErr.message || waErr);
+                                            logger.warn('[mobile-adapter] WA welcome pelanggan PSB (bg):', waErr.message || waErr);
                                         }
                                     })();
                                 });

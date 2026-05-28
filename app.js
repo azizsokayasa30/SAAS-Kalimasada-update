@@ -965,6 +965,13 @@ app.set('views', path.join(__dirname, 'views'));
 if (process.env.NODE_ENV === 'production') {
   app.set('view cache', true); // Optimasi EJS caching untuk prod
 }
+const {
+  registerFieldCompletionStatic,
+  scheduleFieldCompletionCleanup,
+  cleanupFieldCompletionImages
+} = require('./utils/fieldCompletionStorage');
+registerFieldCompletionStatic(app);
+
 app.use(express.static(path.join(__dirname, 'public'), {
   maxAge: '7d',
   etag: true,
@@ -1314,6 +1321,23 @@ try {
                 startRadiusMaintenanceSchedule();
             } catch (err) {
                 logger.error('Error starting RADIUS maintenance schedule:', err);
+            }
+
+            try {
+                scheduleFieldCompletionCleanup();
+                setImmediate(() => {
+                    cleanupFieldCompletionImages({ aggressive: true, syncDb: true })
+                        .then((r) => {
+                            logger.info(
+                                `[field-completion] Startup cleanup: ${r.deleted} file dihapus (~${Math.round((r.freedBytes || 0) / 1024 / 1024)}MB)`
+                            );
+                        })
+                        .catch((e) => {
+                            logger.warn('[field-completion] Startup cleanup:', e.message);
+                        });
+                });
+            } catch (err) {
+                logger.error('Error starting field-completion cleanup:', err);
             }
             
             // Initialize License System
