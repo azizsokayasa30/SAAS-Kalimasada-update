@@ -78,8 +78,8 @@
               </table>
             </div>
           </div>
-        </div>
-      </div>
+
+      <%- include('../partials/isolir-script-generator', { settings: settings || {}, routers: routers || [] }) %>
 
       <!-- Add Router Modal -->
       <div class="modal fade" id="addRouterModal" tabindex="-1">

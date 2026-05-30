@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { getSetting } = require('../config/settingsManager');
+const { logAdminActivity } = require('../config/activityLogger');
 
 function jsonAfterSessionSave(req, res, payload) {
     req.session.save((err) => {
@@ -49,6 +50,7 @@ router.post('/', async (req, res) => {
             req.session.isAdmin = true;
             req.session.adminUser = username;
             req.session.lastActivityAt = Date.now();
+            await logAdminActivity(req, 'admin_login', `Login admin: ${username}`);
             return jsonAfterSessionSave(req, res, { success: true, redirect: '/admin/dashboard' });
         }
 

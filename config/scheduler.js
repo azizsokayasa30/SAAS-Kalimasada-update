@@ -193,6 +193,34 @@ class InvoiceScheduler {
                 } else {
                     logger.debug('RADIUS Auto Backup is disabled.');
                 }
+
+                // Billing database auto backup
+                if (appSettings.billing_autobackup_enabled === 'true') {
+                    const billingInterval = parseInt(appSettings.billing_autobackup_interval, 10) || 7;
+                    const { runBillingAutoBackupIfEnabled } = require('../utils/billingDbBackup');
+                    const { logActivity } = require('./activityLogger');
+                    const billingResult = await runBillingAutoBackupIfEnabled({ db });
+
+                    if (billingResult.ran) {
+                        logger.info(`✅ Billing Auto Backup completed: ${billingResult.filename}`);
+                        try {
+                            await logActivity({
+                                userType: 'system',
+                                userId: 'scheduler',
+                                action: 'database_backup_auto',
+                                description: `Auto backup database: ${billingResult.filename} (interval ${billingInterval} hari)`
+                            });
+                        } catch (logErr) {
+                            logger.warn(`[billing-backup] Gagal catat activity log: ${logErr.message}`);
+                        }
+                    } else if (billingResult.reason === 'interval') {
+                        logger.info(
+                            `Billing Auto Backup skipped. Last backup ${billingResult.daysSinceLast} hari lalu, interval ${billingResult.interval} hari.`
+                        );
+                    }
+                } else {
+                    logger.debug('Billing Auto Backup is disabled.');
+                }
             } catch (error) {
                 logger.error('Error in RADIUS Auto Backup scheduler:', error);
             }

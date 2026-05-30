@@ -170,7 +170,7 @@
                 <div class="col-lg-6 mb-3">
                     <div class="form-section">
                         <h5 class="mb-3">
-                            <i class="bi bi-grid-1x2 text-primary"></i> Branding & Pembayaran
+                            <i class="bi bi-grid-1x2 text-primary"></i> Branding
                         </h5>
                         
                         <div class="alert alert-info alert-custom mb-3">
@@ -180,7 +180,7 @@
                                     <strong>Pengaturan tampilan dan penagihan</strong>
                                     <br>
                                     <small>
-                                        Bagian ini berisi logo aplikasi, QR pembayaran tagihan, dan alat bantu jaringan. SMTP sudah dipindahkan ke <a href="/admin/billing/email-settings" target="_blank">Pengaturan Email</a>.
+                                        Bagian ini berisi logo aplikasi, QR pembayaran tagihan, dan pengaturan billing. SMTP sudah dipindahkan ke <a href="/admin/billing/email-settings" target="_blank">Pengaturan Email</a>.
                                     </small>
                                 </div>
                             </div>
@@ -234,140 +234,16 @@
                             </div>
                         </div>
 
-                        <!-- Script Generator Menu Isolir Mikrotik -->
-                        <div class="mt-4">
-                            <h5 class="mb-3"><i class="bi bi-router"></i> Script Generator Menu Isolir Mikrotik</h5>
-                            <p class="small text-muted mb-3">Generate script untuk mengatur menu isolir di Mikrotik. Pelanggan yang diisolir akan langsung diarahkan ke halaman isolir.</p>
-                            
-                            <div class="row g-3 mb-3">
-                                <div class="col-md-12">
-                                    <label class="form-label small fw-bold">IP PPPoE Aktif</label>
-                                    <input type="text" class="form-control form-control-sm" id="activeIp" placeholder="192.168.10.1" value="192.168.10.1">
-                                </div>
+                        <!-- Billing & Pembayaran -->
+                        <div class="mt-4" id="billingSettingsSection">
+                            <div id="billingSettingsFields">
+                                <!-- Field billing dari settings.json di-render di sini oleh JS -->
                             </div>
-                            
-                            <div class="row g-3 mb-3">
-                                <div class="col-md-12">
-                                    <label class="form-label small fw-bold">IP PPPoE Isolir</label>
-                                    <input type="text" class="form-control form-control-sm" id="isolirIp" placeholder="192.168.200.1" value="192.168.200.1">
-                                    <small class="text-muted">Tanpa Menggunakan /Segment</small>
-                                </div>
-                            </div>
-                            
-                            <div class="row g-3 mb-3">
-                                <div class="col-md-12">
-                                    <label class="form-label small fw-bold">IP Web/Domain Web Isolir </label>
-                                    <input type="text" class="form-control form-control-sm" id="isolirDomain" placeholder="192.168.8.89" value="192.168.8.89">
-                                    <small class="text-muted">IP atau domain aplikasi (contoh: 192.168.8.89 atau cvlmedia.my.id)</small>
-                                </div>
-                            </div>
-                            
-                            <div class="row g-3 mb-3">
-                                <div class="col-md-12">
-                                    <label class="form-label small fw-bold">Path Halaman Isolir (default)</label>
-                                    <input type="text" class="form-control form-control-sm" id="isolirPath" placeholder="/isolir" value="/isolir">
-                                </div>
-                            </div>
-                            
-                            <div class="row g-3 mb-3">
-                                <div class="col-md-12">
-                                    <label class="form-label small fw-bold">Port Halaman Isolir</label>
-                                    <input type="text" class="form-control form-control-sm" id="isolirPort" placeholder="8899" value="8899">
-                                    <small class="text-muted">Default baru: 8899. Port aplikasi billing utama ikut di-whitelist oleh script.</small>
-                                </div>
-                            </div>
-                            
-                            <div class="row g-3 mb-3">
-                                <div class="col-md-12">
-                                    <label class="form-label small fw-bold">Jenis Akses</label>
-                                    <select class="form-select form-select-sm" id="accessType">
-                                        <option value="port">Port Langsung (Recommended)</option>
-                                        <option value="tunneling">Tunneling (Domain + Path)</option>
-                                    </select>
-                                    <small class="text-muted">Port Langsung untuk aplikasi lokal, Tunneling untuk domain</small>
-                                </div>
-                            </div>
-                            
-                            <div class="row g-3 mb-3" id="tunnelingDstAddressRow" style="display: none;">
-                                <div class="col-md-12">
-                                    <label class="form-label small fw-bold">!Dst. Address (IP Domain)</label>
-                                    <input type="text" class="form-control form-control-sm" id="tunnelingDstAddress" placeholder="103.19.57.66" value="">
-                                    <small class="text-muted">IP Domain yang tidak akan ter-drop oleh firewall. Hanya tampil saat menggunakan Tunneling.</small>
-                                </div>
-                            </div>
-                            
-                            <div class="row g-3 mb-3">
-                                <div class="col-md-12">
-                                    <label class="form-label small fw-bold">Pilih Router Nas Tujuan</label>
-                                    <select class="form-select form-select-sm" id="isolirRouterSelect">
-                                        <option value="auto">Auto (Dari /admin/routers)</option>
-                                    </select>
-                                    <small class="text-muted">Pilih router untuk execute script, atau pilih Auto untuk menggunakan router pertama dari /admin/routers</small>
-                                </div>
-                            </div>
-                            
-                            <div class="row g-3 mb-3">
-                                <div class="col-md-12">
-                                    <label class="form-label small fw-bold">RouterOS Version (Opsional)</label>
-                                    <select class="form-select form-select-sm" id="rosVersion">
-                                        <option value="auto">Auto Detect</option>
-                                        <option value="6">ROS 6.x</option>
-                                        <option value="7">ROS 7.x</option>
-                                    </select>
-                                    <small class="text-muted">Pilih versi RouterOS atau biarkan Auto untuk deteksi otomatis</small>
-                                </div>
-                            </div>
-                            
-                            <div class="mb-3">
-                                <div class="form-check form-switch mb-2">
-                                    <input class="form-check-input" type="checkbox" id="autoExecuteIsolir" checked>
-                                    <label class="form-check-label" for="autoExecuteIsolir">
-                                        <strong>Auto-Execute ke Mikrotik</strong>
-                                    </label>
-                                </div>
-                                <small class="text-muted d-block mb-2">Jika dicentang, script akan otomatis dijalankan ke Mikrotik setelah di-generate</small>
-                            </div>
-                            
-                            <div class="mb-3">
-                                <button type="button" class="btn btn-primary btn-sm" onclick="if(typeof window.generateIsolirScript === 'function') { window.generateIsolirScript(); } else { alert('Fungsi belum siap, silakan refresh halaman'); }">
-                                    <i class="bi bi-gear"></i> Generate & Execute Script
+                            <div id="billingSettingsSuccess" class="alert alert-success d-none mt-3" role="alert"></div>
+                            <div class="d-grid gap-2 d-md-flex justify-content-md-end mt-3">
+                                <button type="button" class="btn btn-primary" id="saveSettingsBtnBilling">
+                                    <i class="bi bi-save"></i> Simpan Perubahan
                                 </button>
-                                <button type="button" class="btn btn-success btn-sm ms-2" onclick="if(typeof window.generateLocalIsolirScript === 'function') { window.generateLocalIsolirScript(); } else { alert('Fungsi belum siap, silakan refresh halaman'); }">
-                                    <i class="bi bi-house"></i> Generate Script Lokal
-                                </button>
-                                <button type="button" class="btn btn-outline-secondary btn-sm ms-2" onclick="if(typeof window.copyIsolirScript === 'function') { window.copyIsolirScript(); } else { alert('Fungsi belum siap, silakan refresh halaman'); }">
-                                    <i class="bi bi-clipboard"></i> Copy Script
-                                </button>
-                            </div>
-                            
-                            <div id="isolirExecuteStatus" class="alert d-none mb-3"></div>
-                            
-                            <div class="command-card" id="isolirScriptCard" style="display: none;">
-                                <div class="d-flex justify-content-between align-items-center mb-2">
-                                    <h6 class="mb-0"><i class="bi bi-terminal"></i> Script Mikrotik</h6>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="if(typeof window.copyIsolirScript === 'function') { window.copyIsolirScript(); } else { alert('Fungsi belum siap, silakan refresh halaman'); }">
-                                        <i class="bi bi-clipboard"></i> Copy
-                                    </button>
-                                </div>
-                                <pre id="isolirScript" class="mb-0" style="background: #2d3748; color: #e2e8f0; padding: 15px; border-radius: 6px; font-size: 12px; max-height: 400px; overflow-y: auto;"></pre>
-                            </div>
-                            
-                            <div class="alert alert-info mt-3" id="isolirInfo">
-                                <h6><i class="bi bi-info-circle"></i> Cara Penggunaan:</h6>
-                                <ol class="mb-0">
-                                    <li>Masukkan IP PPPoE aktif dan isolir</li>
-                                    <li>Masukkan IP/domain aplikasi dan path halaman isolir</li>
-                                    <li>Masukkan port aplikasi (contoh: 3003 untuk aplikasi lokal)</li>
-                                    <li>Pilih jenis akses: <strong>Port Langsung</strong> (recommended) atau <strong>Tunneling</strong></li>
-                                    <li>Klik "Generate Script"</li>
-                                    <li>Copy script dan jalankan di terminal Mikrotik</li>
-                                    <li>Script membuat walled garden: billing, halaman isolir, DNS, dan WhatsApp tetap bisa diakses</li>
-                                </ol>
-                                <div class="mt-2">
-                                    <strong>Contoh Halaman Isolir:</strong> 192.168.8.89:8899/isolir<br>
-                                    <strong>Contoh Domain:</strong> cvlmedia.my.id/isolir<br>
-                                    
-                                </div>
                             </div>
                         </div>
                     </div>
@@ -751,6 +627,47 @@
                             </h4>
                         </div>
                         <div class="card-body">
+                            <div class="alert alert-info alert-custom mb-4">
+                                <div class="d-flex align-items-start">
+                                    <i class="bi bi-info-circle-fill me-2 fs-5 mt-1"></i>
+                                    <div class="small">
+                                        <strong>Apa yang di-backup?</strong>
+                                        <p class="mb-2 mt-1">
+                                            Tombol <strong>Buat Backup</strong> menyalin seluruh file database
+                                            <code>data/billing.db</code> ke folder <code>data/backup/</code>.
+                                            Restore mengembalikan <strong>semua isi database billing</strong> ke kondisi saat backup dibuat.
+                                        </p>
+                                        <div class="row g-2">
+                                            <div class="col-md-6">
+                                                <strong class="text-success"><i class="bi bi-check-circle me-1"></i>Ikut ter-backup</strong>
+                                                <ul class="mb-0 ps-3">
+                                                    <li>Data pelanggan, paket, tagihan &amp; pembayaran</li>
+                                                    <li>Router/NAS, area, mapping pelanggan–router</li>
+                                                    <li>Data RADIUS lokal (user, profil, sesi) di DB ini</li>
+                                                    <li>Teknisi, kolektor, job instalasi, laporan gangguan</li>
+                                                    <li>Keuangan, voucher, hotspot, agent, gudang</li>
+                                                    <li>Activity log admin &amp; pengaturan di tabel <code>app_settings</code></li>
+                                                </ul>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <strong class="text-danger"><i class="bi bi-x-circle me-1"></i>Tidak ikut backup ini</strong>
+                                                <ul class="mb-0 ps-3">
+                                                    <li><code>settings.json</code> — host, password admin, WhatsApp, dll.</li>
+                                                    <li>Logo, QR tagihan, foto KTP/rumah (<code>public/img/</code>)</li>
+                                                    <li>Foto penyelesaian pekerjaan teknisi</li>
+                                                    <li>Database RADIUS MySQL terpisah (jika dipakai)</li>
+                                                    <li>Sesi WhatsApp &amp; backup RADIUS (.tar.gz di menu RADIUS)</li>
+                                                </ul>
+                                            </div>
+                                        </div>
+                                        <p class="mb-0 mt-2 text-muted">
+                                            <i class="bi bi-shield-check me-1"></i>
+                                            Sistem otomatis menyimpan <strong>maksimal 3 file backup terbaru</strong>; file lebih lama dihapus otomatis.
+                                            Sebelum restore, sistem membuat salinan <code>pre_restore_*.db</code> sebagai cadangan singkat.
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
                             <div class="row">
                                 <div class="col-md-6">
                                     <div class="card border-primary">
@@ -763,11 +680,35 @@
                                         <div class="card-body">
                                             <p class="text-muted">
                                                 Buat backup database billing untuk keamanan data.
+                                                Sistem otomatis menyimpan <strong>maksimal 3 backup terakhir</strong> untuk hemat penyimpanan.
                                             </p>
                                             <button type="button" class="btn btn-primary" id="createBackupBtn">
                                                 <i class="bi bi-download"></i>
                                                 Buat Backup
                                             </button>
+
+                                            <hr class="my-3">
+
+                                            <h6 class="mb-2"><i class="bi bi-clock-history"></i> Auto Backup</h6>
+                                            <p class="text-muted small mb-2">
+                                                Backup otomatis dijalankan setiap hari pukul 02:00 jika sudah melewati interval yang ditentukan.
+                                            </p>
+                                            <div class="form-check form-switch mb-2">
+                                                <input class="form-check-input" type="checkbox" id="billingAutoBackupEnabled"
+                                                    <%= (typeof appSettings !== 'undefined' && appSettings.billing_autobackup_enabled === 'true') ? 'checked' : '' %>>
+                                                <label class="form-check-label" for="billingAutoBackupEnabled">Aktifkan auto backup</label>
+                                            </div>
+                                            <div class="input-group input-group-sm mb-2">
+                                                <span class="input-group-text">Backup setiap</span>
+                                                <input type="number" class="form-control" id="billingAutoBackupInterval" min="1" max="365"
+                                                    value="<%= (typeof appSettings !== 'undefined' && appSettings.billing_autobackup_interval) ? appSettings.billing_autobackup_interval : '7' %>">
+                                                <span class="input-group-text">hari</span>
+                                            </div>
+                                            <button type="button" class="btn btn-outline-primary btn-sm" id="saveBillingAutoBackupBtn">
+                                                <i class="bi bi-save"></i>
+                                                Simpan Auto Backup
+                                            </button>
+                                            <div id="billingAutoBackupStatus" class="small text-muted mt-2"></div>
                                         </div>
                                     </div>
                                 </div>
@@ -801,11 +742,12 @@
                             <div class="row mt-4">
                                 <div class="col-12">
                                     <div class="card">
-                                        <div class="card-header">
+                                        <div class="card-header d-flex justify-content-between align-items-center">
                                             <h5 class="card-title mb-0">
                                                 <i class="bi bi-clock-history"></i>
                                                 Riwayat Backup
                                             </h5>
+                                            <small class="text-muted">Maks. 3 file terbaru</small>
                                         </div>
                                         <div class="card-body">
                                             <div class="table-responsive">
@@ -931,10 +873,30 @@ if (typeof QRCode === 'undefined') {
 <script>
 $(function() {
     // Fungsi untuk mendapatkan label yang user-friendly
+    function humanizeFieldKey(key) {
+        if (!key) return '';
+        const leaf = key.includes('.') ? key.slice(key.lastIndexOf('.') + 1) : key;
+        return leaf
+            .replace(/([a-z])([A-Z])/g, '$1 $2')
+            .replace(/_/g, ' ')
+            .split(' ')
+            .filter(Boolean)
+            .map(function(word) {
+                const lower = word.toLowerCase();
+                if (lower === 'otp') return 'OTP';
+                if (lower === 'id') return 'ID';
+                if (lower === 'ppn') return 'PPN';
+                if (lower === 'url') return 'URL';
+                if (lower === 'api') return 'API';
+                return lower.charAt(0).toUpperCase() + lower.slice(1);
+            })
+            .join(' ');
+    }
+
     function getFieldLabel(key) {
         const fieldLabels = {
-            'auto_suspension_enabled': 'Auto Suspension (Isolir Otomatis)',
-            'suspension_grace_period_days': 'Grace Period Suspension (Hari)',
+            'auto_suspension_enabled': 'Isolir Otomatis',
+            'suspension_grace_period_days': 'Grace Period Isolir (Hari)',
             'default_pppoe_profile': 'Profile PPPoE Default',
             'admins.0': 'Nomor Admin Utama',
             'admins.1': 'Nomor Admin Tambahan 1',
@@ -944,6 +906,7 @@ $(function() {
             'technician_numbers.2': 'Nomor Teknisi 3',
             'admin_username': 'Username Admin',
             'admin_password': 'Password Admin',
+            'admin_session_timeout_minutes': 'Timeout Login Admin (Menit)',
             'pppoe_monitor_enable': 'Monitor PPPoE',
             'pppoe_monitor_interval_minutes': 'Interval Monitor PPPoE (Menit)',
             'whatsapp_keep_alive': 'WhatsApp Keep Alive',
@@ -955,33 +918,39 @@ $(function() {
             'company_header': 'Header Perusahaan',
             'app_name': 'Nama Aplikasi',
             'footer_info': 'Info Footer',
-            'customerPortalOtp': 'OTP Customer Portal',
+            'company_website': 'Website Perusahaan',
+            'company_slogan': 'Slogan Perusahaan',
+            'company_address': 'Alamat Perusahaan',
+            'contact_phone': 'Telepon',
+            'contact_email': 'Email',
+            'contact_address': 'Alamat Kontak',
+            'contact_whatsapp': 'WhatsApp',
+            'customerPortalOtp': 'OTP Portal Pelanggan',
             'otp_length': 'Panjang OTP',
             'otp_expiry_minutes': 'Masa Berlaku OTP (Menit)',
             'server_host': 'Host Server',
             'server_port': 'Port Server',
-            'technician_group_id': 'ID Grup WhatsApp Teknisi',
+            'technician_group_id': 'Grup WhatsApp Teknisi',
             'payment_bank_name': 'Nama Bank',
             'payment_account_holder': 'Nama Pemilik Rekening',
             'payment_account_number': 'Nomor Rekening',
             'payment_cash_address': 'Alamat Pembayaran Tunai',
             'payment_cash_hours': 'Jam Pembayaran Tunai',
             'invoice_notes': 'Catatan Invoice',
-            'admin_session_timeout_minutes': 'Timeout Login Admin',
-            'trouble_report.enabled': 'Laporan Gangguan',
+            'trouble_report.enabled': 'Fitur Laporan Gangguan',
             'trouble_report.categories': 'Kategori Laporan',
-            'trouble_report.auto_ticket': 'Auto Ticket',
+            'trouble_report.auto_ticket': 'Tiket Otomatis',
             'rxpower_recap_enable': 'Ringkasan RX Power',
             'rxpower_recap_interval_hours': 'Interval Ringkasan RX Power (Jam)',
             'offline_notification_enable': 'Notifikasi Perangkat Offline',
             'offline_notification_interval_hours': 'Interval Notifikasi Offline (Jam)',
             'offline_device_threshold_hours': 'Batas Waktu Offline (Jam)',
-            'tax_settings.default_tax_rate': 'PPN Default (%)',
+            'tax_settings.default_tax_rate': 'Tarif PPN (%)',
             'tax_settings.tax_name': 'Nama Pajak',
-            'tax_settings.tax_enabled': 'Sistem PPN',
-            'tax_settings.tax_inclusive': 'Harga Sudah Termasuk PPN'
+            'tax_settings.tax_enabled': 'Aktifkan PPN',
+            'tax_settings.tax_inclusive': 'Harga Termasuk PPN'
         };
-        return fieldLabels[key] || key;
+        return fieldLabels[key] || humanizeFieldKey(key);
     }
 
     // Field yang tidak perlu ditampilkan di form settings
@@ -1137,74 +1106,46 @@ $(function() {
         'payment_cash_hours',
         'invoice_notes'
     ];
+    const companyFieldOrder = [
+        'company_header',
+        'app_name',
+        'company_slogan',
+        'company_website',
+        'company_address',
+        'contact_phone',
+        'contact_whatsapp',
+        'contact_email',
+        'contact_address',
+        'footer_info'
+    ];
+    const portalFieldOrder = [
+        'customerPortalOtp',
+        'otp_length',
+        'otp_expiry_minutes'
+    ];
+    const taxFieldOrder = [
+        'tax_settings.tax_enabled',
+        'tax_settings.tax_name',
+        'tax_settings.default_tax_rate',
+        'tax_settings.tax_inclusive'
+    ];
+    const troubleFieldOrder = [
+        'trouble_report.enabled',
+        'trouble_report.categories',
+        'trouble_report.auto_ticket'
+    ];
     const systemFieldSet = new Set(systemFieldOrder);
     const billingFieldSet = new Set(billingFieldOrder);
 
-    // Keterangan bahasa Indonesia untuk setiap pengaturan
-    function getFieldDescription(key) {
-        const descriptions = {
-            'auto_suspension_enabled': 'Aktifkan isolir otomatis untuk pelanggan yang tidak membayar',
-            'suspension_grace_period_days': 'Jumlah hari sebelum layanan disuspend setelah jatuh tempo',
-            'default_pppoe_profile': 'Profile PPPoE yang akan digunakan untuk pelanggan baru',
-            'isolir_profile': 'Profile PPPoE untuk pelanggan yang diisolir',
-            'static_ip_suspension_method': 'Metode untuk suspend IP statis (address_list atau disable)',
-            'suspension_bandwidth_limit': 'Batas bandwidth untuk pelanggan yang diisolir (contoh: 1k/1k)',
-            'admins.0': 'Nomor WhatsApp admin utama untuk menerima notifikasi',
-            'admins.1': 'Nomor WhatsApp admin tambahan (opsional)',
-            'admin_username': 'Username untuk login ke admin panel',
-            'admin_password': 'Password untuk login ke admin panel',
-            'admin_session_timeout_minutes': 'Durasi idle sebelum admin otomatis logout. Default 60 menit, minimal 5 menit, maksimal 1440 menit.',
-            'pppoe_monitor_enable': 'Aktifkan monitoring koneksi PPPoE secara real-time',
-            'technician_numbers.0': 'Nomor WhatsApp teknisi pertama',
-            'technician_numbers.1': 'Nomor WhatsApp teknisi kedua',
-            'technician_group_id': 'ID grup WhatsApp untuk teknisi',
-            'whatsapp_keep_alive': 'Pertahankan koneksi WhatsApp tetap aktif',
-            'whatsapp_restart_on_error': 'Restart otomatis WhatsApp jika terjadi error',
-            'rx_power_warning': 'Threshold RX Power untuk peringatan (dBm)',
-            'rx_power_critical': 'Threshold RX Power untuk kondisi kritis (dBm)',
-            'rx_power_notification_enable': 'Aktifkan notifikasi monitoring RX Power',
-            'rx_power_warning_interval_hours': 'Interval pengecekan RX Power (dalam jam)',
-            'company_header': 'Header yang ditampilkan di aplikasi',
-            'app_name': 'Nama aplikasi yang ditampilkan',
-            'footer_info': 'Informasi footer aplikasi',
-            'customerPortalOtp': 'Aktifkan OTP untuk customer portal',
-            'otp_length': 'Panjang kode OTP (4-6 digit)',
-            'otp_expiry_minutes': 'Masa berlaku OTP dalam menit',
-            'server_host': 'Alamat IP atau hostname server',
-            'trouble_report.enabled': 'Aktifkan fitur laporan gangguan',
-            'trouble_report.categories': 'Kategori laporan gangguan (pisahkan dengan koma)',
-            'trouble_report.auto_ticket': 'Buat tiket otomatis untuk laporan gangguan',
-            'rxpower_recap_enable': 'Aktifkan ringkasan RX Power harian',
-            'rxpower_recap_interval_hours': 'Interval pengiriman ringkasan RX Power (dalam jam)',
-            'offline_notification_enable': 'Aktifkan notifikasi perangkat offline',
-            'offline_notification_interval_hours': 'Interval pengecekan perangkat offline (dalam jam)',
-            'offline_device_threshold_hours': 'Batas waktu perangkat dianggap offline (dalam jam)',
-            'tax_settings.default_tax_rate': 'Tarif PPN default dalam persen',
-            'tax_settings.tax_name': 'Nama pajak yang ditampilkan (contoh: PPN)',
-            'tax_settings.tax_enabled': 'Aktifkan sistem PPN',
-            'tax_settings.tax_inclusive': 'Harga sudah termasuk PPN',
-            'server_port': 'Port server aplikasi',
-            'logo_filename': 'Nama file logo perusahaan',
-            'company_website': 'Website perusahaan',
-            'company_slogan': 'Slogan perusahaan',
-            'invoice_notes': 'Catatan yang ditampilkan di invoice',
-            'payment_bank_name': 'Nama bank untuk pembayaran',
-            'payment_account_number': 'Nomor rekening bank',
-            'payment_account_holder': 'Nama pemilik rekening',
-            'payment_cash_address': 'Alamat untuk pembayaran tunai',
-            'payment_cash_hours': 'Jam operasional untuk pembayaran tunai',
-            'contact_phone': 'Nomor telepon kontak',
-            'contact_email': 'Email kontak perusahaan',
-            'contact_address': 'Alamat perusahaan',
-            'contact_whatsapp': 'Nomor WhatsApp kontak',
-            'whatsapp_rate_limit.maxMessagesPerBatch': 'Maksimal pesan per batch WhatsApp',
-            'whatsapp_rate_limit.delayBetweenBatches': 'Jeda antar batch pesan (detik)',
-            'whatsapp_rate_limit.delayBetweenMessages': 'Jeda antar pesan individual (detik)',
-            'whatsapp_rate_limit.maxRetries': 'Maksimal percobaan ulang jika gagal',
-            'whatsapp_rate_limit.dailyMessageLimit': 'Batas pesan harian (0 = tidak terbatas)',
-            'whatsapp_rate_limit.enabled': 'Aktifkan pembatasan tingkat pesan WhatsApp'
+    // Keterangan khusus — hanya untuk hint di bawah input, bukan label duplikat
+    function getFieldHint(key) {
+        const hints = {
+            'admin_session_timeout_minutes': 'Default 60 menit. Min 5, maks 1440.',
+            'trouble_report.categories': 'Pisahkan dengan koma, contoh: Internet Lambat, WiFi Mati',
+            'invoice_notes': 'Tampil di bagian bawah invoice/tagihan',
+            'payment_cash_hours': 'Contoh: 08:00 - 16:00'
         };
-        return descriptions[key] || '';
+        return hints[key] || '';
     }
     // Ambil data settings.json
     $.get('/admin/settings/data', function(data) {
@@ -1256,13 +1197,10 @@ $(function() {
             const key = entry.key;
             const val = entry.val;
             const fieldLabel = escapeHtml(getFieldLabel(key));
-            const fieldDescription = escapeHtml(getFieldDescription(key));
+            const fieldHint = escapeHtml(getFieldHint(key));
             const value = escapeHtml(val);
             let fieldHtml = '<div class="mb-3">';
             fieldHtml += '<label class="form-label">' + fieldLabel + '</label>';
-            if (fieldDescription) {
-                fieldHtml += '<div class="form-text text-muted mb-2">' + fieldDescription + '</div>';
-            }
 
             if (typeof val === 'boolean' || val === true || val === false || val === 'true' || val === 'false') {
                 const checked = (val === true || val === 'true') ? 'checked' : '';
@@ -1272,20 +1210,25 @@ $(function() {
                 fieldHtml += '</div>';
             } else if (key === 'admin_session_timeout_minutes') {
                 fieldHtml += '<input type="number" class="form-control" name="' + escapeHtml(key) + '" value="' + value + '" min="5" max="1440" step="1">';
-                fieldHtml += '<div class="form-text text-info">Perubahan berlaku untuk aktivitas berikutnya. Gunakan 60 untuk timeout 1 jam.</div>';
+                fieldHtml += '<div class="form-text text-muted">' + fieldHint + '</div>';
             } else if (key === 'suspension_grace_period_days') {
                 fieldHtml += '<input type="number" class="form-control" name="' + escapeHtml(key) + '" value="' + value + '" min="1" max="365">';
             } else if (key === 'tax_settings.default_tax_rate') {
                 fieldHtml += '<input type="number" class="form-control" name="' + escapeHtml(key) + '" value="' + value + '" step="0.01" min="0" max="100">';
             } else if (key.includes('password') || key.includes('Password')) {
                 fieldHtml += '<input type="password" class="form-control" name="' + escapeHtml(key) + '" value="' + value + '" placeholder="Masukkan password">';
-                fieldHtml += '<div class="form-text text-warning">Hati-hati saat mengubah password. Pastikan password benar untuk menghindari error koneksi.</div>';
             } else if (key === 'invoice_notes') {
                 fieldHtml += '<textarea class="form-control" name="' + escapeHtml(key) + '" rows="3">' + value + '</textarea>';
+                if (fieldHint) {
+                    fieldHtml += '<div class="form-text text-muted">' + fieldHint + '</div>';
+                }
             } else if (key === 'server_port') {
                 fieldHtml += '<input type="number" class="form-control" name="' + escapeHtml(key) + '" value="' + value + '" min="1" max="65535" step="1">';
             } else {
                 fieldHtml += '<input type="text" class="form-control" name="' + escapeHtml(key) + '" value="' + value + '">';
+                if (fieldHint) {
+                    fieldHtml += '<div class="form-text text-muted">' + fieldHint + '</div>';
+                }
             }
             fieldHtml += '</div>';
             return fieldHtml;
@@ -1314,12 +1257,26 @@ $(function() {
             if (groupA === 'billing') {
                 return billingFieldOrder.indexOf(a.key) - billingFieldOrder.indexOf(b.key);
             }
+            if (groupA === 'company') {
+                return companyFieldOrder.indexOf(a.key) - companyFieldOrder.indexOf(b.key);
+            }
+            if (groupA === 'portal') {
+                return portalFieldOrder.indexOf(a.key) - portalFieldOrder.indexOf(b.key);
+            }
+            if (groupA === 'tax') {
+                return taxFieldOrder.indexOf(a.key) - taxFieldOrder.indexOf(b.key);
+            }
+            if (groupA === 'trouble') {
+                return troubleFieldOrder.indexOf(a.key) - troubleFieldOrder.indexOf(b.key);
+            }
             return getFieldLabel(a.key).localeCompare(getFieldLabel(b.key), 'id');
         });
         entries.forEach(function(entry) {
             groups[getFieldGroup(entry.key)].items.push(renderField(entry));
         });
-        const html = Object.keys(groups).map(function(groupKey) {
+        const html = Object.keys(groups).filter(function(groupKey) {
+            return groupKey !== 'billing' && groupKey !== 'other';
+        }).map(function(groupKey) {
             const group = groups[groupKey];
             if (!group.items.length) return '';
             return '<div class="settings-group mb-4">' +
@@ -1328,74 +1285,103 @@ $(function() {
                 '</div>';
         }).join('');
         $('#settingsFields').html(html || '<div class="alert alert-info mb-0">Tidak ada pengaturan umum yang perlu ditampilkan.</div>');
+
+        const billingGroup = groups.billing;
+        const billingHtml = billingGroup.items.length
+            ? '<div class="settings-group mb-0">' +
+                '<div class="settings-group-title"><i class="bi ' + billingGroup.icon + ' me-1"></i>' + billingGroup.title + '</div>' +
+                billingGroup.items.join('') +
+                '</div>'
+            : '';
+        $('#billingSettingsFields').html(billingHtml);
     });
-    // Submit form settings
-    $('#settingsForm').on('submit', function(e) {
-        e.preventDefault();
-        
-        // Disable submit button untuk mencegah multiple submission
-        const submitBtn = $(this).find('button[type="submit"]');
-        const originalText = submitBtn.html();
-        submitBtn.prop('disabled', true).html('<i class="bi bi-hourglass-split"></i> Menyimpan...');
-        
+
+    function showSettingsSaveMessage(type, message) {
+        const alertClass = type === 'success' ? 'alert-success' : (type === 'warning' ? 'alert-warning' : 'alert-danger');
+        ['#settingsSuccess', '#billingSettingsSuccess'].forEach(function(selector) {
+            const $el = $(selector);
+            $el.removeClass('d-none alert-success alert-warning alert-danger')
+                .addClass(alertClass)
+                .text(message);
+        });
+        if (type === 'success' || type === 'warning') {
+            setTimeout(function() {
+                ['#settingsSuccess', '#billingSettingsSuccess'].forEach(function(selector) {
+                    $(selector).addClass('d-none').removeClass('alert-warning alert-danger');
+                });
+            }, 3000);
+        } else {
+            setTimeout(function() {
+                ['#settingsSuccess', '#billingSettingsSuccess'].forEach(function(selector) {
+                    $(selector).addClass('d-none').removeClass('alert-warning');
+                });
+            }, 5000);
+        }
+    }
+
+    function setSettingsSaveButtonsLoading(loading) {
+        const savingHtml = '<i class="bi bi-hourglass-split"></i> Menyimpan...';
+        const defaultHtml = '<i class="bi bi-save"></i> Simpan Perubahan';
+        $('#settingsForm button[type="submit"], #saveSettingsBtnBilling').each(function() {
+            const $btn = $(this);
+            if (loading) {
+                if (!$btn.data('original-html')) {
+                    $btn.data('original-html', $btn.html());
+                }
+                $btn.prop('disabled', true).html(savingHtml);
+            } else {
+                $btn.prop('disabled', false).html($btn.data('original-html') || defaultHtml);
+            }
+        });
+    }
+
+    function saveSettingsForm() {
         var formData = {};
         var hasChanges = false;
-        
-        // Handle semua input text dan checkbox
-        $('#settingsForm').find('input[type=text],input[type=checkbox],input[type=number],input[type=password],textarea').each(function() {
+
+        $('#settingsForm, #billingSettingsFields').find('input[type=text],input[type=checkbox],input[type=number],input[type=password],textarea').each(function() {
             var name = $(this).attr('name');
             if (!name) return;
-            
+
             let value;
             if ($(this).attr('type') === 'checkbox') {
                 value = $(this).is(':checked');
             } else {
                 value = $(this).val();
             }
-            
+
             formData[name] = value;
             hasChanges = true;
         });
-        
-        // Handle radio button (hanya yang checked)
-        $('#settingsForm').find('input[type=radio]:checked').each(function() {
+
+        $('#settingsForm, #billingSettingsFields').find('input[type=radio]:checked').each(function() {
             var name = $(this).attr('name');
             if (!name) return;
             formData[name] = $(this).val();
             hasChanges = true;
         });
-        
-        // Validasi apakah ada perubahan
+
         if (!hasChanges || Object.keys(formData).length === 0) {
-            $('#settingsSuccess').removeClass('d-none').addClass('alert-warning').text('Tidak ada perubahan untuk disimpan.');
-            setTimeout(function() {
-                $('#settingsSuccess').addClass('d-none').removeClass('alert-warning');
-            }, 3000);
-            submitBtn.prop('disabled', false).html(originalText);
+            showSettingsSaveMessage('warning', 'Tidak ada perubahan untuk disimpan.');
             return;
         }
-        
+
+        setSettingsSaveButtonsLoading(true);
+
         $.ajax({
             url: '/admin/settings/save',
             method: 'POST',
             data: formData,
-            timeout: 10000, // 10 detik timeout
+            timeout: 10000,
             success: function(res) {
                 if (res.success) {
-                    $('#settingsSuccess').removeClass('d-none').text(res.message || 'Pengaturan berhasil disimpan!');
-                    setTimeout(function() {
-                        $('#settingsSuccess').addClass('d-none');
-                    }, 3000);
+                    showSettingsSaveMessage('success', res.message || 'Pengaturan berhasil disimpan!');
                 } else {
-                    $('#settingsSuccess').removeClass('d-none').addClass('alert-danger').text(res.error || 'Gagal menyimpan pengaturan!');
-                    setTimeout(function() {
-                        $('#settingsSuccess').addClass('d-none').removeClass('alert-danger');
-                    }, 5000);
+                    showSettingsSaveMessage('error', res.error || 'Gagal menyimpan pengaturan!');
                 }
             },
-            error: function(xhr, status, error) {
+            error: function(xhr, status) {
                 let errorMsg = 'Gagal menyimpan pengaturan!';
-                
                 if (status === 'timeout') {
                     errorMsg = 'Request timeout. Silakan coba lagi.';
                 } else if (xhr.responseJSON && xhr.responseJSON.error) {
@@ -1407,17 +1393,22 @@ $(function() {
                 } else if (xhr.status === 0) {
                     errorMsg = 'Tidak dapat terhubung ke server. Periksa koneksi Anda.';
                 }
-                
-                $('#settingsSuccess').removeClass('d-none').addClass('alert-danger').text(errorMsg);
-                setTimeout(function() {
-                    $('#settingsSuccess').addClass('d-none').removeClass('alert-danger');
-                }, 5000);
+                showSettingsSaveMessage('error', errorMsg);
             },
             complete: function() {
-                // Re-enable submit button
-                submitBtn.prop('disabled', false).html(originalText);
+                setSettingsSaveButtonsLoading(false);
             }
         });
+    }
+
+    // Submit form settings
+    $('#settingsForm').on('submit', function(e) {
+        e.preventDefault();
+        saveSettingsForm();
+    });
+
+    $('#saveSettingsBtnBilling').on('click', function() {
+        saveSettingsForm();
     });
     // WhatsApp QR & Status - Didefinisikan di scope global agar bisa diakses dari semua block
     window.loadWAStatus = function() {
@@ -1901,9 +1892,39 @@ $(function() {
 
 // Backup & Restore Functions
 $(document).ready(function() {
-    // Load backup files on page load
     loadBackupFiles();
-    
+
+    $('#saveBillingAutoBackupBtn').on('click', function() {
+        const btn = $(this);
+        const originalText = btn.html();
+        const enabled = $('#billingAutoBackupEnabled').is(':checked') ? 'true' : 'false';
+        const interval = Math.max(parseInt($('#billingAutoBackupInterval').val(), 10) || 7, 1);
+
+        btn.prop('disabled', true).html('<i class="bi bi-circle-fill mdi-spin me-1"></i>Menyimpan...');
+
+        $.ajax({
+            url: '/admin/settings/auto-backup-settings',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ enabled, interval }),
+            success: function(response) {
+                if (response.success) {
+                    showNotification('success', response.message);
+                    loadBackupFiles();
+                } else {
+                    showNotification('danger', response.message || 'Gagal menyimpan pengaturan auto backup');
+                }
+            },
+            error: function(xhr) {
+                const errorMsg = xhr.responseJSON?.message || 'Terjadi kesalahan saat menyimpan pengaturan';
+                showNotification('danger', errorMsg);
+            },
+            complete: function() {
+                btn.prop('disabled', false).html(originalText);
+            }
+        });
+    });
+
     // Create backup
     $('#createBackupBtn').on('click', function() {
         const btn = $(this);
@@ -1993,6 +2014,7 @@ $(document).ready(function() {
                 if (response.success) {
                     updateBackupTable(response.backups);
                     updateBackupSelect(response.backups);
+                    updateBillingAutoBackupStatus(response.auto_backup);
                 } else {
                     showNotification('danger', 'Gagal memuat daftar backup');
                 }
@@ -2047,6 +2069,28 @@ $(document).ready(function() {
         });
     }
     
+    function updateBillingAutoBackupStatus(autoBackup) {
+        const statusEl = $('#billingAutoBackupStatus');
+        if (!autoBackup) {
+            statusEl.text('');
+            return;
+        }
+
+        if (!autoBackup.enabled) {
+            statusEl.html('<i class="bi bi-pause-circle me-1"></i>Auto backup nonaktif.');
+            return;
+        }
+
+        let text = `<i class="bi bi-check-circle text-success me-1"></i>Aktif — backup otomatis setiap <strong>${autoBackup.interval}</strong> hari (cek jam 02:00).`;
+        if (autoBackup.last_backup) {
+            const lastDate = new Date(autoBackup.last_backup.modified || autoBackup.last_backup.created).toLocaleString('id-ID');
+            text += `<br>Backup terakhir: <strong>${autoBackup.last_backup.filename}</strong> (${lastDate})`;
+        } else {
+            text += '<br>Belum ada backup — akan dibuat saat jadwal berikutnya.';
+        }
+        statusEl.html(text);
+    }
+
     function formatFileSize(bytes) {
         if (bytes === 0) return '0 Bytes';
         const k = 1024;
@@ -2349,522 +2393,6 @@ $(document).ready(function() {
         showNotification('success', 'Berhasil disalin ke clipboard!');
     });
     
-    // Functions untuk Script Generator Menu Isolir Mikrotik
-    // Load routers list saat page load
-    function loadIsolirRouters() {
-        $.get('/api/dashboard/routers', function(data) {
-            if (data.success && data.routers) {
-                const select = document.getElementById('isolirRouterSelect');
-                if (select) {
-                    // Clear existing options (keep "Auto")
-                    while (select.children.length > 1) {
-                        select.removeChild(select.lastChild);
-                    }
-                    
-                    data.routers.forEach(router => {
-                        const option = document.createElement('option');
-                        option.value = router.id;
-                        option.textContent = `${router.name} (${router.nas_ip})`;
-                        select.appendChild(option);
-                    });
-                }
-            }
-        }).fail(function() {
-            console.error('Failed to load routers');
-        });
-    }
-    
-    // Load routers saat page load
-    loadIsolirRouters();
-    
-    // Define functions dalam scope yang benar (global untuk onclick)
-    window.generateIsolirScript = async function() {
-        const activeIp = document.getElementById('activeIp').value.trim();
-        const isolirIp = document.getElementById('isolirIp').value.trim();
-        const isolirDomain = document.getElementById('isolirDomain').value.trim();
-        const isolirPath = document.getElementById('isolirPath').value.trim();
-        const isolirPort = document.getElementById('isolirPort').value.trim();
-        const accessType = document.getElementById('accessType').value;
-        const tunnelingDstAddress = document.getElementById('tunnelingDstAddress') ? document.getElementById('tunnelingDstAddress').value.trim() : '';
-        
-        // Validasi input (untuk web proxy, isolirPath tidak wajib)
-        if (!activeIp || !isolirIp || !isolirDomain) {
-            showNotification('warning', 'Mohon lengkapi field yang wajib!');
-            return;
-        }
-        
-        // Validasi !Dst. Address untuk tunneling mode
-        if (accessType === 'tunneling' && !tunnelingDstAddress) {
-            showNotification('warning', 'Mohon isi !Dst. Address (IP Domain) untuk mode Tunneling!');
-            return;
-        }
-        
-        // Validasi format IP untuk activeIp dan isolirIp
-        const ipRegex = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
-        if (!ipRegex.test(activeIp) || !ipRegex.test(isolirIp)) {
-            showNotification('warning', 'Format IP tidak valid untuk IP Aktif atau IP Isolir!');
-            return;
-        }
-        
-        // Validasi format IP untuk tunnelingDstAddress jika diisi
-        if (accessType === 'tunneling' && tunnelingDstAddress && !ipRegex.test(tunnelingDstAddress)) {
-            showNotification('warning', 'Format IP tidak valid untuk !Dst. Address!');
-            return;
-        }
-
-        const toCidr = (value) => {
-            if (value.includes('/')) return value;
-            const parts = value.split('.');
-            return parts.length === 4 ? `${parts[0]}.${parts[1]}.${parts[2]}.0/24` : value;
-        };
-        const toPoolRange = (value) => {
-            const cidr = toCidr(value);
-            const base = cidr.split('/')[0].split('.');
-            if (base.length !== 4) return '192.168.200.2-192.168.200.254';
-            return `${base[0]}.${base[1]}.${base[2]}.2-${base[0]}.${base[1]}.${base[2]}.254`;
-        };
-        const gatewayFrom = (value) => {
-            const base = toCidr(value).split('/')[0].split('.');
-            if (base.length !== 4) return '192.168.200.1';
-            return `${base[0]}.${base[1]}.${base[2]}.1`;
-        };
-        const billingServerIp = accessType === 'tunneling' && tunnelingDstAddress
-            ? tunnelingDstAddress.replace(/\/.*$/, '')
-            : isolirDomain;
-        const isolirRange = toCidr(isolirIp);
-        const poolRange = toPoolRange(isolirIp);
-        const localAddress = gatewayFrom(isolirIp);
-        const pagePort = isolirPort || '8899';
-        const billingPorts = Array.from(new Set([pagePort, '3003', '4555', '80', '443'])).join(',');
-        const whatsappHosts = [
-            'wa.me',
-            'whatsapp.com',
-            'web.whatsapp.com',
-            'api.whatsapp.com',
-            'static.whatsapp.net',
-            'whatsapp.net',
-            'graph.whatsapp.com',
-            'mmg.whatsapp.net',
-            'pps.whatsapp.net',
-            'media.whatsapp.net',
-            'mmg-fna.whatsapp.net',
-            'g.whatsapp.net',
-            'v.whatsapp.net',
-            'scontent.whatsapp.net',
-            'facebook.com',
-            'fbcdn.net',
-            'fbsbx.com'
-        ];
-        const updatedWalledGardenScript = [
-            '# BILLING ISOLIR WALLED GARDEN',
-            '# Generated on: ' + new Date().toLocaleString('id-ID'),
-            '# IP PPPoE Aktif: ' + activeIp,
-            '# IP Range Isolir: ' + isolirRange,
-            '# Server Billing: ' + billingServerIp,
-            '# Port Halaman Isolir: ' + pagePort,
-            '',
-            '/ip firewall filter remove [find where comment~"BILLING-ISOLIR"]',
-            '/ip firewall nat remove [find where comment~"BILLING-ISOLIR"]',
-            '/ip firewall address-list remove [find where comment~"BILLING-ISOLIR"]',
-            '/ip firewall filter remove [find where comment~"Generate BILLING - Isolir"]',
-            '/ip firewall filter remove [find where comment~"isolir-allow"]',
-            '/ip firewall filter remove [find where comment~"isolir-block"]',
-            '/ip firewall nat remove [find where comment~"Generate BILLING - Isolir"]',
-            '/ip firewall nat remove [find where comment~"isolir-redirect"]',
-            '',
-            '/ip firewall address-list add list=isolir-users address=' + isolirRange + ' comment="BILLING-ISOLIR users range"',
-            '/ip firewall address-list add list=isolir-allowed-dst address=' + billingServerIp + ' comment="BILLING-ISOLIR billing server"',
-            ...whatsappHosts.map(host => '/ip firewall address-list add list=isolir-allowed-dst address=' + host + ' comment="BILLING-ISOLIR whatsapp ' + host + '"'),
-            '',
-            '/ip pool remove [find where name="isolir-pool"]',
-            '/ip pool add name="isolir-pool" ranges=' + poolRange + ' comment="BILLING-ISOLIR pool"',
-            '/ppp profile remove [find where name="isolir" and comment~"BILLING-ISOLIR"]',
-            '/ppp profile add name="isolir" local-address=' + localAddress + ' remote-address=isolir-pool only-one=yes comment="BILLING-ISOLIR profile"',
-            '',
-            '/ip firewall filter add chain=input src-address=' + isolirRange + ' protocol=udp dst-port=53 action=accept place-before=0 comment="BILLING-ISOLIR allow dns udp to router"',
-            '/ip firewall filter add chain=input src-address=' + isolirRange + ' protocol=tcp dst-port=53 action=accept place-before=0 comment="BILLING-ISOLIR allow dns tcp to router"',
-            '/ip firewall filter add chain=forward src-address=' + isolirRange + ' protocol=udp dst-port=53 action=accept place-before=0 comment="BILLING-ISOLIR allow dns udp forward"',
-            '/ip firewall filter add chain=forward src-address=' + isolirRange + ' protocol=tcp dst-port=53 action=accept place-before=0 comment="BILLING-ISOLIR allow dns tcp forward"',
-            '',
-            '# Urutan command sengaja: redirect dulu, lalu bypass place-before=0 agar bypass berada di atas redirect.',
-            '/ip firewall nat add chain=srcnat src-address=' + isolirRange + ' dst-address=' + billingServerIp + ' action=masquerade place-before=0 comment="BILLING-ISOLIR masquerade to billing server"',
-            '/ip firewall nat add chain=dstnat src-address=' + isolirRange + ' protocol=tcp dst-port=80,8080,8000,8888 action=dst-nat to-addresses=' + billingServerIp + ' to-ports=' + pagePort + ' place-before=0 comment="BILLING-ISOLIR force http to isolir page"',
-            '/ip firewall nat add chain=dstnat src-address=' + isolirRange + ' dst-address-list=isolir-allowed-dst protocol=tcp action=accept place-before=0 comment="BILLING-ISOLIR bypass allowed destinations"',
-            '',
-            '# Urutan command sengaja: drop dulu, lalu allow place-before=0 agar allow berada di atas drop.',
-            '/ip firewall filter add chain=forward src-address=' + isolirRange + ' action=drop place-before=0 comment="BILLING-ISOLIR drop all other traffic"',
-            '/ip firewall filter add chain=forward src-address=' + isolirRange + ' dst-address-list=isolir-allowed-dst protocol=tcp dst-port=80,443,5222,5223,5228,4244 action=accept place-before=0 comment="BILLING-ISOLIR allow whatsapp and allowed web"',
-            '/ip firewall filter add chain=forward src-address=' + isolirRange + ' dst-address=' + billingServerIp + ' protocol=tcp dst-port=' + billingPorts + ' action=accept place-before=0 comment="BILLING-ISOLIR allow billing app and isolir page"',
-            '/ip firewall filter add chain=forward connection-state=established,related action=accept place-before=0 comment="BILLING-ISOLIR allow established"',
-            '',
-            ':put "=== BILLING ISOLIR WALLED GARDEN READY ==="',
-            ':put "Halaman isolir: http://' + billingServerIp + ':' + pagePort + (isolirPath || '/isolir') + '"',
-            ':put "HTTP non-whitelist otomatis diarahkan ke halaman isolir."',
-            ':put "Billing dan WhatsApp sudah di-whitelist sebelum drop."'
-        ].join('\n');
-
-        document.getElementById('isolirScript').textContent = updatedWalledGardenScript;
-        document.getElementById('isolirScriptCard').style.display = 'block';
-        const autoExecuteUpdated = document.getElementById('autoExecuteIsolir').checked;
-        if (autoExecuteUpdated) {
-            window.executeIsolirScript(updatedWalledGardenScript);
-        } else {
-            showNotification('success', 'Script walled garden isolir berhasil di-generate!');
-        }
-        return;
-        
-        // Parse IP aplikasi dari Domain/IP Aplikasi
-        // PENTING: Untuk mode tunneling, isolirDomain HANYA digunakan untuk web proxy access redirect-to
-        // Untuk !Dst. Address di firewall/NAT, gunakan tunnelingDstAddress (kolom terpisah)
-        let appIp = isolirDomain;
-        let resolvedIp = null;
-        const isIp = ipRegex.test(isolirDomain);
-        
-        // Untuk mode tunneling, SKIP DNS resolve karena isolirDomain hanya untuk web proxy access
-        // isolirDomain bisa domain atau IP, dan akan digunakan langsung di web proxy redirect-to
-        if (accessType !== 'tunneling') {
-            // Hanya resolve DNS jika BUKAN mode tunneling
-            // Jika domain, coba resolve ke IP
-            if (!isIp) {
-                try {
-                    showNotification('info', 'Meresolve domain ke IP...', 2000);
-                    const response = await fetch(`/api/resolve-dns?domain=${encodeURIComponent(isolirDomain)}`);
-                    const data = await response.json();
-                    if (data.success && data.ip) {
-                        resolvedIp = data.ip;
-                        appIp = resolvedIp;
-                        showNotification('success', `Domain ${isolirDomain} di-resolve ke IP: ${resolvedIp}`, 3000);
-                    } else {
-                        showNotification('warning', `Gagal resolve domain ${isolirDomain}. Menggunakan pendekatan web proxy saja.`, 4000);
-                    }
-                } catch (error) {
-                    console.warn('DNS resolve error:', error);
-                    showNotification('warning', `Gagal resolve domain ${isolirDomain}. Menggunakan pendekatan web proxy saja.`, 4000);
-                }
-            }
-        } else {
-            // Mode tunneling: isolirDomain hanya untuk web proxy access, tidak perlu resolve
-            // tunnelingDstAddress akan digunakan untuk !Dst. Address
-        }
-        
-        // Parse IP range isolir (dari isolirIp, bisa single IP atau range)
-        // Jika single IP seperti 172.30.0.0, ubah menjadi range 172.30.0.0/16
-        // Atau jika sudah range, gunakan langsung
-        let isolirRange = isolirIp;
-        let isolirRangeForPPPoE = isolirIp; // Untuk PPPoE profile (harus IP range, bukan CIDR)
-        let isolirLocalAddress = isolirIp; // Untuk local-address (harus single IP, bukan CIDR atau range)
-        
-        if (isolirIp && !isolirIp.includes('/') && !isolirIp.includes('-')) {
-            // Single IP - convert ke /16 CIDR untuk firewall
-            const ipParts = isolirIp.split('.');
-            if (ipParts.length === 4) {
-                isolirRange = ipParts[0] + '.' + ipParts[1] + '.0.0/16';
-                // Untuk PPPoE profile, convert ke IP range format (bukan CIDR)
-                isolirRangeForPPPoE = ipParts[0] + '.' + ipParts[1] + '.0.0-' + ipParts[0] + '.' + ipParts[1] + '.255.255';
-                // Local address tetap single IP (biasanya IP gateway, misal .1)
-                isolirLocalAddress = ipParts[0] + '.' + ipParts[1] + '.0.1'; // Default ke .0.1 sebagai gateway
-            }
-        } else if (isolirIp && isolirIp.includes('/')) {
-            // CIDR notation - convert ke IP range untuk PPPoE profile
-            isolirRange = isolirIp; // Tetap gunakan CIDR untuk firewall
-            // Convert CIDR ke IP range
-            const cidrMatch = isolirIp.match(/^(\d+\.\d+\.\d+\.\d+)\/(\d+)$/);
-            if (cidrMatch) {
-                const baseIp = cidrMatch[1];
-                const prefixLength = parseInt(cidrMatch[2]);
-                const ipParts = baseIp.split('.').map(Number);
-                
-                // Calculate network and broadcast addresses
-                let hostBits = 32 - prefixLength;
-                let networkNum = (ipParts[0] << 24) + (ipParts[1] << 16) + (ipParts[2] << 8) + ipParts[3];
-                let mask = (0xFFFFFFFF << hostBits) >>> 0;
-                let network = networkNum & mask;
-                let broadcast = network | (~mask >>> 0);
-                
-                // Convert back to IP addresses
-                let startIp = [
-                    (network >>> 24) & 0xFF,
-                    (network >>> 16) & 0xFF,
-                    (network >>> 8) & 0xFF,
-                    network & 0xFF
-                ].join('.');
-                
-                let endIp = [
-                    (broadcast >>> 24) & 0xFF,
-                    (broadcast >>> 16) & 0xFF,
-                    (broadcast >>> 8) & 0xFF,
-                    broadcast & 0xFF
-                ].join('.');
-                
-                isolirRangeForPPPoE = startIp + '-' + endIp;
-                // Local address = network address + 1 (biasanya gateway)
-                let localIpParts = startIp.split('.').map(Number);
-                localIpParts[3] = localIpParts[3] + 1; // Tambah 1 untuk gateway
-                isolirLocalAddress = localIpParts.join('.');
-            } else {
-                // Fallback: jika parsing gagal, gunakan format sederhana
-                const ipParts = isolirIp.split('.');
-                if (ipParts.length === 4) {
-                    isolirRangeForPPPoE = ipParts[0] + '.' + ipParts[1] + '.0.0-' + ipParts[0] + '.' + ipParts[1] + '.255.255';
-                    isolirLocalAddress = ipParts[0] + '.' + ipParts[1] + '.0.1'; // Default ke .0.1
-                }
-            }
-        } else if (isolirIp && isolirIp.includes('-')) {
-            // Sudah IP range format
-            isolirRangeForPPPoE = isolirIp;
-            // Convert ke CIDR untuk firewall (gunakan /16 sebagai default)
-            const ipParts = isolirIp.split('-')[0].split('.');
-            if (ipParts.length === 4) {
-                isolirRange = ipParts[0] + '.' + ipParts[1] + '.0.0/16';
-                // Local address = IP pertama dari range + 1 (biasanya gateway)
-                let localIpParts = ipParts.map(Number);
-                localIpParts[3] = localIpParts[3] + 1; // Tambah 1 untuk gateway
-                isolirLocalAddress = localIpParts.join('.');
-            }
-        }
-        
-        // Untuk firewall filter dan NAT rules:
-        // - Mode tunneling: gunakan tunnelingDstAddress untuk !Dst. Address (bukan isolirDomain)
-        // - Mode port langsung: gunakan appIp (hasil resolve isolirDomain jika domain)
-        let appIpForFirewall = appIp;
-        let useFirewallFilter = true;
-        const isResolvedIp = ipRegex.test(appIp); // Cek apakah appIp sekarang adalah IP (setelah resolve)
-        
-        // PENTING: Untuk mode tunneling, JANGAN gunakan isolirDomain untuk firewall/NAT
-        // isolirDomain hanya untuk web proxy access redirect-to
-        // tunnelingDstAddress digunakan untuk !Dst. Address di firewall dan NAT
-        if (accessType === 'tunneling') {
-            // Mode tunneling: appIpForFirewall tidak digunakan karena kita pakai tunnelingDstAddress
-            // Tapi tetap set untuk fallback jika tunnelingDstAddress kosong (seharusnya tidak terjadi karena sudah divalidasi)
-            appIpForFirewall = tunnelingDstAddress || '0.0.0.0/0';
-        } else {
-            // Mode port langsung: gunakan appIp (hasil resolve isolirDomain jika domain)
-            if (!isResolvedIp && !isIp) {
-                // Domain tidak bisa di-resolve - gunakan 0.0.0.0/0 untuk block semua
-                // Web proxy akan handle routing berdasarkan domain
-                appIpForFirewall = '0.0.0.0/0'; // Block all, web proxy akan handle routing
-            } else {
-                // IP berhasil di-resolve atau sudah IP dari awal
-                appIpForFirewall = appIp;
-            }
-        }
-        
-        // Generate script Mikrotik dengan metode Web Proxy
-        const script = [
-            '# Script Menu Isolir Mikrotik - Web Proxy Method',
-            '# Generated on: ' + new Date().toLocaleString('id-ID'),
-            '# IP PPPoE Aktif: ' + activeIp,
-            '# IP Range Isolir: ' + isolirRange,
-            '# IP/Domain Aplikasi: ' + isolirDomain,
-            '# Port Aplikasi: ' + (isolirPort || '8080'),
-            ...(accessType === 'tunneling' && tunnelingDstAddress ? ['# !Dst. Address (IP Domain): ' + tunnelingDstAddress] : []),
-            '',
-            '# ===========================================',
-            '# 1. SETUP WEB PROXY - Enable dan Konfigurasi',
-            '# ===========================================',
-            '',
-            '# Enable web proxy',
-            '/ip proxy set enabled=yes port=8080',
-            '',
-            '# Set Web Proxy Role untuk isolir',
-            '# Src Address: sama dengan src address Firewall (isolirRange)',
-            '# Dst. Host: kosong',
-            '# Action: deny',
-            '# Direct to: Domain/IP Aplikasi + Path Halaman Isolir',
-            '# PENTING: isolirDomain hanya digunakan untuk web proxy access redirect-to (bisa domain atau IP)',
-            '# Untuk !Dst. Address di firewall/NAT, gunakan tunnelingDstAddress (kolom terpisah)',
-            '/ip proxy access add src-address=' + isolirRange + ' action=deny redirect-to="' + isolirDomain + (isolirPath || '/isolir') + '"',
-            '',
-            '# ===========================================',
-            '# 2. SETUP FIREWALL FILTER - Block semua kecuali aplikasi',
-            '# ===========================================',
-            '',
-            '# Block semua TCP traffic kecuali ke IP aplikasi (web proxy akan handle routing)',
-            ...(accessType === 'tunneling' && tunnelingDstAddress ? 
-                ['# Block semua TCP traffic kecuali ke IP domain (tunneling mode)',
-                '# PENTING: Menggunakan tunnelingDstAddress untuk !Dst. Address, BUKAN isolirDomain',
-                '# isolirDomain hanya untuk web proxy access redirect-to',
-                '/ip firewall filter add action=drop chain=forward comment="Generate BILLING - Isolir WebProxy" \\',
-                '    dst-address=!' + tunnelingDstAddress + '/29 protocol=tcp src-address=' + isolirRange] :
-            (appIpForFirewall && appIpForFirewall !== '0.0.0.0/0' ? 
-                ['/ip firewall filter add action=drop chain=forward comment="Generate BILLING - Isolir WebProxy" \\',
-                '    dst-address=!' + appIpForFirewall + '/29 protocol=tcp src-address=' + isolirRange] :
-                ['# Block semua TCP traffic (domain tidak di-resolve, web proxy akan handle routing berdasarkan domain)',
-                '/ip firewall filter add action=drop chain=forward comment="Generate BILLING - Isolir WebProxy" \\',
-                '    dst-address=0.0.0.0/0 protocol=tcp src-address=' + isolirRange])),
-            '',
-            '# Block semua UDP traffic kecuali DNS',
-            ...(accessType === 'tunneling' && tunnelingDstAddress ?
-                ['# Block semua UDP traffic kecuali DNS dan IP domain (tunneling mode)',
-                '# PENTING: Menggunakan tunnelingDstAddress untuk !Dst. Address, BUKAN isolirDomain',
-                '# isolirDomain hanya untuk web proxy access redirect-to',
-                '/ip firewall filter add action=drop chain=forward comment="Generate BILLING - Isolir WebProxy" \\',
-                '    dst-address=!' + tunnelingDstAddress + '/29 dst-port=!53,5353 protocol=udp src-address=' + isolirRange] :
-            (appIpForFirewall && appIpForFirewall !== '0.0.0.0/0' ?
-                ['/ip firewall filter add action=drop chain=forward comment="Generate BILLING - Isolir WebProxy" \\',
-                '    dst-address=!' + appIpForFirewall + ' dst-port=!53,5353 protocol=udp src-address=' + isolirRange] :
-                ['# Block semua UDP traffic kecuali DNS (domain tidak di-resolve, web proxy akan handle routing berdasarkan domain)',
-                '/ip firewall filter add action=drop chain=forward comment="Generate BILLING - Isolir WebProxy" \\',
-                '    dst-address=0.0.0.0/0 dst-port=!53,5353 protocol=udp src-address=' + isolirRange])),
-            '',
-            '# ===========================================',
-            '# 3. SETUP NAT RULES - Redirect HTTP/HTTPS ke Web Proxy',
-            '# ===========================================',
-            '',
-            '# Redirect HTTP/HTTPS ke Web Proxy (port 8080)',
-            ...(accessType === 'tunneling' && tunnelingDstAddress ?
-                ['# Redirect HTTP/HTTPS ke Web Proxy kecuali ke IP domain (tunneling mode)',
-                '# PENTING: Menggunakan tunnelingDstAddress untuk !Dst. Address, BUKAN isolirDomain',
-                '# isolirDomain hanya untuk web proxy access redirect-to',
-                '/ip firewall nat add action=redirect chain=dstnat comment="Generate BILLING - Isolir WebProxy" \\',
-                '    dst-address=!' + tunnelingDstAddress + '/29 dst-port=80,443 protocol=tcp src-address=' + isolirRange + ' to-ports=8080'] :
-            (appIpForFirewall && appIpForFirewall !== '0.0.0.0/0' ?
-                ['/ip firewall nat add action=redirect chain=dstnat comment="Generate BILLING - Isolir WebProxy" \\',
-                '    dst-address=!' + appIpForFirewall + '/29 dst-port=80,443 protocol=tcp src-address=' + isolirRange + ' to-ports=8080'] :
-                ['# Redirect semua HTTP/HTTPS ke Web Proxy (domain tidak di-resolve, web proxy akan handle routing berdasarkan domain)',
-                '/ip firewall nat add action=redirect chain=dstnat comment="Generate BILLING - Isolir WebProxy" \\',
-                '    dst-address=0.0.0.0/0 dst-port=80,443 protocol=tcp src-address=' + isolirRange + ' to-ports=8080'])),
-            '',
-            '# ===========================================',
-            '# 4. SETUP IP POOL UNTUK ISOLIR',
-            '# ===========================================',
-            '',
-            '# Buat IP pool untuk isolir (remote-address harus menggunakan pool name)',
-            '/ip pool add name="isolir-pool" ranges=' + isolirRangeForPPPoE + ' comment="Pool untuk pelanggan yang diisolir"',
-            '',
-            '# ===========================================',
-            '# 5. SETUP PPP PROFILE ISOLIR',
-            '# ===========================================',
-            '',
-            '# Buat profile isolir jika belum ada',
-            '# Catatan: local-address harus single IP, remote-address harus pool name (bukan IP range langsung)',
-            '/ppp profile add name="isolir" local-address=' + isolirLocalAddress + ' remote-address=isolir-pool \\',
-            '    rate-limit="0/0" comment="Profile untuk pelanggan yang diisolir"',
-            '',
-            '# ===========================================',
-            '# 6. SETUP ADDRESS LIST - Untuk kemudahan management',
-            '# ===========================================',
-            '',
-            '# Tambahkan IP range isolir ke address list',
-            '/ip firewall address-list add address=' + isolirRange + ' list="isolir-users" comment="PPPoE Isolir Users"',
-            '',
-            '# ===========================================',
-            '# 7. SCRIPT MANAGEMENT - Isolir & Restore',
-            '# ===========================================',
-            '',
-            '# Script untuk isolir pelanggan',
-            '# Gunakan script ini untuk mengisolir pelanggan:',
-            '# :local username "nama_pelanggan"',
-            '# /ppp secret set [find name=$username] profile=isolir',
-            '# :log info "Pelanggan $username telah diisolir"',
-            '',
-            '# Script untuk restore pelanggan',
-            '# Gunakan script ini untuk restore pelanggan:',
-            '# :local username "nama_pelanggan"',
-            '# /ppp secret set [find name=$username] profile=default',
-            '# :log info "Pelanggan $username telah direstore"',
-            '',
-            '# ===========================================',
-            '# 8. VERIFIKASI KONFIGURASI',
-            '# ===========================================',
-            '',
-            ':put "=== KONFIGURASI ISOLIR WEB PROXY SELESAI ==="',
-            ':put "IP Range Isolir: ' + isolirRange + '"',
-            ':put "IP/Domain Aplikasi: ' + isolirDomain + '"',
-            ':put "Web Proxy Port: 8080"',
-            ':put ""',
-            ':put "=== CARA KERJA ==="',
-            ':put "1. User PPPoE terisolir mendapat IP dari range: ' + isolirRange + '"',
-            ':put "2. Web Proxy diaktifkan di port 8080"',
-            ':put "3. HTTP/HTTPS traffic di-redirect ke Web Proxy"',
-            ':put "4. Web Proxy Access di-set ke: ' + isolirDomain + '"',
-            ':put "5. Traffic lainnya di-block kecuali ke IP aplikasi"',
-            ':put ""',
-            ':put "=== SELESAI ==="',
-            '',
-            'echo "Script menu isolir Mikrotik (Web Proxy Method) telah dibuat!"',
-            'echo "Pastikan Web Proxy dapat diakses dari IP range: ' + isolirRange + '"',
-            'echo "Web Proxy Access: ' + isolirDomain + '"'
-        ];
-        
-        const finalScript = script.join('\n');
-
-        // Tampilkan script
-        document.getElementById('isolirScript').textContent = finalScript;
-        document.getElementById('isolirScriptCard').style.display = 'block';
-        
-        // Auto-execute jika checkbox dicentang
-        const autoExecute = document.getElementById('autoExecuteIsolir').checked;
-        if (autoExecute) {
-            window.executeIsolirScript(finalScript);
-        } else {
-            showNotification('success', 'Script berhasil di-generate!');
-        }
-    };
-    
-    // Execute script ke Mikrotik
-    window.executeIsolirScript = function(script) {
-        const routerId = document.getElementById('isolirRouterSelect').value;
-        const rosVersion = document.getElementById('rosVersion').value;
-        const statusDiv = document.getElementById('isolirExecuteStatus');
-        
-        // Show loading status
-        statusDiv.className = 'alert alert-info mb-3';
-        statusDiv.innerHTML = '<i class="bi bi-hourglass-split"></i> <strong>Menjalankan script ke Mikrotik...</strong>';
-        statusDiv.classList.remove('d-none');
-        
-        const executeData = {
-            script: script,
-            router_id: routerId === 'auto' ? null : parseInt(routerId),
-            ros_version: rosVersion === 'auto' ? null : rosVersion
-        };
-        
-        $.post('/admin/settings/execute-isolir-script', executeData, function(response) {
-            if (response.success) {
-                statusDiv.className = 'alert alert-success mb-3';
-                statusDiv.innerHTML = '<i class="bi bi-check-circle"></i> <strong>Script berhasil dijalankan ke Mikrotik!</strong><br>' + 
-                    '<small>Router: ' + (response.router_name || 'Auto') + '</small><br>' +
-                    '<small>ROS Version: ' + (response.ros_version || 'Auto-detect') + '</small><br>' +
-                    '<small>Total commands: ' + (response.commands_executed || 0) + '</small>';
-                showNotification('success', 'Script berhasil dijalankan ke Mikrotik!');
-            } else {
-                statusDiv.className = 'alert alert-danger mb-3';
-                statusDiv.innerHTML = '<i class="bi bi-x-circle"></i> <strong>Gagal menjalankan script:</strong><br>' + 
-                    '<small>' + (response.message || 'Unknown error') + '</small>';
-                showNotification('danger', 'Gagal menjalankan script: ' + (response.message || 'Unknown error'));
-            }
-        }).fail(function(xhr) {
-            const errorMsg = xhr.responseJSON?.message || 'Gagal menjalankan script ke Mikrotik';
-            statusDiv.className = 'alert alert-danger mb-3';
-            statusDiv.innerHTML = '<i class="bi bi-x-circle"></i> <strong>Error:</strong><br><small>' + errorMsg + '</small>';
-            showNotification('danger', errorMsg);
-        });
-    };
-    
-    // Generate script lokal (tanpa execute)
-    window.generateLocalIsolirScript = function() {
-        // Panggil generateIsolirScript tapi uncheck auto-execute
-        const autoExecuteCheckbox = document.getElementById('autoExecuteIsolir');
-        const wasChecked = autoExecuteCheckbox.checked;
-        autoExecuteCheckbox.checked = false;
-        window.generateIsolirScript();
-        autoExecuteCheckbox.checked = wasChecked;
-    };
-    
-    // Copy script ke clipboard
-    window.copyIsolirScript = function() {
-        const scriptElement = document.getElementById('isolirScript');
-        if (!scriptElement || !scriptElement.textContent) {
-            showNotification('warning', 'Tidak ada script untuk di-copy. Silakan generate script terlebih dahulu.');
-            return;
-        }
-        
-        // Copy ke clipboard
-        scriptElement.select();
-        scriptElement.setSelectionRange(0, 99999);
-        document.execCommand('copy');
-        showNotification('success', 'Script berhasil di-copy ke clipboard!');
-    };
 });
 
 // Activity Logs Functions
@@ -2930,12 +2458,14 @@ $(document).ready(function() {
             success: function(response) {
                 if (response.success) {
                     if (page === 1) {
+                        totalLogs = response.logs.length;
                         updateActivityLogsTable(response.logs);
                     } else {
                         appendActivityLogsTable(response.logs);
+                        totalLogs += response.logs.length;
                     }
-                    totalLogs += response.logs.length;
-                    $('#logsCount').text(totalLogs);
+                    $('#logsCount').text(response.total ?? totalLogs);
+                    $('#loadMoreLogsBtn').prop('disabled', !response.hasMore);
                 } else {
                     // Jika fitur disabled, tampilkan pesan di table tanpa error notice
                     const tbody = $('#activityLogsTable tbody');
@@ -2981,11 +2511,73 @@ $(document).ready(function() {
         });
     }
     
+    function getActionLabel(action) {
+        const labels = {
+            admin_login: 'Login',
+            settings_save: 'Simpan Settings',
+            database_backup: 'Backup DB',
+            database_restore: 'Restore DB',
+            customer_create: 'Tambah Pelanggan',
+            customer_update: 'Edit Pelanggan',
+            customer_delete: 'Hapus Pelanggan',
+            customer_bulk_delete: 'Hapus Massal',
+            customer_accept: 'Accept Pelanggan',
+            customer_import: 'Import Pelanggan',
+            customer_suspend: 'Isolir',
+            customer_restore: 'Restore',
+            customer_isolir: 'Isolir',
+            package_create: 'Tambah Paket',
+            package_update: 'Edit Paket',
+            package_delete: 'Hapus Paket',
+            invoice_create: 'Buat Invoice',
+            invoice_update: 'Edit Invoice',
+            invoice_status: 'Status Invoice',
+            invoice_delete: 'Hapus Invoice',
+            invoice_bulk_delete: 'Hapus Massal Invoice',
+            invoice_generate: 'Generate Tagihan',
+            payment_create: 'Catat Bayar',
+            payment_cancel: 'Batalkan Bayar',
+            payment_collector: 'Bayar Kolektor',
+            area_create: 'Tambah Area',
+            area_update: 'Edit Area',
+            area_delete: 'Hapus Area',
+            finance_category_create: 'Kategori Keuangan',
+            finance_category_update: 'Edit Kategori',
+            finance_category_delete: 'Hapus Kategori',
+            expense_create: 'Pengeluaran',
+            expense_update: 'Edit Pengeluaran',
+            expense_delete: 'Hapus Pengeluaran',
+            income_create: 'Pemasukan',
+            income_update: 'Edit Pemasukan',
+            income_delete: 'Hapus Pemasukan'
+        };
+        return labels[action] || action;
+    }
+
+    function renderActivityLogRow(log) {
+        const date = new Date(log.created_at).toLocaleString('id-ID');
+        const userType = log.user_type === 'admin' ? 'Admin' : 'Customer';
+        const actionLabel = escapeHtml(getActionLabel(log.action));
+        return `
+            <tr>
+                <td><small>${date}</small></td>
+                <td><strong>${escapeHtml(log.user_id || '-')}</strong></td>
+                <td><span class="badge bg-${log.user_type === 'admin' ? 'primary' : 'info'}">${userType}</span></td>
+                <td><span class="badge bg-secondary">${actionLabel}</span></td>
+                <td>${escapeHtml(log.description || '')}</td>
+                <td><small>${escapeHtml(log.ip_address || '-')}</small></td>
+            </tr>
+        `;
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
     function updateActivityLogsTable(logs) {
         const tbody = $('#activityLogsTable tbody');
         tbody.empty();
-        
-        if (logs.length === 0) {
+        if (!logs || logs.length === 0) {
             tbody.append(`
                 <tr>
                     <td colspan="6" class="text-center text-muted">
@@ -2996,41 +2588,15 @@ $(document).ready(function() {
             `);
             return;
         }
-        
-        logs.forEach(log => {
-            const date = new Date(log.created_at).toLocaleString('id-ID');
-            const userType = log.user_type === 'admin' ? 'Admin' : 'Customer';
-            
-            tbody.append(`
-                <tr>
-                    <td><small>${date}</small></td>
-                    <td><strong>${log.user_id || '-'}</strong></td>
-                    <td><span class="badge bg-${log.user_type === 'admin' ? 'primary' : 'info'}">${userType}</span></td>
-                    <td><code>${log.action}</code></td>
-                    <td>${log.description}</td>
-                    <td><small>${log.ip_address || '-'}</small></td>
-                </tr>
-            `);
+        logs.forEach(function(log) {
+            tbody.append(renderActivityLogRow(log));
         });
     }
-    
+
     function appendActivityLogsTable(logs) {
         const tbody = $('#activityLogsTable tbody');
-        
-        logs.forEach(log => {
-            const date = new Date(log.created_at).toLocaleString('id-ID');
-            const userType = log.user_type === 'admin' ? 'Admin' : 'Customer';
-            
-            tbody.append(`
-                <tr>
-                    <td><small>${date}</small></td>
-                    <td><strong>${log.user_id || '-'}</strong></td>
-                    <td><span class="badge bg-${log.user_type === 'admin' ? 'primary' : 'info'}">${userType}</span></td>
-                    <td><code>${log.action}</code></td>
-                    <td>${log.description}</td>
-                    <td><small>${log.ip_address || '-'}</small></td>
-                </tr>
-            `);
+        (logs || []).forEach(function(log) {
+            tbody.append(renderActivityLogRow(log));
         });
     }
 
@@ -3786,466 +3352,6 @@ function downloadMikrotikDNSGenieACSScript() {
     showNotification('success', `Script berhasil didownload: ${filename}`);
 }
 
-// Functions untuk Script Generator Menu Isolir Mikrotik
-// Sudah dipindahkan ke dalam $(document).ready() yang sudah ada (line ~2209)
-// Function generateLocalIsolirScript tetap di sini untuk backward compatibility
-function generateLocalIsolirScript() {
-    const activeIp = document.getElementById('activeIp').value.trim();
-    const isolirIp = document.getElementById('isolirIp').value.trim();
-    const isolirDomain = document.getElementById('isolirDomain').value.trim();
-    const isolirPath = document.getElementById('isolirPath').value.trim();
-    const isolirPort = document.getElementById('isolirPort').value.trim();
-    const accessType = document.getElementById('accessType').value;
-    
-    // Validasi input
-    if (!activeIp || !isolirIp || !isolirDomain || !isolirPath) {
-        showNotification('warning', 'Mohon lengkapi field yang wajib!');
-        return;
-    }
-    
-    // Validasi port untuk akses langsung
-    if (accessType === 'port' && !isolirPort) {
-        showNotification('warning', 'Port wajib diisi untuk akses langsung!');
-        return;
-    }
-    
-    // Validasi format IP
-    const ipRegexOld = /^(\d{1,3}\.){3}\d{1,3}$/;
-    if (!ipRegexOld.test(activeIp) || !ipRegexOld.test(isolirIp)) {
-        showNotification('warning', 'Format IP tidak valid!');
-        return;
-    }
-    
-    // Generate script Mikrotik
-    const isolirUrl = accessType === 'tunneling' 
-        ? isolirDomain + isolirPath 
-        : isolirDomain + ':' + isolirPort + isolirPath;
-    
-    const script = [
-        '# Script Menu Isolir Mikrotik - Enhanced Version',
-        '# Generated on: ' + new Date().toLocaleString('id-ID'),
-        '# IP PPPoE Aktif: ' + activeIp,
-        '# IP PPPoE Isolir: ' + isolirIp,
-        '# URL Halaman Isolir: ' + isolirUrl,
-        '# Jenis Akses: ' + (accessType === 'tunneling' ? 'Tunneling' : 'Port Langsung'),
-        '',
-        '# ===========================================',
-        '# 1. SETUP DNS STATIC - Arahkan semua domain ke aplikasi',
-        '# ===========================================',
-        '',
-        '# Hapus DNS static lama (jika ada)',
-        '/ip dns static remove [find where name="' + isolirDomain + '" and address="' + isolirIp + '"]',
-        '',
-        '# Tambahkan DNS static untuk domain aplikasi',
-        '/ip dns static add name="' + isolirDomain + '" address="' + isolirIp + '" ttl=300',
-        '',
-        '# Arahkan domain populer ke aplikasi (opsional)',
-        '/ip dns static add name="google.com" address="' + isolirIp + '" ttl=300',
-        '/ip dns static add name="facebook.com" address="' + isolirIp + '" ttl=300',
-        '/ip dns static add name="youtube.com" address="' + isolirIp + '" ttl=300',
-        '/ip dns static add name="instagram.com" address="' + isolirIp + '" ttl=300',
-        '',
-        '# ===========================================',
-        '# 2. SETUP NAT RULES - Redirect HTTP/HTTPS ke aplikasi',
-        '# ===========================================',
-        '',
-        '# Hapus NAT rules lama (jika ada)',
-        '/ip firewall nat remove [find where comment~"isolir-redirect"]',
-        '',
-        '# ===========================================',
-        '# 3. SETUP FIREWALL RULES - Block semua kecuali aplikasi',
-        '# ===========================================',
-        '',
-        '# Hapus firewall rules lama (jika ada)',
-        '/ip firewall filter remove [find where comment~"isolir"]',
-        '',
-        '# ===========================================',
-        '# 4. SETUP PPP PROFILE ISOLIR',
-        '# ===========================================',
-        '',
-        '# Buat profile isolir jika belum ada',
-        '/ppp profile add name="isolir" local-address=' + isolirIp + ' remote-address=' + isolirIp + ' \\',
-        '    rate-limit="0/0" comment="Profile untuk pelanggan yang diisolir"',
-        '',
-        '# ===========================================',
-        '# 5. SETUP ADDRESS LIST - Untuk kemudahan management',
-        '# ===========================================',
-        '',
-        '# Hapus address list lama (jika ada)',
-        '/ip firewall address-list remove [find where list="isolir-users"]',
-        '',
-        '# Tambahkan IP range isolir ke address list',
-        '/ip firewall address-list add address=' + isolirIp + '/32 list="isolir-users" comment="PPPoE Isolir Users"'
-    ];
-    
-    if (accessType === 'tunneling') {
-        // Untuk tunneling, redirect ke domain + path
-        script.push(
-            '# Redirect HTTP traffic ke aplikasi',
-            '/ip firewall nat add chain=dstnat src-address=' + isolirIp + '/32 dst-port=80 protocol=tcp \\',
-            '    action=dst-nat to-addresses=' + isolirDomain + ' to-ports=80 \\',
-            '    comment="isolir-redirect-http"',
-            '',
-            '# Redirect HTTPS traffic ke aplikasi',
-            '/ip firewall nat add chain=dstnat src-address=' + isolirIp + '/32 dst-port=443 protocol=tcp \\',
-            '    action=dst-nat to-addresses=' + isolirDomain + ' to-ports=443 \\',
-            '    comment="isolir-redirect-https"',
-            '',
-            '# Allow DNS queries ke aplikasi',
-            '/ip firewall filter add chain=forward src-address=' + isolirIp + '/32 \\',
-            '    dst-address=' + isolirDomain + ' dst-port=53 protocol=udp \\',
-            '    action=accept comment="isolir-allow-dns"',
-            '',
-            '# Allow HTTP/HTTPS ke aplikasi',
-            '/ip firewall filter add chain=forward src-address=' + isolirIp + '/32 \\',
-            '    dst-address=' + isolirDomain + ' dst-port=80,443 protocol=tcp \\',
-            '    action=accept comment="isolir-allow-app"',
-            '',
-            '# Block semua traffic lainnya',
-            '/ip firewall filter add chain=forward src-address=' + isolirIp + '/32 \\',
-            '    action=drop comment="isolir-block-all"'
-        );
-    } else {
-        // Untuk port langsung
-        script.push(
-            '# Redirect HTTP traffic ke aplikasi lokal',
-            '/ip firewall nat add chain=dstnat src-address=' + isolirIp + '/32 dst-port=80 protocol=tcp \\',
-            '    action=dst-nat to-addresses=' + isolirDomain + ' to-ports=' + isolirPort + ' \\',
-            '    comment="isolir-redirect-http"',
-            '',
-            '# Redirect HTTPS traffic ke aplikasi lokal',
-            '/ip firewall nat add chain=dstnat src-address=' + isolirIp + '/32 dst-port=443 protocol=tcp \\',
-            '    action=dst-nat to-addresses=' + isolirDomain + ' to-ports=' + isolirPort + ' \\',
-            '    comment="isolir-redirect-https"',
-            '',
-            '# Allow DNS queries ke aplikasi lokal',
-            '/ip firewall filter add chain=forward src-address=' + isolirIp + '/32 \\',
-            '    dst-address=' + isolirDomain + ' dst-port=53 protocol=udp \\',
-            '    action=accept comment="isolir-allow-dns"',
-            '',
-            '# Allow HTTP/HTTPS ke aplikasi lokal',
-            '/ip firewall filter add chain=forward src-address=' + isolirIp + '/32 \\',
-            '    dst-address=' + isolirDomain + ' dst-port=' + isolirPort + ' protocol=tcp \\',
-            '    action=accept comment="isolir-allow-app"',
-            '',
-            '# Block semua traffic lainnya',
-            '/ip firewall filter add chain=forward src-address=' + isolirIp + '/32 \\',
-            '    action=drop comment="isolir-block-all"'
-        );
-    }
-    
-    script.push(
-        '',
-        '# ===========================================',
-        '# 6. SCRIPT MANAGEMENT - Isolir & Restore',
-        '# ===========================================',
-        '',
-        '# Script untuk isolir pelanggan',
-        '# Gunakan script ini untuk mengisolir pelanggan:',
-        '# :local username "nama_pelanggan"',
-        '# /ppp secret set [find name=$username] profile=isolir',
-        '# :log info "Pelanggan $username telah diisolir"',
-        '',
-        '# Script untuk restore pelanggan',
-        '# Gunakan script ini untuk restore pelanggan:',
-        '# :local username "nama_pelanggan"',
-        '# /ppp secret set [find name=$username] profile=default',
-        '# :log info "Pelanggan $username telah direstore"',
-        '',
-        '# ===========================================',
-        '# 7. VERIFIKASI KONFIGURASI',
-        '# ===========================================',
-        '',
-        ':put "=== KONFIGURASI ISOLIR SELESAI ==="',
-        ':put "User PPPoE di ' + isolirIp + ' akan diarahkan ke aplikasi"',
-        ':put "Aplikasi: ' + isolirUrl + '"',
-        ':put ""',
-        ':put "=== VERIFIKASI ==="',
-        '',
-        '# Cek DNS static',
-        ':put "DNS Static Rules:"',
-        '/ip dns static print where name~"' + isolirDomain + '"',
-        '',
-        '# Cek NAT rules',
-        ':put "NAT Rules:"',
-        '/ip firewall nat print where comment~"isolir"',
-        '',
-        '# Cek Firewall rules',
-        ':put "Firewall Rules:"',
-        '/ip firewall filter print where comment~"isolir"',
-        '',
-        '# Cek Address List',
-        ':put "Address List:"',
-        '/ip firewall address-list print where list="isolir-users"',
-        '',
-        ':put ""',
-        ':put "=== CARA KERJA ==="',
-        ':put "1. User PPPoE terisolir mendapat IP: ' + isolirIp + '"',
-        ':put "2. DNS query untuk domain apapun diarahkan ke: ' + isolirDomain + '"',
-        ':put "3. HTTP/HTTPS request di-redirect ke: ' + isolirUrl + '"',
-        ':put "4. Aplikasi menampilkan halaman isolir"',
-        ':put "5. Traffic lainnya di-block"',
-        ':put ""',
-        ':put "=== SELESAI ==="',
-        '',
-        'echo "Script menu isolir Mikrotik telah dibuat!"',
-        'echo "Pastikan halaman isolir dapat diakses dari IP: ' + isolirIp + '"',
-        'echo "URL halaman isolir: ' + isolirUrl + '"'
-    );
-    
-    const finalScript = script.join('\n');
-
-    // Tampilkan script
-    document.getElementById('isolirScript').textContent = finalScript;
-    document.getElementById('isolirScriptCard').style.display = 'block';
-    
-    // Auto-execute jika checkbox dicentang
-    const autoExecute = document.getElementById('autoExecuteIsolir').checked;
-    if (autoExecute) {
-        window.executeIsolirScript(finalScript);
-    } else {
-        // Pastikan showNotification tersedia
-        if (typeof showNotification !== 'undefined') {
-            showNotification('success', 'Script berhasil di-generate!');
-        } else {
-            alert('Script berhasil di-generate!');
-        }
-    }
-}
-
-// Function untuk copy script (bisa dipanggil dari onclick)
-function copyIsolirScript() {
-    const scriptContent = document.getElementById('isolirScript').textContent;
-    
-    if (!scriptContent || scriptContent.trim() === '') {
-        if (typeof showNotification !== 'undefined') {
-            showNotification('warning', 'Tidak ada script untuk di-copy!');
-        } else {
-            alert('Tidak ada script untuk di-copy!');
-        }
-        return;
-    }
-    
-    navigator.clipboard.writeText(scriptContent).then(() => {
-        if (typeof showNotification !== 'undefined') {
-            showNotification('success', 'Script berhasil dicopy ke clipboard!');
-        } else {
-            alert('Script berhasil dicopy ke clipboard!');
-        }
-    }).catch(err => {
-        if (typeof showNotification !== 'undefined') {
-            showNotification('error', 'Gagal copy script: ' + err.message);
-        } else {
-            alert('Gagal copy script: ' + err.message);
-        }
-    });
-}
-
-// Function generateLocalIsolirScript tetap di sini untuk backward compatibility
-function generateLocalIsolirScript() {
-    const activeIp = document.getElementById('activeIp').value.trim();
-    const isolirIp = document.getElementById('isolirIp').value.trim();
-    const isolirDomain = document.getElementById('isolirDomain').value.trim();
-    const isolirPath = document.getElementById('isolirPath').value.trim();
-    const isolirPort = document.getElementById('isolirPort').value.trim();
-    
-    // Validasi input
-    if (!activeIp || !isolirIp || !isolirDomain || !isolirPath || !isolirPort) {
-        showNotification('warning', 'Mohon lengkapi semua field!');
-        return;
-    }
-    
-    // Validasi format IP
-    const ipRegexOld2 = /^(\d{1,3}\.){3}\d{1,3}$/;
-    if (!ipRegexOld2.test(activeIp) || !ipRegexOld2.test(isolirIp)) {
-        showNotification('warning', 'Format IP tidak valid!');
-        return;
-    }
-    
-    // Generate script Mikrotik untuk aplikasi lokal
-    const script = [
-        '# Script Mikrotik untuk User PPPoE Terisolir - Aplikasi Lokal',
-        '# Generated on: ' + new Date().toLocaleString('id-ID'),
-        '# IP PPPoE Aktif: ' + activeIp,
-        '# IP PPPoE Isolir: ' + isolirIp,
-        '# Aplikasi Lokal: ' + isolirDomain + ':' + isolirPort + isolirPath,
-        '',
-        '# ===========================================',
-        '# 1. DNS STATIC - Arahkan semua domain ke aplikasi lokal',
-        '# ===========================================',
-        '',
-        '# Hapus DNS static lama (jika ada)',
-        '/ip dns static remove [find where name="' + isolirDomain + '" and address="' + isolirDomain + '"]',
-        '',
-        '# Tambahkan DNS static untuk domain aplikasi',
-        '/ip dns static add name="' + isolirDomain + '" address="' + isolirDomain + '" ttl=300',
-        '',
-        '# Arahkan domain populer ke aplikasi lokal',
-        '/ip dns static add name="google.com" address="' + isolirDomain + '" ttl=300',
-        '/ip dns static add name="facebook.com" address="' + isolirDomain + '" ttl=300',
-        '/ip dns static add name="youtube.com" address="' + isolirDomain + '" ttl=300',
-        '/ip dns static add name="instagram.com" address="' + isolirDomain + '" ttl=300',
-        '/ip dns static add name="twitter.com" address="' + isolirDomain + '" ttl=300',
-        '/ip dns static add name="tiktok.com" address="' + isolirDomain + '" ttl=300',
-        '/ip dns static add name="whatsapp.com" address="' + isolirDomain + '" ttl=300',
-        '/ip dns static add name="telegram.org" address="' + isolirDomain + '" ttl=300',
-        '',
-        '# ===========================================',
-        '# 2. NAT RULES - Redirect HTTP/HTTPS ke aplikasi lokal',
-        '# ===========================================',
-        '',
-        '# Hapus NAT rules lama (jika ada)',
-        '/ip firewall nat remove [find where comment~"isolir-redirect"]',
-        '',
-        '# Redirect HTTP traffic ke aplikasi lokal',
-        '/ip firewall nat add chain=dstnat src-address=' + isolirIp + '/32 dst-port=80 protocol=tcp \\',
-        '    action=dst-nat to-addresses=' + isolirDomain + ' to-ports=' + isolirPort + ' \\',
-        '    comment="isolir-redirect-http"',
-        '',
-        '# Redirect HTTPS traffic ke aplikasi lokal',
-        '/ip firewall nat add chain=dstnat src-address=' + isolirIp + '/32 dst-port=443 protocol=tcp \\',
-        '    action=dst-nat to-addresses=' + isolirDomain + ' to-ports=' + isolirPort + ' \\',
-        '    comment="isolir-redirect-https"',
-        '',
-        '# ===========================================',
-        '# 3. FIREWALL RULES - Block semua kecuali aplikasi lokal',
-        '# ===========================================',
-        '',
-        '# Hapus firewall rules lama (jika ada)',
-        '/ip firewall filter remove [find where comment~"isolir"]',
-        '',
-        '# Allow DNS queries ke aplikasi lokal',
-        '/ip firewall filter add chain=forward src-address=' + isolirIp + '/32 \\',
-        '    dst-address=' + isolirDomain + ' dst-port=53 protocol=udp \\',
-        '    action=accept comment="isolir-allow-dns"',
-        '',
-        '# Allow HTTP/HTTPS ke aplikasi lokal',
-        '/ip firewall filter add chain=forward src-address=' + isolirIp + '/32 \\',
-        '    dst-address=' + isolirDomain + ' dst-port=' + isolirPort + ' protocol=tcp \\',
-        '    action=accept comment="isolir-allow-app"',
-        '',
-        '# Block semua traffic lainnya',
-        '/ip firewall filter add chain=forward src-address=' + isolirIp + '/32 \\',
-        '    action=drop comment="isolir-block-all"',
-        '',
-        '# ===========================================',
-        '# 4. ADDRESS LIST - Untuk kemudahan management',
-        '# ===========================================',
-        '',
-        '# Hapus address list lama (jika ada)',
-        '/ip firewall address-list remove [find where list="isolir-users"]',
-        '',
-        '# Tambahkan IP range isolir ke address list',
-        '/ip firewall address-list add address=' + isolirIp + '/32 list="isolir-users" comment="PPPoE Isolir Users"',
-        '',
-        '# ===========================================',
-        '# 5. VERIFIKASI KONFIGURASI',
-        '# ===========================================',
-        '',
-        ':put "=== KONFIGURASI ISOLIR LOKAL SELESAI ==="',
-        ':put "User PPPoE di ' + isolirIp + ' akan diarahkan ke aplikasi lokal"',
-        ':put "Aplikasi lokal: http://' + isolirDomain + ':' + isolirPort + isolirPath + '"',
-        ':put ""',
-        ':put "=== VERIFIKASI ==="',
-        '',
-        '# Cek DNS static',
-        ':put "DNS Static Rules:"',
-        '/ip dns static print where name~"' + isolirDomain + '"',
-        '',
-        '# Cek NAT rules',
-        ':put "NAT Rules:"',
-        '/ip firewall nat print where comment~"isolir"',
-        '',
-        '# Cek Firewall rules',
-        ':put "Firewall Rules:"',
-        '/ip firewall filter print where comment~"isolir"',
-        '',
-        '# Cek Address List',
-        ':put "Address List:"',
-        '/ip firewall address-list print where list="isolir-users"',
-        '',
-        ':put ""',
-        ':put "=== CARA KERJA ==="',
-        ':put "1. User PPPoE terisolir mendapat IP: ' + isolirIp + '"',
-        ':put "2. DNS query untuk domain apapun diarahkan ke: ' + isolirDomain + '"',
-        ':put "3. HTTP/HTTPS request di-redirect ke: ' + isolirDomain + ':' + isolirPort + '"',
-        ':put "4. Aplikasi lokal menampilkan halaman isolir"',
-        ':put "5. Traffic lainnya di-block"',
-        ':put ""',
-        ':put "=== SELESAI ==="',
-        '',
-        'echo "Script isolir lokal Mikrotik telah dibuat!"',
-        'echo "Pastikan aplikasi lokal berjalan di: ' + isolirDomain + ':' + isolirPort + '"',
-        'echo "Halaman isolir: http://' + isolirDomain + ':' + isolirPort + isolirPath + '"'
-    ];
-    
-    const finalScript = script.join('\n');
-
-    // Tampilkan script
-    document.getElementById('isolirScript').textContent = finalScript;
-    document.getElementById('isolirScriptCard').style.display = 'block';
-    
-    showNotification('success', 'Script isolir lokal berhasil di-generate!');
-}
-
-function copyIsolirScript() {
-    const scriptElement = document.getElementById('isolirScript');
-    if (!scriptElement || !scriptElement.textContent) {
-        showNotification('warning', 'Tidak ada script untuk di-copy!');
-        return;
-    }
-    
-    navigator.clipboard.writeText(scriptElement.textContent).then(function() {
-        showNotification('success', 'Script berhasil di-copy ke clipboard!');
-    }).catch(function(err) {
-        // Fallback untuk browser lama
-        const textArea = document.createElement('textarea');
-        textArea.value = scriptElement.textContent;
-        document.body.appendChild(textArea);
-        textArea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textArea);
-        showNotification('success', 'Script berhasil di-copy ke clipboard!');
-    });
-}
-
-// Handle access type change (tanpa auto-generate)
-document.addEventListener('DOMContentLoaded', function() {
-    // Handle access type change
-    const accessTypeSelect = document.getElementById('accessType');
-    const tunnelingDstAddressRow = document.getElementById('tunnelingDstAddressRow');
-    
-    function toggleTunnelingFields() {
-        if (accessTypeSelect.value === 'tunneling') {
-            // Tampilkan kolom !Dst. Address
-            if (tunnelingDstAddressRow) {
-                tunnelingDstAddressRow.style.display = 'block';
-            }
-            const portField = document.getElementById('isolirPort');
-            if (portField) {
-                portField.placeholder = 'Kosongkan jika menggunakan tunneling';
-                portField.value = '';
-            }
-        } else {
-            // Sembunyikan kolom !Dst. Address
-            if (tunnelingDstAddressRow) {
-                tunnelingDstAddressRow.style.display = 'none';
-            }
-            const portField = document.getElementById('isolirPort');
-            if (portField) {
-                portField.placeholder = 'Masukkan port (contoh: 3000)';
-            }
-        }
-    }
-    
-    if (accessTypeSelect) {
-        // Set initial state
-        toggleTunnelingFields();
-        
-        // Handle change event
-        accessTypeSelect.addEventListener('change', toggleTunnelingFields);
-    }
-});
 </script>
 
 <!-- Modal untuk Preview Script -->
@@ -4529,212 +3635,6 @@ $(document).ready(function() {
     });
 });
 
-// Fallback generator isolir tanpa jQuery.
-// Dipasang paling akhir agar tombol tetap bekerja meski blok $(document).ready sebelumnya gagal.
-(function() {
-    function isoVal(id, fallback) {
-        const el = document.getElementById(id);
-        const value = el && el.value != null ? String(el.value).trim() : '';
-        return value || fallback || '';
-    }
-
-    function isoNotify(type, message) {
-        if (typeof showNotification === 'function') {
-            showNotification(type, message);
-            return;
-        }
-        if (type === 'danger' || type === 'error' || type === 'warning') {
-            alert(message);
-        } else {
-            console.log(message);
-        }
-    }
-
-    function isoToCidr(value) {
-        if (value.includes('/')) return value;
-        const parts = value.split('.');
-        return parts.length === 4 ? `${parts[0]}.${parts[1]}.${parts[2]}.0/24` : value;
-    }
-
-    function isoPoolRange(value) {
-        const base = isoToCidr(value).split('/')[0].split('.');
-        if (base.length !== 4) return '192.168.200.2-192.168.200.254';
-        return `${base[0]}.${base[1]}.${base[2]}.2-${base[0]}.${base[1]}.${base[2]}.254`;
-    }
-
-    function isoGateway(value) {
-        const base = isoToCidr(value).split('/')[0].split('.');
-        if (base.length !== 4) return '192.168.200.1';
-        return `${base[0]}.${base[1]}.${base[2]}.1`;
-    }
-
-    function buildIsolirWalledGardenScript() {
-        const activeIp = isoVal('activeIp', '192.168.10.1');
-        const isolirIp = isoVal('isolirIp', '192.168.200.1');
-        const serverIp = isoVal('isolirDomain', '192.168.8.89');
-        const isolirPath = isoVal('isolirPath', '/isolir');
-        const pagePort = isoVal('isolirPort', '8899');
-        const accessType = isoVal('accessType', 'port');
-        const tunnelingDstAddress = isoVal('tunnelingDstAddress', '');
-        const billingServerIp = accessType === 'tunneling' && tunnelingDstAddress
-            ? tunnelingDstAddress.replace(/\/.*$/, '')
-            : serverIp;
-        const isolirRange = isoToCidr(isolirIp);
-        const poolRange = isoPoolRange(isolirIp);
-        const localAddress = isoGateway(isolirIp);
-        const billingPorts = Array.from(new Set([pagePort, '3003', '4555', '80', '443'])).join(',');
-        const whatsappHosts = [
-            'wa.me',
-            'whatsapp.com',
-            'web.whatsapp.com',
-            'api.whatsapp.com',
-            'static.whatsapp.net',
-            'mmg.whatsapp.net',
-            'pps.whatsapp.net',
-            'media.whatsapp.net'
-        ];
-
-        if (!activeIp || !isolirIp || !billingServerIp) {
-            throw new Error('Mohon lengkapi IP PPPoE aktif, IP isolir, dan IP/domain server billing.');
-        }
-
-        const filterTop = (chain, params) => [
-            ':local firstFilter [/ip firewall filter find where chain=' + chain + ']',
-            ':if ([:len $firstFilter] > 0) do={',
-            '    :local target [:pick $firstFilter 0]',
-            '    /ip firewall filter add chain=' + chain + ' ' + params + ' place-before=$target',
-            '} else={',
-            '    /ip firewall filter add chain=' + chain + ' ' + params,
-            '}'
-        ];
-        const natTop = (chain, params) => [
-            ':local firstNat [/ip firewall nat find where chain=' + chain + ']',
-            ':if ([:len $firstNat] > 0) do={',
-            '    :local target [:pick $firstNat 0]',
-            '    /ip firewall nat add chain=' + chain + ' ' + params + ' place-before=$target',
-            '} else={',
-            '    /ip firewall nat add chain=' + chain + ' ' + params,
-            '}'
-        ];
-
-        return [
-            '# BILLING ISOLIR WALLED GARDEN',
-            '# Generated on: ' + new Date().toLocaleString('id-ID'),
-            '# IP PPPoE Aktif: ' + activeIp,
-            '# IP Range Isolir: ' + isolirRange,
-            '# Server Billing: ' + billingServerIp,
-            '# Port Halaman Isolir: ' + pagePort,
-            '',
-            '/ip firewall filter remove [find where comment~"BILLING-ISOLIR"]',
-            '/ip firewall nat remove [find where comment~"BILLING-ISOLIR"]',
-            '/ip firewall address-list remove [find where comment~"BILLING-ISOLIR"]',
-            '/ip firewall filter remove [find where comment~"Generate BILLING - Isolir"]',
-            '/ip firewall filter remove [find where comment~"isolir-allow"]',
-            '/ip firewall filter remove [find where comment~"isolir-block"]',
-            '/ip firewall nat remove [find where comment~"Generate BILLING - Isolir"]',
-            '/ip firewall nat remove [find where comment~"isolir-redirect"]',
-            '',
-            '/ip firewall address-list add list=isolir-users address=' + isolirRange + ' comment="BILLING-ISOLIR users range"',
-            '/ip firewall address-list add list=isolir-allowed-dst address=' + billingServerIp + ' comment="BILLING-ISOLIR billing server"',
-            ...whatsappHosts.map((host) => '/ip firewall address-list add list=isolir-allowed-dst address=' + host + ' comment="BILLING-ISOLIR whatsapp ' + host + '"'),
-            '',
-            '/ip pool remove [find where name="isolir-pool"]',
-            '/ip pool add name="isolir-pool" ranges=' + poolRange + ' comment="BILLING-ISOLIR pool"',
-            '/ppp profile remove [find where name="isolir" and comment~"BILLING-ISOLIR"]',
-            '/ppp profile add name="isolir" local-address=' + localAddress + ' remote-address=isolir-pool only-one=yes comment="BILLING-ISOLIR profile"',
-            '',
-            ...filterTop('input', 'src-address=' + isolirRange + ' protocol=udp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns udp to router"'),
-            ...filterTop('input', 'src-address=' + isolirRange + ' protocol=tcp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns tcp to router"'),
-            ...filterTop('forward', 'src-address=' + isolirRange + ' protocol=udp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns udp forward"'),
-            ...filterTop('forward', 'src-address=' + isolirRange + ' protocol=tcp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns tcp forward"'),
-            '',
-            '# RouterOS v7: rule diinsert ke atas chain jika chain sudah punya rule.',
-            ...natTop('srcnat', 'src-address=' + isolirRange + ' dst-address=' + billingServerIp + ' action=masquerade comment="BILLING-ISOLIR masquerade to billing server"'),
-            ...natTop('dstnat', 'src-address=' + isolirRange + ' protocol=tcp dst-port=80,8080,8000,8888 action=dst-nat to-addresses=' + billingServerIp + ' to-ports=' + pagePort + ' comment="BILLING-ISOLIR force http to isolir page"'),
-            ...natTop('dstnat', 'src-address=' + isolirRange + ' dst-address-list=isolir-allowed-dst protocol=tcp action=accept comment="BILLING-ISOLIR bypass allowed destinations"'),
-            '',
-            '# RouterOS v7: drop dibuat, lalu allow diinsert ke atas drop.',
-            ...filterTop('forward', 'src-address=' + isolirRange + ' action=drop comment="BILLING-ISOLIR drop all other traffic"'),
-            ...filterTop('forward', 'src-address=' + isolirRange + ' dst-address-list=isolir-allowed-dst protocol=tcp dst-port=80,443,5222,5223,5228,4244 action=accept comment="BILLING-ISOLIR allow whatsapp and allowed web"'),
-            ...filterTop('forward', 'src-address=' + isolirRange + ' dst-address=' + billingServerIp + ' protocol=tcp dst-port=' + billingPorts + ' action=accept comment="BILLING-ISOLIR allow billing app and isolir page"'),
-            ...filterTop('forward', 'connection-state=established,related action=accept comment="BILLING-ISOLIR allow established"'),
-            '',
-            ':put "=== BILLING ISOLIR WALLED GARDEN READY ==="',
-            ':put "Halaman isolir: http://' + billingServerIp + ':' + pagePort + (isolirPath || '/isolir') + '"',
-            ':put "HTTP non-whitelist otomatis diarahkan ke halaman isolir."',
-            ':put "Billing dan WhatsApp sudah di-whitelist sebelum drop."'
-        ].join('\n');
-    }
-
-    window.generateIsolirScript = function() {
-        try {
-            const script = buildIsolirWalledGardenScript();
-            const output = document.getElementById('isolirScript');
-            const card = document.getElementById('isolirScriptCard');
-            if (output) output.textContent = script;
-            if (card) card.style.display = 'block';
-            const autoExecute = document.getElementById('autoExecuteIsolir');
-            if (autoExecute && autoExecute.checked && typeof window.executeIsolirScript === 'function') {
-                window.executeIsolirScript(script);
-            } else {
-                isoNotify('success', 'Script walled garden isolir berhasil di-generate!');
-            }
-        } catch (error) {
-            isoNotify('warning', error.message || 'Gagal generate script isolir.');
-        }
-    };
-
-    window.generateLocalIsolirScript = function() {
-        const autoExecute = document.getElementById('autoExecuteIsolir');
-        const wasChecked = autoExecute ? autoExecute.checked : false;
-        if (autoExecute) autoExecute.checked = false;
-        window.generateIsolirScript();
-        if (autoExecute) autoExecute.checked = wasChecked;
-    };
-
-    if (typeof window.executeIsolirScript !== 'function') {
-        window.executeIsolirScript = function(script) {
-            const statusDiv = document.getElementById('isolirExecuteStatus');
-            if (statusDiv) {
-                statusDiv.className = 'alert alert-info mb-3';
-                statusDiv.innerHTML = '<i class="bi bi-hourglass-split"></i> <strong>Menjalankan script ke Mikrotik...</strong>';
-                statusDiv.classList.remove('d-none');
-            }
-
-            const routerId = isoVal('isolirRouterSelect', 'auto');
-            const rosVersion = isoVal('rosVersion', 'auto');
-            const body = new URLSearchParams();
-            body.set('script', script);
-            if (routerId !== 'auto') body.set('router_id', String(parseInt(routerId, 10)));
-            if (rosVersion !== 'auto') body.set('ros_version', rosVersion);
-
-            fetch('/admin/settings/execute-isolir-script', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-                body
-            })
-                .then((res) => res.json())
-                .then((response) => {
-                    if (response.success) {
-                        if (statusDiv) {
-                            statusDiv.className = 'alert alert-success mb-3';
-                            statusDiv.innerHTML = '<i class="bi bi-check-circle"></i> <strong>Script berhasil dijalankan ke Mikrotik!</strong>';
-                        }
-                        isoNotify('success', 'Script berhasil dijalankan ke Mikrotik!');
-                    } else {
-                        throw new Error(response.message || 'Unknown error');
-                    }
-                })
-                .catch((error) => {
-                    if (statusDiv) {
-                        statusDiv.className = 'alert alert-danger mb-3';
-                        statusDiv.innerHTML = '<i class="bi bi-x-circle"></i> <strong>Gagal menjalankan script:</strong><br><small>' + error.message + '</small>';
-                    }
-                    isoNotify('danger', 'Gagal menjalankan script: ' + error.message);
-                });
-        };
-    }
-})();
 </script>
 
 </body>

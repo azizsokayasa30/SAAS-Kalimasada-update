@@ -15,6 +15,9 @@ const multer = require('multer');
 const upload = multer();
 const ExcelJS = require('exceljs');
 const { adminAuth } = require('./adminAuth');
+const { adminBillingActivityMiddleware } = require('../config/activityLogger');
+
+router.use(adminBillingActivityMiddleware);
 
 /** Password konfirmasi aksi sensitif: `super_admin_password` di settings jika diisi, else `admin_password`. */
 function verifySuperAdminPassword(plain) {

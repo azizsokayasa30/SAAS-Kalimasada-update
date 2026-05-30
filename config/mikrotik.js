@@ -727,6 +727,41 @@ async function getPPPoEUsersRadius() {
     }
 }
 
+/**
+ * Semua sesi /ppp/active dari MikroTik (semua NAS) — sumber kebenaran status online.
+ * @returns {Promise<Map<string, object>>}
+ */
+async function collectMikrotikPppActiveSessionsByLoginMap() {
+    const byLogin = new Map();
+    const mergeRow = (row) => {
+        const n = row && row.name != null ? String(row.name).trim() : '';
+        if (n) byLogin.set(n, row);
+    };
+    const routers = await getAllRoutersFromBillingDb();
+    if (!routers.length) {
+        try {
+            const conn = await getMikrotikConnection();
+            if (conn) {
+                const active = await conn.write('/ppp/active/print');
+                for (const row of active || []) mergeRow(row);
+            }
+        } catch (e) {
+            logger.warn(`[collectMikrotikPppActiveSessionsByLoginMap] single NAS: ${e.message}`);
+        }
+        return byLogin;
+    }
+    for (const r of routers) {
+        try {
+            const conn = await getMikrotikConnectionForRouter(r);
+            const active = await conn.write('/ppp/active/print');
+            for (const row of active || []) mergeRow(row);
+        } catch (e) {
+            logger.warn(`[collectMikrotikPppActiveSessionsByLoginMap] router ${r.name}: ${e.message}`);
+        }
+    }
+    return byLogin;
+}
+
 // Fungsi untuk mendapatkan active PPPoE connections dari RADIUS (BUKAN hotspot voucher DAN BUKAN member hotspot)
 async function getActivePPPoEConnectionsRadius(options = {}) {
     const forceRefresh = options.forceRefresh === true;
@@ -737,52 +772,77 @@ async function getActivePPPoEConnectionsRadius(options = {}) {
         }
     }
 
-    const conn = await getRadiusConnection();
     try {
         const excludeUsernames = await getPppoeRadcheckExcludeUsernames();
-
+        const excludeSet = new Set(excludeUsernames);
         logger.info(`Excluding ${excludeUsernames.length} voucher/hotspot from active PPPoE connections`);
-        
-        // Get active sessions dari radacct (acctstoptime IS NULL), exclude vouchers DAN members
-        let query = `
-            SELECT 
-                username,
-                acctsessionid,
-                acctstarttime,
-                framedipaddress,
-                acctinputoctets,
-                acctoutputoctets,
-                nasipaddress,
-                (strftime('%s', 'now') - strftime('%s', acctstarttime)) as session_time
-            FROM radacct
-            WHERE (acctstoptime IS NULL OR acctstoptime = '' OR acctstoptime = '0' OR acctstoptime = '0000-00-00 00:00:00')
-        `;
-        
-        const params = [];
-        if (excludeUsernames.length > 0) {
-            const placeholders = excludeUsernames.map(() => '?').join(',');
-            query += ` AND username NOT IN (${placeholders})`;
-            params.push(...excludeUsernames);
-        }
-        
-        query += ` ORDER BY acctstarttime DESC`;
-        
-        const [activeRows] = await conn.execute(query, params);
-        const activeList = Array.isArray(activeRows) ? activeRows : [];
 
-        await conn.end();
-        const result = activeList.map((row) => ({
-            name: row.username,
-            ip: row.framedipaddress || 'N/A',
-            uptime: row.session_time != null && row.session_time !== '' ? row.session_time : 0,
-            'bytes-in': row.acctinputoctets || 0,
-            'bytes-out': row.acctoutputoctets || 0,
-            nasip: row.nasipaddress || 'N/A'
-        }));
+        // Sumber kebenaran online: MikroTik /ppp/active (FR accounting sering di MySQL, app baca SQLite → mismatch).
+        const mikrotikByLogin = await collectMikrotikPppActiveSessionsByLoginMap();
+
+        let mysqlByLogin = new Map();
+        try {
+            const {
+                isRadiusAccountingOnMysql,
+                getActiveSessionsFromMysqlRadacct
+            } = require('./radiusMysqlAccounting');
+            if (isRadiusAccountingOnMysql()) {
+                const mysqlRows = await getActiveSessionsFromMysqlRadacct(excludeUsernames);
+                for (const row of mysqlRows) {
+                    const u = row.username != null ? String(row.username).trim() : '';
+                    if (u) mysqlByLogin.set(u, row);
+                }
+            }
+        } catch (mysqlErr) {
+            logger.warn(`[PPPoE-RADIUS] MySQL radacct skip: ${mysqlErr.message}`);
+        }
+
+        const seen = new Set();
+        const result = [];
+
+        for (const [name, mtRow] of mikrotikByLogin.entries()) {
+            if (excludeSet.has(name)) continue;
+            seen.add(name);
+            const mysqlRow = mysqlByLogin.get(name);
+            const ip =
+                (mtRow.address && String(mtRow.address).trim()) ||
+                (mysqlRow && mysqlRow.framedipaddress) ||
+                'N/A';
+            const uptimeRaw =
+                mtRow.uptime != null && mtRow.uptime !== ''
+                    ? mtRow.uptime
+                    : mysqlRow && mysqlRow.session_time != null
+                      ? mysqlRow.session_time
+                      : 0;
+            result.push({
+                name,
+                ip,
+                uptime: uptimeRaw,
+                'bytes-in': mysqlRow?.acctinputoctets || mtRow['bytes-in'] || 0,
+                'bytes-out': mysqlRow?.acctoutputoctets || mtRow['bytes-out'] || 0,
+                nasip: mysqlRow?.nasipaddress || 'Mikrotik'
+            });
+        }
+
+        // Tambahan dari MySQL radacct jika belum ada di Mikrotik (jarang, tapi jaga-jaga)
+        for (const [name, mysqlRow] of mysqlByLogin.entries()) {
+            if (excludeSet.has(name) || seen.has(name)) continue;
+            result.push({
+                name,
+                ip: mysqlRow.framedipaddress || 'N/A',
+                uptime: mysqlRow.session_time != null ? mysqlRow.session_time : 0,
+                'bytes-in': mysqlRow.acctinputoctets || 0,
+                'bytes-out': mysqlRow.acctoutputoctets || 0,
+                nasip: mysqlRow.nasipaddress || 'RADIUS'
+            });
+        }
+
         cacheManager.set(ACTIVE_RADIUS_SESSIONS_CACHE_KEY, result, ACTIVE_RADIUS_SESSIONS_CACHE_TTL);
+        logger.info(
+            `[PPPoE-RADIUS] Active sessions: ${result.length} (Mikrotik: ${mikrotikByLogin.size}, MySQL radacct: ${mysqlByLogin.size})`
+        );
         return result;
     } catch (error) {
-        await conn.end();
         logger.error(`Error getting active PPPoE connections from RADIUS: ${error.message}`);
         return [];
     }
@@ -812,6 +872,10 @@ async function getPppoeLoginOnlineStatus(login) {
     }
     const authMode = await getUserAuthModeAsync();
     if (authMode === 'radius') {
+        const mikrotikByLogin = await collectMikrotikPppActiveSessionsByLoginMap();
+        if (mikrotikByLogin.has(name)) {
+            return { online: true, authMode: 'radius' };
+        }
         const active = await getActivePPPoEConnectionsRadius();
         const online = (active || []).some((a) => String(a.name) === name);
         return { online, authMode: 'radius' };
@@ -1020,31 +1084,13 @@ async function getRadiusStatistics() {
         const totalRowList = Array.isArray(totalRows) ? totalRows : [];
         const totalUsers = totalRowList[0]?.total || 0;
 
-        // Active PPPoE connections (dari radacct), tapi hanya hitung yang username-nya masih ada di radcheck
-        // Ini mencegah "data yatim" (orphan) di radacct membuat statistik jadi ngaco.
+        // Active PPPoE — dari Mikrotik /ppp/active (+ MySQL radacct), bukan SQLite radacct yatim
         let activeConnections = 0;
         try {
-            const pwdRc = sqlRadcheckPasswordPredicate('rc');
-            let activeQuery = `
-            SELECT COUNT(DISTINCT ra.username) as active
-            FROM radacct ra
-            JOIN radcheck rc
-              ON rc.username = ra.username
-             AND ${pwdRc}
-            WHERE (ra.acctstoptime IS NULL OR ra.acctstoptime = '' OR ra.acctstoptime = '0' OR ra.acctstoptime = '0000-00-00 00:00:00')
-        `;
-            const activeParams = [];
-            if (excludeUsernames.length > 0) {
-                const placeholders = excludeUsernames.map(() => '?').join(',');
-                activeQuery += ` AND ra.username NOT IN (${placeholders})`;
-                activeParams.push(...excludeUsernames);
-            }
-
-            const [activeRows] = await conn.execute(activeQuery, activeParams);
-            const activeRowList = Array.isArray(activeRows) ? activeRows : [];
-            activeConnections = activeRowList[0]?.active || 0;
+            const activeList = await getActivePPPoEConnectionsRadius({ forceRefresh: true });
+            activeConnections = Array.isArray(activeList) ? activeList.length : 0;
         } catch (activeStatErr) {
-            logger.warn(`[RADIUS stats] radacct aktif tidak dihitung (tabel/query): ${activeStatErr.message}`);
+            logger.warn(`[RADIUS stats] active sessions tidak dihitung: ${activeStatErr.message}`);
         }
         
         // Offline users
@@ -10223,6 +10269,7 @@ module.exports = {
     getActivePPPoEConnectionsRadius,
     getActivePppoeLoginNamesSet,
     getActivePppoeLoginNamesSetWithUptimeMap,
+    collectMikrotikPppActiveSessionsByLoginMap,
     getPppoeLoginOnlineStatus,
     updatePPPoEUserRadiusPassword,
     assignPackageRadius,

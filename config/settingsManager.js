@@ -10,6 +10,32 @@ let lastModified = null;
 let cacheExpiry = null;
 const CACHE_TTL = 5000; // 5 detik cache
 
+function backupSettingsFile() {
+  try {
+    if (!fs.existsSync(settingsPath)) return;
+    const backupDir = path.join(process.cwd(), 'data');
+    fs.mkdirSync(backupDir, { recursive: true });
+    const backupPath = path.join(backupDir, `settings.json.bak-${Date.now()}`);
+    fs.copyFileSync(settingsPath, backupPath);
+  } catch (e) {
+    console.warn(`[settings] Backup settings.json gagal: ${e.message}`);
+  }
+}
+
+/** Baca settings.json dari disk (abaikan cache) — dipakai sebelum tulis agar tidak menimpa key lain. */
+function readSettingsFromDisk() {
+  try {
+    if (!fs.existsSync(settingsPath)) return {};
+    const raw = fs.readFileSync(settingsPath, 'utf-8');
+    if (!raw || !raw.trim()) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (e) {
+    console.error(`[settings] Gagal parse settings.json: ${e.message}`);
+    return settingsCache && typeof settingsCache === 'object' ? { ...settingsCache } : {};
+  }
+}
+
 function loadSettingsFromFile() {
   const startTime = Date.now();
   let wasCacheHit = false;
@@ -29,8 +55,7 @@ function loadSettingsFromFile() {
     }
     
     // Baca file dan update cache
-    const raw = fs.readFileSync(settingsPath, 'utf-8');
-    settingsCache = JSON.parse(raw);
+    settingsCache = readSettingsFromDisk();
     lastModified = fileModified;
     cacheExpiry = Date.now() + CACHE_TTL;
     
@@ -52,40 +77,38 @@ function getSetting(key, defaultValue) {
   return settings[key] !== undefined ? settings[key] : defaultValue;
 }
 
+function persistSettings(settings) {
+  backupSettingsFile();
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+  settingsCache = settings;
+  lastModified = fs.statSync(settingsPath).mtime.getTime();
+  cacheExpiry = Date.now() + CACHE_TTL;
+}
+
 function setSetting(key, value) {
   try {
-    const settings = getSettingsWithCache();
+    const settings = readSettingsFromDisk();
     settings[key] = value;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
-    
-    // Invalidate cache setelah write
-    settingsCache = settings;
-    lastModified = fs.statSync(settingsPath).mtime.getTime();
-    cacheExpiry = Date.now() + CACHE_TTL;
-    
+    persistSettings(settings);
     return true;
   } catch (e) {
+    console.error(`[settings] setSetting(${key}) gagal: ${e.message}`);
     return false;
   }
 }
 
 function deleteSetting(key) {
     try {
-        const settings = getSettingsWithCache();
+        const settings = readSettingsFromDisk();
         if (!(key in settings)) {
             return false;
         }
 
         delete settings[key];
-        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
-
-        // Invalidate cache setelah write
-        settingsCache = settings;
-        lastModified = fs.statSync(settingsPath).mtime.getTime();
-        cacheExpiry = Date.now() + CACHE_TTL;
-
+        persistSettings(settings);
         return true;
     } catch (e) {
+        console.error(`[settings] deleteSetting(${key}) gagal: ${e.message}`);
         return false;
     }
 }

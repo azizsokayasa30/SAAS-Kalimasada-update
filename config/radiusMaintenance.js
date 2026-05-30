@@ -39,6 +39,13 @@ function runMaintenanceJob() {
             logger.warn(`[RADIUS-MAINT] Pemeliharaan gagal (exit ${code}): ${out.slice(-500)}`);
         }
     });
+
+    try {
+        const { closeStaleSqliteRadacctOpenSessions } = require('./radiusMysqlAccounting');
+        closeStaleSqliteRadacctOpenSessions().catch((e) => {
+            logger.warn(`[RADIUS-MAINT] Tutup sesi SQLite radacct: ${e.message}`);
+        });
+    } catch (_) {}
 }
 
 function startRadiusMaintenanceSchedule() {

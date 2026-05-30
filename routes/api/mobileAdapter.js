@@ -699,6 +699,7 @@ router.get('/customers/:customerId/ppp-session', verifyToken, requireTechnician,
         const {
             getUserAuthModeAsync,
             getActivePPPoEConnectionsRadius,
+            collectMikrotikPppActiveSessionsByLoginMap,
             getMikrotikConnectionForRouter,
             getMikrotikConnection
         } = require('../../config/mikrotik');
@@ -733,12 +734,15 @@ router.get('/customers/:customerId/ppp-session', verifyToken, requireTechnician,
         };
 
         if (authMode === 'radius') {
-            const active = await getActivePPPoEConnectionsRadius();
-            if (Array.isArray(active)) {
-                session = active.find((a) => String(a.name || '').trim() === login) || null;
+            const mikrotikByLogin = await collectMikrotikPppActiveSessionsByLoginMap();
+            mikrotikSession = mikrotikByLogin.get(login) || null;
+            session = mikrotikSession;
+            if (!session) {
+                const active = await getActivePPPoEConnectionsRadius();
+                if (Array.isArray(active)) {
+                    session = active.find((a) => String(a.name || '').trim() === login) || null;
+                }
             }
-            // Radius radacct sering tidak menyimpan MAC/caller-id; lengkapi dari session aktif MikroTik bila ada.
-            mikrotikSession = await findMikrotikSessionByLogin(login);
         } else {
             session = await findMikrotikSessionByLogin(login);
             mikrotikSession = session;

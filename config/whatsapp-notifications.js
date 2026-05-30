@@ -1162,6 +1162,57 @@ Internet Tanpa Batas`;
         }
     }
 
+    // Resolve customer record from installation job (by customer_id or phone, fallback to job fields)
+    async resolveCustomerFromInstallationJob(installationJob) {
+        if (!installationJob) return null;
+
+        try {
+            let customer = null;
+            const custId =
+                installationJob.customer_id != null ? parseInt(installationJob.customer_id, 10) : NaN;
+            if (Number.isFinite(custId) && custId > 0) {
+                customer = await billingManager.getCustomerById(custId);
+            }
+            if (!customer && installationJob.customer_phone) {
+                customer = await billingManager.getCustomerByPhone(installationJob.customer_phone);
+            }
+            if (customer) {
+                return {
+                    ...customer,
+                    phone: customer.phone || installationJob.customer_phone,
+                    package_speed: customer.package_speed || customer.speed || 'N/A',
+                    pppoe_password: customer.pppoe_password || customer.wifi_password || 'N/A'
+                };
+            }
+            if (installationJob.customer_phone) {
+                return {
+                    name: installationJob.customer_name || 'Pelanggan',
+                    phone: installationJob.customer_phone,
+                    package_name: installationJob.package_name || 'N/A',
+                    package_speed: installationJob.package_speed || 'N/A',
+                    pppoe_username: installationJob.pppoe_username || 'N/A',
+                    pppoe_password: 'N/A',
+                    wifi_password: 'N/A'
+                };
+            }
+            return null;
+        } catch (error) {
+            logger.error('Error resolving customer from installation job:', error);
+            return null;
+        }
+    }
+
+    // Send welcome message to customer when installation job is marked complete
+    async sendWelcomeMessageOnInstallComplete(installationJob) {
+        const customer = await this.resolveCustomerFromInstallationJob(installationJob);
+        if (!customer) {
+            logger.warn('[WA] Install complete: tidak ada data pelanggan untuk welcome message');
+            return { success: false, error: 'No customer data' };
+        }
+        logger.info(`[WA] Mengirim welcome message ke ${customer.name} setelah instalasi selesai`);
+        return this.sendWelcomeMessage(customer);
+    }
+
     // Send welcome message notification
     async sendWelcomeMessage(customer) {
         try {

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { adminAuth } = require('./adminAuth');
-const axios = require('axios');
+const { getSettingsWithCache } = require('../config/settingsManager');
 
 // Setting Mikrotik page (NAS/Routers only)
 router.get('/connection-settings', adminAuth, async (req, res) => {
@@ -51,7 +51,8 @@ router.get('/connection-settings', adminAuth, async (req, res) => {
     res.render('admin/connection-settings', { 
       title: 'Setting Mikrotik', 
       routers, 
-      genieacsServers, 
+      genieacsServers,
+      settings: getSettingsWithCache(),
       page: 'connection-settings' 
     });
   } catch (e) {

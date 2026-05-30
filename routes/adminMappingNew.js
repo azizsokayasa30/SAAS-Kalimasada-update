@@ -12,6 +12,19 @@ const router = express.Router();
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const { adminAuth } = require('./adminAuth');
+const cacheManager = require('../config/cacheManager');
+const {
+    CACHE_KEYS,
+    CACHE_TTL,
+    invalidateMappingCache,
+    openBillingDb,
+    loadMappingDbData,
+    buildCorePayload,
+    buildLivePayload,
+    buildMappingStatistics,
+    enrichCustomersWithPppoe,
+    getPppoeBatchCached
+} = require('../utils/mappingNewData');
 
 // Helper function untuk mendapatkan nilai parameter dari device
 function getParameterValue(device, parameterPath) {
@@ -208,386 +221,89 @@ function getTXPowerValue(device) {
 
 // API endpoint untuk mapping data baru
 router.get('/api/mapping/new', adminAuth, async (req, res) => {
-    try {
-        console.log('🚀 New Mapping API - Loading network data...');
-        
-        const dbPath = path.join(__dirname, '../data/billing.db');
-        const db = new sqlite3.Database(dbPath);
-        
-        // Satu gelombang: query SQLite + batch PPPoE (satu round-trip NAS) + GenieACS cache — hindari N+1 MikroTik & N+1 SQLite per device.
-        console.log('🔍 Loading mapping data (DB + PPPoE batch + GenieACS parallel)...');
-        const [dbResults, pppoeBatch, genieacsDevices] = await Promise.all([
-            Promise.all([
-            // Load customers (join paket & ODP untuk matching GenieACS tanpa query per device)
-            new Promise((resolve) => {
-                db.all(`
-                    SELECT c.id, c.name, c.phone, c.pppoe_username, c.latitude, c.longitude,
-                           c.address, c.package_id, c.status, c.join_date, c.odp_id,
-                           p.name AS package_name,
-                           o.name AS odp_name
-                    FROM customers c
-                    LEFT JOIN packages p ON c.package_id = p.id
-                    LEFT JOIN odps o ON c.odp_id = o.id
-                    WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL
-                    ORDER BY c.name
-                `, [], (err, rows) => {
-                    if (err) {
-                        console.error('❌ Error loading customers:', err);
-                        resolve([]);
-                    } else {
-                        console.log(`✅ Found ${rows ? rows.length : 0} customers with coordinates`);
-                        resolve(rows || []);
-                    }
-                });
-            }),
-            
-            // Load ODPs
-            new Promise((resolve) => {
-                db.all(`
-                    SELECT id, name, code, latitude, longitude, address, 
-                           capacity, used_ports, status, installation_date
-                    FROM odps 
-                    ORDER BY name
-                `, [], (err, rows) => {
-                    if (err) {
-                        console.error('❌ Error loading ODPs:', err);
-                        resolve([]);
-                    } else {
-                        console.log(`✅ Found ${rows ? rows.length : 0} ODPs`);
-                        resolve(rows || []);
-                    }
-                });
-            }),
-            
-            // Load cables with customer and ODP coordinates
-            new Promise((resolve) => {
-                db.all(`
-                    SELECT cr.id, cr.customer_id, cr.odp_id, cr.cable_length, cr.cable_type, 
-                           cr.installation_date, cr.status, cr.port_number, cr.notes,
-                           c.name as customer_name, c.phone as customer_phone,
-                           c.latitude as customer_latitude, c.longitude as customer_longitude,
-                           o.name as odp_name, o.code as odp_code,
-                           o.latitude as odp_latitude, o.longitude as odp_longitude
-                    FROM cable_routes cr
-                    LEFT JOIN customers c ON cr.customer_id = c.id
-                    LEFT JOIN odps o ON cr.odp_id = o.id
-                    WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL 
-                    AND o.latitude IS NOT NULL AND o.longitude IS NOT NULL
-                    ORDER BY cr.id
-                `, [], (err, rows) => {
-                    if (err) {
-                        console.error('❌ Error loading cables:', err);
-                        resolve([]);
-                    } else {
-                        console.log(`✅ Found ${rows ? rows.length : 0} cables with coordinates`);
-                        resolve(rows || []);
-                    }
-                });
-            }),
-            
-            // Load network segments and ODP connections (backbone cables) with ODP coordinates
-            new Promise((resolve) => {
-                db.all(`
-                    SELECT ns.id, ns.name, ns.start_odp_id, ns.end_odp_id, ns.cable_length, 
-                           ns.segment_type, ns.installation_date, ns.status, ns.notes,
-                           start_odp.name as start_odp_name, start_odp.code as start_odp_code,
-                           start_odp.latitude as start_odp_latitude, start_odp.longitude as start_odp_longitude,
-                           end_odp.name as end_odp_name, end_odp.code as end_odp_code,
-                           end_odp.latitude as end_odp_latitude, end_odp.longitude as end_odp_longitude,
-                           'network_segments' as source_table
-                    FROM network_segments ns
-                    LEFT JOIN odps start_odp ON ns.start_odp_id = start_odp.id
-                    LEFT JOIN odps end_odp ON ns.end_odp_id = end_odp.id
-                    WHERE start_odp.latitude IS NOT NULL AND start_odp.longitude IS NOT NULL 
-                      AND end_odp.latitude IS NOT NULL AND end_odp.longitude IS NOT NULL
-                    
-                    UNION ALL
-                    
-                    SELECT oc.id + 10000 as id, 
-                           'Connection-' || from_odp.name || '-' || to_odp.name as name,
-                           oc.from_odp_id as start_odp_id, oc.to_odp_id as end_odp_id, 
-                           oc.cable_length, oc.connection_type as segment_type, 
-                           oc.installation_date, oc.status, oc.notes,
-                           from_odp.name as start_odp_name, from_odp.code as start_odp_code,
-                           from_odp.latitude as start_odp_latitude, from_odp.longitude as start_odp_longitude,
-                           to_odp.name as end_odp_name, to_odp.code as end_odp_code,
-                           to_odp.latitude as end_odp_latitude, to_odp.longitude as end_odp_longitude,
-                           'odp_connections' as source_table
-                    FROM odp_connections oc
-                    LEFT JOIN odps from_odp ON oc.from_odp_id = from_odp.id
-                    LEFT JOIN odps to_odp ON oc.to_odp_id = to_odp.id
-                    WHERE from_odp.latitude IS NOT NULL AND from_odp.longitude IS NOT NULL 
-                      AND to_odp.latitude IS NOT NULL AND to_odp.longitude IS NOT NULL
-                      AND oc.status = 'active'
-                `, [], (err, rows) => {
-                    if (err) {
-                        console.error('❌ Error loading backbone cables:', err);
-                        resolve([]);
-                    } else {
-                        console.log(`✅ Found ${rows ? rows.length : 0} backbone cables (network segments + ODP connections)`);
-                        resolve(rows || []);
-                    }
-                });
-            })
-            ]),
-            (async () => {
-                try {
-                    const { getActivePppoeLoginNamesSetWithUptimeMap } = require('../config/mikrotik');
-                    return await getActivePppoeLoginNamesSetWithUptimeMap();
-                } catch (e) {
-                    console.warn('⚠️ PPPoE batch (mapping):', e.message || e);
-                    return { names: new Set(), uptimeByLogin: Object.create(null) };
-                }
-            })(),
-            (async () => {
-                try {
-                    const { getDevicesCached } = require('../config/genieacs');
-                    return await getDevicesCached();
-                } catch (e) {
-                    console.warn('⚠️ GenieACS (mapping):', e.message || e);
-                    return [];
-                }
-            })()
-        ]);
+    const started = Date.now();
+    const phase = String(req.query.phase || 'full').toLowerCase();
 
-        const [customers, odps, cables, backboneCables] = dbResults;
+    try {
+        if (phase === 'core') {
+            const cached = cacheManager.get(CACHE_KEYS.core);
+            if (cached) {
+                return res.json({ success: true, data: cached, phase: 'core', cached: true, ms: Date.now() - started });
+            }
+
+            const db = openBillingDb();
+            const dbData = await loadMappingDbData(db);
+            db.close();
+
+            const data = buildCorePayload(dbData);
+            cacheManager.set(CACHE_KEYS.core, data, CACHE_TTL.core);
+            console.log(`✅ Mapping core loaded in ${Date.now() - started}ms`);
+            return res.json({ success: true, data, phase: 'core', cached: false, ms: Date.now() - started });
+        }
+
+        if (phase === 'live') {
+            const cached = cacheManager.get(CACHE_KEYS.live);
+            if (cached) {
+                return res.json({ success: true, data: cached, phase: 'live', cached: true, ms: Date.now() - started });
+            }
+
+            let customers = cacheManager.get(CACHE_KEYS.core)?.customers;
+            if (!customers?.length) {
+                const db = openBillingDb();
+                const dbData = await loadMappingDbData(db);
+                db.close();
+                customers = dbData.customers;
+            } else {
+                customers = customers.map((c) => ({
+                    id: c.id,
+                    name: c.name,
+                    phone: c.phone,
+                    pppoe_username: c.pppoe_username,
+                    latitude: c.latitude,
+                    longitude: c.longitude,
+                    address: c.address,
+                    package_id: c.package_id,
+                    status: c.status,
+                    join_date: c.join_date,
+                    odp_id: c.odp_id,
+                    package_name: c.package_name,
+                    odp_name: c.odp_name
+                }));
+            }
+
+            const live = await buildLivePayload(customers);
+            const data = {
+                customers: live.enrichedCustomers,
+                statistics: {
+                    downCustomers: live.enrichedCustomers.filter((c) => c.network_down === true).length
+                }
+            };
+            cacheManager.set(CACHE_KEYS.live, data, CACHE_TTL.live);
+            console.log(`✅ Mapping live (PPPoE) loaded in ${Date.now() - started}ms`);
+            return res.json({ success: true, data, phase: 'live', cached: false, ms: Date.now() - started });
+        }
+
+        console.log('🚀 New Mapping API - Loading full network data...');
+        const db = openBillingDb();
+        const dbData = await loadMappingDbData(db);
         db.close();
 
-        const onlineLoginSet = pppoeBatch.names || new Set();
-        const pppoeUptimeByLogin = pppoeBatch.uptimeByLogin || Object.create(null);
-        const onlineLower = new Set(
-            [...onlineLoginSet].map((n) => String(n).toLowerCase())
+        const pppoeBatch = await getPppoeBatchCached();
+        const enrichedCustomers = enrichCustomersWithPppoe(dbData.customers, pppoeBatch);
+
+        const data = buildCorePayload(dbData);
+        data.customers = enrichedCustomers;
+        data.onuDevices = [];
+        data.statistics = buildMappingStatistics(
+            enrichedCustomers,
+            dbData.odps,
+            dbData.cables,
+            dbData.backboneCables,
+            []
         );
 
-        const customerByPppoeLower = new Map();
-        for (const row of customers || []) {
-            const raw = row && row.pppoe_username != null ? String(row.pppoe_username).trim() : '';
-            if (raw) {
-                const key = raw.toLowerCase();
-                if (!customerByPppoeLower.has(key)) {
-                    customerByPppoeLower.set(key, row);
-                }
-            }
-        }
-
-        let enrichedCustomers = (customers || []).map((customer) => {
-            const pppoeLogin =
-                customer && customer.pppoe_username != null
-                    ? String(customer.pppoe_username).trim()
-                    : '';
-            if (!pppoeLogin) {
-                return {
-                    ...customer,
-                    pppoe_active: null,
-                    network_down: false,
-                    down_reason: null,
-                    pppoe_uptime_display: null
-                };
-            }
-            const isActive = onlineLower.has(pppoeLogin.toLowerCase());
-            return {
-                ...customer,
-                pppoe_active: isActive,
-                network_down: !isActive,
-                down_reason: isActive ? null : 'PPPoE inactive',
-                pppoe_uptime_display: isActive
-                    ? pppoeUptimeByLogin[String(pppoeLogin).toLowerCase()] || null
-                    : null
-            };
-        });
-        
-        console.log('🔍 Matching GenieACS devices to customers (in-memory)...');
-        let onuDevices = [];
-        
-        try {
-            console.log(`📊 Found ${genieacsDevices.length} devices from GenieACS`);
-            
-            if (!genieacsDevices || genieacsDevices.length === 0) {
-                console.log('⚠️ No devices from GenieACS — ONU list will be empty');
-                throw new Error('No GenieACS data available');
-            }
-            
-            const devicesWithCoords = [];
-            
-            for (const device of genieacsDevices) {
-                try {
-                    // Validasi device ID
-                    const deviceId = getValidDeviceId(device);
-                    if (!deviceId) {
-                        console.log('⚠️ Skipping device with invalid ID:', device);
-                        continue;
-                    }
-                    
-                    let customerData = null;
-                    let coordinateSource = 'none';
-
-                    const pppoeUsername1 = getParameterValue(device, 'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username');
-                    const pppoeUsername2 = getParameterValue(device, 'VirtualParameters.pppoeUsername');
-                    const pppoeUsername = sanitizePPPoEUsername(pppoeUsername2 || pppoeUsername1);
-
-                    if (pppoeUsername && pppoeUsername !== '-') {
-                        const customer = customerByPppoeLower.get(pppoeUsername.toLowerCase()) || null;
-                        if (customer) {
-                            customerData = customer;
-                            coordinateSource = 'pppoe_username';
-                        }
-                    }
-
-                    if (customerData) {
-                            const deviceWithCoords = {
-                                   id: deviceId,
-                                   serialNumber: getParameterValue(device, 'VirtualParameters.getSerialNumber') || 
-                                               getParameterValue(device, 'Device.DeviceInfo.SerialNumber') ||
-                                               getParameterValue(device, 'DeviceID.SerialNumber') || 'N/A',
-                                   name: getParameterValue(device, 'DeviceID.ProductClass') || 
-                                        getParameterValue(device, 'Device.DeviceInfo.ProductClass') || 'N/A',
-                                   model: getParameterValue(device, 'DeviceID.ProductClass') || 
-                                         getParameterValue(device, 'Device.DeviceInfo.ModelName') ||
-                                         getParameterValue(device, 'Device.DeviceInfo.ProductClass') || 'N/A',
-                                status: getDeviceStatus(device._lastInform),
-                                   ssid: getParameterValue(device, 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID') || 
-                                        getParameterValue(device, 'Device.WiFi.SSID.1.SSID') ||
-                                        getParameterValue(device, 'VirtualParameters.wifiSSID') || 'N/A',
-                                   password: getParameterValue(device, 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase') || 
-                                            getParameterValue(device, 'InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase') ||
-                                            getParameterValue(device, 'VirtualParameters.wifiPassword') || 'N/A',
-                                latitude: customerData.latitude,
-                                longitude: customerData.longitude,
-                                customerName: customerData.name,
-                                customerPhone: customerData.phone,
-                                customerPPPoE: customerData.pppoe_username,
-                                customerAddress: customerData.address,
-                                customerPackage: customerData.package_name,
-                                customerStatus: customerData.status,
-                                odpName: customerData.odp_name || 'N/A',
-                                   rxPower: getRXPowerValue(device) || 'N/A',
-                                   txPower: getTXPowerValue(device) || 'N/A',
-                                   temperature: getParameterValue(device, 'VirtualParameters.gettemp') || 
-                                              getParameterValue(device, 'VirtualParameters.temperature') || 'N/A',
-                                   uptime: getParameterValue(device, 'VirtualParameters.getdeviceuptime') || 
-                                          getParameterValue(device, 'VirtualParameters.deviceUptime') || 'N/A',
-                                   lastInform: device._lastInform || new Date().toISOString(),
-                                   firmware: getParameterValue(device, 'Device.DeviceInfo.SoftwareVersion') ||
-                                           getParameterValue(device, 'InternetGatewayDevice.DeviceInfo.SoftwareVersion') || 'N/A',
-                                   hardware: getParameterValue(device, 'Device.DeviceInfo.HardwareVersion') ||
-                                           getParameterValue(device, 'InternetGatewayDevice.DeviceInfo.HardwareVersion') || 'N/A',
-                                   ipAddress: getParameterValue(device, 'VirtualParameters.pppoeIP') || 
-                                            getParameterValue(device, 'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ExternalIPAddress') || 'N/A',
-                                   macAddress: getParameterValue(device, 'VirtualParameters.pppoeMac') || 
-                                             getParameterValue(device, 'InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.1.MACAddress') || 'N/A',
-                                coordinateSource: coordinateSource,
-                                
-                            // Add genieacsData
-                                genieacsData: {
-                                manufacturer: getParameterValue(device, 'Device.DeviceInfo.Manufacturer') || 'N/A',
-                                hardwareVersion: getParameterValue(device, 'Device.DeviceInfo.HardwareVersion') || 'N/A',
-                                softwareVersion: getParameterValue(device, 'Device.DeviceInfo.SoftwareVersion') || 'N/A',
-                                deviceUptime: getParameterValue(device, 'VirtualParameters.getdeviceuptime') || 'N/A',
-                                pppoeUsername: pppoeUsername,
-                                    pppoeIP: getParameterValue(device, 'VirtualParameters.pppoeIP') || 'N/A',
-                                pppoeMac: getParameterValue(device, 'VirtualParameters.pppoeMac') || 'N/A'
-                                }
-                            };
-                            
-                            devicesWithCoords.push(deviceWithCoords);
-                        }
-                    
-                } catch (deviceError) {
-                    console.error(`❌ Error processing device ${device._id}:`, deviceError.message);
-                    continue;
-                }
-            }
-            
-            if (devicesWithCoords.length === 0) {
-                console.log('⚠️ No devices with coordinates — ONU list will be empty');
-                throw new Error('No devices with coordinates');
-            }
-            
-            console.log(`✅ Created ${devicesWithCoords.length} ONU devices with coordinates`);
-            console.log('🚀 BACKEND: GenieACS processing completed');
-            onuDevices = devicesWithCoords;
-                    
-                } catch (error) {
-                    console.error('❌ Error loading ONU devices from GenieACS:', error.message);
-                    // Jangan isi peta dengan ONU simulasi (fallback_*, SIM*, dll.) — itu bukan data nyata
-                    // dan tidak bisa "dihapus" dari DB. Daftar ONU kosong sampai GenieACS / mapping valid.
-                    onuDevices = [];
-                    console.log('ℹ️ BACKEND: Daftar ONU dikosongkan (tanpa simulasi). Perbaiki GenieACS atau koordinat pelanggan.');
-                }
-        
-        // Hitung statistik
-        const statistics = {
-            totalCustomers: enrichedCustomers.length,
-            downCustomers: enrichedCustomers.filter((c) => c.network_down === true).length,
-            totalONU: onuDevices.length,
-            onlineONU: onuDevices.filter(d => d.status === 'Online').length,
-            offlineONU: onuDevices.filter(d => d.status === 'Offline').length,
-            totalODP: odps.length,
-            totalCables: cables.length,
-            totalBackboneCables: backboneCables.length,
-            connectedCables: cables.filter(c => c.status === 'connected').length,
-            disconnectedCables: cables.filter(c => c.status === 'disconnected').length
-        };
-        
-        // Format cables untuk frontend dengan koordinat array
-        const formattedCables = cables.map(cable => ({
-            id: cable.id,
-            customer_id: cable.customer_id,
-            coordinates: [
-                [cable.odp_latitude, cable.odp_longitude],
-                [cable.customer_latitude, cable.customer_longitude]
-            ],
-            from: cable.odp_name,
-            to: cable.customer_name,
-            type: 'Access Cable',
-            length: cable.cable_length || 'N/A',
-            status: cable.status,
-            customer_name: cable.customer_name,
-            customer_phone: cable.customer_phone,
-            odp_name: cable.odp_name,
-            port_number: cable.port_number,
-            notes: cable.notes
-        }));
-        
-        // Format backbone cables untuk frontend dengan koordinat array
-        const formattedBackboneCables = backboneCables.map(cable => ({
-            id: cable.id,
-            coordinates: [
-                [cable.start_odp_latitude, cable.start_odp_longitude],
-                [cable.end_odp_latitude, cable.end_odp_longitude]
-            ],
-            from: cable.start_odp_name,
-            to: cable.end_odp_name,
-            type: cable.segment_type || 'Backbone',
-            length: cable.cable_length || 'N/A',
-            status: cable.status,
-            name: cable.name,
-            notes: cable.notes
-        }));
-        
-        console.log('✅ New Mapping API - Data loaded successfully:', statistics);
-        if (process.env.DEBUG_MAPPING === '1') {
-            console.log('🔍 Sample data:', {
-                customer: enrichedCustomers[0],
-                odp: odps[0],
-                cable: formattedCables[0],
-                backbone: formattedBackboneCables[0],
-                onu: onuDevices[0]
-            });
-        }
-        
-        res.json({
-            success: true,
-            data: {
-                customers: enrichedCustomers,
-                onuDevices: onuDevices,
-                odps: odps,
-                cables: formattedCables,
-                backboneCables: formattedBackboneCables,
-                statistics: statistics
-            }
-        });
-        
+        console.log(`✅ Mapping full loaded in ${Date.now() - started}ms`);
+        return res.json({ success: true, data, phase: 'full', ms: Date.now() - started });
     } catch (error) {
         console.error('❌ Error in new mapping API:', error);
         res.status(500).json({
@@ -681,6 +397,7 @@ router.post('/update-onu', adminAuth, async (req, res) => {
         try {
             const cacheManager = require('../config/cacheManager');
             cacheManager.invalidatePattern('genieacs:*');
+            invalidateMappingCache();
             console.log('🔄 GenieACS cache invalidated after ONU update');
         } catch (cacheError) {
             console.warn('⚠️ Failed to invalidate cache:', cacheError.message);
@@ -774,9 +491,9 @@ router.post('/update-odp', adminAuth, async (req, res) => {
         console.log('📋 Request data:', req.body);
         
         const { id, name, code, capacity, used_ports, status, address, latitude, longitude, installation_date, parent_odp_id } = req.body;
+        const isNewOdp = !id || id === 'new' || id === '0';
         
-        // Validate required fields - hanya validasi id karena update bisa sebagian
-        if (!id) {
+        if (!isNewOdp && !id) {
             return res.status(400).json({
                 success: false,
                 message: 'Missing required field: id'
@@ -786,18 +503,18 @@ router.post('/update-odp', adminAuth, async (req, res) => {
         const dbPath = path.join(__dirname, '../data/billing.db');
         const db = new sqlite3.Database(dbPath);
         
-        // Check if ODP exists in database
-        const existingODP = await new Promise((resolve, reject) => {
-            db.get(`
-                SELECT id FROM odps WHERE id = ?
-            `, [id], (err, row) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(row);
-                }
+        let existingODP = null;
+        if (!isNewOdp) {
+            existingODP = await new Promise((resolve, reject) => {
+                db.get(`SELECT id FROM odps WHERE id = ?`, [id], (err, row) => {
+                    if (err) reject(err);
+                    else resolve(row);
+                });
             });
-        });
+        }
+        
+        let savedOdpId = isNewOdp ? null : parseInt(id, 10);
+        let savedCode = code;
         
         if (existingODP) {
             // Bangun query dinamis berdasarkan field yang ada
@@ -908,57 +625,69 @@ router.post('/update-odp', adminAuth, async (req, res) => {
                 }
             }
         } else {
-            // Validasi field yang diperlukan untuk insert
-            if (!name || !code || !capacity) {
+            if (!name || capacity === undefined || capacity === null || capacity === '') {
                 db.close();
                 return res.status(400).json({
                     success: false,
-                    message: 'Missing required fields for new ODP: name, code, capacity'
+                    message: 'Field wajib untuk ODP baru: name, capacity'
                 });
             }
-            
-            // Insert new ODP
-            await new Promise((resolve, reject) => {
+
+            const finalCode = (code && String(code).trim())
+                || String(name).trim().toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)
+                || `ODP-${Date.now()}`;
+
+            savedCode = finalCode;
+
+            savedOdpId = await new Promise((resolve, reject) => {
                 db.run(`
                     INSERT INTO odps (
-                        id, name, code, capacity, used_ports, status, 
-                        address, latitude, longitude, installation_date, 
+                        name, code, capacity, used_ports, status,
+                        address, latitude, longitude, installation_date,
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'), datetime('now','localtime'))
-                `, [id, name, code, capacity, used_ports || 0, status || 'active', address || '', latitude || 0, longitude || 0, installation_date || null], function(err) {
-                    if (err) {
-                        reject(err);
-                    } else {
-                        console.log(`✅ Created new ODP: ${id}`);
-                        resolve();
-                    }
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'), datetime('now','localtime'))
+                `, [
+                    name,
+                    finalCode,
+                    parseInt(capacity, 10) || 8,
+                    parseInt(used_ports, 10) || 0,
+                    status || 'active',
+                    address || '',
+                    latitude != null ? parseFloat(latitude) : 0,
+                    longitude != null ? parseFloat(longitude) : 0,
+                    installation_date || new Date().toISOString().split('T')[0]
+                ], function onInsert(err) {
+                    if (err) reject(err);
+                    else resolve(this.lastID);
                 });
             });
+
+            console.log(`✅ Created new ODP: ${savedOdpId}`);
         }
         
         db.close();
         
-        console.log('✅ ODP updated successfully in database');
+        console.log('✅ ODP saved successfully in database');
         
-        // Invalidate GenieACS cache after successful update
+        // Invalidate cache after successful save
         try {
             const cacheManager = require('../config/cacheManager');
             cacheManager.invalidatePattern('genieacs:*');
-            console.log('🔄 GenieACS cache invalidated after ODP update');
+            invalidateMappingCache();
         } catch (cacheError) {
             console.warn('⚠️ Failed to invalidate cache:', cacheError.message);
         }
         
         res.json({
             success: true,
-            message: 'ODP updated successfully',
+            message: isNewOdp ? 'ODP berhasil ditambahkan' : 'ODP updated successfully',
             data: {
-                id: id,
+                id: savedOdpId,
                 name: name,
-                code: code,
+                code: savedCode,
                 capacity: capacity,
                 used_ports: used_ports,
-                status: status,
+                status: status || 'active',
                 address: address,
                 latitude: latitude,
                 longitude: longitude,
@@ -1093,6 +822,7 @@ router.post('/update-customer', adminAuth, async (req, res) => {
         try {
             const cacheManager = require('../config/cacheManager');
             cacheManager.invalidatePattern('genieacs:*');
+            invalidateMappingCache();
             console.log('🔄 GenieACS cache invalidated after Customer update');
         } catch (cacheError) {
             console.warn('⚠️ Failed to invalidate cache:', cacheError.message);
@@ -1233,6 +963,7 @@ router.post('/restart-onu', adminAuth, async (req, res) => {
         try {
             const cacheManager = require('../config/cacheManager');
             cacheManager.invalidatePattern('genieacs:*');
+            invalidateMappingCache();
             console.log('🔄 GenieACS cache invalidated after ONU restart');
         } catch (cacheError) {
             console.warn('⚠️ Failed to invalidate cache:', cacheError.message);

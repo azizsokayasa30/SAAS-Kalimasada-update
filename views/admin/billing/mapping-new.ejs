@@ -390,6 +390,68 @@
             border-top: 1px solid #e9ecef;
             background: var(--bg-secondary, #f8f9fa);
             border-radius: 0 0 12px 12px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .custom-popup.customer-popup {
+            min-width: 280px;
+        }
+
+        .custom-popup .popup-footer.popup-footer-row {
+            flex-direction: row;
+            flex-wrap: nowrap;
+            align-items: stretch;
+            gap: 8px;
+        }
+
+        .custom-popup .popup-footer.popup-footer-row .btn {
+            flex: 1 1 0;
+            margin: 0;
+            white-space: nowrap;
+        }
+
+        .odp-pick-banner {
+            position: absolute;
+            top: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1200;
+            background: #ffc107;
+            color: #212529;
+            padding: 10px 16px;
+            border-radius: 10px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+            font-size: 14px;
+            font-weight: 600;
+            display: none;
+            align-items: center;
+            gap: 10px;
+            max-width: calc(100% - 24px);
+        }
+
+        .odp-pick-banner.active {
+            display: flex;
+        }
+
+        #map.odp-pick-mode {
+            cursor: crosshair;
+        }
+
+        .odp-marker.odp-pick-highlight {
+            animation: odpPickPulse 1.2s ease-in-out infinite;
+        }
+
+        .odp-marker.odp-pick-disabled {
+            opacity: 0.35;
+            filter: grayscale(0.6);
+            pointer-events: none;
+        }
+
+        @keyframes odpPickPulse {
+            0%, 100% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(255, 193, 7, 0)); }
+            50% { transform: scale(1.08); filter: drop-shadow(0 0 8px rgba(255, 193, 7, 0.9)); }
         }
         
         .status-active {
@@ -703,6 +765,94 @@
             width: 100%;
             height: 100%;
             z-index: 1;
+        }
+
+        .map-wrap {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        .map-wrap .odp-pick-banner,
+        .map-wrap .add-odp-banner,
+        .map-wrap .live-sync-badge,
+        .map-wrap .map-add-odp-btn {
+            position: absolute;
+            z-index: 1500;
+            pointer-events: auto;
+        }
+
+        .map-wrap .map-add-odp-btn {
+            bottom: 16px;
+            left: 16px;
+        }
+
+        .map-add-odp-btn {
+            background: #0d6efd;
+            color: #fff !important;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 16px;
+            font-size: 14px;
+            font-weight: 600;
+            box-shadow: 0 4px 14px rgba(13, 110, 253, 0.45);
+            display: inline-flex !important;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            visibility: visible !important;
+            opacity: 1 !important;
+        }
+
+        .map-add-odp-btn:hover,
+        .map-add-odp-btn:focus {
+            background: #0b5ed7;
+            color: #fff;
+        }
+
+        .map-add-odp-btn.active {
+            background: #084298;
+            box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.35);
+        }
+
+        #map.add-odp-mode {
+            cursor: crosshair;
+        }
+
+        .add-odp-banner {
+            position: absolute;
+            top: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1200;
+            background: #0d6efd;
+            color: #fff;
+            padding: 10px 16px;
+            border-radius: 10px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+            font-size: 14px;
+            font-weight: 600;
+            display: none;
+            align-items: center;
+            gap: 10px;
+            max-width: calc(100% - 24px);
+        }
+
+        .add-odp-banner.active {
+            display: flex;
+        }
+
+        .live-sync-badge {
+            position: absolute;
+            bottom: 12px;
+            right: 12px;
+            z-index: 1100;
+            background: rgba(31, 45, 70, 0.92);
+            color: #e9f0ff;
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
         }
         
         .panels-row {
@@ -1352,7 +1502,25 @@
         </div>
         
         <!-- Map -->
-        <div id="map"></div>
+        <div class="map-wrap">
+            <div id="map"></div>
+            <div id="odpPickBanner" class="odp-pick-banner">
+                <span id="odpPickBannerText">Klik ODP di peta untuk patch pelanggan</span>
+                <button type="button" class="btn btn-sm btn-dark" id="cancelOdpPickBtn">Batal</button>
+            </div>
+            <div id="liveSyncBadge" class="live-sync-badge d-none">
+                <i class="fas fa-circle-notch fa-spin me-1"></i>
+                <span id="liveSyncText">Memuat status PPPoE...</span>
+            </div>
+            <div id="addOdpBanner" class="add-odp-banner">
+                <span>Klik peta untuk tentukan lokasi ODP baru</span>
+                <button type="button" class="btn btn-sm btn-light" id="cancelAddOdpBtn">Batal</button>
+            </div>
+            <button type="button" class="map-add-odp-btn" id="startAddOdpBtn" title="Tambah ODP di peta">
+                <i class="fas fa-plus-circle"></i>
+                Tambah ODP
+            </button>
+        </div>
                 </div>
                 
                 <!-- Panels Below Map -->
@@ -1375,8 +1543,8 @@
                                 </label>
                             </div>
                             
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="showONU" checked>
+                            <div class="form-check d-none" id="showONUWrap" aria-hidden="true">
+                                <input class="form-check-input" type="checkbox" id="showONU">
                                 <label class="form-check-label" for="showONU">
                                     <i class="fas fa-broadcast-tower text-success"></i> ONU Devices
                                 </label>
@@ -1410,15 +1578,15 @@
                                 <span class="status-offline">Down Customers:</span>
                                 <span id="downCustomers" class="status-offline">-</span>
                             </div>
-                            <div class="stats-item">
+                            <div class="stats-item d-none" id="onuStatsWrap" aria-hidden="true">
                                 <span>ONU Devices:</span>
                                 <span id="totalONU">-</span>
                             </div>
-                            <div class="stats-item">
+                            <div class="stats-item d-none" aria-hidden="true">
                                 <span class="status-online">Online:</span>
                                 <span id="onlineONU" class="status-online">-</span>
                             </div>
-                            <div class="stats-item">
+                            <div class="stats-item d-none" aria-hidden="true">
                                 <span class="status-offline">Offline:</span>
                                 <span id="offlineONU" class="status-offline">-</span>
                             </div>
@@ -1438,11 +1606,11 @@
                             <!-- Legend -->
                             <div class="mt-3 pt-2 border-top">
                                 <h6 class="mb-2"><i class="fas fa-info-circle"></i> Legend</h6>
-                                <div class="legend-item">
+                                <div class="legend-item d-none" id="onuLegendWrap" aria-hidden="true">
                                     <div class="legend-color online"></div>
                                     <span>ONU Online</span>
                                 </div>
-                                <div class="legend-item">
+                                <div class="legend-item d-none" aria-hidden="true">
                                     <div class="legend-color offline"></div>
                                     <span>ONU Offline</span>
                                 </div>
@@ -1492,7 +1660,58 @@
         let networkData = {};
         let showOnlyDownCustomers = false;
         let customerLayer, onuLayer, odpLayer, cableLayer, backboneLayer;
+        let odpPickMode = null;
+        let odpParentPickMode = null;
+        let addOdpMode = false;
+        let addOdpPreviewMarker = null;
+        let pendingAddOdpLatLng = null;
+        let customerById = new Map();
+        let liveDataLoaded = false;
+        const MAX_FLOW_ANIMATIONS = 40;
+        const MAP_VIEW_STORAGE_KEY = 'kalimasada-mapping-map-view';
         // Auto-refresh dinonaktifkan — muat ulang data lewat refresh browser atau aksi simpan yang memanggil loadNetworkData().
+
+        function getSavedMapView() {
+            try {
+                const raw = localStorage.getItem(MAP_VIEW_STORAGE_KEY);
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                const lat = Number(parsed.lat);
+                const lng = Number(parsed.lng);
+                const zoom = Number(parsed.zoom);
+                if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(zoom)) {
+                    return null;
+                }
+                return {
+                    lat,
+                    lng,
+                    zoom: Math.min(Math.max(Math.round(zoom), 1), 19)
+                };
+            } catch (error) {
+                return null;
+            }
+        }
+
+        function saveMapView() {
+            if (!map) return;
+            try {
+                const center = map.getCenter();
+                localStorage.setItem(MAP_VIEW_STORAGE_KEY, JSON.stringify({
+                    lat: center.lat,
+                    lng: center.lng,
+                    zoom: map.getZoom()
+                }));
+            } catch (error) {
+                // Abaikan jika localStorage penuh/tidak tersedia
+            }
+        }
+
+        function bindMapViewPersistence() {
+            if (!map || map._viewPersistenceBound) return;
+            map._viewPersistenceBound = true;
+            map.on('moveend', saveMapView);
+            map.on('zoomend', saveMapView);
+        }
 
         // Initialize map
         function initMap() {
@@ -1501,10 +1720,17 @@
             const defaultLat = <%= typeof defaultMapLat !== 'undefined' && defaultMapLat != null ? Number(defaultMapLat) : -6.2088 %>;
             const defaultLng = <%= typeof defaultMapLng !== 'undefined' && defaultMapLng != null ? Number(defaultMapLng) : 106.8456 %>;
             const defaultZoom = <%= typeof defaultMapZoom !== 'undefined' && defaultMapZoom != null ? parseInt(String(defaultMapZoom), 10) : 13 %>;
+            const savedView = getSavedMapView();
             map = L.map('map', {
                 zoomControl: false,
                 maxZoom: 19
-            }).setView([defaultLat, defaultLng], defaultZoom);
+            });
+            if (savedView) {
+                map.setView([savedView.lat, savedView.lng], savedView.zoom);
+            } else {
+                map.setView([defaultLat, defaultLng], defaultZoom);
+            }
+            bindMapViewPersistence();
             
             // Add enhanced tile layers with multiple options
             const lightTheme = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
@@ -1536,7 +1762,7 @@
                 
             // Initialize layers
             customerLayer = L.layerGroup().addTo(map);
-            onuLayer = L.layerGroup().addTo(map);
+            onuLayer = L.layerGroup();
             odpLayer = L.layerGroup().addTo(map);
             cableLayer = L.layerGroup().addTo(map);
             backboneLayer = L.layerGroup().addTo(map);
@@ -1546,8 +1772,7 @@
                 "ODPs": odpLayer,
                 "Customers": customerLayer,
                 "Cable Routes": cableLayer,
-                "Backbone": backboneLayer,
-                "ONU Devices": onuLayer
+                "Backbone": backboneLayer
             };
             
             // Add layer control (collapsed by default)
@@ -1575,6 +1800,12 @@
                     layerControlElement.style.overflowY = 'auto';
                 }
             }, 100);
+
+            map.on('click', function(e) {
+                if (addOdpMode) {
+                    openAddOdpAt(e.latlng.lat, e.latlng.lng);
+                }
+            });
             
             console.log('? Map initialized successfully with satellite view as default');
             
@@ -1600,10 +1831,14 @@
             });
         }
         
+        function isCustomerPppoeDown(customer) {
+            return !customer || customer.pppoe_active !== true;
+        }
+
         function createCustomerIcon(customer) {
-            const isDown = customer && customer.network_down === true;
-            const statusClass = isDown ? 'down' : ((customer && customer.status === 'active') ? 'active' : 'inactive');
-            const indicatorClass = isDown ? 'down' : ((customer && customer.status === 'active') ? 'active' : 'inactive');
+            const isDown = isCustomerPppoeDown(customer);
+            const statusClass = isDown ? 'down' : 'active';
+            const indicatorClass = isDown ? 'down' : 'active';
             const iconClass = isDown ? 'fas fa-triangle-exclamation' : 'fas fa-home';
             return L.divIcon({
                 className: 'custom-customer-icon',
@@ -1631,82 +1866,154 @@
             });
         }
 
-        // Load network data from API
-        async function loadNetworkData() {
+        // Load network data from API (core first, then live enrichment)
+        async function loadNetworkData(options = {}) {
+            const loadingEl = document.getElementById('loading');
+            const loadingText = loadingEl?.querySelector('.mt-2');
+            const liveBadge = document.getElementById('liveSyncBadge');
+            const liveText = document.getElementById('liveSyncText');
+            const skipLive = options.skipLive === true;
+
             try {
-                console.log('?? Loading network data...');
-                
-                const response = await fetch('/admin/api/mapping/new');
-                const result = await response.json();
-                
-                if (result.success) {
-                    networkData = result.data;
-                    console.log('? Network data loaded:', networkData);
-                    
-                    // Render all data
-                    renderNetworkData();
-                
-                // Update statistics
-                updateStatistics();
-                
-                    // Hide loading
-                    document.getElementById('loading').style.display = 'none';
-                    
-                } else {
-                    console.error('? Failed to load network data:', result.error);
-                    throw new Error(result.error || 'Failed to load network data');
+                if (loadingText) loadingText.textContent = 'Memuat peta & infrastruktur...';
+                if (loadingEl) loadingEl.style.display = 'block';
+
+                const coreResponse = await fetch('/admin/api/mapping/new?phase=core');
+                const coreResult = await coreResponse.json();
+
+                if (!coreResult.success) {
+                    throw new Error(coreResult.error || 'Failed to load core mapping data');
                 }
-                
+
+                networkData = coreResult.data;
+                rebuildCustomerIndex();
+                renderCoreNetworkData();
+
+                if (loadingEl) loadingEl.style.display = 'none';
+
+                if (skipLive) {
+                    return;
+                }
+
+                if (liveBadge) liveBadge.classList.remove('d-none');
+                if (liveText) liveText.textContent = 'Memuat status PPPoE...';
+
+                const liveResponse = await fetch('/admin/api/mapping/new?phase=live');
+                const liveResult = await liveResponse.json();
+
+                if (liveResult.success) {
+                    mergeLiveNetworkData(liveResult.data);
+                    renderLiveNetworkData();
+                    liveDataLoaded = true;
+                    if (liveText) {
+                        liveText.textContent = liveResult.cached
+                            ? 'Status PPPoE (cache)'
+                            : `Status PPPoE (${liveResult.ms || 0} ms)`;
+                    }
+                    setTimeout(() => {
+                        if (liveBadge) liveBadge.classList.add('d-none');
+                    }, 2500);
+                } else if (liveText) {
+                    liveText.textContent = 'Status PPPoE gagal dimuat';
+                }
             } catch (error) {
                 console.error('? Error loading network data:', error);
-                document.getElementById('loading').innerHTML = `
-                    <div class="text-center text-danger">
-                        <i class="fas fa-exclamation-triangle fa-2x mb-2"></i>
-                        <div>Error loading network data</div>
-                        <small>${error.message}</small>
-                    </div>
-                `;
+                if (loadingEl) {
+                    loadingEl.innerHTML = `
+                        <div class="text-center text-danger">
+                            <i class="fas fa-exclamation-triangle fa-2x mb-2"></i>
+                            <div>Gagal memuat data jaringan</div>
+                            <small>${error.message}</small>
+                        </div>
+                    `;
+                }
+                if (liveBadge) liveBadge.classList.add('d-none');
             }
+        }
+
+        function rebuildCustomerIndex() {
+            customerById = new Map();
+            (networkData.customers || []).forEach((customer) => {
+                customerById.set(String(customer.id), customer);
+            });
+        }
+
+        function mergeLiveNetworkData(liveData) {
+            if (!liveData) return;
+
+            if (Array.isArray(liveData.customers)) {
+                const liveById = new Map(liveData.customers.map((c) => [String(c.id), c]));
+                networkData.customers = (networkData.customers || []).map((customer) => {
+                    const updated = liveById.get(String(customer.id));
+                    if (!updated) return customer;
+                    return {
+                        ...customer,
+                        pppoe_active: updated.pppoe_active,
+                        network_down: updated.network_down,
+                        down_reason: updated.down_reason,
+                        pppoe_uptime_display: updated.pppoe_uptime_display
+                    };
+                });
+                rebuildCustomerIndex();
+            }
+
+            if (liveData.statistics && networkData.statistics) {
+                networkData.statistics = {
+                    ...networkData.statistics,
+                    ...liveData.statistics
+                };
+            }
+        }
+
+        function renderCoreNetworkData() {
+            renderNetworkData({ includeOnu: false, refreshCables: true, animate: false });
+        }
+
+        function renderLiveNetworkData() {
+            if (customerLayer) customerLayer.clearLayers();
+            if (networkData.customers?.length > 0) {
+                renderCustomers(networkData.customers);
+            }
+            if (cableLayer) cableLayer.clearLayers();
+            if (networkData.cables?.length > 0) {
+                renderCables(networkData.cables);
+            }
+            updateStatistics();
+            scheduleDataFlowAnimations();
         }
         
         // Render all network data
-        function renderNetworkData() {
+        function renderNetworkData(options = {}) {
+            const refreshCables = options.refreshCables !== false;
+            const animate = options.animate !== false;
+
             try {
                 console.log('?? Rendering network data...');
                 
-                // Clear existing layers
                 clearLayers();
                 
-                // Render customers
                 if (networkData.customers?.length > 0) {
                     renderCustomers(networkData.customers);
                 }
                 
-                // Render ONU devices
-                if (networkData.onuDevices?.length > 0) {
-                    renderONUDevices(networkData.onuDevices);
-                }
-                
-                // Render ODPs
                 if (networkData.odps?.length > 0) {
                     renderODPs(networkData.odps);
                 }
                 
-                // Render cables
-                if (networkData.cables?.length > 0) {
+                if (refreshCables && networkData.cables?.length > 0) {
                     renderCables(networkData.cables);
                 }
                 
-                // Render backbone cables
                 if (networkData.backboneCables?.length > 0) {
                     renderBackboneCables(networkData.backboneCables);
                 }
                 
-                // Add data flow animations
-                addDataFlowAnimations();
-                
-                // Fit map to data
+                updateStatistics();
                 fitToBounds();
+
+                if (animate) {
+                    scheduleDataFlowAnimations();
+                }
                 
                 console.log('? Network data rendered successfully');
                 
@@ -1730,130 +2037,595 @@
         }
 
         // Render customers
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function getCustomerPackageName(customer) {
+            return customer?.package_name || customer?.package || 'N/A';
+        }
+
+        function getCustomerOdpLabel(customer) {
+            if (customer?.odp_name) {
+                return customer.odp_name;
+            }
+            if (customer?.odp_id) {
+                const odp = networkData.odps?.find((o) => String(o.id) === String(customer.odp_id));
+                return odp ? `${odp.name}${odp.code ? ` (${odp.code})` : ''}` : `ODP #${customer.odp_id}`;
+            }
+            return 'Belum dipatch';
+        }
+
+        function createCustomerPopupContent(customer) {
+            const packageName = escapeHtml(getCustomerPackageName(customer));
+            const odpLabel = escapeHtml(getCustomerOdpLabel(customer));
+            const pppoeBadge = customer.pppoe_active === true ? 'success' : customer.pppoe_active === false ? 'danger' : 'secondary';
+            const pppoeText = customer.pppoe_active === true ? 'YES' : customer.pppoe_active === false ? 'NO' : 'UNKNOWN';
+            const showNetworkDown = isCustomerPppoeDown(customer);
+
+            return `
+                <div class="custom-popup customer-popup">
+                    <div class="popup-header">
+                        <h6><i class="fas fa-home"></i> ${escapeHtml(customer.name)}</h6>
+                    </div>
+                    <div class="popup-body">
+                        <p><strong>Phone:</strong> ${escapeHtml(customer.phone || 'N/A')}</p>
+                        <p><strong>Address:</strong> ${escapeHtml(customer.address || 'N/A')}</p>
+                        <p><strong>ODP:</strong> <span id="customer-popup-odp-${customer.id}">${odpLabel}</span></p>
+                        <p><strong>Status:</strong> <span class="status-${customer.status}">${escapeHtml(customer.status || 'unknown')}</span></p>
+                        <p><strong>PPPoE Active:</strong> <span class="badge bg-${pppoeBadge}">${pppoeText}</span></p>
+                        ${showNetworkDown ? '<p><strong>Network:</strong> <span class="badge bg-danger">DOWN</span></p>' : ''}
+                        <p><strong>Package:</strong> ${packageName}</p>
+                    </div>
+                    <div class="popup-footer popup-footer-row">
+                        <button type="button" class="btn btn-sm btn-warning" onclick="openSelectCustomerOdpModal(${customer.id})">
+                            <i class="fas fa-broadcast-tower"></i> Pilih ODP
+                        </button>
+                        <button type="button" class="btn btn-sm btn-primary" onclick="viewCustomerDetails(${customer.id})">
+                            <i class="fas fa-eye"></i> Detail
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function populateOdpSelectElement(selectEl, selectedId) {
+            if (!selectEl) return;
+            selectEl.innerHTML = '<option value="">— Pilih ODP —</option>';
+
+            if (!networkData.odps?.length) return;
+
+            const sortedOdps = [...networkData.odps].sort((a, b) => {
+                const nameA = String(a.name || '').toLowerCase();
+                const nameB = String(b.name || '').toLowerCase();
+                return nameA.localeCompare(nameB);
+            });
+
+            sortedOdps.forEach((odp) => {
+                const option = document.createElement('option');
+                option.value = odp.id;
+                const prefix = odp.parent_odp_id ? '└─ ' : '';
+                const capacity = `${odp.used_ports || 0}/${odp.capacity || 0} port`;
+                option.textContent = `${prefix}${odp.name}${odp.code ? ` (${odp.code})` : ''} — ${capacity}`;
+                if (String(odp.id) === String(selectedId)) {
+                    option.selected = true;
+                }
+                selectEl.appendChild(option);
+            });
+        }
+
+        function openSelectCustomerOdpModal(customerId) {
+            const customer = networkData.customers?.find((c) => String(c.id) === String(customerId));
+            if (!customer) {
+                alert('Data pelanggan tidak ditemukan');
+                return;
+            }
+
+            if (map && typeof map.closePopup === 'function') {
+                map.closePopup();
+            }
+
+            document.getElementById('selectCustomerOdpCustomerId').value = customer.id;
+            document.getElementById('selectCustomerOdpName').textContent = customer.name || 'N/A';
+            document.getElementById('selectCustomerOdpCurrent').textContent = getCustomerOdpLabel(customer);
+            populateOdpSelectElement(document.getElementById('selectCustomerOdpSelect'), customer.odp_id || '');
+
+            const modal = new bootstrap.Modal(document.getElementById('selectCustomerOdpModal'));
+            modal.show();
+        }
+
+        function getOdpParentLabel(odp) {
+            if (!odp?.parent_odp_id) return '—';
+            const parent = networkData.odps?.find((o) => String(o.id) === String(odp.parent_odp_id));
+            if (!parent) return `ODP #${odp.parent_odp_id}`;
+            return `${parent.name}${parent.code ? ` (${parent.code})` : ''}`;
+        }
+
+        function applyOdpPickHighlights(excludeOdpId = null) {
+            if (!odpLayer) return;
+            odpLayer.eachLayer((layer) => {
+                const el = layer.getElement?.();
+                if (!el) return;
+                const markerEl = el.querySelector('.odp-marker');
+                if (!markerEl) return;
+                const layerOdpId = layer.options?.odpId;
+                markerEl.classList.remove('odp-pick-highlight', 'odp-pick-disabled');
+                if (excludeOdpId && String(layerOdpId) === String(excludeOdpId)) {
+                    markerEl.classList.add('odp-pick-disabled');
+                } else {
+                    markerEl.classList.add('odp-pick-highlight');
+                }
+            });
+        }
+
+        function clearOdpPickHighlights() {
+            if (!odpLayer) return;
+            odpLayer.eachLayer((layer) => {
+                const el = layer.getElement?.();
+                if (!el) return;
+                const markerEl = el.querySelector('.odp-marker');
+                if (markerEl) {
+                    markerEl.classList.remove('odp-pick-highlight', 'odp-pick-disabled');
+                }
+            });
+        }
+
+        function startOdpPickMode(customerId) {
+            cancelAddOdpMode(true);
+            cancelOdpPickMode();
+            const customer = networkData.customers?.find((c) => String(c.id) === String(customerId));
+            if (!customer) {
+                alert('Data pelanggan tidak ditemukan');
+                return;
+            }
+
+            const selectModalEl = document.getElementById('selectCustomerOdpModal');
+            const selectModal = bootstrap.Modal.getInstance(selectModalEl);
+            if (selectModal) {
+                selectModal.hide();
+            }
+
+            if (map && typeof map.closePopup === 'function') {
+                map.closePopup();
+            }
+
+            odpPickMode = {
+                customerId: customer.id,
+                customerName: customer.name || 'Pelanggan'
+            };
+
+            const mapEl = document.getElementById('map');
+            const banner = document.getElementById('odpPickBanner');
+            const bannerText = document.getElementById('odpPickBannerText');
+            if (mapEl) mapEl.classList.add('odp-pick-mode');
+            if (banner) banner.classList.add('active');
+            if (bannerText) {
+                bannerText.textContent = `Patch "${customer.name}" — klik icon ODP di peta`;
+            }
+
+            applyOdpPickHighlights();
+
+            if (!document.getElementById('showODP')?.checked) {
+                document.getElementById('showODP').checked = true;
+                map.addLayer(odpLayer);
+            }
+        }
+
+        function startOdpParentPickMode(childOdpId) {
+            cancelAddOdpMode(true);
+            cancelOdpPickMode();
+
+            const childOdp = networkData.odps?.find((o) => String(o.id) === String(childOdpId));
+            if (!childOdp) {
+                alert('Data ODP tidak ditemukan');
+                return;
+            }
+
+            if (map && typeof map.closePopup === 'function') {
+                map.closePopup();
+            }
+
+            odpParentPickMode = {
+                childOdpId: childOdp.id,
+                childOdpName: childOdp.name || 'ODP'
+            };
+
+            const mapEl = document.getElementById('map');
+            const banner = document.getElementById('odpPickBanner');
+            const bannerText = document.getElementById('odpPickBannerText');
+            if (mapEl) mapEl.classList.add('odp-pick-mode');
+            if (banner) banner.classList.add('active');
+            if (bannerText) {
+                bannerText.textContent = `Sambung "${childOdp.name}" — klik ODP parent di peta`;
+            }
+
+            applyOdpPickHighlights(childOdp.id);
+
+            if (!document.getElementById('showODP')?.checked) {
+                document.getElementById('showODP').checked = true;
+                map.addLayer(odpLayer);
+            }
+        }
+
+        function cancelOdpPickMode() {
+            odpPickMode = null;
+            odpParentPickMode = null;
+            const mapEl = document.getElementById('map');
+            const banner = document.getElementById('odpPickBanner');
+            if (mapEl) mapEl.classList.remove('odp-pick-mode');
+            if (banner) banner.classList.remove('active');
+            clearOdpPickHighlights();
+        }
+
+        function clearAddOdpPreviewMarker() {
+            if (addOdpPreviewMarker && map) {
+                map.removeLayer(addOdpPreviewMarker);
+                addOdpPreviewMarker = null;
+            }
+        }
+
+        function startAddOdpMode() {
+            cancelOdpPickMode();
+            clearAddOdpPreviewMarker();
+            addOdpMode = true;
+            pendingAddOdpLatLng = null;
+
+            const btn = document.getElementById('startAddOdpBtn');
+            const mapEl = document.getElementById('map');
+            const banner = document.getElementById('addOdpBanner');
+            if (btn) btn.classList.add('active');
+            if (mapEl) mapEl.classList.add('add-odp-mode');
+            if (banner) banner.classList.add('active');
+            if (map && typeof map.closePopup === 'function') map.closePopup();
+        }
+
+        function cancelAddOdpMode(clearPreview = true) {
+            addOdpMode = false;
+            pendingAddOdpLatLng = null;
+
+            const btn = document.getElementById('startAddOdpBtn');
+            const mapEl = document.getElementById('map');
+            const banner = document.getElementById('addOdpBanner');
+            if (btn) btn.classList.remove('active');
+            if (mapEl) mapEl.classList.remove('add-odp-mode');
+            if (banner) banner.classList.remove('active');
+            if (clearPreview) clearAddOdpPreviewMarker();
+        }
+
+        function openAddOdpAt(lat, lng) {
+            pendingAddOdpLatLng = { lat, lng };
+            cancelAddOdpMode(false);
+
+            clearAddOdpPreviewMarker();
+            if (map) {
+                addOdpPreviewMarker = L.marker([lat, lng], { icon: createODPIcon(), opacity: 0.9 }).addTo(map);
+            }
+
+            document.getElementById('addOdpLat').value = lat;
+            document.getElementById('addOdpLng').value = lng;
+            document.getElementById('addOdpCoordHint').textContent = `Koordinat: ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+            document.getElementById('addOdpName').value = '';
+            document.getElementById('addOdpCapacity').value = 8;
+            document.getElementById('addOdpUsedPorts').value = 0;
+            document.getElementById('addOdpAddress').value = '';
+
+            const modalEl = document.getElementById('addOdpModal');
+            const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+            modal.show();
+        }
+
+        function saveNewOdp() {
+            const name = document.getElementById('addOdpName')?.value?.trim();
+            const capacity = parseInt(document.getElementById('addOdpCapacity')?.value, 10);
+            const usedPorts = parseInt(document.getElementById('addOdpUsedPorts')?.value, 10) || 0;
+            const status = 'active';
+            const address = document.getElementById('addOdpAddress')?.value?.trim() || '';
+            const latitude = parseFloat(document.getElementById('addOdpLat')?.value);
+            const longitude = parseFloat(document.getElementById('addOdpLng')?.value);
+
+            if (!name) {
+                alert('Nama ODP wajib diisi');
+                return;
+            }
+            if (!Number.isFinite(capacity) || capacity < 1) {
+                alert('Jumlah port minimal 1');
+                return;
+            }
+            if (usedPorts > capacity) {
+                alert('Port terpakai tidak boleh lebih besar dari jumlah port');
+                return;
+            }
+            if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+                alert('Koordinat belum dipilih di peta');
+                return;
+            }
+
+            const payload = {
+                id: 'new',
+                name,
+                capacity,
+                used_ports: usedPorts,
+                status,
+                address,
+                latitude,
+                longitude,
+                installation_date: new Date().toISOString().split('T')[0]
+            };
+
+            const btn = document.getElementById('saveAddOdpBtn');
+            const originalText = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menyimpan...';
+
+            const headers = { 'Content-Type': 'application/json' };
+            const csrfTokenMeta = document.querySelector('meta[name="csrf-token"]');
+            if (csrfTokenMeta) {
+                headers['X-CSRF-TOKEN'] = csrfTokenMeta.getAttribute('content');
+            }
+
+            fetch('/admin/update-odp', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(payload)
+            })
+            .then((response) => response.json())
+            .then((data) => {
+                if (!data.success) {
+                    alert('Gagal menyimpan ODP: ' + (data.message || 'Unknown error'));
+                    return;
+                }
+
+                const modal = bootstrap.Modal.getInstance(document.getElementById('addOdpModal'));
+                if (modal) modal.hide();
+                clearAddOdpPreviewMarker();
+                cancelAddOdpMode(true);
+
+                alert('ODP berhasil ditambahkan!');
+                if (typeof loadNetworkData === 'function') {
+                    loadNetworkData({ skipLive: liveDataLoaded });
+                }
+            })
+            .catch((error) => {
+                console.error('Error saving new ODP:', error);
+                alert('Terjadi kesalahan saat menyimpan ODP');
+            })
+            .finally(() => {
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            });
+        }
+
+        function patchCustomerToOdp(customerId, odpId, odpName) {
+            const customer = networkData.customers?.find((c) => String(c.id) === String(customerId));
+            if (!customer) {
+                alert('Data pelanggan tidak ditemukan');
+                return Promise.resolve(false);
+            }
+
+            const normalizedOdpId = (odpId === '' || odpId === null || odpId === undefined)
+                ? null
+                : parseInt(odpId, 10);
+
+            if (normalizedOdpId && String(normalizedOdpId) === String(customer.odp_id || '')) {
+                alert('Pelanggan sudah ter-patch ke ODP ini.');
+                return Promise.resolve(false);
+            }
+
+            const odpLabel = odpName || networkData.odps?.find((o) => String(o.id) === String(normalizedOdpId))?.name || 'ODP';
+            const confirmText = normalizedOdpId
+                ? `Patch pelanggan "${customer.name}" ke ODP "${odpLabel}"?\n\nKabel akses akan otomatis dibuat/diupdate.`
+                : `Lepas patch ODP untuk pelanggan "${customer.name}"?`;
+
+            if (!confirm(confirmText)) {
+                return Promise.resolve(false);
+            }
+
+            const payload = {
+                id: customer.id,
+                odp_id: normalizedOdpId,
+                address: customer.address || null,
+                latitude: customer.latitude || null,
+                longitude: customer.longitude || null
+            };
+
+            const headers = { 'Content-Type': 'application/json' };
+            const csrfTokenMeta = document.querySelector('meta[name="csrf-token"]');
+            if (csrfTokenMeta) {
+                headers['X-CSRF-TOKEN'] = csrfTokenMeta.getAttribute('content');
+            }
+
+            return fetch('/admin/update-customer', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(payload)
+            })
+            .then((response) => response.json())
+            .then((data) => {
+                if (!data.success) {
+                    alert('Gagal patch ODP: ' + (data.message || 'Unknown error'));
+                    return false;
+                }
+
+                const matchedOdp = networkData.odps?.find((o) => String(o.id) === String(normalizedOdpId));
+                customer.odp_id = normalizedOdpId;
+                customer.odp_name = matchedOdp?.name || (normalizedOdpId ? odpLabel : null);
+
+                updateCustomerMarkerOnMap(customer);
+
+                const popupOdpEl = document.getElementById(`customer-popup-odp-${customer.id}`);
+                if (popupOdpEl) {
+                    popupOdpEl.textContent = getCustomerOdpLabel(customer);
+                }
+
+                cancelOdpPickMode();
+
+                const selectModalEl = document.getElementById('selectCustomerOdpModal');
+                const selectModal = bootstrap.Modal.getInstance(selectModalEl);
+                if (selectModal) {
+                    selectModal.hide();
+                }
+
+                if (typeof loadNetworkData === 'function') {
+                    loadNetworkData();
+                }
+
+                alert(normalizedOdpId
+                    ? `Pelanggan berhasil di-patch ke ODP "${customer.odp_name}".`
+                    : 'Patch ODP pelanggan berhasil dilepas.');
+                return true;
+            })
+            .catch((error) => {
+                console.error('Network error patching ODP:', error);
+                alert('Terjadi kesalahan jaringan saat patch ODP.');
+                return false;
+            });
+        }
+
+        function patchOdpParent(childOdpId, parentOdpId, parentName) {
+            const childOdp = networkData.odps?.find((o) => String(o.id) === String(childOdpId));
+            if (!childOdp) {
+                alert('Data ODP tidak ditemukan');
+                return Promise.resolve(false);
+            }
+
+            const normalizedParentId = parseInt(parentOdpId, 10);
+            if (!Number.isInteger(normalizedParentId) || normalizedParentId <= 0) {
+                alert('Parent ODP tidak valid');
+                return Promise.resolve(false);
+            }
+
+            if (String(normalizedParentId) === String(childOdpId)) {
+                alert('ODP tidak bisa dijadikan parent dirinya sendiri.');
+                return Promise.resolve(false);
+            }
+
+            if (String(normalizedParentId) === String(childOdp.parent_odp_id || '')) {
+                alert('ODP ini sudah terhubung ke parent tersebut.');
+                return Promise.resolve(false);
+            }
+
+            const parentLabel = parentName
+                || networkData.odps?.find((o) => String(o.id) === String(normalizedParentId))?.name
+                || 'ODP';
+            const confirmText = `Sambungkan ODP "${childOdp.name}" ke parent ODP "${parentLabel}"?\n\nKabel backbone akan otomatis dibuat/diupdate.`;
+
+            if (!confirm(confirmText)) {
+                return Promise.resolve(false);
+            }
+
+            const payload = {
+                id: childOdpId,
+                parent_odp_id: normalizedParentId
+            };
+
+            const headers = { 'Content-Type': 'application/json' };
+            const csrfTokenMeta = document.querySelector('meta[name="csrf-token"]');
+            if (csrfTokenMeta) {
+                headers['X-CSRF-TOKEN'] = csrfTokenMeta.getAttribute('content');
+            }
+
+            return fetch('/admin/update-odp', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(payload)
+            })
+            .then((response) => response.json())
+            .then((data) => {
+                if (!data.success) {
+                    alert('Gagal sambung parent ODP: ' + (data.message || 'Unknown error'));
+                    return false;
+                }
+
+                childOdp.parent_odp_id = normalizedParentId;
+                cancelOdpPickMode();
+
+                if (typeof loadNetworkData === 'function') {
+                    loadNetworkData();
+                }
+
+                alert(`ODP "${childOdp.name}" berhasil disambung ke parent "${parentLabel}".`);
+                return true;
+            })
+            .catch((error) => {
+                console.error('Network error patching parent ODP:', error);
+                alert('Terjadi kesalahan jaringan saat sambung parent ODP.');
+                return false;
+            });
+        }
+
         function renderCustomers(customers) {
             console.log(`?? Rendering ${customers.length} customers...`);
             
             customers.forEach(customer => {
-                if (showOnlyDownCustomers && customer.network_down !== true) return;
+                if (showOnlyDownCustomers && !isCustomerPppoeDown(customer)) return;
                 if (customer.latitude && customer.longitude) {
                     const marker = L.marker([customer.latitude, customer.longitude], {
-                        icon: createCustomerIcon(customer)
+                        icon: createCustomerIcon(customer),
+                        customerId: customer.id
                     }).addTo(customerLayer);
                     
-                    const popupContent = `
-                        <div class="custom-popup">
-                            <div class="popup-header">
-                                <h6><i class="fas fa-home"></i> ${customer.name}</h6>
-                            </div>
-                            <div class="popup-body">
-                                <p><strong>Phone:</strong> ${customer.phone || 'N/A'}</p>
-                                <p><strong>Address:</strong> ${customer.address || 'N/A'}</p>
-                                <p><strong>Status:</strong> <span class="status-${customer.status}">${customer.status}</span></p>
-                                <p><strong>PPPoE Active:</strong> <span class="badge bg-${customer.pppoe_active === true ? 'success' : customer.pppoe_active === false ? 'danger' : 'secondary'}">${customer.pppoe_active === true ? 'YES' : customer.pppoe_active === false ? 'NO' : 'UNKNOWN'}</span></p>
-                                ${customer.network_down === true ? '<p><strong>Network:</strong> <span class="badge bg-danger">DOWN</span></p>' : ''}
-                                <p><strong>Package:</strong> ${customer.package || 'N/A'}</p>
-                            </div>
-                            <div class="popup-footer">
-                                <button class="btn btn-sm btn-primary" onclick="viewCustomerDetails(${customer.id})">
-                                    <i class="fas fa-eye"></i> View Details
-                                </button>
-                            </div>
-                        </div>
-                    `;
-                    
-                    marker.bindPopup(popupContent);
+                    marker.bindPopup(createCustomerPopupContent(customer));
                 }
             });
             
             console.log(`? Loaded ${customers.length} customer markers from database`);
         }
 
-        // Render ONU devices
+        // Render ONU devices (popup dibuat saat dibuka — lebih ringan)
+        function createONUPopupContent(device) {
+            return buildOnuPopupContent(device);
+        }
+
+        function buildOnuPopupContent(device) {
+            const statusIcon = device.status?.toLowerCase() === 'offline' ? 'fas fa-wifi-slash' : 'fas fa-wifi';
+            const rxPower = parseFloat(device.rxPower);
+            let rxPowerClass = 'danger';
+            if (rxPower > -25) rxPowerClass = 'success';
+            else if (rxPower > -30) rxPowerClass = 'warning';
+
+            return `
+                <div class="custom-popup" style="max-width: 450px;">
+                    <div class="popup-header">
+                        <h6><i class="${statusIcon}"></i> ${escapeHtml(device.customerName || device.name || 'ONU Device')}</h6>
+                    </div>
+                    <div class="popup-body" style="max-height: 450px; overflow-y: auto;">
+                        <h6 class="mt-2 mb-2 border-bottom pb-1"><i class="fas fa-info-circle"></i> Device Info</h6>
+                        <p style="margin: 4px 0;"><strong>Serial:</strong> ${escapeHtml(device.serialNumber || 'N/A')}</p>
+                        <p style="margin: 4px 0;"><strong>Model:</strong> ${escapeHtml(device.model || 'N/A')}</p>
+                        <p style="margin: 4px 0;"><strong>Status:</strong> <span class="badge bg-${device.status?.toLowerCase() === 'offline' ? 'danger' : 'success'}">${escapeHtml(device.status || 'Unknown')}</span></p>
+                        <p style="margin: 4px 0;"><strong>IP:</strong> ${escapeHtml(device.ipAddress || 'N/A')}</p>
+                        <h6 class="mt-3 mb-2 border-bottom pb-1"><i class="fas fa-wifi"></i> Signal</h6>
+                        <p style="margin: 4px 0;"><strong>RX Power:</strong> <span class="badge bg-${rxPowerClass}">${escapeHtml(device.rxPower || 'N/A')} dBm</span></p>
+                        <h6 class="mt-3 mb-2 border-bottom pb-1"><i class="fas fa-user"></i> Pelanggan</h6>
+                        <p style="margin: 4px 0;"><strong>Nama:</strong> ${escapeHtml(device.customerName || 'N/A')}</p>
+                        <p style="margin: 4px 0;"><strong>PPPoE:</strong> ${escapeHtml(device.customerPPPoE || 'N/A')}</p>
+                        <p style="margin: 4px 0;"><strong>ODP:</strong> ${escapeHtml(device.odpName || 'N/A')}</p>
+                    </div>
+                    <div class="popup-footer popup-footer-row">
+                        <button type="button" class="btn btn-sm btn-primary" onclick="viewONUDetails(${JSON.stringify(String(device.id))})">
+                            <i class="fas fa-eye"></i> Detail
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
         function renderONUDevices(devices) {
             console.log(`?? Rendering ${devices.length} ONU devices...`);
             
             devices.forEach(device => {
                 if (device.latitude && device.longitude) {
                     const marker = L.marker([device.latitude, device.longitude], {
-                        icon: createONUIcon(device.status)
+                        icon: createONUIcon(device.status),
+                        deviceId: device.id
                     }).addTo(onuLayer);
-                    
-                    const statusClass = device.status?.toLowerCase() === 'offline' ? 'status-offline' : 'status-online';
-                    const statusIcon = device.status?.toLowerCase() === 'offline' ? 'fas fa-wifi-slash' : 'fas fa-wifi';
-                    
-                    // Determine RX Power color
-                    const rxPower = parseFloat(device.rxPower);
-                    let rxPowerClass = 'danger';
-                    if (rxPower > -25) rxPowerClass = 'success';
-                    else if (rxPower > -30) rxPowerClass = 'warning';
-                    
-                    const popupContent = `
-                        <div class="custom-popup" style="max-width: 450px;">
-                            <div class="popup-header">
-                                <h6><i class="${statusIcon}"></i> ${device.customerName || device.name || 'ONU Device'}</h6>
-                            </div>
-                            <div class="popup-body" style="max-height: 450px; overflow-y: auto;">
-                                <h6 class="mt-2 mb-2 border-bottom pb-1"><i class="fas fa-info-circle"></i> Device Info</h6>
-                                <p style="margin: 4px 0;"><strong>ID:</strong> ${device.id || 'N/A'}</p>
-                                <p style="margin: 4px 0;"><strong>Serial:</strong> ${device.serialNumber || 'N/A'}</p>
-                                <p style="margin: 4px 0;"><strong>Model:</strong> ${device.model || 'N/A'}</p>
-                                <p style="margin: 4px 0;"><strong>Status:</strong> <span class="badge bg-${device.status?.toLowerCase() === 'offline' ? 'danger' : 'success'}">${device.status || 'Unknown'}</span></p>
-                                <p style="margin: 4px 0;"><strong>IP Address:</strong> ${device.ipAddress || 'N/A'}</p>
-                                <p style="margin: 4px 0;"><strong>MAC Address:</strong> ${device.macAddress || 'N/A'}</p>
-                                <p style="margin: 4px 0;"><strong>Firmware:</strong> ${device.firmware || 'N/A'}</p>
-                                <p style="margin: 4px 0;"><strong>Hardware:</strong> ${device.hardware || 'N/A'}</p>
-                                
-                                <h6 class="mt-3 mb-2 border-bottom pb-1"><i class="fas fa-wifi"></i> WiFi & Signal</h6>
-                                <p style="margin: 4px 0;"><strong>RX Power:</strong> <span class="badge bg-${rxPowerClass}">${device.rxPower || 'N/A'} dBm</span></p>
-                                <p style="margin: 4px 0;"><strong>TX Power:</strong> ${device.txPower || 'N/A'}</p>
-                                <p style="margin: 4px 0;"><strong>Temperature:</strong> ${device.temperature || 'N/A'}</p>
-                                <p style="margin: 4px 0;"><strong>Uptime:</strong> ${device.uptime || 'N/A'}</p>
-                                
-                                <div class="mt-3 p-2 bg-light rounded">
-                                    <h6 class="mb-2"><i class="fas fa-edit"></i> Edit WiFi Settings</h6>
-                                    <div class="mb-2">
-                                        <label class="form-label mb-1" style="font-size: 12px; font-weight: 600;">SSID:</label>
-                                        <div class="input-group input-group-sm">
-                                            <input type="text" class="form-control" id="popup-ssid-${device.id}" value="${device.ssid || ''}" placeholder="Enter SSID">
-                                            <button class="btn btn-primary" type="button" onclick="savePopupSSID('${device.id}')">
-                                                <i class="fas fa-save"></i> Save
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <div class="mb-0">
-                                        <label class="form-label mb-1" style="font-size: 12px; font-weight: 600;">WiFi Password:</label>
-                                        <div class="input-group input-group-sm">
-                                            <input type="password" class="form-control" id="popup-password-${device.id}" placeholder="Enter Password">
-                                            <button class="btn btn-outline-secondary" type="button" onclick="togglePopupPassword('${device.id}')">
-                                                <i class="fas fa-eye"></i>
-                                            </button>
-                                            <button class="btn btn-warning" type="button" onclick="savePopupPassword('${device.id}')">
-                                                <i class="fas fa-key"></i> Save
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                                
-                                <h6 class="mt-3 mb-2 border-bottom pb-1"><i class="fas fa-user"></i> Customer Info</h6>
-                                <p style="margin: 4px 0;"><strong>Name:</strong> ${device.customerName || 'N/A'}</p>
-                                <p style="margin: 4px 0;"><strong>Phone:</strong> ${device.customerPhone || 'N/A'}</p>
-                                <p style="margin: 4px 0;"><strong>PPPoE:</strong> ${device.customerPPPoE || 'N/A'}</p>
-                                <p style="margin: 4px 0;"><strong>Package:</strong> ${device.customerPackage || 'N/A'}</p>
-                                ${device.customerStatus ? `<p style="margin: 4px 0;"><strong>Status Layanan:</strong> <span class="badge bg-${device.customerStatus === 'active' ? 'success' : device.customerStatus === 'suspended' ? 'warning' : 'danger'}">${device.customerStatus === 'active' ? 'Aktif' : device.customerStatus === 'suspended' ? 'Suspend' : device.customerStatus}</span></p>` : ''}
-                                ${device.paymentStatus ? `<p style="margin: 4px 0;"><strong>Status Pembayaran:</strong> <span class="badge bg-${device.paymentStatus === 'paid' ? 'success' : device.paymentStatus === 'pending' ? 'warning' : 'danger'}">${device.paymentStatus === 'paid' ? 'Lunas' : device.paymentStatus === 'pending' ? 'Pending' : device.paymentStatus === 'unpaid' ? 'Belum Bayar' : device.paymentStatus}</span></p>` : ''}
-                                ${device.lastPaymentDate ? `<p style="margin: 4px 0;"><strong>Pembayaran Terakhir:</strong> ${new Date(device.lastPaymentDate).toLocaleDateString('id-ID')}</p>` : ''}
-                                ${device.nextBillingDate ? `<p style="margin: 4px 0;"><strong>Tagihan Berikutnya:</strong> ${new Date(device.nextBillingDate).toLocaleDateString('id-ID')}</p>` : ''}
-                                
-                                <h6 class="mt-3 mb-2 border-bottom pb-1"><i class="fas fa-map-marker-alt"></i> Location</h6>
-                                <p style="margin: 4px 0;"><strong>ODP:</strong> ${device.odpName || 'N/A'}</p>
-                                <p style="margin: 4px 0;"><strong>Address:</strong> ${device.customerAddress || 'N/A'}</p>
-                                <p style="margin: 4px 0;"><strong>Coordinates:</strong> ${device.latitude || 'N/A'}, ${device.longitude || 'N/A'}</p>
-                                <p style="margin: 4px 0;"><strong>Last Inform:</strong> ${device.lastInform ? new Date(device.lastInform).toLocaleString() : 'N/A'}</p>
-                            </div>
-                        </div>
-                    `;
-                    
-                    marker.bindPopup(popupContent);
+
+                    marker.bindPopup(() => buildOnuPopupContent(device), { maxWidth: 460 });
                 }
             });
             
@@ -1867,30 +2639,52 @@
             odps.forEach(odp => {
                 if (odp.latitude && odp.longitude) {
                     const marker = L.marker([odp.latitude, odp.longitude], {
-                        icon: createODPIcon()
+                        icon: createODPIcon(),
+                        odpId: odp.id
                     }).addTo(odpLayer);
                     
+                    const parentLabel = getOdpParentLabel(odp);
                     const popupContent = `
                         <div class="custom-popup">
                             <div class="popup-header">
-                                <h6><i class="fas fa-broadcast-tower"></i> ${odp.name}</h6>
+                                <h6><i class="fas fa-broadcast-tower"></i> ${escapeHtml(odp.name)}</h6>
                             </div>
                             <div class="popup-body">
-                                <p><strong>Code:</strong> ${odp.code}</p>
+                                <p><strong>Code:</strong> ${escapeHtml(odp.code || 'N/A')}</p>
+                                <p><strong>Parent:</strong> ${escapeHtml(parentLabel)}</p>
                                 <p><strong>Capacity:</strong> ${odp.capacity} ports</p>
                                 <p><strong>Used:</strong> ${odp.used_ports} ports</p>
-                                <p><strong>Status:</strong> <span class="status-${odp.status}">${odp.status}</span></p>
-                                <p><strong>Address:</strong> ${odp.address || 'N/A'}</p>
+                                <p><strong>Status:</strong> <span class="status-${odp.status}">${escapeHtml(odp.status)}</span></p>
+                                <p><strong>Address:</strong> ${escapeHtml(odp.address || 'N/A')}</p>
                             </div>
-                            <div class="popup-footer">
-                                <button class="btn btn-sm btn-primary" onclick="viewODPDetails(${odp.id})">
-                                    <i class="fas fa-eye"></i> View Details
+                            <div class="popup-footer popup-footer-row">
+                                <button type="button" class="btn btn-sm btn-warning" onclick="startOdpParentPickMode(${odp.id})">
+                                    <i class="fas fa-link"></i> Sambung
+                                </button>
+                                <button type="button" class="btn btn-sm btn-primary" onclick="viewODPDetails(${odp.id})">
+                                    <i class="fas fa-eye"></i> Detail
                                 </button>
                             </div>
                         </div>
                     `;
                     
                     marker.bindPopup(popupContent);
+                    marker.on('click', function(e) {
+                        if (!odpPickMode && !odpParentPickMode) return;
+                        L.DomEvent.stopPropagation(e);
+                        if (marker.isPopupOpen()) {
+                            marker.closePopup();
+                        }
+                        if (odpPickMode) {
+                            patchCustomerToOdp(odpPickMode.customerId, odp.id, odp.name);
+                        } else if (odpParentPickMode) {
+                            if (String(odp.id) === String(odpParentPickMode.childOdpId)) {
+                                alert('Pilih ODP lain sebagai parent, bukan ODP ini sendiri.');
+                                return;
+                            }
+                            patchOdpParent(odpParentPickMode.childOdpId, odp.id, odp.name);
+                        }
+                    });
                     console.log(`?? Processing ODP ${odp.id}: ${odp.name} at ${odp.latitude}, ${odp.longitude}`);
                 }
             });
@@ -1921,36 +2715,19 @@
                 document.body.appendChild(svg);
             }
             
-            cables.forEach((cable, index) => {
+            cables.forEach((cable) => {
                 if (cable.coordinates && cable.coordinates.length >= 2) {
-                    // Determine cable status based on connected ONU status
                     let cableStatus = 'connected';
                     let cableClass = 'cable-line connected';
-                    const connectedCustomer = Array.isArray(networkData.customers)
-                        ? networkData.customers.find((c) =>
-                            (cable.customer_id && String(c.id) === String(cable.customer_id)) ||
-                            (cable.customer_name && c.name && String(c.name).trim() === String(cable.customer_name).trim())
-                        )
+                    const connectedCustomer = cable.customer_id
+                        ? customerById.get(String(cable.customer_id))
                         : null;
 
-                    // Priority rule: customer PPPoE inactive/network down => cable must be disconnected.
-                    if (connectedCustomer && connectedCustomer.network_down === true) {
+                    if (connectedCustomer && isCustomerPppoeDown(connectedCustomer)) {
                         cableStatus = 'disconnected';
                         cableClass = 'cable-line disconnected';
                     }
                     
-                    // Check if cable is connected to any offline ONU
-                    if (cableStatus === 'connected' && networkData.onuDevices) {
-                        const connectedONU = networkData.onuDevices.find(onu => 
-                            onu.odpName === cable.from || onu.odpName === cable.to
-                        );
-                        if (connectedONU && connectedONU.status && connectedONU.status.toLowerCase() === 'offline') {
-                            cableStatus = 'disconnected';
-                            cableClass = 'cable-line disconnected';
-                        }
-                    }
-                    
-                    // Create the polyline with animation
                     const polyline = L.polyline(cable.coordinates, {
                         color: cableStatus === 'connected' ? '#28a745' : '#dc3545',
                         weight: 4,
@@ -1961,37 +2738,6 @@
                         cableStatus: cableStatus
                     });
                     
-                    // Add animation effect
-                    // Wait for the path to be rendered
-                    setTimeout(() => {
-                        try {
-                            if (polyline._path) {
-                                const length = polyline._path.getTotalLength ? polyline._path.getTotalLength() : 100;
-                                polyline._path.style.strokeDasharray = '10, 5';
-                                polyline._path.style.strokeDashoffset = length;
-                                
-                                // Animate the dash offset
-                                const animate = () => {
-                                    if (!polyline._path) return;
-                                    
-                                    const currentOffset = parseFloat(polyline._path.style.strokeDashoffset) || 0;
-                                    if (currentOffset <= -length) {
-                                        polyline._path.style.strokeDashoffset = length;
-                                    } else {
-                                        polyline._path.style.strokeDashoffset = currentOffset - 0.5;
-                                    }
-                                    requestAnimationFrame(animate);
-                                };
-                                
-                                // Start animation
-                                requestAnimationFrame(animate);
-                            }
-                        } catch (error) {
-                            console.error('Error animating cable:', error);
-                        }
-                    }, 500 + (index * 100)); // Add delay to ensure path is rendered
-                    
-                    // Add popup with cable info
                     polyline.bindPopup(`
                         <div class="popup-content">
                             <div class="popup-title">
@@ -2068,32 +2814,43 @@
             });
         }
 
-        // Add data flow animations
+        function scheduleDataFlowAnimations() {
+            if (typeof requestIdleCallback === 'function') {
+                requestIdleCallback(() => addDataFlowAnimations(), { timeout: 1500 });
+            } else {
+                setTimeout(() => addDataFlowAnimations(), 300);
+            }
+        }
+
+        // Add data flow animations (dibatasi agar tidak berat)
         function addDataFlowAnimations() {
             console.log('?? Adding data flow animations...');
+            let animatedCount = 0;
             
-            // Animasi untuk cable routes (Customer ? ODP)
             if (cableLayer) {
                 cableLayer.eachLayer(function(layer) {
+                    if (animatedCount >= MAX_FLOW_ANIMATIONS) return;
                     if (layer instanceof L.Polyline) {
                         if (layer.options && layer.options.cableStatus === 'disconnected') {
                             return;
                         }
                         createDataFlowAnimation(layer, 'cable');
+                        animatedCount += 1;
                     }
                 });
             }
             
-            // Animasi untuk backbone cables (ODP ? ODP)
-            if (backboneLayer) {
+            if (backboneLayer && animatedCount < MAX_FLOW_ANIMATIONS) {
                 backboneLayer.eachLayer(function(layer) {
+                    if (animatedCount >= MAX_FLOW_ANIMATIONS) return;
                     if (layer instanceof L.Polyline) {
                         createDataFlowAnimation(layer, 'backbone');
+                        animatedCount += 1;
                     }
                 });
             }
             
-            console.log('? Data flow animations added');
+            console.log(`? Data flow animations added (${animatedCount})`);
         }
         
         // Create animated data flow for cables
@@ -2200,8 +2957,13 @@
         }
 
         // Fit map to data bounds
-        function fitToBounds() {
+        function fitToBounds(force = false) {
             if (!map) return;
+
+            if (!force && getSavedMapView()) {
+                console.log('Map view preserved (zoom/center locked)');
+                return;
+            }
             
             const bounds = L.latLngBounds();
             let hasData = false;
@@ -2211,15 +2973,6 @@
                 networkData.customers.forEach(customer => {
                     if (customer.latitude && customer.longitude) {
                         bounds.extend([customer.latitude, customer.longitude]);
-                        hasData = true;
-                    }
-                });
-            }
-            
-            if (networkData.onuDevices) {
-                networkData.onuDevices.forEach(device => {
-                    if (device.latitude && device.longitude) {
-                        bounds.extend([device.latitude, device.longitude]);
                         hasData = true;
                     }
                 });
@@ -2236,6 +2989,7 @@
             
             if (hasData) {
                 map.fitBounds(bounds, { padding: [20, 20] });
+                saveMapView();
                 console.log('? Map fitted to data bounds');
             }
         }
@@ -2256,16 +3010,6 @@
             if (customerLayer) customerLayer.clearLayers();
             if (networkData.customers?.length > 0) {
                 renderCustomers(networkData.customers);
-            }
-        });
-
-        document.getElementById('showONU').addEventListener('change', function() {
-            if (this.checked) {
-                map.addLayer(onuLayer);
-                console.log('? ONU layer shown');
-            } else {
-                map.removeLayer(onuLayer);
-                console.log('? ONU layer hidden');
             }
         });
 
@@ -2399,13 +3143,15 @@
             document.getElementById('customer-phone').textContent = customer.phone || 'N/A';
             document.getElementById('customer-email').textContent = customer.email || 'N/A';
             document.getElementById('customer-status').innerHTML = `<span class="badge bg-${customer.status === 'active' ? 'success' : 'danger'}">${customer.status || 'Unknown'}</span>`;
-            document.getElementById('customer-package').textContent = customer.package || 'N/A';
+            document.getElementById('customer-package').textContent = getCustomerPackageName(customer);
+            document.getElementById('customer-odp').textContent = getCustomerOdpLabel(customer);
             document.getElementById('customer-address').textContent = customer.address || 'N/A';
             document.getElementById('customer-latitude').textContent = customer.latitude || 'N/A';
             document.getElementById('customer-longitude').textContent = customer.longitude || 'N/A';
             
             // Set data attributes for buttons
             document.getElementById('edit-customer-btn').setAttribute('data-customer-id', customerId);
+            document.getElementById('pick-customer-odp-btn').setAttribute('data-customer-id', customerId);
             
             // Show modal
             const modal = new bootstrap.Modal(document.getElementById('customerDetailsModal'));
@@ -2810,7 +3556,7 @@
             }
             
             // Populate ODP dropdown
-            populateODPDropdownForCustomer();
+            populateODPDropdownForCustomer(customer.odp_id || '');
             
             // Populate edit form
             document.getElementById('editCustomerId').value = customer.id;
@@ -2847,18 +3593,8 @@
         }
         
         // Populate ODP dropdown for customer
-        function populateODPDropdownForCustomer() {
-            const odpSelect = document.getElementById('editCustomerOdp');
-            odpSelect.innerHTML = '<option value="">Select ODP</option>';
-            
-            if (networkData.odps) {
-                networkData.odps.forEach(odp => {
-                    const option = document.createElement('option');
-                    option.value = odp.id;
-                    option.textContent = `${odp.name} (${odp.code || 'No Code'})`;
-                    odpSelect.appendChild(option);
-                });
-            }
+        function populateODPDropdownForCustomer(selectedId) {
+            populateOdpSelectElement(document.getElementById('editCustomerOdp'), selectedId || '');
         }
         
         // Save Customer changes
@@ -2917,11 +3653,16 @@
                     // Update the customer in networkData
                     const customerIndex = networkData.customers.findIndex(customer => String(customer.id) === String(payload.id));
                     if (customerIndex !== -1) {
-                        networkData.customers[customerIndex] = { ...networkData.customers[customerIndex], ...payload };
+                        const matchedOdp = networkData.odps?.find((o) => String(o.id) === String(payload.odp_id));
+                        networkData.customers[customerIndex] = {
+                            ...networkData.customers[customerIndex],
+                            ...payload,
+                            odp_name: matchedOdp?.name || networkData.customers[customerIndex].odp_name || null
+                        };
                     }
                     
                     // Update the marker on the map
-                    updateCustomerMarkerOnMap(payload);
+                    updateCustomerMarkerOnMap(networkData.customers[customerIndex] || payload);
                     
                     // Show success message
                     alert('Customer updated successfully in database!');
@@ -2962,7 +3703,8 @@
                         layer.setLatLng([parseFloat(customerData.latitude), parseFloat(customerData.longitude)]);
                     }
                     
-                    // Update popup content
+                    // Update marker icon & popup
+                    layer.setIcon(createCustomerIcon(customerData));
                     const popupContent = createCustomerPopupContent(customerData);
                     layer.setPopupContent(popupContent);
                 }
@@ -2983,7 +3725,7 @@
             populateCustomerDropdown();
             
             // Populate ODP dropdown
-            populateODPDropdown();
+            populateODPDropdown(onuDevice.odp_id || '');
             
             // Populate edit form
             document.getElementById('editOnuId').value = onuDevice.id;
@@ -3022,18 +3764,8 @@
         }
         
         // Populate ODP dropdown
-        function populateODPDropdown() {
-            const odpSelect = document.getElementById('editOnuOdpId');
-            odpSelect.innerHTML = '<option value="">Select ODP</option>';
-            
-            if (networkData.odps) {
-                networkData.odps.forEach(odp => {
-                    const option = document.createElement('option');
-                    option.value = odp.id;
-                    option.textContent = `${odp.name} (${odp.code || 'No Code'})`;
-                    odpSelect.appendChild(option);
-                });
-            }
+        function populateODPDropdown(selectedId) {
+            populateOdpSelectElement(document.getElementById('editOnuOdpId'), selectedId || '');
         }
         
         // Toggle password visibility
@@ -3406,6 +4138,14 @@ Please wait a few minutes for the device to come back online.`);
         document.addEventListener('DOMContentLoaded', function() {
             initMap();
             initMobileToggles();
+
+            const addOdpModalEl = document.getElementById('addOdpModal');
+            if (addOdpModalEl) {
+                addOdpModalEl.addEventListener('hidden.bs.modal', function() {
+                    clearAddOdpPreviewMarker();
+                    pendingAddOdpLatLng = null;
+                });
+            }
             
             // Inject per-field save buttons for SSID and WiFi password in Edit ONU modal
             try {
@@ -3451,6 +4191,51 @@ Please wait a few minutes for the device to come back online.`);
                     } else {
                         alert('Customer ID not found');
                     }
+                } else if (e.target.id === 'pick-customer-odp-btn') {
+                    const customerId = e.target.getAttribute('data-customer-id');
+                    if (customerId) {
+                        const detailsModal = bootstrap.Modal.getInstance(document.getElementById('customerDetailsModal'));
+                        if (detailsModal) detailsModal.hide();
+                        openSelectCustomerOdpModal(customerId);
+                    } else {
+                        alert('Customer ID not found');
+                    }
+                } else if (e.target.closest('#saveCustomerOdpBtn')) {
+                    const customerId = document.getElementById('selectCustomerOdpCustomerId')?.value;
+                    const odpId = document.getElementById('selectCustomerOdpSelect')?.value;
+                    if (!customerId) {
+                        alert('Pelanggan tidak ditemukan');
+                        return;
+                    }
+                    if (!odpId) {
+                        alert('Pilih ODP terlebih dahulu');
+                        return;
+                    }
+                    const btn = e.target.closest('#saveCustomerOdpBtn');
+                    const originalText = btn.innerHTML;
+                    btn.disabled = true;
+                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menyimpan...';
+                    patchCustomerToOdp(customerId, odpId).finally(() => {
+                        btn.disabled = false;
+                        btn.innerHTML = originalText;
+                    });
+                } else if (e.target.closest('#pickCustomerOdpOnMapBtn')) {
+                    const customerId = document.getElementById('selectCustomerOdpCustomerId')?.value;
+                    if (customerId) {
+                        startOdpPickMode(customerId);
+                    }
+                } else if (e.target.id === 'cancelOdpPickBtn') {
+                    cancelOdpPickMode();
+                } else if (e.target.id === 'startAddOdpBtn' || e.target.closest('#startAddOdpBtn')) {
+                    if (addOdpMode) {
+                        cancelAddOdpMode(true);
+                    } else {
+                        startAddOdpMode();
+                    }
+                } else if (e.target.id === 'cancelAddOdpBtn') {
+                    cancelAddOdpMode(true);
+                } else if (e.target.id === 'saveAddOdpBtn' || e.target.closest('#saveAddOdpBtn')) {
+                    saveNewOdp();
                 } else if (e.target.id === 'edit-onu-btn') {
                     const deviceId = e.target.getAttribute('data-onu-id');
                     if (deviceId) {

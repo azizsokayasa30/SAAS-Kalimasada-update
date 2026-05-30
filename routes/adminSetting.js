@@ -7,6 +7,17 @@ const multer = require('multer');
 const { getSettingsWithCache, deleteSetting, clearSettingsCache } = require('../config/settingsManager');
 const { getVersionInfo, getVersionBadge } = require('../config/version-utils');
 const logger = require('../config/logger');
+const { logAdminActivity, getActivityLogs, clearOldActivityLogs } = require('../config/activityLogger');
+const billing = require('../config/billing');
+const {
+    createBillingDbBackup,
+    cleanupOldBillingBackups,
+    listBackupDbFiles,
+    getBackupDir,
+    getAppSettings,
+    getLatestRegularBackup,
+    DEFAULT_KEEP_COUNT
+} = require('../utils/billingDbBackup');
 const { spawn } = require('child_process');
 const { adminAuth } = require('./adminAuth');
 const dns = require('dns').promises;
@@ -134,9 +145,15 @@ function collapseDottedKeysIntoObjects(target) {
 }
 
 // GET: Render halaman Setting
-router.get('/', (req, res) => {
-    const settings = getSettingsWithCache();
-    res.render('adminSetting', { settings });
+router.get('/', async (req, res) => {
+    try {
+        const settings = getSettingsWithCache();
+        const appSettings = await getAppSettings(billing.db);
+        res.render('adminSetting', { settings, appSettings });
+    } catch (error) {
+        logger.error('Error loading settings page:', error);
+        res.status(500).send('Gagal memuat halaman pengaturan');
+    }
 });
 
 // GET: Ambil semua setting
@@ -301,6 +318,12 @@ router.post('/save', async (req, res) => {
         } catch (e) {
             logger.warn('Gagal reload payment gateway setelah simpan settings:', e.message);
         }
+
+        await logAdminActivity(req, 'settings_save', 'Menyimpan pengaturan sistem', {
+            changedKeys: Object.keys(sanitizedSettings).filter((k) => {
+                return String(oldSettings[k] ?? '') !== String(sanitizedSettings[k] ?? '');
+            }).slice(0, 30)
+        });
 
         res.json({
             success: true,
@@ -776,25 +799,21 @@ router.post('/wa-delete', async (req, res) => {
 router.post('/backup', async (req, res) => {
     try {
         const dbPath = path.join(__dirname, '../data/billing.db');
-        const backupPath = path.join(__dirname, '../data/backup');
-        
-        // Buat direktori backup jika belum ada
-        if (!fs.existsSync(backupPath)) {
-            fs.mkdirSync(backupPath, { recursive: true });
+        const { filename, cleanup } = createBillingDbBackup(dbPath);
+
+        logger.info(`Database backup created: ${filename}`);
+        await logAdminActivity(req, 'database_backup', `Backup database: ${filename}`);
+
+        let message = 'Database backup berhasil dibuat';
+        if (cleanup.deletedCount > 0) {
+            message += ` (${cleanup.deletedCount} backup lama dihapus, tersisa ${DEFAULT_KEEP_COUNT} terakhir)`;
         }
-        
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const backupFile = path.join(backupPath, `billing_backup_${timestamp}.db`);
-        
-        // Copy database file
-        fs.copyFileSync(dbPath, backupFile);
-        
-        logger.info(`Database backup created: ${backupFile}`);
-        
+
         res.json({
             success: true,
-            message: 'Database backup berhasil dibuat',
-            backup_file: path.basename(backupFile)
+            message,
+            backup_file: filename,
+            cleanup
         });
     } catch (error) {
         logger.error('Error creating backup:', error);
@@ -818,17 +837,15 @@ router.post('/restore', upload.single('backup_file'), async (req, res) => {
         
         const dbPath = path.join(__dirname, '../data/billing.db');
         const backupPath = path.join(__dirname, '../data/backup', req.file.filename);
-        
-        // Backup database saat ini sebelum restore
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const currentBackup = path.join(__dirname, '../data/backup', `pre_restore_${timestamp}.db`);
-        fs.copyFileSync(dbPath, currentBackup);
-        
+
+        createBillingDbBackup(dbPath, { prefix: 'pre_restore' });
+
         // Restore database
         fs.copyFileSync(backupPath, dbPath);
         
         logger.info(`Database restored from: ${req.file.filename}`);
-        
+        await logAdminActivity(req, 'database_restore', `Restore database: ${req.file.filename}`);
+
         res.json({
             success: true,
             message: 'Database berhasil di-restore',
@@ -844,34 +861,91 @@ router.post('/restore', upload.single('backup_file'), async (req, res) => {
     }
 });
 
+// Simpan pengaturan auto backup database billing
+router.post('/auto-backup-settings', async (req, res) => {
+    try {
+        const enabled = req.body.enabled === 'true' || req.body.enabled === true ? 'true' : 'false';
+        const interval = Math.max(parseInt(req.body.interval, 10) || 7, 1);
+
+        await new Promise((resolve, reject) => {
+            billing.db.run(
+                `INSERT INTO app_settings (key, value) VALUES (?, ?)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+                ['billing_autobackup_enabled', enabled],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+
+        await new Promise((resolve, reject) => {
+            billing.db.run(
+                `INSERT INTO app_settings (key, value) VALUES (?, ?)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+                ['billing_autobackup_interval', String(interval)],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+
+        logger.info(`Billing auto backup settings updated: enabled=${enabled}, interval=${interval} days`);
+        await logAdminActivity(
+            req,
+            'billing_autobackup_settings',
+            `Auto backup database: ${enabled === 'true' ? 'aktif' : 'nonaktif'}, interval ${interval} hari`
+        );
+
+        res.json({
+            success: true,
+            message: 'Pengaturan auto backup berhasil disimpan',
+            enabled,
+            interval
+        });
+    } catch (error) {
+        logger.error('Error saving billing auto backup settings:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 // Get backup files list
 router.get('/backups', async (req, res) => {
     try {
-        const backupPath = path.join(__dirname, '../data/backup');
-        
+        const backupPath = getBackupDir();
+
         if (!fs.existsSync(backupPath)) {
+            const appSettings = await getAppSettings(billing.db);
             return res.json({
                 success: true,
-                backups: []
+                backups: [],
+                keep_count: DEFAULT_KEEP_COUNT,
+                auto_backup: {
+                    enabled: appSettings.billing_autobackup_enabled === 'true',
+                    interval: parseInt(appSettings.billing_autobackup_interval, 10) || 7,
+                    last_backup: null
+                }
             });
         }
-        
-        const files = fs.readdirSync(backupPath)
-            .filter(file => file.endsWith('.db'))
-            .map(file => {
-                const filePath = path.join(backupPath, file);
-                const stats = fs.statSync(filePath);
-                return {
-                    filename: file,
-                    size: stats.size,
-                    created: stats.birthtime
-                };
-            })
-            .sort((a, b) => new Date(b.created) - new Date(a.created));
-        
+
+        const files = listBackupDbFiles(backupPath).map((file) => ({
+            filename: file.filename,
+            size: file.size,
+            created: file.created
+        }));
+        const latestRegular = getLatestRegularBackup(backupPath);
+        const appSettings = await getAppSettings(billing.db);
+
         res.json({
             success: true,
-            backups: files
+            backups: files,
+            keep_count: DEFAULT_KEEP_COUNT,
+            auto_backup: {
+                enabled: appSettings.billing_autobackup_enabled === 'true',
+                interval: parseInt(appSettings.billing_autobackup_interval, 10) || 7,
+                last_backup: latestRegular
+                    ? {
+                        filename: latestRegular.filename,
+                        created: latestRegular.created,
+                        modified: latestRegular.modified
+                    }
+                    : null
+            }
         });
     } catch (error) {
         res.status(500).json({
@@ -882,20 +956,40 @@ router.get('/backups', async (req, res) => {
     }
 });
 
-// Get activity logs - Temporarily disabled due to logger refactoring
-router.get('/activity-logs', async (req, res) => {
-    res.status(501).json({
-        success: false,
-        message: 'Activity logs feature temporarily disabled'
-    });
+// Get activity logs
+router.get('/activity-logs', adminAuth, async (req, res) => {
+    try {
+        const page = parseInt(req.query.page, 10) || 1;
+        const limit = parseInt(req.query.limit, 10) || 50;
+        const result = await getActivityLogs({ page, limit, userType: 'admin' });
+        res.json({
+            success: true,
+            logs: result.logs,
+            page: result.page,
+            limit: result.limit,
+            total: result.total,
+            hasMore: result.hasMore
+        });
+    } catch (error) {
+        logger.error('Error loading activity logs:', error);
+        res.status(500).json({ success: false, message: 'Gagal memuat activity logs' });
+    }
 });
 
-// Clear old activity logs - Temporarily disabled due to logger refactoring
-router.post('/clear-logs', async (req, res) => {
-    res.status(501).json({
-        success: false,
-        message: 'Clear logs feature temporarily disabled'
-    });
+// Clear old activity logs
+router.post('/clear-logs', adminAuth, async (req, res) => {
+    try {
+        const days = parseInt(req.body?.days, 10) || 30;
+        const deleted = await clearOldActivityLogs(days);
+        res.json({
+            success: true,
+            message: `Berhasil menghapus ${deleted} log lebih dari ${days} hari`,
+            deleted
+        });
+    } catch (error) {
+        logger.error('Error clearing activity logs:', error);
+        res.status(500).json({ success: false, message: 'Gagal menghapus activity logs lama' });
+    }
 });
 
 // GET: Test endpoint untuk upload logo (tanpa auth)

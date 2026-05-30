@@ -142,6 +142,17 @@ logger.info(`⏰ Application timezone confirmed: ${process.env.TZ} (WIB - Waktu 
 // Import invoice scheduler
 const invoiceScheduler = require('./config/scheduler');
 
+// Bersihkan backup database lama — sisakan 3 file terbaru
+try {
+    const { cleanupOldBillingBackups } = require('./utils/billingDbBackup');
+    const backupCleanup = cleanupOldBillingBackups(3);
+    if (backupCleanup.deletedCount > 0) {
+        logger.info(`[billing-backup] Startup cleanup: ${backupCleanup.deletedCount} file dihapus, tersisa ${backupCleanup.kept.length}`);
+    }
+} catch (backupCleanupErr) {
+    logger.warn(`[billing-backup] Startup cleanup gagal: ${backupCleanupErr.message}`);
+}
+
 // Import auto GenieACS setup untuk development (DISABLED - menggunakan web interface)
 // const { autoGenieACSSetup } = require('./config/autoGenieACSSetup');
 
@@ -1338,6 +1349,17 @@ try {
                 });
             } catch (err) {
                 logger.error('Error starting field-completion cleanup:', err);
+            }
+
+            try {
+                const { closeStaleSqliteRadacctOpenSessions } = require('./config/radiusMysqlAccounting');
+                setImmediate(() => {
+                    closeStaleSqliteRadacctOpenSessions().catch((e) => {
+                        logger.warn('[RADIUS-ACCT] Startup close stale SQLite radacct:', e.message);
+                    });
+                });
+            } catch (err) {
+                logger.warn('[RADIUS-ACCT] Startup maintenance skip:', err.message);
             }
             
             // Initialize License System

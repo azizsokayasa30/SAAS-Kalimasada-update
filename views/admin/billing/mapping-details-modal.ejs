@@ -75,6 +75,7 @@
                         <h6 class="text-info">Service Information</h6>
                         <table class="table table-sm">
                             <tr><td><strong>Package:</strong></td><td id="customer-package">-</td></tr>
+                            <tr><td><strong>ODP:</strong></td><td id="customer-odp">-</td></tr>
                             <tr><td><strong>Address:</strong></td><td id="customer-address">-</td></tr>
                             <tr><td><strong>Latitude:</strong></td><td id="customer-latitude">-</td></tr>
                             <tr><td><strong>Longitude:</strong></td><td id="customer-longitude">-</td></tr>
@@ -84,6 +85,9 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-warning" id="pick-customer-odp-btn">
+                    <i class="fas fa-broadcast-tower"></i> Pilih ODP
+                </button>
                 <button type="button" class="btn btn-info" id="edit-customer-btn">Edit Customer</button>
             </div>
         </div>
@@ -160,6 +164,51 @@
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                 <button type="button" class="btn btn-warning" id="edit-onu-btn">Edit ONU</button>
                 <button type="button" class="btn btn-danger" id="restart-onu-btn">Restart ONU</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Pilih ODP Pelanggan Modal -->
+<div class="modal fade" id="selectCustomerOdpModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-warning text-dark">
+                <h5 class="modal-title">
+                    <i class="fas fa-broadcast-tower"></i> Patch Pelanggan ke ODP
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="selectCustomerOdpCustomerId">
+                <div class="mb-3">
+                    <label class="form-label text-muted small mb-1">Pelanggan</label>
+                    <div class="fw-semibold" id="selectCustomerOdpName">-</div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label text-muted small mb-1">ODP saat ini</label>
+                    <div id="selectCustomerOdpCurrent">Belum dipatch</div>
+                </div>
+                <div class="mb-3">
+                    <label for="selectCustomerOdpSelect" class="form-label">Pilih ODP tujuan</label>
+                    <select class="form-select" id="selectCustomerOdpSelect">
+                        <option value="">— Pilih ODP —</option>
+                    </select>
+                    <small class="text-muted">Sub ODP ditandai dengan └─</small>
+                </div>
+                <div class="alert alert-info small mb-0">
+                    <i class="fas fa-map-marker-alt me-1"></i>
+                    Atau gunakan <strong>Pilih di Peta</strong>, lalu klik icon ODP di map untuk patch cepat.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+                <button type="button" class="btn btn-outline-primary" id="pickCustomerOdpOnMapBtn">
+                    <i class="fas fa-map-marked-alt"></i> Pilih di Peta
+                </button>
+                <button type="button" class="btn btn-warning" id="saveCustomerOdpBtn">
+                    <i class="fas fa-link"></i> Patch ke ODP
+                </button>
             </div>
         </div>
     </div>
@@ -268,6 +317,50 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-warning" id="saveOnuBtn">Save Changes</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Tambah ODP Modal -->
+<div class="modal fade" id="addOdpModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-primary text-white">
+                <h5 class="modal-title">
+                    <i class="fas fa-broadcast-tower"></i> Tambah ODP Baru
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="addOdpForm">
+                    <div class="mb-2 small text-muted" id="addOdpCoordHint">Koordinat: —</div>
+                    <input type="hidden" id="addOdpLat" name="latitude">
+                    <input type="hidden" id="addOdpLng" name="longitude">
+                    <div class="mb-3">
+                        <label for="addOdpName" class="form-label">Nama ODP <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="addOdpName" name="name" required placeholder="Contoh: ODP Jl. Merdeka 01">
+                    </div>
+                    <div class="mb-3">
+                        <label for="addOdpCapacity" class="form-label">Jumlah Port <span class="text-danger">*</span></label>
+                        <input type="number" class="form-control" id="addOdpCapacity" name="capacity" min="1" value="8" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="addOdpUsedPorts" class="form-label">Status Port (terpakai)</label>
+                        <input type="number" class="form-control" id="addOdpUsedPorts" name="used_ports" min="0" value="0">
+                        <small class="text-muted">Isi jumlah port yang sudah dipakai</small>
+                    </div>
+                    <div class="mb-0">
+                        <label for="addOdpAddress" class="form-label">Alamat</label>
+                        <textarea class="form-control" id="addOdpAddress" name="address" rows="2" placeholder="Alamat lokasi ODP"></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+                <button type="button" class="btn btn-primary" id="saveAddOdpBtn">
+                    <i class="fas fa-save"></i> Simpan ODP
+                </button>
             </div>
         </div>
     </div>
