@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:open_filex/open_filex.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -33,13 +33,15 @@ class AppUpdateInfo {
 
 /// Cek & unduh update APK (server billing → GitHub).
 class AppUpdateService {
+  static const MethodChannel _installChannel = MethodChannel('com.kalimasada.mobile/app_install');
+
   static const String _githubRepoOwner = 'azizsokayasa30';
   static const String _githubRepoName = 'billing-kalimasada';
 
   static const Map<String, String> _githubHeaders = {
     'Accept': 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'KalimasadaBillingMobile/5.9',
+    'User-Agent': 'KalimasadaBillingMobile/5.9.1',
   };
 
   static const _prefDismissedBuild = 'dismissed_update_build';
@@ -252,12 +254,22 @@ class AppUpdateService {
     }
 
     onProgress?.call(1.0);
-    final result = await OpenFilex.open(
-      file.path,
-      type: 'application/vnd.android.package-archive',
-    );
-    if (result.type != ResultType.done) {
-      throw Exception(result.message ?? 'Gagal membuka installer');
+    await _launchApkInstaller(file.path);
+  }
+
+  /// Intent instal sistem via FileProvider (OpenFilex sering gagal di Android 7+).
+  static Future<void> _launchApkInstaller(String filePath) async {
+    try {
+      final allowed = await _installChannel.invokeMethod<bool>('canRequestPackageInstalls');
+      if (allowed == false) {
+        await _installChannel.invokeMethod<void>('openInstallUnknownAppsSettings');
+        throw Exception(
+          'Izinkan instal dari sumber tidak dikenal untuk aplikasi ini, lalu coba lagi.',
+        );
+      }
+      await _installChannel.invokeMethod<void>('installApk', {'filePath': filePath});
+    } on PlatformException catch (e) {
+      throw Exception(e.message ?? 'Gagal membuka installer');
     }
   }
 }

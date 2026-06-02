@@ -77,5 +77,10 @@
             <action android:name="android.intent.action.SEND" />
             <data android:mimeType="image/*" />
         </intent>
+        <!-- Pemasang APK (update in-app, Android 11+ package visibility) -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/vnd.android.package-archive" />
+        </intent>
     </queries>
 </manifest>

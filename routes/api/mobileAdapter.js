@@ -567,6 +567,51 @@ function calculateLateMinutes(actualTs, shiftCheckInTime) {
     return Math.max(0, actualMinutes - shiftMinutes);
 }
 
+/** Grace setelah jam pulang shift sebelum absen pulang otomatis. */
+const AUTO_CHECKOUT_GRACE_MINUTES = 10;
+
+function shiftEndEpochMsForAutoCheckout(attendanceDateYmd, shiftCheckOutTime, checkInTs) {
+    const out = extractTimePart(shiftCheckOutTime);
+    if (!out) return NaN;
+    const ymd = attendanceDateYmd || jakartaAttendanceTodayYmd();
+    const iso = `${ymd}T${String(out.hour).padStart(2, '0')}:${String(out.minute).padStart(2, '0')}:00+07:00`;
+    let endMs = Date.parse(iso);
+    if (!Number.isFinite(endMs)) return NaN;
+    const inPart = extractTimePart(checkInTs);
+    const outMin = out.hour * 60 + out.minute;
+    if (inPart) {
+        const inMin = inPart.hour * 60 + inPart.minute;
+        if (outMin <= inMin) {
+            endMs += 24 * 60 * 60 * 1000;
+        }
+    }
+    return endMs;
+}
+
+function shouldAutoCheckOutNow(row, shiftCheckOutTime, graceMinutes = AUTO_CHECKOUT_GRACE_MINUTES) {
+    if (!row || !row.check_in || row.check_out) return false;
+    const endMs = shiftEndEpochMsForAutoCheckout(row.date, shiftCheckOutTime, row.check_in);
+    if (!Number.isFinite(endMs)) return false;
+    return Date.now() >= endMs + graceMinutes * 60 * 1000;
+}
+
+function performAutoCheckOut(attendanceId, existingNotes, cb) {
+    const ts = getLocalTimestamp();
+    const tag = '[AUTO_CHECKOUT] Pulang otomatis (lewat jam shift +10 menit)';
+    const notes = existingNotes ? `${String(existingNotes)} | ${tag}` : tag;
+    db.run(
+        `UPDATE employee_attendance SET check_out = ?, notes = ?, updated_at = datetime('now','localtime') WHERE id = ?`,
+        [ts, notes, attendanceId],
+        (err) => cb(err, ts)
+    );
+}
+
+function formatShiftTimeLabel(timeValue) {
+    const t = extractTimePart(timeValue);
+    if (!t) return '';
+    return `${String(t.hour).padStart(2, '0')}:${String(t.minute).padStart(2, '0')}`;
+}
+
 function haversineMeters(lat1, lng1, lat2, lng2) {
     const toRad = (deg) => (deg * Math.PI) / 180;
     const R = 6371000;
@@ -715,10 +760,13 @@ router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
 
     const sql = `
         SELECT c.id, c.customer_id, c.name, c.phone, c.email, c.status, c.address,
-               c.latitude, c.longitude, c.pppoe_username,
+               c.area_id, c.latitude, c.longitude, c.pppoe_username,
+               COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, '') AS area,
+               ar.nama_area AS nama_area,
                p.name AS profile
         FROM customers c
         LEFT JOIN packages p ON c.package_id = p.id
+        LEFT JOIN areas ar ON c.area_id = ar.id
         WHERE ${where}
         ORDER BY c.id DESC
         LIMIT ? OFFSET ?
@@ -730,14 +778,21 @@ router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
             logger.error('[mobile-adapter] customers:', err);
             return res.status(500).json({ success: false, message: 'Gagal memuat pelanggan' });
         }
-        const list = (rows || []).map((r) => {
-            const safe = sqliteJsonSafeRow(r);
-            return {
-                ...safe,
-                ip_address: safe.pppoe_username ? 'PPPoE' : 'DHCP/Dynamic'
-            };
+        attachAreaNamesFromMaster(rows || [], (areaErr, enriched) => {
+            if (areaErr) {
+                logger.error('[mobile-adapter] customers area:', areaErr);
+                return res.status(500).json({ success: false, message: areaErr.message });
+            }
+            const list = (enriched || []).map((r) => {
+                const safe = sqliteJsonSafeRow(r);
+                return {
+                    ...safe,
+                    area: resolveCustomerAreaLabel(safe),
+                    ip_address: safe.pppoe_username ? 'PPPoE' : 'DHCP/Dynamic'
+                };
+            });
+            res.json({ success: true, data: list });
         });
-        res.json({ success: true, data: list });
     });
 });
 
@@ -883,13 +938,15 @@ router.get('/customers/search', verifyToken, allowFieldOps, (req, res) => {
     const like = `%${q.replace(/%/g, '')}%`;
     db.all(
         `SELECT c.id, c.customer_id, c.name, c.phone, c.email, c.status, c.address, c.area_id,
-                COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, '') AS area
+                COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, ar.kode_area, '') AS area,
+                ar.nama_area AS nama_area
          FROM customers c
          LEFT JOIN areas ar ON c.area_id = ar.id
          WHERE c.name LIKE ? OR c.phone LIKE ? OR CAST(c.customer_id AS TEXT) LIKE ? OR IFNULL(c.email, '') LIKE ?
+            OR IFNULL(c.area, '') LIKE ? OR IFNULL(ar.nama_area, '') LIKE ? OR IFNULL(ar.kode_area, '') LIKE ?
          ORDER BY c.name
          LIMIT 30`,
-        [like, like, like, like],
+        [like, like, like, like, like, like, like],
         (err, rows) => {
             if (err) {
                 return res.status(500).json({ success: false, message: err.message });
@@ -1222,6 +1279,59 @@ router.put('/me', verifyToken, requireTechnician, (req, res) => {
 });
 
 // --- Absensi teknisi (employees.no_hp = nomor login JWT) ---
+function sendAttendanceStatusPayload(res, empRow, row, today) {
+    const shiftOutTime = empRow && empRow.check_out_time;
+    const shiftPayload = empRow
+        ? {
+              shift_name: empRow.shift_name || null,
+              check_in_time: empRow.check_in_time || null,
+              check_out_time: shiftOutTime || null,
+              check_out_time_label: formatShiftTimeLabel(shiftOutTime)
+          }
+        : null;
+
+    if (!row) {
+        return res.json({
+            success: true,
+            data: null,
+            employee_matched: true,
+            date: today,
+            shift: shiftPayload
+        });
+    }
+
+    const lateFromMarker = (() => {
+        const m = String(row.notes || '').match(/\[LATE_MINUTES:(\d+)\]/);
+        return m ? parseInt(m[1], 10) : 0;
+    })();
+    const lateFromShift = calculateLateMinutes(row.check_in, empRow && empRow.check_in_time);
+    const lateMinutes = lateFromMarker > 0 ? lateFromMarker : lateFromShift;
+    const lateNotice = lateMinutes > 0 ? `Anda terlambat ${lateMinutes} menit` : null;
+    const autoApplied = /\[AUTO_CHECKOUT\]/i.test(String(row.notes || ''));
+    const autoNotice = autoApplied
+        ? `Pulang otomatis dicatat (lewat jam shift +${AUTO_CHECKOUT_GRACE_MINUTES} menit).`
+        : null;
+    const attendanceNotice = autoNotice || lateNotice;
+
+    return res.json({
+        success: true,
+        employee_matched: true,
+        date: row.date,
+        attendance_notice: attendanceNotice,
+        shift: shiftPayload,
+        auto_check_out_applied: autoApplied,
+        data: {
+            check_in: row.check_in,
+            check_out: row.check_out,
+            status: row.status,
+            notes: row.notes,
+            late_minutes: lateMinutes,
+            late_notice: lateNotice,
+            auto_check_out: autoApplied
+        }
+    });
+}
+
 router.get('/attendance/status', verifyToken, requireTechnician, (req, res) => {
     const variants = phoneVariantsForEmployeeLookup(req.user.phone || req.user.username || '');
     if (!variants.length) {
@@ -1229,7 +1339,7 @@ router.get('/attendance/status', verifyToken, requireTechnician, (req, res) => {
     }
     const ph = variants.map(() => '?').join(',');
     db.get(
-        `SELECT e.id, e.shift_id, s.shift_name, s.check_in_time
+        `SELECT e.id, e.shift_id, s.shift_name, s.check_in_time, s.check_out_time
          FROM employees e
          LEFT JOIN attendance_shifts s ON e.shift_id = s.id
          WHERE (e.status IS NULL OR LOWER(TRIM(e.status)) = 'aktif') AND TRIM(e.no_hp) IN (${ph})
@@ -1254,28 +1364,29 @@ router.get('/attendance/status', verifyToken, requireTechnician, (req, res) => {
                         return res.status(500).json({ success: false, message: aErr.message });
                     }
                     if (!row) {
-                        return res.json({ success: true, data: null, employee_matched: true, date: today });
+                        return sendAttendanceStatusPayload(res, empRow, null, today);
                     }
-                    const lateFromMarker = (() => {
-                        const m = String(row.notes || '').match(/\[LATE_MINUTES:(\d+)\]/);
-                        return m ? parseInt(m[1], 10) : 0;
-                    })();
-                    const lateFromShift = calculateLateMinutes(row.check_in, empRow && empRow.check_in_time);
-                    const lateMinutes = lateFromMarker > 0 ? lateFromMarker : lateFromShift;
-                    const lateNotice = lateMinutes > 0 ? `Anda terlambat ${lateMinutes} menit` : null;
-                    res.json({
-                        success: true,
-                        employee_matched: true,
-                        date: row.date,
-                        attendance_notice: lateNotice,
-                        data: {
-                            check_in: row.check_in,
-                            check_out: row.check_out,
-                            status: row.status,
-                            notes: row.notes,
-                            late_minutes: lateMinutes,
-                            late_notice: lateNotice
+                    const shiftOut = empRow && empRow.check_out_time;
+                    if (!shouldAutoCheckOutNow(row, shiftOut)) {
+                        return sendAttendanceStatusPayload(res, empRow, row, today);
+                    }
+                    performAutoCheckOut(row.id, row.notes, (coErr, ts) => {
+                        if (coErr) {
+                            logger.error('[mobile-adapter] attendance auto check_out', coErr);
+                            return sendAttendanceStatusPayload(res, empRow, row, today);
                         }
+                        logger.info('[mobile-adapter] attendance auto check_out ok', {
+                            attendance_id: row.id,
+                            check_out: ts
+                        });
+                        const updated = {
+                            ...row,
+                            check_out: ts,
+                            notes: row.notes
+                                ? `${row.notes} | [AUTO_CHECKOUT] Pulang otomatis (lewat jam shift +10 menit)`
+                                : '[AUTO_CHECKOUT] Pulang otomatis (lewat jam shift +10 menit)'
+                        };
+                        return sendAttendanceStatusPayload(res, empRow, updated, today);
                     });
                 }
             );
@@ -1319,7 +1430,7 @@ router.post('/attendance', verifyToken, requireTechnician, (req, res) => {
     }
     const ph = variants.map(() => '?').join(',');
     db.get(
-        `SELECT e.id, e.shift_id, s.shift_name, s.check_in_time
+        `SELECT e.id, e.shift_id, s.shift_name, s.check_in_time, s.check_out_time
          FROM employees e
          LEFT JOIN attendance_shifts s ON e.shift_id = s.id
          WHERE (e.status IS NULL OR LOWER(TRIM(e.status)) = 'aktif') AND TRIM(e.no_hp) IN (${ph})

@@ -3,12 +3,11 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:open_filex/open_filex.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../services/api_client.dart';
+import '../services/app_update_service.dart';
 
 /// Layar menu update: cek versi dari server billing lalu GitHub, unduh APK di Android.
 class AppUpdateScreen extends StatefulWidget {
@@ -323,48 +322,17 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
           );
         }
 
-        final client = http.Client();
-        final dir = await getTemporaryDirectory();
-        final filePath = '${dir.path}/kalimasada-update-${DateTime.now().millisecondsSinceEpoch}.apk';
-        final file = File(filePath);
-        try {
-          final request = http.Request('GET', Uri.parse(_latestApkUrl!));
-          final streamed = await client.send(request);
-          if (streamed.statusCode != 200) {
-            throw Exception('HTTP ${streamed.statusCode}');
-          }
-
-          final sink = file.openWrite();
-          final totalBytes = streamed.contentLength ?? -1;
-          var downloadedBytes = 0;
-          await for (final chunk in streamed.stream) {
-            sink.add(chunk);
-            downloadedBytes += chunk.length;
-            if (!mounted) continue;
-            if (totalBytes > 0) {
-              final p = (downloadedBytes / totalBytes).clamp(0.0, 1.0);
-              setState(() => _downloadProgress = p);
-            }
-          }
-          await sink.flush();
-          await sink.close();
-        } finally {
-          client.close();
-        }
+        await AppUpdateService.downloadAndInstall(
+          _latestApkUrl!,
+          onProgress: (p) {
+            if (mounted) setState(() => _downloadProgress = p);
+          },
+        );
 
         if (!mounted) return;
         messenger.showSnackBar(
-          const SnackBar(content: Text('Unduhan selesai, membuka installer...')),
+          const SnackBar(content: Text('Membuka layar instal. Tap Install di sistem.')),
         );
-        final result = await OpenFilex.open(
-          file.path,
-          type: 'application/vnd.android.package-archive',
-        );
-        if (result.type != ResultType.done && mounted) {
-          messenger.showSnackBar(
-            SnackBar(content: Text('Gagal membuka installer: ${result.message}')),
-          );
-        }
       } catch (e) {
         if (mounted) {
           messenger.showSnackBar(

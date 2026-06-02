@@ -1,7 +1,7 @@
 {
-  "version": "5.9.0",
-  "build_number": 89,
-  "apk_url": "/mobile-app/kalimasada-mobile-5.9.0.apk",
+  "version": "5.9.1",
+  "build_number": 90,
+  "apk_url": "/mobile-app/kalimasada-mobile-5.9.1.apk",
   "force_update": false,
-  "release_notes": "Update otomatis dari dalam aplikasi; kirim resi WhatsApp (gambar); logout jam 12 malam; ingat sandi & login sidik jari; area pelanggan di tag lokasi teknisi; perbaikan stabilitas."
+  "release_notes": "Perbaikan instal update APK (layar Install terbuka otomatis setelah unduh); update otomatis dari dalam aplikasi; kirim resi WhatsApp; logout jam 12 malam; ingat sandi & sidik jari; area pelanggan di tag lokasi teknisi."
 }

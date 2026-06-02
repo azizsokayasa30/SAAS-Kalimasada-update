@@ -38,7 +38,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   Map<String, dynamic>? _attendanceData;
   String? _attendanceNotice;
   Timer? _timer;
+  Timer? _statusRefreshTimer;
   DateTime _currentTime = DateTime.now();
+  bool _autoCheckoutToastShown = false;
 
   /// `selfie` | `qr` — wajib sebelum masuk. GPS selalu dipakai saat masuk (bukan pilihan mode).
   String? _checkInMode;
@@ -74,11 +76,15 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         });
       }
     });
+    _statusRefreshTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      _fetchStatus(silent: true, keepLoading: false);
+    });
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _statusRefreshTimer?.cancel();
     super.dispose();
   }
 
@@ -133,8 +139,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     return (baseMessage == null || baseMessage.isEmpty) ? fallback : baseMessage;
   }
 
-  Future<void> _fetchStatus() async {
-    setState(() => _isLoading = true);
+  Future<void> _fetchStatus({
+    bool silent = false,
+    bool keepLoading = true,
+  }) async {
+    if (keepLoading && mounted) {
+      setState(() => _isLoading = true);
+    }
     try {
       final res = await ApiClient.get('/api/mobile-adapter/attendance/status');
       final leaveRes = await ApiClient.get('/api/mobile-adapter/leave-requests/recent');
@@ -158,6 +169,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           _employeeMatched = response['employee_matched'] != false;
           final data = response['data'];
           final responseNotice = response['attendance_notice']?.toString();
+          final autoCheckOut = response['auto_check_out_applied'] == true ||
+              (data is Map && data['auto_check_out'] == true);
           if (data == null) {
             _status = 'awaiting';
             _attendanceData = null;
@@ -188,17 +201,28 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           _log(
             'Status: $_status (karyawan DB: ${_employeeMatched ? "cocok" : "tidak cocok"})',
           );
+          if (autoCheckOut && !_autoCheckoutToastShown && mounted) {
+            _autoCheckoutToastShown = true;
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Absensi pulang otomatis dicatat (lewat jam shift +10 menit).',
+                ),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
         }
       }
     } catch (e) {
       debugPrint('Error fetching attendance status: $e');
-      if (mounted) {
+      if (!silent && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Gagal memuat status absensi: $e')),
         );
       }
     } finally {
-      if (mounted) {
+      if (keepLoading && mounted) {
         setState(() => _isLoading = false);
       }
     }
@@ -781,7 +805,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: primaryDark))
           : RefreshIndicator(
-              onRefresh: _fetchStatus,
+              onRefresh: () => _fetchStatus(silent: false, keepLoading: false),
               color: primaryDark,
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),

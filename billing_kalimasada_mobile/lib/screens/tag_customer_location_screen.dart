@@ -8,6 +8,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
 import '../services/api_client.dart';
+import '../services/tag_customer_search_service.dart';
 import '../store/auth_provider.dart';
 import '../store/customer_provider.dart';
 import '../widgets/customer_home_map_marker.dart';
@@ -60,33 +61,16 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
   }
 
   Future<void> _loadAreaNames() async {
-    try {
-      final response = await ApiClient.get('/api/mobile-adapter/areas/names');
-      if (response.statusCode != 200) return;
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      if (!ApiClient.jsonSuccess(data['success'])) return;
-      final raw = data['data'];
-      if (raw is! List) return;
-      final map = <int, String>{};
-      for (final item in raw) {
-        if (item is! Map) continue;
-        final id = item['id'];
-        final name = item['nama_area']?.toString().trim() ?? '';
-        final intId = id is int ? id : int.tryParse(id?.toString() ?? '');
-        if (intId != null && intId > 0 && name.isNotEmpty) {
-          map[intId] = name;
-        }
+    final map = await TagCustomerSearchService.loadAreaNameMap();
+    if (!mounted) return;
+    setState(() {
+      _areaById = map;
+      if (_searchHits.isNotEmpty) {
+        _searchHits = _searchHits
+            .map((h) => TagCustomerSearchService.enrichRow(h, _areaById))
+            .toList();
       }
-      if (!mounted) return;
-      setState(() {
-        _areaById = map;
-        if (_searchHits.isNotEmpty) {
-          _searchHits = _searchHits.map(_enrichCustomerArea).toList();
-        }
-      });
-    } catch (_) {
-      /* fallback resolve-areas setelah pencarian */
-    }
+    });
   }
 
   @override
@@ -159,42 +143,14 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
 
   Future<void> _runCustomerSearch(String q) async {
     setState(() => _searching = true);
-    final role = context.read<AuthProvider>().role;
+    final role = context.read<AuthProvider>().role ?? '';
     try {
       await (_areaNamesFuture ?? _loadAreaNames());
-
-      final enc = Uri.encodeQueryComponent(q);
-      final path = role == 'collector'
-          ? '/api/mobile-adapter/collector/customers?q=$enc'
-          : '/api/mobile-adapter/customers/search?q=$enc';
-      final response = await ApiClient.get(path);
-      if (!mounted) return;
-      if (response.statusCode != 200) {
-        setState(() {
-          _searchHits = [];
-          _searching = false;
-        });
-        return;
-      }
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      if (!ApiClient.jsonSuccess(data['success'])) {
-        setState(() {
-          _searchHits = [];
-          _searching = false;
-        });
-        return;
-      }
-      final raw = data['data'];
-      var hits = raw is List
-          ? raw.map((e) => Map<String, dynamic>.from(e as Map)).toList()
-          : <Map<String, dynamic>>[];
-      if (role == 'collector' && hits.length > 30) {
-        hits = hits.take(30).toList();
-      }
-      hits = hits.map(_enrichCustomerArea).toList();
-      if (role != 'collector') {
-        hits = await _resolveMissingAreas(hits);
-      }
+      final hits = await TagCustomerSearchService.search(
+        role: role,
+        query: q,
+        areaById: _areaById,
+      );
       if (!mounted) return;
       setState(() {
         _searchHits = hits;
@@ -209,60 +165,8 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
     }
   }
 
-  Future<List<Map<String, dynamic>>> _resolveMissingAreas(
-    List<Map<String, dynamic>> hits,
-  ) async {
-    final out = hits.map((h) => Map<String, dynamic>.from(h)).toList();
-    final missingIds = <int>[];
-    for (final row in out) {
-      if (_customerAreaLabel(row).isNotEmpty) continue;
-      final id = row['id'];
-      final intId = id is int ? id : int.tryParse(id?.toString() ?? '');
-      if (intId != null && intId > 0) missingIds.add(intId);
-    }
-    if (missingIds.isEmpty) return out;
-
-    try {
-      final response = await ApiClient.post(
-        '/api/mobile-adapter/customers/resolve-areas',
-        {'ids': missingIds},
-      );
-      if (response.statusCode != 200) return out;
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
-      if (!ApiClient.jsonSuccess(body['success'])) return out;
-      final map = body['data'];
-      if (map is! Map) return out;
-
-      for (final row in out) {
-        if (_customerAreaLabel(row).isNotEmpty) continue;
-        final id = row['id'];
-        final key = id?.toString() ?? '';
-        final area = map[key]?.toString().trim() ?? '';
-        if (area.isNotEmpty) row['area'] = area;
-      }
-    } catch (_) {}
-
-    return out.map(_enrichCustomerArea).toList();
-  }
-
   String _customerAreaLabel(Map<String, dynamic> row) {
-    for (final key in ['area', 'nama_area', 'area_name', 'wilayah']) {
-      final v = row[key]?.toString().trim() ?? '';
-      if (v.isNotEmpty) return v;
-    }
-    final aid = row['area_id'];
-    final intId = aid is int ? aid : int.tryParse(aid?.toString() ?? '');
-    if (intId != null && _areaById.containsKey(intId)) {
-      return _areaById[intId]!;
-    }
-    return '';
-  }
-
-  Map<String, dynamic> _enrichCustomerArea(Map<String, dynamic> row) {
-    final copy = Map<String, dynamic>.from(row);
-    final label = _customerAreaLabel(copy);
-    if (label.isNotEmpty) copy['area'] = label;
-    return copy;
+    return TagCustomerSearchService.areaLabel(row, _areaById);
   }
 
   void _pickCustomer(Map<String, dynamic> row) {
@@ -679,11 +583,14 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
                         final area = _customerAreaLabel(row);
                         final phone = row['phone']?.toString() ?? '';
                         final cid = row['customer_id']?.toString() ?? '';
+                        final contactLine = [phone, cid]
+                            .where((s) => s.isNotEmpty)
+                            .join(' · ');
                         return ListTile(
                           dense: true,
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 16,
-                            vertical: 4,
+                            vertical: 6,
                           ),
                           title: Text(
                             name,
@@ -694,28 +601,36 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
                               fontWeight: FontWeight.w600,
                             ),
                           ),
-                          trailing: area.isNotEmpty
-                              ? SizedBox(
-                                  width: 120,
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (contactLine.isNotEmpty)
+                                Text(
+                                  contactLine,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: textOnSurfaceVariant,
+                                  ),
+                                ),
+                              if (area.isNotEmpty)
+                                Padding(
+                                  padding: EdgeInsets.only(
+                                    top: contactLine.isNotEmpty ? 4 : 0,
+                                  ),
                                   child: Text(
                                     area,
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
-                                    textAlign: TextAlign.right,
                                     style: const TextStyle(
                                       fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                      color: textOnSurfaceVariant,
+                                      fontWeight: FontWeight.w600,
+                                      color: primary,
                                     ),
                                   ),
-                                )
-                              : null,
-                          subtitle: Text(
-                            [phone, cid].where((s) => s.isNotEmpty).join(' · '),
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: textOnSurfaceVariant,
-                            ),
+                                ),
+                            ],
                           ),
                           onTap: () => _pickCustomer(row),
                         );
