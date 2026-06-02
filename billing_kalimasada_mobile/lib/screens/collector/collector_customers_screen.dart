@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../store/collector_provider.dart';
 import '../../store/collector_notification_provider.dart';
 import '../../theme/collector_colors.dart';
+import '../../utils/collector_debug_log.dart';
 import 'collector_notifications_screen.dart';
 import 'collector_customer_detail_sheet.dart';
 import 'collector_payment_status_badge.dart';
@@ -25,9 +26,15 @@ class CollectorCustomersScreen extends StatefulWidget {
   const CollectorCustomersScreen({
     super.key,
     required this.onSync,
+    this.initialStatus = '',
+    this.syncStamp = 0,
   });
 
   final Future<void> Function() onSync;
+  /// Filter chip awal (dari dashboard: `unpaid`, `paid`, `isolir`, atau kosong = semua).
+  final String initialStatus;
+  /// Naikkan dari parent agar filter & fetch diselaraskan saat tap kartu ringkasan.
+  final int syncStamp;
 
   @override
   State<CollectorCustomersScreen> createState() => _CollectorCustomersScreenState();
@@ -39,16 +46,31 @@ class _CollectorCustomersScreenState extends State<CollectorCustomersScreen> {
   /// Kosong = semua wilayah; nilai = string persis seperti `collector_areas.area` di server.
   String _areaFilter = '';
   bool _syncing = false;
+  int _loadGeneration = 0;
+
+  Future<void> _loadCustomers({String? statusOverride}) async {
+    final gen = ++_loadGeneration;
+    final status = statusOverride ?? _status;
+    collectorDbg('Pelanggan: load gen=$gen status="$status" area="$_areaFilter" stamp=${widget.syncStamp}');
+    final col = context.read<CollectorProvider>();
+    await col.fetchCollectorAreas();
+    if (!mounted || gen != _loadGeneration) {
+      collectorDbg('Pelanggan: load gen=$gen dibatalkan (stamp/filter berubah)');
+      return;
+    }
+    await col.fetchCustomers(status: status, q: _search.text, area: _areaFilter);
+    if (!mounted || gen != _loadGeneration) return;
+    collectorDbg('Pelanggan: load gen=$gen selesai → ${col.customers.length} baris');
+  }
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
+    _status = widget.initialStatus;
+    collectorDbg('Pelanggan: initState status="$_status" stamp=${widget.syncStamp}');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final col = context.read<CollectorProvider>();
-      await col.fetchCollectorAreas();
-      if (!mounted) return;
-      await col.fetchCustomers(status: _status, q: _search.text, area: _areaFilter);
+      _loadCustomers();
     });
   }
 
@@ -58,18 +80,33 @@ class _CollectorCustomersScreenState extends State<CollectorCustomersScreen> {
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(covariant CollectorCustomersScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.syncStamp != widget.syncStamp) {
+      collectorDbg(
+        'Pelanggan: didUpdateWidget stamp ${oldWidget.syncStamp}→${widget.syncStamp} '
+        'status "${oldWidget.initialStatus}"→"${widget.initialStatus}"',
+      );
+      setState(() => _status = widget.initialStatus);
+      _loadCustomers(statusOverride: widget.initialStatus);
+    }
+  }
+
   Future<void> _reload() async {
-    await context.read<CollectorProvider>().fetchCustomers(status: _status, q: _search.text, area: _areaFilter);
+    await _loadCustomers();
   }
 
   void _setFilter(String s) {
+    collectorDbg('Pelanggan: chip filter → "$s"');
     setState(() => _status = s);
-    context.read<CollectorProvider>().fetchCustomers(status: s, q: _search.text, area: _areaFilter);
+    _loadCustomers(statusOverride: s);
   }
 
   void _applyAreaFilter(String area) {
+    collectorDbg('Pelanggan: filter area → "$area"');
     setState(() => _areaFilter = area);
-    context.read<CollectorProvider>().fetchCustomers(status: _status, q: _search.text, area: area);
+    _loadCustomers();
   }
 
   void _openAreaFilterSheet() {
@@ -314,6 +351,7 @@ class _CollectorCustomersScreenState extends State<CollectorCustomersScreen> {
                 _FilterChip(label: 'Belum Bayar', value: 'unpaid', current: _status, onTap: _setFilter),
                 _FilterChip(label: 'Lunas', value: 'paid', current: _status, onTap: _setFilter),
                 _FilterChip(label: 'Isolir', value: 'isolir', current: _status, onTap: _setFilter),
+                _FilterChip(label: 'Baru', value: 'baru', current: _status, onTap: _setFilter),
               ],
             ),
           ),

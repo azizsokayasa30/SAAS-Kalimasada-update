@@ -3,20 +3,12 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../../store/collector_provider.dart';
 import '../../theme/collector_colors.dart';
-import 'collector_payment_status_badge.dart';
-import 'collector_receive_payment_screen.dart';
+import '../../utils/collector_debug_log.dart';
 import '../tag_customer_location_screen.dart';
 
 String _rupiah(num? v) {
   final n = (v ?? 0).round();
   return 'Rp ${NumberFormat.decimalPattern('id_ID').format(n)}';
-}
-
-num? _coerceNum(dynamic v) {
-  if (v == null) return null;
-  if (v is num) return v;
-  if (v is String) return num.tryParse(v);
-  return num.tryParse(v.toString());
 }
 
 const _kMonthShortId = [
@@ -25,10 +17,10 @@ const _kMonthShortId = [
 ];
 
 class CollectorHomeTab extends StatefulWidget {
-  const CollectorHomeTab({super.key, this.onGoCustomersTab});
+  const CollectorHomeTab({super.key, this.onOpenCustomersList});
 
-  /// Pindah ke tab Pelanggan (filter belum bayar di tab itu).
-  final VoidCallback? onGoCustomersTab;
+  /// Pindah ke daftar pelanggan; [status] kosong = semua, `unpaid` / `paid` / `isolir`.
+  final void Function(String status)? onOpenCustomersList;
 
   @override
   State<CollectorHomeTab> createState() => _CollectorHomeTabState();
@@ -106,7 +98,6 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
     final blm = (field?['belumBayarCount'] as num?)?.toInt() ?? 0;
     final lunas = (field?['lunasCount'] as num?)?.toInt() ?? 0;
     final isolir = (field?['isolirCount'] as num?)?.toInt() ?? 0;
-    final priority = (field?['priorityCustomers'] as List?) ?? [];
 
     return ColoredBox(
       color: FieldCollectorColors.dashboardCanvas,
@@ -494,7 +485,7 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
             ),
           ),
           const SizedBox(height: 10),
-          _summaryGrid(context, totalPlg, blm, lunas, isolir),
+          _summaryGrid(context, totalPlg, blm, lunas, isolir, widget.onOpenCustomersList),
           const SizedBox(height: 22),
           Align(
             alignment: Alignment.centerLeft,
@@ -555,161 +546,6 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
               ),
             ),
           ),
-          const SizedBox(height: 20),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Prioritas penagihan',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      color: FieldCollectorColors.onSurface,
-                      letterSpacing: -0.2,
-                    ),
-              ),
-              TextButton.icon(
-                onPressed: () => widget.onGoCustomersTab?.call(),
-                icon: const Icon(Icons.arrow_forward_rounded, size: 18),
-                label: const Text('Lihat semua'),
-                style: TextButton.styleFrom(
-                  foregroundColor: FieldCollectorColors.statTotalIcon,
-                  textStyle: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ),
-            ],
-          ),
-          ...priority.map<Widget>((p) {
-            if (p == null || p is! Map) return const SizedBox.shrink();
-            final m = Map<String, dynamic>.from(p);
-            final pname = m['name']?.toString() ?? '';
-            final addr = m['address']?.toString() ?? '';
-            final amt = _coerceNum(m['amount'])?.round() ?? 0;
-            final payPs = m['payment_status']?.toString() ?? '';
-            final priorityBadge = collectorPaymentBadgeFor(isIsolirAccount: false, paymentStatus: payPs);
-            final priorityAmountColor =
-                collectorPaymentAmountHeadlineColor(isIsolirAccount: false, paymentStatus: payPs);
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: _Card(
-                color: FieldCollectorColors.dashPriorityBg,
-                borderRadius: 16,
-                borderColor: const Color(0xFFFFE0B2),
-                shadows: const [
-                  BoxShadow(color: Color(0x10000000), blurRadius: 10, offset: Offset(0, 4)),
-                ],
-                child: Container(
-                  decoration: const BoxDecoration(
-                    border: Border(
-                      left: BorderSide(width: 5, color: FieldCollectorColors.dashPriorityRail),
-                    ),
-                  ),
-                  padding: const EdgeInsets.only(left: 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              pname,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w800,
-                                fontSize: 16,
-                                color: FieldCollectorColors.onSurface,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          priorityBadge.buildPill(),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(
-                            Icons.home_work_rounded,
-                            size: 17,
-                            color: FieldCollectorColors.onSurfaceVariant.withValues(alpha: 0.9),
-                          ),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              addr,
-                              style: TextStyle(
-                                fontSize: 13,
-                                height: 1.35,
-                                color: FieldCollectorColors.onSurfaceVariant.withValues(alpha: 0.95),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            _rupiah(amt),
-                            style: TextStyle(
-                              fontWeight: FontWeight.w900,
-                              fontSize: 17,
-                              color: priorityAmountColor,
-                            ),
-                          ),
-                          TextButton.icon(
-                            onPressed: () async {
-                              final idRaw = m['id'];
-                              final customerId = idRaw is int
-                                  ? idRaw
-                                  : (idRaw is num ? idRaw.toInt() : int.tryParse(idRaw?.toString() ?? ''));
-                              if (customerId == null) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('ID pelanggan tidak valid')),
-                                );
-                                return;
-                              }
-                              final snapshot = Map<String, dynamic>.from({
-                                'id': customerId,
-                                'name': pname,
-                                'address': addr,
-                                'package_price': amt,
-                                'payment_status': m['payment_status']?.toString() ?? 'unpaid',
-                              });
-                              final done = await Navigator.of(context).push<bool>(
-                                MaterialPageRoute<bool>(
-                                  builder: (_) => CollectorReceivePaymentScreen(
-                                    customerId: customerId,
-                                    customerSnapshot: snapshot,
-                                  ),
-                                ),
-                              );
-                              if (!mounted || done != true) return;
-                              if (!context.mounted) return;
-                              final col = context.read<CollectorProvider>();
-                              await col.fetchOverview(month: _month, year: _year);
-                              await col.fetchCustomers(
-                                status: col.lastCustomersFetchStatus,
-                                q: col.lastCustomersFetchQ,
-                                area: col.lastCustomersFetchArea,
-                              );
-                            },
-                            icon: const Icon(Icons.chevron_right_rounded, size: 20),
-                            label: const Text('Tagih'),
-                            style: TextButton.styleFrom(
-                              foregroundColor: FieldCollectorColors.statTotalIcon,
-                              textStyle: const TextStyle(fontWeight: FontWeight.w800),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          }),
         ],
         ),
       ),
@@ -736,7 +572,14 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
     );
   }
 
-  Widget _summaryGrid(BuildContext context, int total, int blm, int lunas, int isolir) {
+  Widget _summaryGrid(
+    BuildContext context,
+    int total,
+    int blm,
+    int lunas,
+    int isolir,
+    void Function(String status)? onOpenCustomersList,
+  ) {
     const statH = 56.0;
     const pad = EdgeInsets.symmetric(horizontal: 14, vertical: 12);
 
@@ -748,8 +591,9 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
       required IconData icon,
       required String label,
       required String value,
+      required String filterStatus,
     }) {
-      return _Card(
+      final card = _Card(
         color: bg,
         padding: pad,
         borderRadius: 16,
@@ -801,6 +645,18 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
           ),
         ),
       );
+      if (onOpenCustomersList == null) return card;
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            collectorDbg('Dashboard: tap "$label" → filter="$filterStatus"');
+            onOpenCustomersList(filterStatus);
+          },
+          borderRadius: BorderRadius.circular(16),
+          child: card,
+        ),
+      );
     }
 
     return Column(
@@ -813,6 +669,7 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
           icon: Icons.groups_2_rounded,
           label: 'Total pelanggan',
           value: '$total',
+          filterStatus: '',
         ),
         const SizedBox(height: 10),
         Row(
@@ -827,6 +684,7 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                 icon: Icons.pending_actions_rounded,
                 label: 'Belum bayar',
                 value: '$blm',
+                filterStatus: 'unpaid',
               ),
             ),
             const SizedBox(width: 10),
@@ -839,6 +697,7 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                 icon: Icons.verified_rounded,
                 label: 'Lunas',
                 value: '$lunas',
+                filterStatus: 'paid',
               ),
             ),
           ],
@@ -852,6 +711,7 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
           icon: Icons.wifi_off_rounded,
           label: 'Terisolir',
           value: '$isolir',
+          filterStatus: 'isolir',
         ),
       ],
     );

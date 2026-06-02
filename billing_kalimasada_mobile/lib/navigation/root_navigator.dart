@@ -18,6 +18,7 @@ import '../screens/collector/collector_notifications_screen.dart';
 import '../screens/attendance_screen.dart';
 import '../screens/customer_list_screen.dart';
 import '../screens/collector/collector_customers_screen.dart';
+import '../utils/collector_debug_log.dart';
 
 import '../screens/technician_profile_screen.dart';
 import '../screens/task_list_screen.dart';
@@ -246,6 +247,8 @@ class _CollectorTabs extends StatefulWidget {
 
 class _CollectorTabsState extends State<_CollectorTabs> {
   int _currentIndex = 0;
+  int _customersSyncStamp = 0;
+  String _customersInitialStatus = '';
   CollectorNotificationProvider? _collectorNotif;
 
   Future<void> _syncAll() async {
@@ -286,16 +289,15 @@ class _CollectorTabsState extends State<_CollectorTabs> {
     super.dispose();
   }
 
-  void _goCustomersTab() {
-    setState(() => _currentIndex = 1);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final col = context.read<CollectorProvider>();
-      col.fetchCustomers(
-        status: col.lastCustomersFetchStatus,
-        q: col.lastCustomersFetchQ,
-        area: col.lastCustomersFetchArea,
-      );
+  void _goCustomersTab([String status = '']) {
+    collectorDbg(
+      'Nav: dashboard → Pelanggan filter="$status" '
+      '(stamp ${_customersSyncStamp}→${_customersSyncStamp + 1})',
+    );
+    setState(() {
+      _currentIndex = 1;
+      _customersInitialStatus = status;
+      _customersSyncStamp++;
     });
   }
 
@@ -324,9 +326,11 @@ class _CollectorTabsState extends State<_CollectorTabs> {
     final body = IndexedStack(
       index: _currentIndex,
       children: [
-        CollectorHomeTab(onGoCustomersTab: _goCustomersTab),
+        CollectorHomeTab(onOpenCustomersList: _goCustomersTab),
         CollectorCustomersScreen(
           onSync: _syncAll,
+          initialStatus: _customersInitialStatus,
+          syncStamp: _customersSyncStamp,
         ),
         const CollectorSettlementTab(),
         const CollectorProfileTab(),
@@ -490,7 +494,7 @@ class _CollectorTabsState extends State<_CollectorTabs> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        'Total tagihan ${_collectorStripRupiah(total)}',
+                        'Total paket ${_collectorStripRupiah(total)}',
                         style: const TextStyle(
                           fontWeight: FontWeight.w700,
                           fontSize: 13,

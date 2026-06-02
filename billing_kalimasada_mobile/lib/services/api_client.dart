@@ -135,4 +135,15 @@ class ApiClient {
         )
         .timeout(requestTimeout);
   }
+
+  static Future<http.Response> patch(String endpoint, Map<String, dynamic> body) async {
+    final headers = await _getHeaders();
+    return http
+        .patch(
+          _uri(endpoint),
+          headers: headers,
+          body: jsonEncode(body),
+        )
+        .timeout(requestTimeout);
+  }
 }

@@ -87,12 +87,36 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
   bool _loadingDetail = true;
   String? _detailError;
   bool _isolirLoading = false;
+  late String _phoneDisplay;
+  bool _phoneSaving = false;
+  bool _dueDateSaving = false;
 
   int? get _customerId => int.tryParse(widget.row['id']?.toString() ?? '');
+
+  Map<String, dynamic>? _primaryOpenInvoice() {
+    for (final inv in _history) {
+      final st = (inv['status']?.toString() ?? '').toLowerCase();
+      if (st.isNotEmpty && st != 'paid') return inv;
+    }
+    return null;
+  }
+
+  String _formatDueDateLabel(String? iso) {
+    if (iso == null || iso.isEmpty) return '—';
+    final d = DateTime.tryParse(iso);
+    if (d == null) return iso;
+    return DateFormat('EEEE, d MMMM yyyy', 'id_ID').format(d);
+  }
+
+  String _toYmd(DateTime d) {
+    final p = (int n) => n.toString().padLeft(2, '0');
+    return '${d.year}-${p(d.month)}-${p(d.day)}';
+  }
 
   @override
   void initState() {
     super.initState();
+    _phoneDisplay = widget.row['phone']?.toString().trim() ?? '';
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadDetail());
   }
 
@@ -126,6 +150,86 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
           _detailError = e.toString();
         });
       }
+    }
+  }
+
+  Future<void> _editPhone() async {
+    final cid = _customerId;
+    if (cid == null) return;
+    final ctrl = TextEditingController(text: _phoneDisplay);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit nomor WhatsApp'),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.phone,
+          decoration: const InputDecoration(
+            labelText: 'Nomor HP / WA',
+            hintText: '08xxxxxxxxxx',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Simpan')),
+        ],
+      ),
+    );
+    final newPhone = ctrl.text.trim();
+    ctrl.dispose();
+    if (ok != true || !mounted) return;
+    setState(() => _phoneSaving = true);
+    final err = await context.read<CollectorProvider>().updateCustomerPhone(cid, newPhone);
+    if (!mounted) return;
+    setState(() {
+      _phoneSaving = false;
+      if (err == null) _phoneDisplay = newPhone;
+    });
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+    } else {
+      widget.row['phone'] = newPhone;
+      await widget.onRefreshCustomers?.call();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nomor HP diperbarui')));
+      }
+    }
+  }
+
+  Future<void> _editDueDate(Map<String, dynamic> inv) async {
+    final cid = _customerId;
+    final invoiceId = int.tryParse(inv['id']?.toString() ?? '');
+    if (cid == null || invoiceId == null) return;
+    final currentIso = inv['due_date']?.toString() ?? '';
+    final initial = DateTime.tryParse(currentIso) ?? DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2035, 12, 31),
+      helpText: 'Pilih jatuh tempo',
+      cancelText: 'Batal',
+      confirmText: 'Simpan',
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _dueDateSaving = true);
+    final ymd = _toYmd(picked);
+    final err = await context.read<CollectorProvider>().updateInvoiceDueDate(cid, invoiceId, ymd);
+    if (!mounted) return;
+    setState(() => _dueDateSaving = false);
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+      return;
+    }
+    setState(() {
+      final idx = _history.indexWhere((h) => h['id']?.toString() == invoiceId.toString());
+      if (idx >= 0) {
+        _history[idx] = Map<String, dynamic>.from(_history[idx])..['due_date'] = ymd;
+      }
+    });
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Jatuh tempo diperbarui')));
     }
   }
 
@@ -230,7 +334,7 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
   Widget build(BuildContext context) {
     final row = widget.row;
     final name = row['name']?.toString() ?? '';
-    final phone = row['phone']?.toString().trim() ?? '';
+    final phone = _phoneDisplay;
     final addr = row['address']?.toString() ?? '';
     final ps = row['payment_status']?.toString() ?? '';
     final st = row['status']?.toString().toLowerCase() ?? '';
@@ -338,16 +442,10 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                 ],
               ),
               const SizedBox(height: 16),
-              if (phone.isNotEmpty)
-                _linkTile(
-                  context,
-                  icon: Icons.chat_outlined,
-                  title: 'WhatsApp',
-                  subtitle: phone,
-                  enabled: waUri != null,
-                  onTap: waUri == null ? null : () => _launchExternal(Uri.parse(waUri)),
-                ),
-              if (phone.isNotEmpty) const SizedBox(height: 8),
+              _buildDueDateSection(context),
+              const SizedBox(height: 12),
+              _phoneContactTile(context, phone: phone, waUri: waUri),
+              const SizedBox(height: 8),
               if (addr.isNotEmpty) ...[
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -577,6 +675,180 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildDueDateSection(BuildContext context) {
+    const green = Color(0xFF1B5E20);
+    const greenBg = Color(0xFFE8F5E9);
+    if (_loadingDetail) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: greenBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFFA5D6A7)),
+        ),
+        child: const Center(
+          child: SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2, color: green),
+          ),
+        ),
+      );
+    }
+    final inv = _primaryOpenInvoice();
+    if (inv == null) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: FieldCollectorColors.surfaceContainerHigh,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: FieldCollectorColors.outlineVariant),
+        ),
+        child: const Text(
+          'Belum ada tagihan terbuka — jatuh tempo akan tampil setelah faktur dibuat.',
+          style: TextStyle(fontSize: 13, height: 1.35, color: FieldCollectorColors.onSurfaceVariant),
+        ),
+      );
+    }
+    final dueIso = inv['due_date']?.toString() ?? '';
+    final dueLabel = _formatDueDateLabel(dueIso);
+    final invNo = inv['invoice_number']?.toString() ?? '#${inv['id']}';
+    return Material(
+      color: greenBg,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: _dueDateSaving ? null : () => _editDueDate(inv),
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFF66BB6A), width: 1.5),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'JATUH TEMPO',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.8,
+                        color: green.withValues(alpha: 0.85),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      dueLabel,
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                        height: 1.2,
+                        color: green,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      invNo,
+                      style: TextStyle(fontSize: 12, color: green.withValues(alpha: 0.75)),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Ketuk untuk ubah tanggal',
+                      style: TextStyle(fontSize: 11, color: green.withValues(alpha: 0.65)),
+                    ),
+                  ],
+                ),
+              ),
+              if (_dueDateSaving)
+                const Padding(
+                  padding: EdgeInsets.only(top: 4),
+                  child: SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: green),
+                  ),
+                )
+              else
+                Icon(Icons.edit_calendar_rounded, color: green.withValues(alpha: 0.9), size: 28),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _phoneContactTile(BuildContext context, {required String phone, required String? waUri}) {
+    return Material(
+      color: const Color(0xFFF3F4F6),
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        child: Row(
+          children: [
+            Expanded(
+              child: InkWell(
+                onTap: waUri == null ? null : () => _launchExternal(Uri.parse(waUri)),
+                borderRadius: BorderRadius.circular(10),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.chat_outlined,
+                        color: phone.isNotEmpty ? FieldCollectorColors.primaryContainer : FieldCollectorColors.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('WhatsApp', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                            const SizedBox(height: 2),
+                            Text(
+                              phone.isNotEmpty ? phone : 'Belum diisi — ketuk pensil untuk isi',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: phone.isNotEmpty
+                                    ? FieldCollectorColors.primaryContainer
+                                    : FieldCollectorColors.onSurfaceVariant,
+                                decoration: phone.isNotEmpty ? TextDecoration.underline : null,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (phone.isNotEmpty)
+                        Icon(Icons.open_in_new, size: 18, color: FieldCollectorColors.onSurfaceVariant.withValues(alpha: 0.8)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Edit nomor',
+              onPressed: _phoneSaving ? null : _editPhone,
+              icon: _phoneSaving
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.edit_outlined, color: FieldCollectorColors.primaryContainer),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

@@ -250,6 +250,41 @@ class CollectorProvider extends ChangeNotifier {
     }
   }
 
+  /// Perbarui nomor HP pelanggan di wilayah kolektor.
+  Future<String?> updateCustomerPhone(int customerId, String phone) async {
+    try {
+      final r = await ApiClient.patch(
+        '/api/mobile-adapter/collector/customers/$customerId/phone',
+        {'phone': phone},
+      );
+      final body = ApiClient.decodeJsonObject(r, debugLabel: 'collector/customers/phone');
+      if (r.statusCode == 200 && body['success'] == true) {
+        bumpCustomersReload();
+        return null;
+      }
+      return body['message']?.toString() ?? 'Gagal menyimpan nomor HP';
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  /// Ubah jatuh tempo tagihan belum lunas.
+  Future<String?> updateInvoiceDueDate(int customerId, int invoiceId, String dueDateYmd) async {
+    try {
+      final r = await ApiClient.patch(
+        '/api/mobile-adapter/collector/customers/$customerId/invoices/$invoiceId/due-date',
+        {'due_date': dueDateYmd},
+      );
+      final body = ApiClient.decodeJsonObject(r, debugLabel: 'collector/customers/due-date');
+      if (r.statusCode == 200 && body['success'] == true) {
+        return null;
+      }
+      return body['message']?.toString() ?? 'Gagal menyimpan jatuh tempo';
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
   /// Simpan nama, alamat, email, nomor HP kolektor (Bearer).
   Future<String?> updateCollectorProfile({
     required String name,
