@@ -1,7 +1,7 @@
 name: billing_kalimasada_mobile
 description: "A new Flutter project."
 publish_to: 'none'
-version: 5.9.1+90
+version: 5.9.2+91
 
 environment:
   sdk: ^3.11.5

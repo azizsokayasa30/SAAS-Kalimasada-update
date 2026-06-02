@@ -1,7 +1,7 @@
 {
-  "version": "5.9.1",
-  "build_number": 90,
-  "apk_url": "/mobile-app/kalimasada-mobile-5.9.1.apk",
+  "version": "5.9.2",
+  "build_number": 91,
+  "apk_url": "/mobile-app/kalimasada-mobile-5.9.2.apk",
   "force_update": false,
-  "release_notes": "Perbaikan instal update APK (layar Install terbuka otomatis setelah unduh); update otomatis dari dalam aplikasi; kirim resi WhatsApp; logout jam 12 malam; ingat sandi & sidik jari; area pelanggan di tag lokasi teknisi."
+  "release_notes": "Auto pulang: jika lewat jam pulang shift +10 menit maka check-out otomatis. Perbaikan tampil area di pencarian Tag Pelanggan teknisi (fallback bila server belum deploy endpoint area). Perbaikan instal update APK (installer terbuka otomatis)."
 }
