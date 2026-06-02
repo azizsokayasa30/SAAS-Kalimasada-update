@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme/colors.dart';
 import '../store/auth_provider.dart';
+import '../services/biometric_auth_service.dart';
+import '../services/credential_storage.dart';
+import '../widgets/app_update_dialog.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -14,6 +17,60 @@ class _LoginScreenState extends State<LoginScreen> {
   final _phoneController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
+  bool _rememberPassword = false;
+  bool _enableBiometric = false;
+  bool _biometricAvailable = false;
+  bool _biometricLoginReady = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _bootstrap());
+  }
+
+  Future<void> _bootstrap() async {
+    if (mounted) {
+      await showAppUpdateDialogIfNeeded(context);
+    }
+    if (!mounted) return;
+
+    final auth = context.read<AuthProvider>();
+    if (auth.sessionExpiredMessage && mounted) {
+      auth.clearSessionExpiredMessage();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Sesi berakhir (jam 12 malam). Silakan login kembali.'),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
+
+    final remember = await CredentialStorage.rememberCredentials;
+    final biometricOn = await CredentialStorage.biometricEnabled;
+    final bioAvailable = await BiometricAuthService.canCheckBiometrics();
+    final creds = await CredentialStorage.readCredentials();
+
+    if (!mounted) return;
+    setState(() {
+      _rememberPassword = remember;
+      _enableBiometric = biometricOn && remember;
+      _biometricAvailable = bioAvailable;
+      _biometricLoginReady =
+          biometricOn && remember && creds.username != null && creds.password != null && bioAvailable;
+      if (creds.username != null) {
+        _phoneController.text = creds.username!;
+      }
+      if (remember && creds.password != null) {
+        _passwordController.text = creds.password!;
+      }
+    });
+
+    if (_biometricLoginReady && mounted && !auth.loading) {
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      if (!mounted || auth.loading) return;
+      await context.read<AuthProvider>().loginWithBiometric();
+    }
+  }
 
   void _handleLogin() {
     final phone = _phoneController.text.trim();
@@ -29,7 +86,16 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    context.read<AuthProvider>().login(phone, password);
+    context.read<AuthProvider>().login(
+          phone,
+          password,
+          rememberPassword: _rememberPassword,
+          enableBiometric: _rememberPassword && _enableBiometric,
+        );
+  }
+
+  Future<void> _handleBiometricLogin() async {
+    await context.read<AuthProvider>().loginWithBiometric();
   }
 
   @override
@@ -43,7 +109,6 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
 
-    // Colors matching the new updated design
     const bgColor = Color(0xFFF7F9FC);
     const surfaceColor = Color(0xFFFFFFFF);
     const outlineColor = Color(0xFFC6C5D4);
@@ -58,7 +123,6 @@ class _LoginScreenState extends State<LoginScreen> {
       backgroundColor: bgColor,
       body: Stack(
         children: [
-          // Ambient Decorative Elements
           Positioned(
             top: -100,
             left: -100,
@@ -83,7 +147,6 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
           ),
-          
           Center(
             child: SingleChildScrollView(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 48),
@@ -93,7 +156,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Header / Logo Area
                     Container(
                       width: 80,
                       height: 80,
@@ -138,8 +200,6 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                     const SizedBox(height: 32),
-
-                    // Login Card
                     Container(
                       padding: const EdgeInsets.all(32),
                       decoration: BoxDecoration(
@@ -166,8 +226,6 @@ class _LoginScreenState extends State<LoginScreen> {
                                 style: const TextStyle(color: AppColors.error),
                               ),
                             ),
-
-                          // Operator ID Input
                           const Text(
                             'Operator ID / Email',
                             style: TextStyle(
@@ -199,33 +257,13 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ),
                           const SizedBox(height: 16),
-
-                          // Password Input
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text(
-                                'Password',
-                                style: TextStyle(
-                                  color: textOnSurface,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              GestureDetector(
-                                onTap: () {
-                                  // Handle forgot password
-                                },
-                                child: const Text(
-                                  'Lupa diri',
-                                  style: TextStyle(
-                                    color: secondaryColor,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                            ],
+                          const Text(
+                            'Password',
+                            style: TextStyle(
+                              color: textOnSurface,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
                           const SizedBox(height: 6),
                           TextField(
@@ -242,9 +280,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   color: textOnSurfaceVariant,
                                 ),
                                 onPressed: () {
-                                  setState(() {
-                                    _obscurePassword = !_obscurePassword;
-                                  });
+                                  setState(() => _obscurePassword = !_obscurePassword);
                                 },
                               ),
                               filled: true,
@@ -260,9 +296,38 @@ class _LoginScreenState extends State<LoginScreen> {
                               ),
                             ),
                           ),
-                          const SizedBox(height: 24),
-
-                          // Login Button
+                          const SizedBox(height: 12),
+                          CheckboxListTile(
+                            value: _rememberPassword,
+                            onChanged: (v) {
+                              setState(() {
+                                _rememberPassword = v ?? false;
+                                if (!_rememberPassword) _enableBiometric = false;
+                              });
+                            },
+                            contentPadding: EdgeInsets.zero,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            dense: true,
+                            title: const Text(
+                              'Ingat sandi',
+                              style: TextStyle(fontSize: 14, color: textOnSurface),
+                            ),
+                          ),
+                          if (_biometricAvailable)
+                            CheckboxListTile(
+                              value: _enableBiometric,
+                              onChanged: _rememberPassword
+                                  ? (v) => setState(() => _enableBiometric = v ?? false)
+                                  : null,
+                              contentPadding: EdgeInsets.zero,
+                              controlAffinity: ListTileControlAffinity.leading,
+                              dense: true,
+                              title: const Text(
+                                'Login sidik jari',
+                                style: TextStyle(fontSize: 14, color: textOnSurface),
+                              ),
+                            ),
+                          const SizedBox(height: 16),
                           Container(
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(8),
@@ -309,12 +374,23 @@ class _LoginScreenState extends State<LoginScreen> {
                                     ),
                             ),
                           ),
+                          if (_biometricLoginReady || (_biometricAvailable && _rememberPassword)) ...[
+                            const SizedBox(height: 16),
+                            OutlinedButton.icon(
+                              onPressed: auth.loading ? null : _handleBiometricLogin,
+                              icon: const Icon(Icons.fingerprint, size: 28),
+                              label: const Text('Masuk dengan sidik jari'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: primaryColor,
+                                side: const BorderSide(color: primaryColor),
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
                     const SizedBox(height: 48),
-
-                    // Footer
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       decoration: BoxDecoration(
@@ -328,7 +404,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           Icon(Icons.shield, size: 14, color: secondaryColor),
                           SizedBox(width: 6),
                           Text(
-                            'Koneksi aman terenkripsi',
+                            'Sesi otomatis logout jam 12 malam',
                             style: TextStyle(
                               color: textOnSurfaceVariant,
                               fontSize: 12,

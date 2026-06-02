@@ -55,6 +55,77 @@ function sqliteJsonSafeRow(row) {
     return out;
 }
 
+function resolveCustomerAreaLabel(c) {
+    if (!c) return '';
+    const direct = c.area != null ? String(c.area).trim() : '';
+    if (direct) return direct;
+    const joined = c.nama_area != null ? String(c.nama_area).trim() : '';
+    if (joined) return joined;
+    return '';
+}
+
+/** Baris pelanggan untuk pencarian tag lokasi (teknisi / field ops). */
+function mapTagSearchCustomerRow(r) {
+    const safe = sqliteJsonSafeRow(r || {});
+    return {
+        id: safe.id,
+        customer_id:
+            safe.customer_id != null && String(safe.customer_id).trim() !== ''
+                ? String(safe.customer_id)
+                : null,
+        name: safe.name || '',
+        phone: safe.phone || '',
+        email: safe.email || '',
+        status: safe.status,
+        address: safe.address || '',
+        area: resolveCustomerAreaLabel(safe),
+        area_id:
+            safe.area_id != null && safe.area_id !== '' && !Number.isNaN(Number(safe.area_id))
+                ? Number(safe.area_id)
+                : null
+    };
+}
+
+/** Isi nama area dari tabel master `areas` bila kolom teks pelanggan kosong. */
+function attachAreaNamesFromMaster(customers, cb) {
+    const list = Array.isArray(customers) ? customers.map((c) => ({ ...c })) : [];
+    const ids = [
+        ...new Set(
+            list
+                .map((c) => {
+                    if (resolveCustomerAreaLabel(c)) return null;
+                    const aid = c.area_id != null ? Number(c.area_id) : NaN;
+                    return Number.isFinite(aid) && aid > 0 ? aid : null;
+                })
+                .filter(Boolean)
+        )
+    ];
+    if (!ids.length) {
+        return cb(null, list);
+    }
+    const placeholders = ids.map(() => '?').join(',');
+    db.all(
+        `SELECT id, nama_area FROM areas WHERE id IN (${placeholders})`,
+        ids,
+        (err, rows) => {
+            if (err) return cb(err);
+            const byId = new Map(
+                (rows || []).map((r) => [Number(r.id), String(r.nama_area || '').trim()])
+            );
+            for (const c of list) {
+                const existing = resolveCustomerAreaLabel(c);
+                if (existing) {
+                    c.area = existing;
+                    continue;
+                }
+                const aid = c.area_id != null ? Number(c.area_id) : NaN;
+                c.area = Number.isFinite(aid) ? byId.get(aid) || '' : '';
+            }
+            cb(null, list);
+        }
+    );
+}
+
 function collectorCustomerIsIsolir(c) {
     return String(c.status || '')
         .toLowerCase()
@@ -393,13 +464,20 @@ router.get('/app-update/manifest', (req, res) => {
         const build_number = Number.isFinite(bnRaw) && bnRaw >= 0 ? bnRaw : null;
         const apk_url = parsed.apk_url != null ? String(parsed.apk_url).trim() : '';
         const release_notes = parsed.release_notes != null ? String(parsed.release_notes).trim() : '';
+        const forceRaw = parsed.force_update;
+        const force_update =
+            forceRaw === true ||
+            forceRaw === 1 ||
+            forceRaw === '1' ||
+            String(forceRaw).toLowerCase() === 'true';
         if (!version || !apk_url) return null;
         return {
             configured: true,
             version,
             build_number,
             apk_url,
-            release_notes: release_notes || 'Pembaruan aplikasi mobile.'
+            release_notes: release_notes || 'Pembaruan aplikasi mobile.',
+            force_update
         };
     }
 
@@ -804,8 +882,10 @@ router.get('/customers/search', verifyToken, allowFieldOps, (req, res) => {
     }
     const like = `%${q.replace(/%/g, '')}%`;
     db.all(
-        `SELECT c.id, c.customer_id, c.name, c.phone, c.email, c.status, c.address
+        `SELECT c.id, c.customer_id, c.name, c.phone, c.email, c.status, c.address, c.area_id,
+                COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, '') AS area
          FROM customers c
+         LEFT JOIN areas ar ON c.area_id = ar.id
          WHERE c.name LIKE ? OR c.phone LIKE ? OR CAST(c.customer_id AS TEXT) LIKE ? OR IFNULL(c.email, '') LIKE ?
          ORDER BY c.name
          LIMIT 30`,
@@ -814,7 +894,73 @@ router.get('/customers/search', verifyToken, allowFieldOps, (req, res) => {
             if (err) {
                 return res.status(500).json({ success: false, message: err.message });
             }
-            res.json({ success: true, data: rows || [] });
+            attachAreaNamesFromMaster(rows || [], (areaErr, enriched) => {
+                if (areaErr) {
+                    return res.status(500).json({ success: false, message: areaErr.message });
+                }
+                const data = (enriched || []).map(mapTagSearchCustomerRow);
+                res.json({ success: true, data });
+            });
+        }
+    );
+});
+
+/** Batch resolve nama area pelanggan (fallback tag pelanggan teknisi). */
+router.post('/customers/resolve-areas', verifyToken, allowFieldOps, (req, res) => {
+    const rawIds = req.body && req.body.ids;
+    const ids = (Array.isArray(rawIds) ? rawIds : [])
+        .map((v) => parseInt(String(v), 10))
+        .filter((n) => Number.isFinite(n) && n > 0)
+        .slice(0, 50);
+    if (!ids.length) {
+        return res.json({ success: true, data: {} });
+    }
+    const placeholders = ids.map(() => '?').join(',');
+    db.all(
+        `SELECT c.id, c.area_id,
+                COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, '') AS area
+         FROM customers c
+         LEFT JOIN areas ar ON c.area_id = ar.id
+         WHERE c.id IN (${placeholders})`,
+        ids,
+        (err, rows) => {
+            if (err) {
+                logger.error('[mobile-adapter] customers/resolve-areas', err);
+                return res.status(500).json({ success: false, message: err.message });
+            }
+            attachAreaNamesFromMaster(rows || [], (areaErr, enriched) => {
+                if (areaErr) {
+                    return res.status(500).json({ success: false, message: areaErr.message });
+                }
+                const data = {};
+                for (const row of enriched || []) {
+                    const id = row.id != null ? Number(row.id) : NaN;
+                    if (!Number.isFinite(id)) continue;
+                    data[String(id)] = resolveCustomerAreaLabel(row);
+                }
+                res.json({ success: true, data });
+            });
+        }
+    );
+});
+
+/** Daftar nama area (teknisi / field ops) — untuk label pencarian tag pelanggan. */
+router.get('/areas/names', verifyToken, allowFieldOps, (req, res) => {
+    db.all(
+        `SELECT id, nama_area FROM areas
+         WHERE nama_area IS NOT NULL AND TRIM(nama_area) != ''
+         ORDER BY nama_area ASC`,
+        [],
+        (err, rows) => {
+            if (err) {
+                logger.error('[mobile-adapter] areas/names', err);
+                return res.status(500).json({ success: false, message: err.message });
+            }
+            const data = (rows || []).map((r) => ({
+                id: Number(r.id),
+                nama_area: String(r.nama_area || '').trim(),
+            }));
+            res.json({ success: true, data });
         }
     );
 });
@@ -3468,7 +3614,7 @@ router.get('/collector/customers', verifyToken, requireCollector, async (req, re
             username: c.username != null ? String(c.username) : '',
             name: c.name,
             address: c.address || '',
-            area: c.area != null ? String(c.area) : '',
+            area: resolveCustomerAreaLabel(c),
             area_id:
                 c.area_id != null && c.area_id !== '' && !Number.isNaN(Number(c.area_id))
                     ? Number(c.area_id)
@@ -3491,7 +3637,13 @@ router.get('/collector/customers', verifyToken, requireCollector, async (req, re
             pppoe_profile: c.pppoe_profile != null ? String(c.pppoe_profile) : '',
             router_name: c.router_name != null ? String(c.router_name) : ''
         }));
-        res.json({ success: true, data });
+        attachAreaNamesFromMaster(data, (areaErr, enriched) => {
+            if (areaErr) {
+                logger.error('[mobile-adapter] collector/customers area', areaErr);
+                return res.status(500).json({ success: false, message: areaErr.message || 'Gagal memuat' });
+            }
+            res.json({ success: true, data: enriched });
+        });
     } catch (error) {
         logger.error('[mobile-adapter] collector/customers', error);
         res.status(500).json({ success: false, message: error.message || 'Gagal memuat' });
@@ -3889,6 +4041,53 @@ function sanitizeInvoiceForCollectorReceipt(inv) {
 }
 
 /** Resi / cetak invoice (setara /admin/billing/invoices/:id/print) untuk pelanggan di wilayah kolektor. */
+async function resolveCollectorPaidReceiptInvoice(customerId, invoiceIdOptional) {
+    let full = null;
+
+    if (Number.isFinite(invoiceIdOptional) && invoiceIdOptional > 0) {
+        const row = await billingManager.getInvoiceById(invoiceIdOptional);
+        if (!row) {
+            const err = new Error('Invoice tidak ditemukan');
+            err.status = 404;
+            throw err;
+        }
+        if (Number(row.customer_id) !== customerId) {
+            const err = new Error('Invoice bukan milik pelanggan ini');
+            err.status = 403;
+            throw err;
+        }
+        if (String(row.status || '').toLowerCase() !== 'paid') {
+            const err = new Error('Resi hanya untuk tagihan yang sudah lunas');
+            err.status = 400;
+            throw err;
+        }
+        full = row;
+    } else {
+        const list = await billingManager.getInvoicesByCustomer(customerId);
+        const paid = (list || [])
+            .filter((i) => String(i.status || '').toLowerCase() === 'paid')
+            .sort((a, b) => {
+                const ta = new Date(a.payment_date || a.updated_at || a.created_at || 0).getTime();
+                const tb = new Date(b.payment_date || b.updated_at || b.created_at || 0).getTime();
+                return tb - ta;
+            });
+        const pick = paid[0];
+        if (!pick) {
+            const err = new Error('Belum ada invoice lunas untuk ditampilkan sebagai resi');
+            err.status = 404;
+            throw err;
+        }
+        full = await billingManager.getInvoiceById(pick.id);
+    }
+
+    if (!full) {
+        const err = new Error('Data invoice tidak tersedia');
+        err.status = 404;
+        throw err;
+    }
+    return full;
+}
+
 router.get('/collector/customers/:customerId/receipt', verifyToken, requireCollector, async (req, res) => {
     const collectorId = parseCollectorId(req);
     if (!collectorId) {
@@ -3905,39 +4104,7 @@ router.get('/collector/customers/:customerId/receipt', verifyToken, requireColle
             return res.status(403).json({ success: false, message: 'Pelanggan tidak ada di wilayah Anda' });
         }
 
-        let full = null;
-
-        if (Number.isFinite(qInv) && qInv > 0) {
-            const row = await billingManager.getInvoiceById(qInv);
-            if (!row) {
-                return res.status(404).json({ success: false, message: 'Invoice tidak ditemukan' });
-            }
-            if (Number(row.customer_id) !== customerId) {
-                return res.status(403).json({ success: false, message: 'Invoice bukan milik pelanggan ini' });
-            }
-            if (String(row.status || '').toLowerCase() !== 'paid') {
-                return res.status(400).json({ success: false, message: 'Resi hanya untuk tagihan yang sudah lunas' });
-            }
-            full = row;
-        } else {
-            const list = await billingManager.getInvoicesByCustomer(customerId);
-            const paid = (list || [])
-                .filter((i) => String(i.status || '').toLowerCase() === 'paid')
-                .sort((a, b) => {
-                    const ta = new Date(a.payment_date || a.updated_at || a.created_at || 0).getTime();
-                    const tb = new Date(b.payment_date || b.updated_at || b.created_at || 0).getTime();
-                    return tb - ta;
-                });
-            const pick = paid[0];
-            if (!pick) {
-                return res.status(404).json({ success: false, message: 'Belum ada invoice lunas untuk ditampilkan sebagai resi' });
-            }
-            full = await billingManager.getInvoiceById(pick.id);
-        }
-
-        if (!full) {
-            return res.status(404).json({ success: false, message: 'Data invoice tidak tersedia' });
-        }
+        const full = await resolveCollectorPaidReceiptInvoice(customerId, qInv);
 
         res.json({
             success: true,
@@ -3948,7 +4115,41 @@ router.get('/collector/customers/:customerId/receipt', verifyToken, requireColle
         });
     } catch (error) {
         logger.error('[mobile-adapter] collector/customers/.../receipt', error);
-        res.status(500).json({ success: false, message: error.message || 'Gagal memuat' });
+        res.status(error.status || 500).json({ success: false, message: error.message || 'Gagal memuat' });
+    }
+});
+
+/** Unduh PDF invoice lunas — kolektor membagikannya lewat WhatsApp di HP. */
+router.get('/collector/customers/:customerId/receipt/pdf', verifyToken, requireCollector, async (req, res) => {
+    const collectorId = parseCollectorId(req);
+    if (!collectorId) {
+        return res.status(400).json({ success: false, message: 'ID kolektor tidak valid' });
+    }
+    const customerId = parseInt(String(req.params.customerId), 10);
+    if (!Number.isFinite(customerId) || customerId <= 0) {
+        return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
+    }
+    const qInv = req.query.invoice_id != null && req.query.invoice_id !== '' ? parseInt(String(req.query.invoice_id), 10) : null;
+    try {
+        const allowed = await collectorMappedCustomerIds(collectorId);
+        if (!allowed.has(customerId)) {
+            return res.status(403).json({ success: false, message: 'Pelanggan tidak ada di wilayah Anda' });
+        }
+
+        const full = await resolveCollectorPaidReceiptInvoice(customerId, qInv);
+        const { generateInvoicePdf } = require('../../config/invoicePdf');
+        const pdfResult = await generateInvoicePdf(full.id);
+        if (!pdfResult || !pdfResult.buffer) {
+            return res.status(500).json({ success: false, message: 'Gagal membuat PDF invoice' });
+        }
+
+        const fileName = pdfResult.fileName || `Invoice-${full.invoice_number || full.id}.pdf`;
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/"/g, '')}"`);
+        res.send(pdfResult.buffer);
+    } catch (error) {
+        logger.error('[mobile-adapter] collector/customers/.../receipt/pdf', error);
+        res.status(error.status || 500).json({ success: false, message: error.message || 'Gagal membuat PDF' });
     }
 });
 

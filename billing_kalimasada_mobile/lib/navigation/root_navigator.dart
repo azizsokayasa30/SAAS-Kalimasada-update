@@ -23,9 +23,43 @@ import '../utils/collector_debug_log.dart';
 import '../screens/technician_profile_screen.dart';
 import '../screens/task_list_screen.dart';
 import '../screens/network_map_screen.dart';
+import '../widgets/app_update_dialog.dart';
 
-class RootNavigator extends StatelessWidget {
+class RootNavigator extends StatefulWidget {
   const RootNavigator({super.key});
+
+  @override
+  State<RootNavigator> createState() => _RootNavigatorState();
+}
+
+class _RootNavigatorState extends State<RootNavigator> with WidgetsBindingObserver {
+  bool _updateCheckDone = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkAppUpdateOnce());
+  }
+
+  Future<void> _checkAppUpdateOnce() async {
+    if (_updateCheckDone || !mounted) return;
+    _updateCheckDone = true;
+    await showAppUpdateDialogIfNeeded(context);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      context.read<AuthProvider>().checkSessionExpiry();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

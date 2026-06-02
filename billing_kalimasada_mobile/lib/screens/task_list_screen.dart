@@ -65,17 +65,11 @@ class _TaskListScreenState extends State<TaskListScreen> {
             ? TextField(
                 controller: _searchController,
                 autofocus: true,
-                style: const TextStyle(
-                  color: Color(0xFF19163F),
-                  fontSize: 16,
-                ),
+                style: const TextStyle(color: Color(0xFF19163F), fontSize: 16),
                 cursorColor: Color(0xFF1B0C6B),
                 decoration: const InputDecoration(
                   hintText: 'Cari tugas, pelanggan...',
-                  hintStyle: TextStyle(
-                    color: Color(0xFF787582),
-                    fontSize: 14,
-                  ),
+                  hintStyle: TextStyle(color: Color(0xFF787582), fontSize: 14),
                   border: InputBorder.none,
                 ),
                 onChanged: (value) {
@@ -386,8 +380,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
     final type = task['type']?.toString().toUpperCase() ?? '';
     final typeLabel = type == 'TR'
         ? 'TIKET GANGGUAN'
-        : (task['sector']?.toString() ??
-              (type == 'INSTALL' ? 'PSB' : 'UMUM'));
+        : (task['sector']?.toString() ?? (type == 'INSTALL' ? 'PSB' : 'UMUM'));
     Color typeColor;
     Color typeBgColor;
 

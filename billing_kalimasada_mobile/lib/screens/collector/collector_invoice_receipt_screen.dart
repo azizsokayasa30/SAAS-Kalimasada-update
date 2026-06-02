@@ -1,6 +1,11 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../../services/api_client.dart';
+import '../../services/whatsapp_receipt_share.dart';
 import '../../theme/collector_colors.dart';
 
 String _rupiah(num? v) {
@@ -54,9 +59,18 @@ class CollectorInvoiceReceiptScreen extends StatefulWidget {
 
 class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptScreen> {
   bool _loading = true;
+  bool _sendingWa = false;
   String? _error;
   Map<String, dynamic>? _invoice;
   Map<String, dynamic>? _settings;
+  final GlobalKey _receiptCaptureKey = GlobalKey();
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -102,6 +116,87 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
           _loading = false;
         });
       }
+    }
+  }
+
+  Future<Uint8List> _captureReceiptPng() async {
+    if (_scrollController.hasClients) {
+      await _scrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOut,
+      );
+    }
+
+    await WidgetsBinding.instance.endOfFrame;
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+
+    final boundary = _receiptCaptureKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+    if (boundary == null) {
+      throw Exception('Tampilan resi belum siap');
+    }
+    if (boundary.debugNeedsPaint) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+
+    final image = await boundary.toImage(pixelRatio: 3.0);
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    if (byteData == null) {
+      throw Exception('Gagal mengonversi resi ke gambar');
+    }
+    return byteData.buffer.asUint8List();
+  }
+
+  Future<void> _sendReceiptWhatsApp() async {
+    if (_sendingWa || _invoice == null || _settings == null) return;
+    final phone = _invoice!['customer_phone']?.toString().trim() ?? '';
+    if (phone.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nomor WhatsApp pelanggan belum diisi')),
+      );
+      return;
+    }
+
+    setState(() => _sendingWa = true);
+    try {
+      final invNo = _invoice!['invoice_number']?.toString() ?? 'invoice';
+      final customerName = _invoice!['customer_name']?.toString().trim() ?? 'Pelanggan';
+
+      final pngBytes = await _captureReceiptPng();
+
+      await WhatsAppReceiptShare.shareImageToCustomer(
+        pngBytes: pngBytes,
+        fileName: 'Resi-$invNo.png',
+        customerPhone: phone,
+        prefilledText: 'Halo $customerName, berikut resi pembayaran $invNo.',
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'WhatsApp terbuka — gambar resi sudah terlampir. '
+            'Pilih chat $customerName lalu tap Kirim.',
+          ),
+          duration: const Duration(seconds: 6),
+        ),
+      );
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.message ?? 'Gagal membuka WhatsApp'),
+          backgroundColor: Colors.red.shade700,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Gagal menyiapkan gambar resi: $e'), backgroundColor: Colors.red.shade700),
+      );
+    } finally {
+      if (mounted) setState(() => _sendingWa = false);
     }
   }
 
@@ -170,7 +265,48 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
                   )
                 : _invoice == null || _settings == null
                     ? const Center(child: Text('Data tidak tersedia', style: TextStyle(color: FieldCollectorColors.onSurface)))
-                    : _ReceiptBody(invoice: _invoice!, settings: _settings!),
+                    : Column(
+                        children: [
+                          Expanded(
+                            child: SingleChildScrollView(
+                              controller: _scrollController,
+                              child: RepaintBoundary(
+                                key: _receiptCaptureKey,
+                                child: ColoredBox(
+                                  color: FieldCollectorColors.background,
+                                  child: _ReceiptBody(invoice: _invoice!, settings: _settings!),
+                                ),
+                              ),
+                            ),
+                          ),
+                          SafeArea(
+                            top: false,
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                              child: SizedBox(
+                                width: double.infinity,
+                                child: FilledButton.icon(
+                                  onPressed: _sendingWa ? null : _sendReceiptWhatsApp,
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: const Color(0xFF25D366),
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(vertical: 14),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                  icon: _sendingWa
+                                      ? const SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                        )
+                                      : const Icon(Icons.send_rounded),
+                                  label: Text(_sendingWa ? 'Menyiapkan gambar…' : 'Kirim resi (WhatsApp)'),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
       ),
     );
   }
@@ -204,9 +340,11 @@ class _ReceiptBody extends StatelessWidget {
         : 'logo.png';
     final logoUri = Uri.parse(ApiClient.apiOrigin).replace(path: '/public/img/$logoName');
 
-    return ListView(
+    return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-      children: [
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -272,10 +410,40 @@ class _ReceiptBody extends StatelessWidget {
               const SizedBox(height: 8),
               _kv('Tanggal dibuat', _fmtIdDate(invoice['created_at']?.toString())),
               _kv('Jatuh tempo', _fmtIdDate(invoice['due_date']?.toString())),
-              _kv('Status', 'Lunas', valueColor: const Color(0xFF0D5A16)),
               if ((invoice['payment_date']?.toString() ?? '').trim().isNotEmpty)
                 _kv('Tanggal bayar', _fmtIdDate(invoice['payment_date']?.toString())),
               _kv('Metode', _methodLabel(invoice['payment_method']?.toString())),
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    const SizedBox(
+                      width: 108,
+                      child: Text(
+                        'Status',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12,
+                          color: FieldCollectorColors.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        'LUNAS',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.6,
+                          color: const Color(0xFF0D5A16),
+                          height: 1.2,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
@@ -493,7 +661,8 @@ class _ReceiptBody extends StatelessWidget {
           'Simpan layar ini sebagai bukti pembayaran.',
           style: TextStyle(fontSize: 11, fontStyle: FontStyle.italic, color: FieldCollectorColors.onSurfaceVariant),
         ),
-      ],
+        ],
+      ),
     );
   }
 

@@ -94,6 +94,24 @@ class ApiClient {
     return response;
   }
 
+  /// Unduh file biner (mis. PDF resi) dengan token auth yang sama.
+  static Future<http.Response> download(String endpoint, {String accept = 'application/pdf'}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token');
+    final uri = _uri(endpoint);
+    final response = await http
+        .get(
+          uri,
+          headers: {
+            'Accept': accept,
+            if (token != null) 'Authorization': 'Bearer $token',
+          },
+        )
+        .timeout(requestTimeout);
+    print('DOWNLOAD $uri → ${response.statusCode}');
+    return response;
+  }
+
   static Future<http.Response> post(String endpoint, Map<String, dynamic> body) async {
     final headers = await _getHeaders();
     return http

@@ -6,6 +6,8 @@ class FieldCollectorColors {
 
   static const Color background = Color(0xFFF8F9FA);
   static const Color surface = Color(0xFFFFFFFF);
+  /// Latar kartu sedikit lebih tinggi dari [surface] (M3 surfaceContainerHigh).
+  static const Color surfaceContainerHigh = Color(0xFFECEEF2);
   static const Color primaryContainer = Color(0xFF001F3F);
   static const Color onPrimary = Color(0xFFFFFFFF);
   static const Color onPrimaryContainer = Color(0xFF6F88AD);

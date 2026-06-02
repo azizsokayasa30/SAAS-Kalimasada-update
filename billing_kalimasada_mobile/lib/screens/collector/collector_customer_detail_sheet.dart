@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../store/collector_provider.dart';
+import '../../utils/whatsapp_uri.dart';
 import '../../theme/collector_colors.dart';
 import 'collector_invoice_receipt_screen.dart';
 import 'collector_receive_payment_screen.dart';
@@ -22,17 +23,7 @@ num? _coerceNum(dynamic v) {
   return num.tryParse(v.toString());
 }
 
-String? _waLaunchUri(String raw) {
-  final digits = raw.replaceAll(RegExp(r'\D'), '');
-  if (digits.isEmpty) return null;
-  var n = digits;
-  if (n.startsWith('0')) {
-    n = '62${n.substring(1)}';
-  } else if (!n.startsWith('62')) {
-    n = '62$n';
-  }
-  return 'https://wa.me/$n';
-}
+String? _waLaunchUri(String raw) => waLaunchUri(raw);
 
 Uri? _mapsUri(double? lat, double? lng) {
   if (lat == null || lng == null) return null;
@@ -780,7 +771,21 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                   ),
                 )
               else
-                Icon(Icons.edit_calendar_rounded, color: green.withValues(alpha: 0.9), size: 28),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.edit_calendar_rounded, color: green.withValues(alpha: 0.9), size: 28),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Edit',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: green.withValues(alpha: 0.85),
+                      ),
+                    ),
+                  ],
+                ),
             ],
           ),
         ),
@@ -804,9 +809,27 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                   child: Row(
                     children: [
-                      Icon(
-                        Icons.chat_outlined,
-                        color: phone.isNotEmpty ? FieldCollectorColors.primaryContainer : FieldCollectorColors.onSurfaceVariant,
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.chat_outlined,
+                            color: phone.isNotEmpty
+                                ? FieldCollectorColors.primaryContainer
+                                : FieldCollectorColors.onSurfaceVariant,
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Chat',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: phone.isNotEmpty
+                                  ? FieldCollectorColors.primaryContainer
+                                  : FieldCollectorColors.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -816,7 +839,7 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                             const Text('WhatsApp', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
                             const SizedBox(height: 2),
                             Text(
-                              phone.isNotEmpty ? phone : 'Belum diisi — ketuk pensil untuk isi',
+                              phone.isNotEmpty ? phone : 'Belum diisi — ketuk Edit untuk isi',
                               style: TextStyle(
                                 fontSize: 13,
                                 color: phone.isNotEmpty
@@ -835,16 +858,33 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                 ),
               ),
             ),
-            IconButton(
-              tooltip: 'Edit nomor',
-              onPressed: _phoneSaving ? null : _editPhone,
-              icon: _phoneSaving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.edit_outlined, color: FieldCollectorColors.primaryContainer),
+            InkWell(
+              onTap: _phoneSaving ? null : _editPhone,
+              borderRadius: BorderRadius.circular(10),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _phoneSaving
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.edit_outlined, color: FieldCollectorColors.primaryContainer),
+                    const SizedBox(height: 2),
+                    const Text(
+                      'Edit',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: FieldCollectorColors.primaryContainer,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ],
         ),

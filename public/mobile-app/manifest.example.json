@@ -1,6 +1,7 @@
 {
-  "version": "5.8.6",
-  "build_number": 86,
-  "apk_url": "/mobile-app/kalimasada-mobile-5.8.6.apk",
-  "release_notes": "Kolektor: kartu pelanggan & prioritas penagihan seragam; badge Baru (belum ada invoice); Isolir merah; filter area (pil); ringkasan jumlah & total tagihan; tombol Tagih di prioritas; sinkron filter area saat ganti tab; perbaikan badge pembayaran."
+  "version": "5.9.0",
+  "build_number": 89,
+  "apk_url": "/mobile-app/kalimasada-mobile-5.9.0.apk",
+  "force_update": false,
+  "release_notes": "Update otomatis dari dalam aplikasi; kirim resi WhatsApp (gambar); logout jam 12 malam; ingat sandi & login sidik jari; area pelanggan di tag lokasi teknisi; perbaikan stabilitas."
 }

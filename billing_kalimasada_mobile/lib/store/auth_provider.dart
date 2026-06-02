@@ -1,7 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_client.dart';
+import '../services/biometric_auth_service.dart';
+import '../services/credential_storage.dart';
+import '../services/session_service.dart';
 
 class AuthProvider extends ChangeNotifier {
   bool _isInitialized = false;
@@ -10,6 +14,8 @@ class AuthProvider extends ChangeNotifier {
   String? _token;
   String? _role;
   Map<String, dynamic>? _user;
+  Timer? _midnightLogoutTimer;
+  bool _sessionExpiredMessage = false;
 
   bool get isInitialized => _isInitialized;
   bool get loading => _loading;
@@ -17,6 +23,11 @@ class AuthProvider extends ChangeNotifier {
   String? get token => _token;
   String? get role => _role;
   Map<String, dynamic>? get user => _user;
+  bool get sessionExpiredMessage => _sessionExpiredMessage;
+
+  void clearSessionExpiredMessage() {
+    _sessionExpiredMessage = false;
+  }
 
   Future<void> initialize() async {
     try {
@@ -37,17 +48,50 @@ class AuthProvider extends ChangeNotifier {
           _user = null;
         }
       }
+
+      if (_token != null) {
+        if (prefs.getString('session_expires_at') == null) {
+          await SessionService.markSessionValid();
+        }
+        await checkSessionExpiry(silent: true);
+        if (_token != null) {
+          _scheduleMidnightLogout();
+        }
+      }
     } catch (_) {
-      /* SP lambat / gagal — tetap tampilkan login, bukan splash abadi */
+      /* SP lambat / gagal — tetap tampilkan login */
     } finally {
       _isInitialized = true;
       notifyListeners();
     }
   }
 
-  Future<void> login(String phone, String password) async {
+  void _scheduleMidnightLogout() {
+    _midnightLogoutTimer?.cancel();
+    SessionService.timeUntilMidnightLogout().then((remaining) {
+      if (remaining == null || _token == null) return;
+      _midnightLogoutTimer = Timer(remaining, () {
+        logout(sessionExpired: true);
+      });
+    });
+  }
+
+  /// Cek sesi saat buka app / kembali dari background.
+  Future<void> checkSessionExpiry({bool silent = false}) async {
+    if (_token == null) return;
+    if (!await SessionService.isSessionExpired()) return;
+    await logout(sessionExpired: !silent);
+  }
+
+  Future<void> login(
+    String phone,
+    String password, {
+    bool rememberPassword = false,
+    bool enableBiometric = false,
+  }) async {
     _loading = true;
     _error = null;
+    _sessionExpiredMessage = false;
     notifyListeners();
 
     try {
@@ -67,6 +111,19 @@ class AuthProvider extends ChangeNotifier {
           await prefs.setString('token', _token!);
           await prefs.setString('role', _role ?? '');
           await prefs.setString('user', jsonEncode(_user));
+
+          await SessionService.markSessionValid();
+          _scheduleMidnightLogout();
+
+          if (rememberPassword) {
+            await CredentialStorage.saveCredentials(
+              username: phone,
+              password: password,
+              enableBiometric: enableBiometric,
+            );
+          } else {
+            await CredentialStorage.clearCredentials();
+          }
         } else {
           _error = data['message'] ?? 'Login gagal';
         }
@@ -80,6 +137,35 @@ class AuthProvider extends ChangeNotifier {
       _loading = false;
       notifyListeners();
     }
+  }
+
+  Future<void> loginWithBiometric() async {
+    if (!await CredentialStorage.biometricEnabled) {
+      _error = 'Login sidik jari belum diaktifkan';
+      notifyListeners();
+      return;
+    }
+
+    final creds = await CredentialStorage.readCredentials();
+    if (creds.username == null || creds.password == null) {
+      _error = 'Sandi tersimpan tidak ditemukan. Login manual dulu.';
+      notifyListeners();
+      return;
+    }
+
+    final authResult = await BiometricAuthService.authenticate();
+    if (!authResult.ok) {
+      _error = authResult.error ?? 'Sidik jari gagal atau dibatalkan';
+      notifyListeners();
+      return;
+    }
+
+    await login(
+      creds.username!,
+      creds.password!,
+      rememberPassword: true,
+      enableBiometric: true,
+    );
   }
 
   /// Muat ulang profil teknisi dari server (sinkron dengan web / tabel technicians).
@@ -129,16 +215,31 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> logout() async {
+  Future<void> logout({bool sessionExpired = false, bool clearSavedCredentials = false}) async {
+    _midnightLogoutTimer?.cancel();
+    _midnightLogoutTimer = null;
+
     _token = null;
     _role = null;
     _user = null;
-    
+    _sessionExpiredMessage = sessionExpired;
+
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('token');
     await prefs.remove('role');
     await prefs.remove('user');
-    
+    await SessionService.clearSessionMarker();
+
+    if (clearSavedCredentials) {
+      await CredentialStorage.clearCredentials();
+    }
+
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _midnightLogoutTimer?.cancel();
+    super.dispose();
   }
 }
