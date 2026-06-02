@@ -27,21 +27,38 @@ Terima kasih atas kepercayaan Anda.`,
             enabled: true
         },
         due_date_reminder: {
-            title: 'Peringatan Jatuh Tempo',
-            template: `⚠️ *PERINGATAN JATUH TEMPO*
+            title: 'Peringatan Sebelum Jatuh Tempo',
+            template: `📋 *PEMBERITAHUAN TAGIHAN*
 
 Halo {customer_name},
 
-Tagihan Anda akan jatuh tempo dalam {days_remaining} hari:
+Tagihan Anda akan jatuh tempo dalam *{days_remaining} hari*:
 
 📄 *No. Invoice:* {invoice_number}
 💰 *Jumlah:* Rp {amount}
 📅 *Jatuh Tempo:* {due_date}
 📦 *Paket:* {package_name} ({package_speed})
 
-Silakan lakukan pembayaran segera untuk menghindari denda keterlambatan.
+Mohon persiapkan pembayaran sebelum tanggal jatuh tempo agar layanan tetap lancar.
 
 Terima kasih.`,
+            enabled: true
+        },
+        due_date_reminder_today: {
+            title: 'Pengingat Hari H Jatuh Tempo',
+            template: `🙏 *PENGINGAT PEMBAYARAN*
+
+Halo {customer_name},
+
+Hari ini (*{due_date}*) adalah tanggal jatuh tempo tagihan Anda:
+
+📄 *No. Invoice:* {invoice_number}
+💰 *Jumlah:* Rp {amount}
+📦 *Paket:* {package_name} ({package_speed})
+
+Apabila belum melakukan pembayaran, mohon kiranya dapat diselesaikan hari ini. Jika sudah bayar, abaikan pesan ini.
+
+Terima kasih atas kerja samanya.`,
             enabled: true
         },
         payment_received: {

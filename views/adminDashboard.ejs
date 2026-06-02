@@ -195,21 +195,38 @@
                     <div class="sc-value"><%= (bs.total_customers || 0) - (bs.active_customers || 0) %></div>
                     <div class="sc-sub">Isolir / Berhenti berlangganan</div>
                 </a>
+                <% 
+                  var tagihanBln = bs.monthly_total_tagihan != null ? bs.monthly_total_tagihan : ((bs.monthly_revenue || 0) + (bs.monthly_unpaid || 0));
+                  var lunasBln = bs.monthly_lunas_canonical != null ? bs.monthly_lunas_canonical : (bs.monthly_revenue || 0);
+                  var blmBln = bs.monthly_belum_lunas_canonical != null ? bs.monthly_belum_lunas_canonical : (bs.monthly_unpaid || 0);
+                  var invBln = bs.monthly_invoice_count_canonical != null ? bs.monthly_invoice_count_canonical : (bs.monthly_invoices || 0);
+                  var invBlmBln = bs.monthly_belum_lunas_count_canonical != null ? bs.monthly_belum_lunas_count_canonical : (bs.unpaid_monthly_invoices || 0);
+                  var piutangAll = bs.outstanding_unpaid_total != null ? bs.outstanding_unpaid_total : 0;
+                  var piutangCnt = bs.outstanding_unpaid_count != null ? bs.outstanding_unpaid_count : 0;
+                %>
                 <a href="/admin/billing/invoices" class="stat-card-big stat-blue" id="sc-total-invoice">
                     <div class="sc-header">
                         <span class="sc-label">Total Tagihan</span>
-                        <span class="sc-badge"><i class="bi bi-receipt me-1"></i> Bln Ini</span>
+                        <span class="sc-badge"><i class="bi bi-receipt me-1"></i> <%= invBln %> Inv</span>
                     </div>
-                    <div class="sc-value">Rp <%= ((bs.monthly_revenue || 0) + (bs.monthly_unpaid || 0)).toLocaleString('id-ID') %></div>
-                    <div class="sc-sub">Akumulasi tagihan bulan ini</div>
+                    <div class="sc-value">Rp <%= tagihanBln.toLocaleString('id-ID') %></div>
+                    <div class="sc-sub">Lunas Rp <%= lunasBln.toLocaleString('id-ID') %> · Blm Rp <%= blmBln.toLocaleString('id-ID') %></div>
                 </a>
                 <a href="/admin/billing/invoices?status=unpaid" class="stat-card-big stat-amber" id="sc-unpaid">
                     <div class="sc-header">
-                        <span class="sc-label">Belum Bayar</span>
-                        <span class="sc-badge"><%= bs.unpaid_monthly_invoices || 0 %> Inv</span>
+                        <span class="sc-label">Belum Lunas</span>
+                        <span class="sc-badge"><%= invBlmBln %> Inv · Bln Ini</span>
                     </div>
-                    <div class="sc-value">Rp <%= (bs.monthly_unpaid || 0).toLocaleString('id-ID') %></div>
-                    <div class="sc-sub">Piutang berjalan</div>
+                    <div class="sc-value">Rp <%= blmBln.toLocaleString('id-ID') %></div>
+                    <div class="sc-sub">Dari tagihan terbit bulan ini</div>
+                </a>
+                <a href="/admin/billing/invoices?status=unpaid" class="stat-card-big stat-rose" id="sc-piutang-all" title="Semua invoice belum lunas (termasuk bulan lalu)">
+                    <div class="sc-header">
+                        <span class="sc-label">Piutang Aktif</span>
+                        <span class="sc-badge"><%= piutangCnt %> Inv</span>
+                    </div>
+                    <div class="sc-value">Rp <%= piutangAll.toLocaleString('id-ID') %></div>
+                    <div class="sc-sub">Total belum lunas (semua periode)</div>
                 </a>
                 <a href="/admin/billing/customers" class="stat-card-big stat-teal" id="sc-new-customer">
                     <div class="sc-header">

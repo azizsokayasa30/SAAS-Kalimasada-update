@@ -163,7 +163,7 @@ function joinDateThisCalendarMonth(c) {
 /**
  * Filter daftar kolektor: pool = area + assignment kolektor (getCollectorCustomers).
  * Semua = seluruh pelanggan di pool (seperti admin /customers, dibatasi area tim).
- * unpaid = Belum Lunas admin; paid = Lunas admin; baru = join_date bulan ini.
+ * unpaid = Belum Lunas admin; paid = Lunas admin; baru = belum punya invoice (no_invoice).
  */
 function filterCollectorCustomersForMobile(allMappedCustomers, statusFilter, q, areaFilter) {
     const validFilters = new Set(['paid', 'unpaid', 'overdue', 'no_invoice', 'isolir', 'baru']);
@@ -175,7 +175,7 @@ function filterCollectorCustomersForMobile(allMappedCustomers, statusFilter, q, 
     if (sf === 'isolir') {
         customers = customers.filter((c) => collectorCustomerIsIsolir(c));
     } else if (sf === 'baru') {
-        customers = customers.filter((c) => joinDateThisCalendarMonth(c));
+        customers = customers.filter((c) => (c.payment_status || '') === 'no_invoice');
     } else if (sf === 'unpaid') {
         customers = customers.filter((c) => matchesAdminBelumLunasFromPaymentStatus(c));
     } else if (sf === 'paid') {
@@ -4050,6 +4050,99 @@ router.post('/collector/customer-isolir/:customerId', verifyToken, requireCollec
         res.status(500).json({ success: false, message: error.message || 'Gagal isolir' });
     }
 });
+
+/** Normalisasi nomor HP pelanggan (format lokal 08…). */
+function normalizeCustomerPhoneInput(raw) {
+    const digits = String(raw || '').replace(/\D/g, '');
+    if (digits.length < 9 || digits.length > 15) return null;
+    if (digits.startsWith('0')) return digits;
+    if (digits.startsWith('62')) return `0${digits.slice(2)}`;
+    return `0${digits}`;
+}
+
+router.patch('/collector/customers/:customerId/phone', verifyToken, requireCollector, async (req, res) => {
+    const collectorId = parseCollectorId(req);
+    if (!collectorId) {
+        return res.status(400).json({ success: false, message: 'ID kolektor tidak valid' });
+    }
+    const customerId = parseInt(String(req.params.customerId), 10);
+    if (!Number.isFinite(customerId) || customerId <= 0) {
+        return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
+    }
+    const phone = normalizeCustomerPhoneInput(req.body && req.body.phone);
+    if (!phone) {
+        return res.status(400).json({ success: false, message: 'Nomor HP tidak valid (min. 9 digit)' });
+    }
+    try {
+        const allowed = await collectorMappedCustomerIds(collectorId);
+        if (!allowed.has(customerId)) {
+            return res.status(403).json({ success: false, message: 'Pelanggan tidak ada di wilayah Anda' });
+        }
+        await new Promise((resolve, reject) => {
+            db.run('UPDATE customers SET phone = ? WHERE id = ?', [phone, customerId], (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+        res.json({ success: true, data: { phone }, message: 'Nomor HP diperbarui' });
+    } catch (error) {
+        logger.error('[mobile-adapter] collector/customers/phone', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal menyimpan nomor HP' });
+    }
+});
+
+router.patch(
+    '/collector/customers/:customerId/invoices/:invoiceId/due-date',
+    verifyToken,
+    requireCollector,
+    async (req, res) => {
+        const collectorId = parseCollectorId(req);
+        if (!collectorId) {
+            return res.status(400).json({ success: false, message: 'ID kolektor tidak valid' });
+        }
+        const customerId = parseInt(String(req.params.customerId), 10);
+        const invoiceId = parseInt(String(req.params.invoiceId), 10);
+        if (!Number.isFinite(customerId) || customerId <= 0 || !Number.isFinite(invoiceId) || invoiceId <= 0) {
+            return res.status(400).json({ success: false, message: 'ID tidak valid' });
+        }
+        const dueDate = String((req.body && req.body.due_date) || '').trim().slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
+            return res.status(400).json({ success: false, message: 'Format tanggal harus YYYY-MM-DD' });
+        }
+        try {
+            const allowed = await collectorMappedCustomerIds(collectorId);
+            if (!allowed.has(customerId)) {
+                return res.status(403).json({ success: false, message: 'Pelanggan tidak ada di wilayah Anda' });
+            }
+            const inv = await billingManager.getInvoiceById(invoiceId);
+            if (!inv || Number(inv.customer_id) !== customerId) {
+                return res.status(404).json({ success: false, message: 'Tagihan tidak ditemukan' });
+            }
+            if (String(inv.status || '').toLowerCase() === 'paid') {
+                return res.status(400).json({ success: false, message: 'Tagihan sudah lunas, jatuh tempo tidak dapat diubah' });
+            }
+            await new Promise((resolve, reject) => {
+                db.run(
+                    'UPDATE invoices SET due_date = ? WHERE id = ? AND customer_id = ?',
+                    [dueDate, invoiceId, customerId],
+                    (err) => {
+                        if (err) reject(err);
+                        else resolve();
+                    }
+                );
+            });
+            const updated = await billingManager.getInvoiceById(invoiceId);
+            res.json({
+                success: true,
+                data: { id: invoiceId, due_date: updated.due_date },
+                message: 'Jatuh tempo diperbarui'
+            });
+        } catch (error) {
+            logger.error('[mobile-adapter] collector/customers/.../due-date', error);
+            res.status(500).json({ success: false, message: error.message || 'Gagal menyimpan jatuh tempo' });
+        }
+    }
+);
 
 router.post(
     '/collector/payment',

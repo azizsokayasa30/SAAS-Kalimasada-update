@@ -1993,7 +1993,7 @@ router.post('/installations/update-status', async (req, res) => {
                             console.warn(`Failed to send WhatsApp status update notification to technician ${technician.name}:`, notificationResult.error);
                         }
 
-                        // If installation is completed, send completion notification
+                        // If installation is completed, send completion notification to technician + welcome to customer
                         if (status === 'completed') {
                             const completionNotificationResult = await whatsappNotifications.sendInstallationCompletionNotification(
                                 technician,
@@ -2006,6 +2006,13 @@ router.post('/installations/update-status', async (req, res) => {
                                 console.log(`WhatsApp completion notification sent to technician ${technician.name} for job ${currentJob.job_number}`);
                             } else {
                                 console.warn(`Failed to send WhatsApp completion notification to technician ${technician.name}:`, notificationResult.error);
+                            }
+
+                            const welcomeResult = await whatsappNotifications.sendWelcomeMessageOnInstallComplete(currentJob);
+                            if (welcomeResult && welcomeResult.success && !welcomeResult.skipped) {
+                                console.log(`Welcome message sent to customer for job ${currentJob.job_number}`);
+                            } else if (welcomeResult && !welcomeResult.skipped) {
+                                console.warn(`Failed to send welcome message to customer for job ${currentJob.job_number}:`, welcomeResult.error);
                             }
                         }
                     }

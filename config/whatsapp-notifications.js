@@ -476,11 +476,12 @@ class WhatsAppNotificationManager {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 
-    // Send invoice created notification
-    async sendInvoiceCreatedNotification(customerId, invoiceId) {
+    // Send invoice created notification (jadwal: H-X sebelum jatuh tempo; manual/test: monitor terpisah)
+    async sendInvoiceCreatedNotification(customerId, invoiceId, options = {}) {
         try {
-            if (!this.isSystemMonitorEnabled('billing_scheduler_invoice_wa')) {
-                logger.info('billing_scheduler_invoice_wa off — skip invoice created notification');
+            const monitorId = options.fromSchedule ? 'billing_daily_due_wa' : 'billing_scheduler_invoice_wa';
+            if (!this.isSystemMonitorEnabled(monitorId)) {
+                logger.info(`${monitorId} off — skip invoice created notification`);
                 return { success: true, skipped: true, reason: 'System monitor disabled' };
             }
 
@@ -523,17 +524,34 @@ class WhatsAppNotificationManager {
         }
     }
 
-    // Send due date reminder
-    async sendDueDateReminder(invoiceId) {
+    _resolveDueReminderTemplateKey(reminderType = 'before') {
+        return reminderType === 'today' ? 'due_date_reminder_today' : 'due_date_reminder';
+    }
+
+    _calcDaysRemaining(dueDateStr) {
+        const raw = String(dueDateStr || '').slice(0, 10);
+        const parts = raw.split('-').map((n) => parseInt(n, 10));
+        if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return 0;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const due = new Date(parts[0], parts[1] - 1, parts[2]);
+        due.setHours(0, 0, 0, 0);
+        return Math.max(0, Math.round((due - today) / (1000 * 60 * 60 * 24)));
+    }
+
+    // Send due date reminder (before jatuh tempo atau hari H)
+    async sendDueDateReminder(invoiceId, options = {}) {
         try {
             if (!this.isSystemMonitorEnabled('billing_daily_due_wa')) {
                 logger.info('billing_daily_due_wa off — skip due date reminder notification');
                 return { success: true, skipped: true, reason: 'System monitor disabled' };
             }
 
-            // Check if template is enabled
-            if (!this.isTemplateEnabled('due_date_reminder')) {
-                logger.info('Due date reminder notification is disabled, skipping...');
+            const reminderType = options.reminderType === 'today' ? 'today' : 'before';
+            const templateKey = this._resolveDueReminderTemplateKey(reminderType);
+
+            if (!this.isTemplateEnabled(templateKey)) {
+                logger.info(`Template ${templateKey} disabled, skipping...`);
                 return { success: true, skipped: true, reason: 'Template disabled' };
             }
 
@@ -546,9 +564,7 @@ class WhatsAppNotificationManager {
                 return { success: false, error: 'Missing data' };
             }
 
-            const dueDate = new Date(invoice.due_date);
-            const today = new Date();
-            const daysRemaining = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
+            const daysRemaining = this._calcDaysRemaining(invoice.due_date);
 
             const data = {
                 customer_name: customer.name,
@@ -560,12 +576,9 @@ class WhatsAppNotificationManager {
                 package_speed: packageData.speed
             };
 
-            const message = this.replaceTemplateVariables(
-                this.templates.due_date_reminder.template,
-                data
-            );
+            const tpl = this.templates[templateKey];
+            const message = this.replaceTemplateVariables(tpl.template, data);
 
-            // Attach same invoice banner image
             const imagePath = this.getInvoiceImagePath();
             return await this.sendNotification(customer.phone, message, { imagePath });
         } catch (error) {
@@ -575,10 +588,11 @@ class WhatsAppNotificationManager {
     }
 
     // Send member invoice created notification
-    async sendMemberInvoiceCreatedNotification(memberId, invoiceId) {
+    async sendMemberInvoiceCreatedNotification(memberId, invoiceId, options = {}) {
         try {
-            if (!this.isSystemMonitorEnabled('billing_scheduler_invoice_wa')) {
-                logger.info('billing_scheduler_invoice_wa off — skip member invoice created notification');
+            const monitorId = options.fromSchedule ? 'billing_daily_due_wa' : 'billing_scheduler_invoice_wa';
+            if (!this.isSystemMonitorEnabled(monitorId)) {
+                logger.info(`${monitorId} off — skip member invoice created notification`);
                 return { success: true, skipped: true, reason: 'System monitor disabled' };
             }
 
@@ -620,15 +634,18 @@ class WhatsAppNotificationManager {
     }
 
     // Send member due date reminder
-    async sendMemberDueDateReminder(invoiceId) {
+    async sendMemberDueDateReminder(invoiceId, options = {}) {
         try {
             if (!this.isSystemMonitorEnabled('billing_daily_due_wa')) {
                 logger.info('billing_daily_due_wa off — skip member due date reminder notification');
                 return { success: true, skipped: true, reason: 'System monitor disabled' };
             }
 
-            if (!this.isTemplateEnabled('due_date_reminder')) {
-                logger.info('Member due date reminder notification is disabled, skipping...');
+            const reminderType = options.reminderType === 'today' ? 'today' : 'before';
+            const templateKey = this._resolveDueReminderTemplateKey(reminderType);
+
+            if (!this.isTemplateEnabled(templateKey)) {
+                logger.info(`Member template ${templateKey} disabled, skipping...`);
                 return { success: true, skipped: true, reason: 'Template disabled' };
             }
 
@@ -641,9 +658,7 @@ class WhatsAppNotificationManager {
                 return { success: false, error: 'Missing data' };
             }
 
-            const dueDate = new Date(invoice.due_date);
-            const today = new Date();
-            const daysRemaining = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
+            const daysRemaining = this._calcDaysRemaining(invoice.due_date);
 
             const data = {
                 customer_name: member.name,
@@ -655,10 +670,8 @@ class WhatsAppNotificationManager {
                 package_speed: packageData.speed
             };
 
-            const message = this.replaceTemplateVariables(
-                this.templates.due_date_reminder.template,
-                data
-            );
+            const tpl = this.templates[templateKey];
+            const message = this.replaceTemplateVariables(tpl.template, data);
 
             const imagePath = this.getInvoiceImagePath();
             return await this.sendNotification(member.phone, message, { imagePath });

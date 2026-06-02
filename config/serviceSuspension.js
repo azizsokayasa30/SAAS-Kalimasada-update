@@ -33,6 +33,36 @@ function withTimeout(promise, ms, label = 'operation') {
     ]);
 }
 
+/** Tanggal isolir otomatis global setiap bulan (1–28), default 25. */
+function getAutoSuspensionDay() {
+    const raw = parseInt(getSetting('auto_suspension_day', '25'), 10);
+    if (!Number.isFinite(raw)) return 25;
+    return Math.min(Math.max(raw, 1), 28);
+}
+
+function isAutoSuspensionDay(date = new Date()) {
+    return date.getDate() === getAutoSuspensionDay();
+}
+
+/** Tanggal isolir pelanggan: kolom auto_suspension_day atau fallback global. */
+function getCustomerAutoSuspensionDay(customer) {
+    if (customer && customer.auto_suspension_day != null && customer.auto_suspension_day !== '') {
+        const per = parseInt(customer.auto_suspension_day, 10);
+        if (Number.isFinite(per) && per >= 1 && per <= 28) return per;
+    }
+    return getAutoSuspensionDay();
+}
+
+function isCustomerAutoSuspensionDay(customer, date = new Date()) {
+    return date.getDate() === getCustomerAutoSuspensionDay(customer);
+}
+
+/** Scheduler: admin manual pakai force; otomatis dicek per pelanggan di loop. */
+function shouldRunAutoSuspension(options = {}) {
+    if (options && options.force) return true;
+    return true;
+}
+
 /**
  * Router untuk disconnect PPPoE. Tanpa mapping: pindai router dengan timeout per-router + budget total
  * agal request admin tidak hang menunggu NAS yang tidak merespons.
@@ -655,7 +685,7 @@ class ServiceSuspensionManager {
     /**
      * Check dan suspend pelanggan yang telat bayar otomatis
      */
-    async checkAndSuspendOverdueCustomers() {
+    async checkAndSuspendOverdueCustomers(options = {}) {
         if (this.isRunning) {
             logger.info('Service suspension check already running, skipping...');
             return;
@@ -665,59 +695,56 @@ class ServiceSuspensionManager {
             this.isRunning = true;
             logger.info('Starting automatic service suspension check...');
 
-            // Ambil pengaturan grace period
-            const gracePeriodDays = parseInt(getSetting('suspension_grace_period_days', '7'));
             const autoSuspensionEnabled = getSetting('auto_suspension_enabled', true) === true || getSetting('auto_suspension_enabled', 'true') === 'true';
+            const defaultSuspensionDay = getAutoSuspensionDay();
+            const todayDay = new Date().getDate();
+            const forceRun = Boolean(options && options.force);
 
             if (!autoSuspensionEnabled) {
                 logger.info('Auto suspension is disabled in settings');
                 return;
             }
 
-            // Ambil tagihan yang overdue
-            const overdueInvoices = await billingManager.getOverdueInvoices();
-            logger.info(`Found ${overdueInvoices.length} overdue invoices to check`);
+            logger.info(
+                forceRun
+                    ? 'Running manual (force) auto suspension — semua pelanggan unpaid'
+                    : `Running auto suspension (hari ini: ${todayDay}, default global: tgl ${defaultSuspensionDay}) — per pelanggan sesuai auto_suspension_day`
+            );
+
+            // Tanggal isolir tetap: semua tagihan unpaid (bukan hanya overdue + grace period)
+            const unpaidInvoices = await billingManager.getUnpaidInvoicesForAutoSuspension();
+            logger.info(`Found ${unpaidInvoices.length} unpaid invoices to check`);
             
-            if (overdueInvoices.length === 0) {
-                logger.info('No overdue invoices found, skipping suspension check');
+            if (unpaidInvoices.length === 0) {
+                logger.info('No unpaid invoices found, skipping suspension check');
                 return { checked: 0, suspended: 0, errors: 0, details: [] };
             }
             
             const results = {
                 checked: 0,
                 suspended: 0,
+                skipped_wrong_day: 0,
                 errors: 0,
+                suspension_day: defaultSuspensionDay,
                 details: []
             };
 
-            for (const invoice of overdueInvoices) {
-                results.checked++;
+            for (const invoice of unpaidInvoices) {
+                if (!invoice.customer_id) continue;
 
                 try {
-                    // Hitung berapa hari telat dengan perhitungan yang lebih akurat
-                    const dueDate = new Date(invoice.due_date);
-                    const today = new Date();
-                    
-                    // Normalize dates to start of day to avoid timezone issues
-                    const dueDateStart = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
-                    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-                    
-                    const daysOverdue = Math.floor((todayStart - dueDateStart) / (1000 * 60 * 60 * 24));
-                    
-                    logger.info(`Customer ${invoice.customer_name}: Due date: ${dueDate.toISOString().split('T')[0]}, Today: ${today.toISOString().split('T')[0]}, Days overdue: ${daysOverdue}, Grace period: ${gracePeriodDays}`);
-
-                    // Skip jika belum melewati grace period
-                    if (daysOverdue < gracePeriodDays) {
-                        logger.info(`Customer ${invoice.customer_name} overdue ${daysOverdue} days, grace period ${gracePeriodDays} days - skipping`);
-                        continue;
-                    }
-
-                    // Ambil data customer
                     const customer = await billingManager.getCustomerById(invoice.customer_id);
                     if (!customer) {
                         logger.warn(`Customer not found for invoice ${invoice.invoice_number}`);
                         continue;
                     }
+
+                    if (!forceRun && !isCustomerAutoSuspensionDay(customer)) {
+                        results.skipped_wrong_day++;
+                        continue;
+                    }
+
+                    results.checked++;
 
                     // Skip jika sudah suspended/isolir
                     if (isSuspendedStatus(customer.status)) {
@@ -731,24 +758,25 @@ class ServiceSuspensionManager {
                         continue;
                     }
 
+                    const customerSuspensionDay = getCustomerAutoSuspensionDay(customer);
+                    logger.info(`Customer ${invoice.customer_name}: unpaid invoice ${invoice.invoice_number}, due ${invoice.due_date}`);
+
                     // Suspend layanan
-                    const suspensionResult = await this.suspendCustomerService(customer, `Telat bayar ${daysOverdue} hari`);
+                    const suspensionResult = await this.suspendCustomerService(customer, `Isolir otomatis tanggal ${customerSuspensionDay}`);
                     
                     if (suspensionResult.success) {
                         results.suspended++;
                         results.details.push({
                             customer: customer.username,
                             invoice: invoice.invoice_number,
-                            daysOverdue,
                             status: 'suspended'
                         });
-                        logger.info(`Successfully suspended service for ${customer.username} (${daysOverdue} days overdue)`);
+                        logger.info(`Successfully suspended service for ${customer.username} (auto suspension day ${customerSuspensionDay})`);
                     } else {
                         results.errors++;
                         results.details.push({
                             customer: customer.username,
                             invoice: invoice.invoice_number,
-                            daysOverdue,
                             status: 'failed'
                         });
                         logger.error(`Failed to suspend service for ${customer.username}`);
@@ -771,7 +799,7 @@ class ServiceSuspensionManager {
         }
     }
 
-    async checkAndSuspendOverdueMembers() {
+    async checkAndSuspendOverdueMembers(options = {}) {
         if (this.isRunning) {
             logger.info('Member service suspension check already running, skipping...');
             return;
@@ -781,22 +809,26 @@ class ServiceSuspensionManager {
             this.isRunning = true;
             logger.info('Starting automatic member service suspension check...');
 
-            // Ambil pengaturan grace period
-            const gracePeriodDays = parseInt(getSetting('suspension_grace_period_days', '7'));
             const autoSuspensionEnabled = getSetting('auto_suspension_enabled', true) === true || getSetting('auto_suspension_enabled', 'true') === 'true';
+            const suspensionDay = getAutoSuspensionDay();
+            const todayDay = new Date().getDate();
 
             if (!autoSuspensionEnabled) {
                 logger.info('Auto suspension is disabled in settings');
                 return;
             }
 
-            // Ambil tagihan member yang overdue
-            const overdueInvoices = await billingManager.getOverdueInvoices();
-            const memberInvoices = overdueInvoices.filter(inv => inv.member_id && inv.invoice_type_entity === 'member');
-            logger.info(`Found ${memberInvoices.length} overdue member invoices to check`);
+            if (!shouldRunAutoSuspension(options)) {
+                logger.info(`Member auto suspension hanya dijalankan tanggal ${suspensionDay} setiap bulan (hari ini: ${todayDay}), skipping...`);
+                return { checked: 0, suspended: 0, errors: 0, skipped: true, suspension_day: suspensionDay, details: [] };
+            }
+
+            const unpaidInvoices = await billingManager.getUnpaidInvoicesForAutoSuspension();
+            const memberInvoices = unpaidInvoices.filter(inv => inv.member_id && inv.invoice_type_entity === 'member');
+            logger.info(`Found ${memberInvoices.length} unpaid member invoices to check`);
             
             if (memberInvoices.length === 0) {
-                logger.info('No overdue member invoices found, skipping suspension check');
+                logger.info('No unpaid member invoices found, skipping suspension check');
                 return { checked: 0, suspended: 0, errors: 0, details: [] };
             }
             
@@ -804,6 +836,7 @@ class ServiceSuspensionManager {
                 checked: 0,
                 suspended: 0,
                 errors: 0,
+                suspension_day: suspensionDay,
                 details: []
             };
 
@@ -811,24 +844,6 @@ class ServiceSuspensionManager {
                 results.checked++;
 
                 try {
-                    // Hitung berapa hari telat
-                    const dueDate = new Date(invoice.due_date);
-                    const today = new Date();
-                    
-                    const dueDateStart = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
-                    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-                    
-                    const daysOverdue = Math.floor((todayStart - dueDateStart) / (1000 * 60 * 60 * 24));
-                    
-                    logger.info(`Member ${invoice.member_name}: Due date: ${dueDate.toISOString().split('T')[0]}, Today: ${today.toISOString().split('T')[0]}, Days overdue: ${daysOverdue}, Grace period: ${gracePeriodDays}`);
-
-                    // Skip jika belum melewati grace period
-                    if (daysOverdue < gracePeriodDays) {
-                        logger.info(`Member ${invoice.member_name} overdue ${daysOverdue} days, grace period ${gracePeriodDays} days - skipping`);
-                        continue;
-                    }
-
-                    // Ambil data member
                     const member = await billingManager.getMemberById(invoice.member_id);
                     if (!member) {
                         logger.warn(`Member not found for invoice ${invoice.invoice_number}`);
@@ -847,24 +862,24 @@ class ServiceSuspensionManager {
                         continue;
                     }
 
+                    logger.info(`Member ${invoice.member_name}: unpaid invoice ${invoice.invoice_number}, due ${invoice.due_date}`);
+
                     // Suspend layanan member
-                    const suspensionResult = await this.suspendMemberService(member, `Telat bayar ${daysOverdue} hari`);
+                    const suspensionResult = await this.suspendMemberService(member, `Isolir otomatis tanggal ${suspensionDay}`);
                     
                     if (suspensionResult.success) {
                         results.suspended++;
                         results.details.push({
                             member: member.hotspot_username || member.name,
                             invoice: invoice.invoice_number,
-                            daysOverdue,
                             status: 'suspended'
                         });
-                        logger.info(`Successfully suspended service for member ${member.hotspot_username || member.name} (${daysOverdue} days overdue)`);
+                        logger.info(`Successfully suspended service for member ${member.hotspot_username || member.name} (auto suspension day ${suspensionDay})`);
                     } else {
                         results.errors++;
                         results.details.push({
                             member: member.hotspot_username || member.name,
                             invoice: invoice.invoice_number,
-                            daysOverdue,
                             status: 'failed'
                         });
                         logger.error(`Failed to suspend service for member ${member.hotspot_username || member.name}`);
@@ -1222,3 +1237,8 @@ class ServiceSuspensionManager {
 const serviceSuspensionManager = new ServiceSuspensionManager();
 
 module.exports = serviceSuspensionManager;
+module.exports.getAutoSuspensionDay = getAutoSuspensionDay;
+module.exports.isAutoSuspensionDay = isAutoSuspensionDay;
+module.exports.getCustomerAutoSuspensionDay = getCustomerAutoSuspensionDay;
+module.exports.isCustomerAutoSuspensionDay = isCustomerAutoSuspensionDay;
+module.exports.shouldRunAutoSuspension = shouldRunAutoSuspension;

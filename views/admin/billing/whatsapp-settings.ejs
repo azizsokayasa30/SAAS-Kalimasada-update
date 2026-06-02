@@ -160,12 +160,31 @@
             height: auto;
         }
 
-        .provider-config {
-            background: var(--bg-secondary, #f8f9fa);
+        .provider-row {
             border: 1px solid #e9ecef;
             border-radius: 12px;
+            margin-top: 0.75rem;
+            overflow: hidden;
+            background: var(--panel-bg, #fff);
+        }
+
+        .provider-row-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.85rem 1rem;
+            background: var(--bg-secondary, #f8f9fa);
+        }
+
+        .provider-row-body {
+            display: none;
             padding: 1rem;
-            margin-top: 1rem;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .provider-row.is-enabled .provider-row-body {
+            display: block;
         }
     </style>
 
@@ -213,17 +232,17 @@
                     </div>
                 </div>
 
-                <!-- WhatsApp Gateway (Baileys) Section -->
+                <!-- WhatsApp Provider -->
                 <div class="row">
                     <div class="col-lg-6">
                         <div class="gateway-card" id="baileysSection">
-                            <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+                            <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-2">
                                 <div>
                                     <h4 class="template-title mb-2">
-                                        <i class="bi bi-whatsapp text-success"></i> WhatsApp Gateway Gratis (Baileys)
+                                        <i class="bi bi-whatsapp text-success"></i> Provider WhatsApp
                                     </h4>
                                     <p class="template-description mb-0">
-                                        Pilih provider aktif untuk bot WhatsApp dan simpan kredensial API tiap provider.
+                                        Aktifkan provider yang dipakai. Detail konfigurasi muncul setelah Enable dihidupkan.
                                     </p>
                                 </div>
                                 <div style="min-width: 220px;">
@@ -237,166 +256,165 @@
                                 </div>
                             </div>
 
-                            <div class="provider-config">
-                                <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap">
+                            <div class="provider-row" data-provider="baileys" id="providerRowBaileys">
+                                <div class="provider-row-header">
                                     <div>
                                         <strong><i class="bi bi-whatsapp text-success"></i> Baileys</strong>
-                                        <div class="form-text">Provider gratis berbasis session QR.</div>
+                                        <div class="form-text mb-0">Gratis — session QR</div>
                                     </div>
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="baileys_enabled">
-                                        <label class="form-check-label" for="baileys_enabled">
-                                            <strong>Enable</strong>
-                                        </label>
+                                    <div class="form-check form-switch mb-0">
+                                        <input class="form-check-input provider-enable-toggle" type="checkbox" id="baileys_enabled" data-provider="baileys">
+                                        <label class="form-check-label" for="baileys_enabled"><strong>Enable</strong></label>
+                                    </div>
+                                </div>
+                                <div class="provider-row-body">
+                                    <div class="alert alert-warning mb-3">
+                                        <strong>Gunakan nomor bot untuk scan QR.</strong>
+                                        <small class="d-block">Jangan gunakan nomor admin pribadi.</small>
+                                    </div>
+                                    <div id="baileysContent">
+                                        <div id="wa-status" class="mb-3"></div>
+                                        <div id="wa-qr-container" class="d-flex justify-content-center mb-3 d-none">
+                                            <div class="position-relative text-center">
+                                                <img id="wa-qr" src="#" alt="QR Code WhatsApp" class="img-fluid rounded shadow" style="max-width: 100%; height: auto; display: none;">
+                                                <div id="wa-qr-div" class="d-flex justify-content-center"></div>
+                                            </div>
+                                        </div>
+                                        <div class="d-flex gap-2 flex-wrap">
+                                            <button class="btn btn-success btn-sm" id="btnRefreshQR" type="button">
+                                                <i class="bi bi-arrow-clockwise"></i> Refresh QR
+                                            </button>
+                                            <button class="btn btn-outline-danger btn-sm" id="btnDeleteSession" type="button">
+                                                <i class="bi bi-trash"></i> Hapus Session
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
 
-                            <div class="alert alert-warning mt-3 mb-0">
-                                <div class="d-flex align-items-start">
-                                    <i class="bi bi-exclamation-triangle-fill me-2 mt-1"></i>
-                                    <div>
-                                        <strong>Gunakan nomor bot untuk scan QR.</strong><br>
-                                        <small>Nomor yang discan akan menjadi gateway WhatsApp. Sebaiknya jangan gunakan nomor admin pribadi.</small>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div id="baileysContent" style="display: none;">
-                                <div id="wa-status" class="mb-3"></div>
-                                <div id="wa-qr-container" class="d-flex justify-content-center mb-3 d-none">
-                                    <div class="position-relative text-center">
-                                        <img id="wa-qr" src="#" alt="QR Code WhatsApp" class="img-fluid rounded shadow" style="max-width: 100%; height: auto; display: none;">
-                                        <div id="wa-qr-div" class="d-flex justify-content-center"></div>
-                                    </div>
-                                </div>
-                                <div class="d-flex gap-2 flex-wrap">
-                                    <button class="btn btn-success btn-sm" id="btnRefreshQR" type="button">
-                                        <i class="bi bi-arrow-clockwise"></i> Refresh QR
-                                    </button>
-                                    <button class="btn btn-outline-danger btn-sm" id="btnDeleteSession" type="button">
-                                        <i class="bi bi-trash"></i> Hapus Session
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div class="provider-config">
-                                <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-3">
+                            <div class="provider-row" data-provider="wablas" id="providerRowWablas">
+                                <div class="provider-row-header">
                                     <div>
                                         <strong><i class="bi bi-cloud-check text-primary"></i> Wablas</strong>
-                                        <div class="form-text">Provider API Wablas untuk pengiriman pesan bot.</div>
+                                        <div class="form-text mb-0">API Wablas</div>
                                     </div>
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="wablas_enabled">
+                                    <div class="form-check form-switch mb-0">
+                                        <input class="form-check-input provider-enable-toggle" type="checkbox" id="wablas_enabled" data-provider="wablas">
                                         <label class="form-check-label" for="wablas_enabled"><strong>Enable</strong></label>
                                     </div>
                                 </div>
-                                <div class="row g-2">
-                                    <div class="col-md-6">
-                                        <label class="form-label">API URL</label>
-                                        <input type="text" class="form-control" id="wablas_api_url" placeholder="https://bdg.wablas.com">
-                                    </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label">API Key</label>
-                                        <input type="text" class="form-control" id="wablas_api_key" placeholder="Token Wablas">
-                                    </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label">Secret Key</label>
-                                        <input type="password" class="form-control" id="wablas_secret_key" placeholder="Secret key">
-                                    </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label">Device ID</label>
-                                        <input type="text" class="form-control" id="wablas_device_id" placeholder="Device ID">
-                                    </div>
-                                    <div class="col-md-4">
-                                        <label class="form-label">Min Delay (ms)</label>
-                                        <input type="number" class="form-control" id="wablas_min_delay" value="1000">
-                                    </div>
-                                    <div class="col-md-4">
-                                        <label class="form-label">Max Retry</label>
-                                        <input type="number" class="form-control" id="wablas_max_retries" value="3">
-                                    </div>
-                                    <div class="col-md-4">
-                                        <label class="form-label">Retry Delay (ms)</label>
-                                        <input type="number" class="form-control" id="wablas_retry_delay" value="2000">
-                                    </div>
-                                    <div class="col-12">
-                                        <label class="form-label">Webhook Secret</label>
-                                        <input type="password" class="form-control" id="wablas_webhook_secret" placeholder="Webhook secret">
+                                <div class="provider-row-body">
+                                    <div class="row g-2">
+                                        <div class="col-md-6">
+                                            <label class="form-label">API URL</label>
+                                            <input type="text" class="form-control" id="wablas_api_url" placeholder="https://bdg.wablas.com">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">API Key</label>
+                                            <input type="text" class="form-control" id="wablas_api_key" placeholder="Token Wablas">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Secret Key</label>
+                                            <input type="password" class="form-control" id="wablas_secret_key" placeholder="Secret key">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Device ID</label>
+                                            <input type="text" class="form-control" id="wablas_device_id" placeholder="Device ID">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label">Min Delay (ms)</label>
+                                            <input type="number" class="form-control" id="wablas_min_delay" value="1000">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label">Max Retry</label>
+                                            <input type="number" class="form-control" id="wablas_max_retries" value="3">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label">Retry Delay (ms)</label>
+                                            <input type="number" class="form-control" id="wablas_retry_delay" value="2000">
+                                        </div>
+                                        <div class="col-12">
+                                            <label class="form-label">Webhook Secret</label>
+                                            <input type="password" class="form-control" id="wablas_webhook_secret" placeholder="Webhook secret">
+                                        </div>
                                     </div>
                                 </div>
                             </div>
 
-                            <div class="provider-config">
-                                <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-3">
+                            <div class="provider-row" data-provider="meta" id="providerRowMeta">
+                                <div class="provider-row-header">
                                     <div>
                                         <strong><i class="bi bi-meta text-primary"></i> Meta Cloud API</strong>
-                                        <div class="form-text">Provider resmi WhatsApp Cloud API dari Meta.</div>
+                                        <div class="form-text mb-0">WhatsApp Cloud API resmi</div>
                                     </div>
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="meta_enabled">
+                                    <div class="form-check form-switch mb-0">
+                                        <input class="form-check-input provider-enable-toggle" type="checkbox" id="meta_enabled" data-provider="meta">
                                         <label class="form-check-label" for="meta_enabled"><strong>Enable</strong></label>
                                     </div>
                                 </div>
-                                <div class="row g-2">
-                                    <div class="col-md-6">
-                                        <label class="form-label">Graph API URL</label>
-                                        <input type="text" class="form-control" id="meta_graph_api_url" placeholder="https://graph.facebook.com/v19.0">
-                                    </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label">Phone Number ID</label>
-                                        <input type="text" class="form-control" id="meta_phone_number_id" placeholder="Phone number ID">
-                                    </div>
-                                    <div class="col-12">
-                                        <label class="form-label">Access Token</label>
-                                        <input type="password" class="form-control" id="meta_access_token" placeholder="Permanent access token">
-                                    </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label">Business Account ID</label>
-                                        <input type="text" class="form-control" id="meta_business_account_id" placeholder="WABA ID">
-                                    </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label">Webhook Verify Token</label>
-                                        <input type="password" class="form-control" id="meta_webhook_verify_token" placeholder="Verify token">
-                                    </div>
-                                    <div class="col-12">
-                                        <label class="form-label">App Secret</label>
-                                        <input type="password" class="form-control" id="meta_app_secret" placeholder="App secret">
+                                <div class="provider-row-body">
+                                    <div class="row g-2">
+                                        <div class="col-md-6">
+                                            <label class="form-label">Graph API URL</label>
+                                            <input type="text" class="form-control" id="meta_graph_api_url" placeholder="https://graph.facebook.com/v19.0">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Phone Number ID</label>
+                                            <input type="text" class="form-control" id="meta_phone_number_id" placeholder="Phone number ID">
+                                        </div>
+                                        <div class="col-12">
+                                            <label class="form-label">Access Token</label>
+                                            <input type="password" class="form-control" id="meta_access_token" placeholder="Permanent access token">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Business Account ID</label>
+                                            <input type="text" class="form-control" id="meta_business_account_id" placeholder="WABA ID">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Webhook Verify Token</label>
+                                            <input type="password" class="form-control" id="meta_webhook_verify_token" placeholder="Verify token">
+                                        </div>
+                                        <div class="col-12">
+                                            <label class="form-label">App Secret</label>
+                                            <input type="password" class="form-control" id="meta_app_secret" placeholder="App secret">
+                                        </div>
                                     </div>
                                 </div>
                             </div>
 
-                            <div class="provider-config">
-                                <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-3">
+                            <div class="provider-row" data-provider="qontak" id="providerRowQontak">
+                                <div class="provider-row-header">
                                     <div>
                                         <strong><i class="bi bi-chat-square-text text-info"></i> Qontak</strong>
-                                        <div class="form-text">Provider WhatsApp API Qontak/Mekari.</div>
+                                        <div class="form-text mb-0">API Qontak / Mekari</div>
                                     </div>
-                                    <div class="form-check form-switch">
-                                        <input class="form-check-input" type="checkbox" id="qontak_enabled">
+                                    <div class="form-check form-switch mb-0">
+                                        <input class="form-check-input provider-enable-toggle" type="checkbox" id="qontak_enabled" data-provider="qontak">
                                         <label class="form-check-label" for="qontak_enabled"><strong>Enable</strong></label>
                                     </div>
                                 </div>
-                                <div class="row g-2">
-                                    <div class="col-md-6">
-                                        <label class="form-label">API URL</label>
-                                        <input type="text" class="form-control" id="qontak_api_url" placeholder="https://service-chat.qontak.com">
-                                    </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label">Channel Integration ID</label>
-                                        <input type="text" class="form-control" id="qontak_channel_integration_id" placeholder="Channel integration ID">
-                                    </div>
-                                    <div class="col-12">
-                                        <label class="form-label">Access Token</label>
-                                        <input type="password" class="form-control" id="qontak_access_token" placeholder="Bearer token">
-                                    </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label">Namespace</label>
-                                        <input type="text" class="form-control" id="qontak_namespace" placeholder="Namespace template (opsional)">
-                                    </div>
-                                    <div class="col-md-6">
-                                        <label class="form-label">Webhook Secret</label>
-                                        <input type="password" class="form-control" id="qontak_webhook_secret" placeholder="Webhook secret">
+                                <div class="provider-row-body">
+                                    <div class="row g-2">
+                                        <div class="col-md-6">
+                                            <label class="form-label">API URL</label>
+                                            <input type="text" class="form-control" id="qontak_api_url" placeholder="https://service-chat.qontak.com">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Channel Integration ID</label>
+                                            <input type="text" class="form-control" id="qontak_channel_integration_id" placeholder="Channel integration ID">
+                                        </div>
+                                        <div class="col-12">
+                                            <label class="form-label">Access Token</label>
+                                            <input type="password" class="form-control" id="qontak_access_token" placeholder="Bearer token">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Namespace</label>
+                                            <input type="text" class="form-control" id="qontak_namespace" placeholder="Namespace template (opsional)">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Webhook Secret</label>
+                                            <input type="password" class="form-control" id="qontak_webhook_secret" placeholder="Webhook secret">
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -607,6 +625,56 @@
                     </div>
                 </div>
                 
+                <!-- Jadwal notifikasi tagihan -->
+                <div class="row mb-4">
+                    <div class="col-12">
+                        <div class="template-card">
+                            <h4 class="template-title mb-3">
+                                <i class="bi bi-calendar-event"></i> Jadwal Kirim Notifikasi Tagihan
+                            </h4>
+                            <p class="template-description mb-2">
+                                Semua WA tagihan terjadwal pukul <strong>09:00</strong> (cek invoice <em>unpaid</em> setiap hari).
+                                <strong>Tagihan baru tidak dikirim saat invoice dibuat</strong> — hanya sesuai jadwal di bawah.
+                            </p>
+                            <ul class="small text-muted mb-3">
+                                <li><strong>Tagihan baru</strong> → template <em>Notifikasi Tagihan Baru</em></li>
+                                <li><strong>Pengingat</strong> → template <em>Peringatan Sebelum Jatuh Tempo (H-X)</em></li>
+                                <li><strong>Hari jatuh tempo</strong> → template <em>Pengingat Hari H Jatuh Tempo</em></li>
+                            </ul>
+                            <div class="row align-items-end g-3">
+                                <div class="col-md-3">
+                                    <label for="billingInvoiceNotifyDays" class="form-label fw-semibold">Tagihan baru (H-X)</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text">H -</span>
+                                        <input type="number" class="form-control" id="billingInvoiceNotifyDays" min="1" max="30" value="3">
+                                    </div>
+                                    <small class="text-muted">Mis. 3 = WA tagihan baru 3 hari sebelum jatuh tempo.</small>
+                                </div>
+                                <div class="col-md-3">
+                                    <label for="billingReminderDays" class="form-label fw-semibold">Pengingat (H-X)</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text">H -</span>
+                                        <input type="number" class="form-control" id="billingReminderDays" min="1" max="30" value="1">
+                                    </div>
+                                    <small class="text-muted">Mis. 1 = pengingat sehari sebelum jatuh tempo.</small>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label fw-semibold d-block">Hari jatuh tempo</label>
+                                    <div class="form-check form-switch mt-2">
+                                        <input class="form-check-input" type="checkbox" id="billingSendOnDueDay" checked>
+                                        <label class="form-check-label" for="billingSendOnDueDay">Kirim peringatan hari H</label>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <button type="button" class="btn btn-success w-100" id="btnSaveBillingNotifySchedule">
+                                        <i class="bi bi-save me-1"></i>Simpan Jadwal
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Templates Section -->
                 <div class="row">
                     <div class="col-12">
@@ -637,7 +705,7 @@
                                 <!-- Invoice Created Template -->
                                 <div class="mb-4">
                                     <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <h5>?? Invoice Created Notification</h5>
+                                        <h5>Notifikasi Tagihan Baru</h5>
                                         <div class="form-check form-switch">
                                             <input class="form-check-input" type="checkbox" id="invoice_created_enabled" checked>
                                             <label class="form-check-label" for="invoice_created_enabled">
@@ -645,6 +713,7 @@
                                             </label>
                                         </div>
                                     </div>
+                                    <p class="text-muted small">Dikirim pada <strong>H-X tagihan baru</strong> di jadwal (bukan saat invoice dibuat di sistem).</p>
                                     <div class="variable-list">
                                         <strong>Available Variables:</strong>
                                         <span class="variable-item">{customer_name}</span>
@@ -669,7 +738,7 @@
                                 <!-- Due Date Reminder Template -->
                                 <div class="mb-4">
                                     <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <h5>?? Due Date Reminder</h5>
+                                        <h5>Peringatan Sebelum Jatuh Tempo (H-X)</h5>
                                         <div class="form-check form-switch">
                                             <input class="form-check-input" type="checkbox" id="due_date_reminder_enabled" checked>
                                             <label class="form-check-label" for="due_date_reminder_enabled">
@@ -677,6 +746,7 @@
                                             </label>
                                         </div>
                                     </div>
+                                    <p class="text-muted small">Dikirim pada <strong>H-X pengingat</strong> di jadwal (mis. H-1).</p>
                                     <div class="variable-list">
                                         <strong>Available Variables:</strong>
                                         <span class="variable-item">{customer_name}</span>
@@ -686,9 +756,6 @@
                                         <span class="variable-item">{days_remaining}</span>
                                         <span class="variable-item">{package_name}</span>
                                         <span class="variable-item" title="Untuk Customer (PPPoE) dan Member (Hotspot)">{package_speed}</span>
-                                        <div class="mt-2 text-muted small">
-                                            <i class="bi bi-info-circle"></i> <strong>Catatan:</strong> Variabel {package_name} dan {package_speed} otomatis mendeteksi paket Customer (PPPoE) atau Member (Hotspot) berdasarkan tipe invoice.
-                                        </div>
                                     </div>
                                     <textarea class="form-control" id="due_date_reminder_template" rows="8" placeholder="Enter template message..."></textarea>
                                     <div class="mt-2">
@@ -697,11 +764,39 @@
                                         </button>
                                     </div>
                                 </div>
+
+                                <div class="mb-4">
+                                    <div class="d-flex justify-content-between align-items-center mb-2">
+                                        <h5>Pengingat Hari H Jatuh Tempo</h5>
+                                        <div class="form-check form-switch">
+                                            <input class="form-check-input" type="checkbox" id="due_date_reminder_today_enabled" checked>
+                                            <label class="form-check-label" for="due_date_reminder_today_enabled">
+                                                <strong>Enable Notification</strong>
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <p class="text-muted small">Dikirim pada <strong>hari H (jatuh tempo)</strong> jika opsi di jadwal aktif.</p>
+                                    <div class="variable-list">
+                                        <strong>Available Variables:</strong>
+                                        <span class="variable-item">{customer_name}</span>
+                                        <span class="variable-item">{invoice_number}</span>
+                                        <span class="variable-item">{amount}</span>
+                                        <span class="variable-item">{due_date}</span>
+                                        <span class="variable-item">{package_name}</span>
+                                        <span class="variable-item">{package_speed}</span>
+                                    </div>
+                                    <textarea class="form-control" id="due_date_reminder_today_template" rows="8" placeholder="Enter template message..."></textarea>
+                                    <div class="mt-2">
+                                        <button class="btn btn-warning btn-sm" onclick="testTemplate('due_date_reminder_today')">
+                                            <i class="bi bi-send"></i> Test Template
+                                        </button>
+                                    </div>
+                                </div>
                                 
                                 <!-- Payment Received Template -->
                                 <div class="mb-4">
                                     <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <h5>? Payment Received Notification</h5>
+                                        <h5>Notifikasi Pembayaran Diterima</h5>
                                         <div class="form-check form-switch">
                                             <input class="form-check-input" type="checkbox" id="payment_received_enabled" checked>
                                             <label class="form-check-label" for="payment_received_enabled">
@@ -734,7 +829,7 @@
                                 <!-- Service Disruption Template -->
                                 <div class="mb-4">
                                     <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <h5>?? Service Disruption Notification</h5>
+                                        <h5>Notifikasi Gangguan Layanan</h5>
                                         <div class="form-check form-switch">
                                             <input class="form-check-input" type="checkbox" id="service_disruption_enabled" checked>
                                             <label class="form-check-label" for="service_disruption_enabled">
@@ -760,7 +855,7 @@
                                 <!-- Service Announcement Template -->
                                 <div class="mb-4">
                                     <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <h5>?? Service Announcement</h5>
+                                        <h5>Pengumuman Layanan</h5>
                                         <div class="form-check form-switch">
                                             <input class="form-check-input" type="checkbox" id="service_announcement_enabled" checked>
                                             <label class="form-check-label" for="service_announcement_enabled">
@@ -783,7 +878,7 @@
                                 <!-- Service Suspension Template -->
                                 <div class="mb-4">
                                     <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <h5>?? Service Suspension Notification</h5>
+                                        <h5>Notifikasi Isolir Layanan</h5>
                                         <div class="form-check form-switch">
                                             <input class="form-check-input" type="checkbox" id="service_suspension_enabled" checked>
                                             <label class="form-check-label" for="service_suspension_enabled">
@@ -812,7 +907,7 @@
                                 <!-- Service Restoration Template -->
                                 <div class="mb-4">
                                     <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <h5>? Service Restoration Notification</h5>
+                                        <h5>Notifikasi Restore Layanan</h5>
                                         <div class="form-check form-switch">
                                             <input class="form-check-input" type="checkbox" id="service_restoration_enabled" checked>
                                             <label class="form-check-label" for="service_restoration_enabled">
@@ -842,7 +937,7 @@
                                 <!-- Welcome Message Template -->
                                 <div class="mb-4">
                                     <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <h5>?? Welcome Message</h5>
+                                        <h5>Pesan Selamat Datang</h5>
                                         <div class="form-check form-switch">
                                             <input class="form-check-input" type="checkbox" id="welcome_message_enabled" checked>
                                             <label class="form-check-label" for="welcome_message_enabled">
@@ -1039,7 +1134,8 @@
                                         <label class="form-label">Template Type</label>
                                         <select class="form-select" id="testTemplateType">
                                             <option value="invoice_created">Invoice Created</option>
-                                            <option value="due_date_reminder">Due Date Reminder</option>
+                                            <option value="due_date_reminder">Peringatan Sebelum Jatuh Tempo (H-X)</option>
+                                            <option value="due_date_reminder_today">Pengingat Hari H Jatuh Tempo</option>
                                             <option value="payment_received">Payment Received</option>
                                             <option value="service_disruption">Service Disruption</option>
                                             <option value="service_announcement">Service Announcement</option>
@@ -1083,6 +1179,7 @@
         loadRateLimitSettings();
         loadWAGroups();
         loadProviderSettings();
+        loadBillingNotifySchedule();
         bindBaileysControls();
 
         // Auto-save on toggle change: Rate Limit enabled
@@ -1139,7 +1236,7 @@
             }
 
             applyProviderSettings(data.settings || {});
-            toggleBaileysContent();
+            syncAllProviderRows();
         } catch (error) {
             console.error('Error loading provider settings:', error);
             showAlert('Gagal memuat pengaturan provider WhatsApp', 'danger');
@@ -1218,22 +1315,116 @@
         };
     }
 
+    function syncAllProviderRows() {
+        ['baileys', 'wablas', 'meta', 'qontak'].forEach((provider) => {
+            const row = document.querySelector(`.provider-row[data-provider="${provider}"]`);
+            const enabled = document.getElementById(`${provider}_enabled`)?.checked;
+            if (row) row.classList.toggle('is-enabled', !!enabled);
+        });
+
+        if (document.getElementById('baileys_enabled')?.checked) {
+            loadWAStatus();
+            startWAStatusInterval();
+        } else {
+            const status = document.getElementById('wa-status');
+            const qrContainer = document.getElementById('wa-qr-container');
+            if (status) status.innerHTML = '';
+            if (qrContainer) qrContainer.classList.add('d-none');
+            stopWAStatusInterval();
+        }
+    }
+
+    async function loadBillingNotifySchedule() {
+        try {
+            const response = await fetch('/admin/billing/whatsapp-settings/billing-notify-schedule');
+            const data = await response.json();
+            if (data.success && data.settings) {
+                setFieldValue('billingInvoiceNotifyDays', data.settings.invoice_notify_days_before ?? 3);
+                setFieldValue('billingReminderDays', data.settings.reminder_days_before ?? 1);
+                setFieldChecked('billingSendOnDueDay', data.settings.send_on_due_day !== false);
+            }
+        } catch (e) {
+            console.error('loadBillingNotifySchedule', e);
+        }
+    }
+
+    async function saveBillingNotifySchedule() {
+        const btn = document.getElementById('btnSaveBillingNotifySchedule');
+        const invoiceDays = parseInt(getFieldValue('billingInvoiceNotifyDays'), 10);
+        const reminderDays = parseInt(getFieldValue('billingReminderDays'), 10);
+        const sendOnDueDay = getFieldChecked('billingSendOnDueDay');
+
+        if (!Number.isFinite(invoiceDays) || invoiceDays < 1 || invoiceDays > 30) {
+            showAlert('Hari tagihan baru harus 1–30', 'warning');
+            return;
+        }
+        if (!Number.isFinite(reminderDays) || reminderDays < 1 || reminderDays > 30) {
+            showAlert('Hari pengingat harus 1–30', 'warning');
+            return;
+        }
+        if (invoiceDays === reminderDays) {
+            showAlert('Hari tagihan baru dan pengingat harus berbeda', 'warning');
+            return;
+        }
+
+        const original = btn ? btn.innerHTML : '';
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Menyimpan...';
+        }
+        try {
+            const response = await fetch('/admin/billing/whatsapp-settings/billing-notify-schedule', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    invoice_notify_days_before: invoiceDays,
+                    reminder_days_before: reminderDays,
+                    send_on_due_day: sendOnDueDay
+                })
+            });
+            const data = await response.json();
+            if (data.success) {
+                const s = data.settings || {};
+                showAlert(
+                    `Jadwal disimpan: tagihan baru H-${s.invoice_notify_days_before || invoiceDays}, ` +
+                    `pengingat H-${s.reminder_days_before || reminderDays}, ` +
+                    `${sendOnDueDay ? 'hari H aktif' : 'hari H nonaktif'} (09:00)`,
+                    'success'
+                );
+                loadStatus();
+            } else {
+                showAlert(data.message || 'Gagal menyimpan jadwal', 'danger');
+            }
+        } catch (e) {
+            showAlert('Gagal menyimpan jadwal notifikasi', 'danger');
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = original;
+            }
+        }
+    }
+
     function bindBaileysControls() {
-        const toggle = document.getElementById('baileys_enabled');
         const activeProvider = document.getElementById('whatsappActiveProvider');
         const saveButton = document.getElementById('btnSaveGatewaySettings');
         const refreshButton = document.getElementById('btnRefreshQR');
         const deleteButton = document.getElementById('btnDeleteSession');
+        const scheduleBtn = document.getElementById('btnSaveBillingNotifySchedule');
 
-        if (toggle) {
-            toggle.addEventListener('change', toggleBaileysContent);
+        document.querySelectorAll('.provider-enable-toggle').forEach((el) => {
+            el.addEventListener('change', syncAllProviderRows);
+        });
+
+        if (scheduleBtn) {
+            scheduleBtn.addEventListener('click', saveBillingNotifySchedule);
         }
 
         if (activeProvider) {
             activeProvider.addEventListener('change', function() {
                 const selectedProvider = activeProvider.value;
                 setFieldChecked(`${selectedProvider}_enabled`, true);
-                toggleBaileysContent();
+                syncAllProviderRows();
             });
         }
 
@@ -1269,7 +1460,7 @@
             if (data.success) {
                 applyProviderSettings(data.settings || {});
                 showAlert('Pengaturan provider WhatsApp berhasil disimpan!', 'success');
-                toggleBaileysContent();
+                syncAllProviderRows();
             } else {
                 showAlert('Gagal menyimpan provider: ' + (data.message || data.error || 'Unknown error'), 'danger');
             }
@@ -1281,26 +1472,6 @@
                 button.disabled = false;
                 button.innerHTML = originalHtml;
             }
-        }
-    }
-
-    function toggleBaileysContent() {
-        const enabled = document.getElementById('baileys_enabled')?.checked;
-        const content = document.getElementById('baileysContent');
-        const status = document.getElementById('wa-status');
-        const qrContainer = document.getElementById('wa-qr-container');
-
-        if (!content) return;
-
-        if (enabled) {
-            content.style.display = '';
-            loadWAStatus();
-            startWAStatusInterval();
-        } else {
-            content.style.display = 'none';
-            if (status) status.innerHTML = '';
-            if (qrContainer) qrContainer.classList.add('d-none');
-            stopWAStatusInterval();
         }
     }
 

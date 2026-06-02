@@ -32,14 +32,14 @@ const MONITOR_DEFINITIONS = [
     {
         id: 'billing_daily_due_wa',
         category: 'Billing',
-        title: 'Pengingat jatuh tempo harian',
-        description: 'Job scheduler jam 09:00 — kirim WA tagihan jatuh tempo / terlambat ke pelanggan.'
+        title: 'Jadwal WA tagihan (harian 09:00)',
+        description: 'Tagihan baru H-X, pengingat H-Y, dan peringatan hari H — sesuai jadwal di WhatsApp Settings.'
     },
     {
         id: 'billing_scheduler_invoice_wa',
         category: 'Billing',
-        title: 'WA tagihan baru (generator otomatis)',
-        description: 'Saat invoice terbuat otomatis (bulanan/harian billing), kirim WA tagihan baru ke pelanggan.'
+        title: 'WA tagihan baru (kirim manual / test)',
+        description: 'Hanya untuk tombol test atau kirim manual dari admin — bukan saat invoice dibuat otomatis.'
     },
     {
         id: 'payment_received_wa',

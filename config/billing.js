@@ -50,6 +50,7 @@
             this.paymentGateway = new PaymentGatewayManager();
             this._paymentsDiscountColumnEnsured = false;
             this._remittanceNetAppliedEnsured = false;
+            this._collectorAreaUniqueEnsured = false;
             this.initDatabase();
             
             // Inisialisasi scheduler otomatis hapus foto usang (Umur > 60 Hari)
@@ -1056,6 +1057,15 @@
                 }
             });
 
+            // Tanggal auto isolir per pelanggan (null = pakai pengaturan global auto_suspension_day)
+            this.db.run("ALTER TABLE customers ADD COLUMN auto_suspension_day INTEGER", (err) => {
+                if (err && !err.message.includes('duplicate column name')) {
+                    console.error('Error adding auto_suspension_day column:', err);
+                } else if (!err) {
+                    console.log('Added auto_suspension_day column to customers table');
+                }
+            });
+
         // Tambahkan kolom tax_rate ke packages jika belum ada
         this.db.run("ALTER TABLE packages ADD COLUMN tax_rate DECIMAL(5,2) DEFAULT 11.00", (err) => {
             if (err && !err.message.includes('duplicate column name')) {
@@ -1928,18 +1938,19 @@
      * SQL boolean: pelanggan c berada di wilayah yang sama dengan baris collector_areas (alias).
      * Mendukung c.area (teks) dan c.area_id → areas.nama_area / kode_area.
      */
-    _sqlCustomerMatchesCollectorAreaRow(hasAreas, areaAlias = 'cra') {
+    _sqlCustomerMatchesCollectorAreaRow(hasAreas, areaAlias = 'cra', customerAlias = 'c') {
         const a = areaAlias;
-        const byCustomerAreaText = `(TRIM(IFNULL(c.area, '')) != '' AND LOWER(TRIM(c.area)) = LOWER(TRIM(${a}.area)))`;
+        const cust = customerAlias;
+        const byCustomerAreaText = `(TRIM(IFNULL(${cust}.area, '')) != '' AND LOWER(TRIM(${cust}.area)) = LOWER(TRIM(${a}.area)))`;
         if (!hasAreas) {
             return byCustomerAreaText;
         }
         return `(
             ${byCustomerAreaText}
             OR (
-                c.area_id IS NOT NULL AND EXISTS (
+                ${cust}.area_id IS NOT NULL AND EXISTS (
                     SELECT 1 FROM areas ar
-                    WHERE ar.id = c.area_id
+                    WHERE ar.id = ${cust}.area_id
                     AND (
                         (TRIM(IFNULL(ar.nama_area, '')) != '' AND LOWER(TRIM(ar.nama_area)) = LOWER(TRIM(${a}.area)))
                         OR (TRIM(IFNULL(ar.kode_area, '')) != '' AND LOWER(TRIM(ar.kode_area)) = LOWER(TRIM(${a}.area)))
@@ -1947,6 +1958,105 @@
                 )
             )
         )`;
+    }
+
+    /** Filter voucher bulanan (selaras dashboard & laporan kolektor). */
+    _sqlInvoiceExcludeVoucher(hasInvoiceType) {
+        if (hasInvoiceType) {
+            return `(i.invoice_type != 'voucher' OR i.invoice_type IS NULL)`;
+        }
+        return `(i.invoice_number NOT LIKE 'INV-VCR-%' AND IFNULL(i.notes, '') NOT LIKE 'Voucher Hotspot%')`;
+    }
+
+    /**
+     * Total tagihan bulanan — definisi tunggal untuk dashboard & terima setoran.
+     * scope: 'all' = seluruh invoice bulanan; 'collector_territory' = pool area/penugasan kolektor.
+     */
+    async getMonthlyTagihanTotals(month, year, options = {}) {
+        const scope = options.scope === 'collector_territory' ? 'collector_territory' : 'all';
+        const m = parseInt(String(month), 10);
+        const y = parseInt(String(year), 10);
+        if (!Number.isFinite(m) || m < 1 || m > 12 || !Number.isFinite(y)) {
+            return { total_tagihan: 0, total_lunas: 0, total_belum_lunas: 0 };
+        }
+        const startDate = `${y}-${String(m).padStart(2, '0')}-01`;
+        const endDate = new Date(y, m, 0).toISOString().split('T')[0];
+        const hasAreas = await this._hasAreasReferenceTable();
+        const hasInvoiceType = await new Promise((resolve) => {
+            this.db.all('PRAGMA table_info(invoices)', (err, cols) => {
+                if (err) resolve(false);
+                else resolve((cols || []).some((c) => c.name === 'invoice_type'));
+            });
+        });
+        const voucherExcl = this._sqlInvoiceExcludeVoucher(hasInvoiceType);
+        let poolSql = '';
+        if (scope === 'collector_territory') {
+            const areaMatch = this._sqlCustomerMatchesCollectorAreaRow(hasAreas, 'ca', 'cust');
+            poolSql = `AND (
+                EXISTS (SELECT 1 FROM collector_areas ca WHERE ${areaMatch})
+                OR EXISTS (SELECT 1 FROM collector_assignments casm WHERE casm.customer_id = cust.id)
+            )`;
+        }
+        const sql = `
+            SELECT
+                COUNT(*) AS count_total,
+                COALESCE(SUM(sub.amount), 0) AS total_tagihan,
+                COALESCE(SUM(CASE WHEN sub.status = 'paid' THEN 1 ELSE 0 END), 0) AS count_lunas,
+                COALESCE(SUM(CASE WHEN sub.status = 'paid' THEN sub.amount ELSE 0 END), 0) AS total_lunas,
+                COALESCE(SUM(CASE WHEN sub.status = 'unpaid' THEN 1 ELSE 0 END), 0) AS count_belum_lunas,
+                COALESCE(SUM(CASE WHEN sub.status = 'unpaid' THEN sub.amount ELSE 0 END), 0) AS total_belum_lunas
+            FROM (
+                SELECT DISTINCT i.id AS id, i.amount AS amount, i.status AS status
+                FROM invoices i
+                INNER JOIN customers cust ON cust.id = i.customer_id
+                WHERE DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
+                  AND ${voucherExcl}
+                  AND i.status IN ('paid', 'unpaid')
+                  ${poolSql}
+            ) sub
+        `;
+        return new Promise((resolve, reject) => {
+            this.db.get(sql, [startDate, endDate], (err, row) => {
+                if (err) reject(err);
+                else {
+                    resolve({
+                        count_total: Number(row && row.count_total) || 0,
+                        total_tagihan: Number(row && row.total_tagihan) || 0,
+                        count_lunas: Number(row && row.count_lunas) || 0,
+                        total_lunas: Number(row && row.total_lunas) || 0,
+                        count_belum_lunas: Number(row && row.count_belum_lunas) || 0,
+                        total_belum_lunas: Number(row && row.total_belum_lunas) || 0
+                    });
+                }
+            });
+        });
+    }
+
+    /** Seluruh invoice belum lunas (non-voucher) — piutang aktif, semua periode. */
+    async getOutstandingUnpaidTotals() {
+        const hasInvoiceType = await new Promise((resolve) => {
+            this.db.all('PRAGMA table_info(invoices)', (err, cols) => {
+                if (err) resolve(false);
+                else resolve((cols || []).some((c) => c.name === 'invoice_type'));
+            });
+        });
+        const voucherExcl = this._sqlInvoiceExcludeVoucher(hasInvoiceType);
+        const sql = `
+            SELECT COUNT(*) AS count_unpaid, COALESCE(SUM(amount), 0) AS total_unpaid
+            FROM invoices i
+            WHERE i.status = 'unpaid' AND ${voucherExcl}
+        `;
+        return new Promise((resolve, reject) => {
+            this.db.get(sql, [], (err, row) => {
+                if (err) reject(err);
+                else {
+                    resolve({
+                        count_unpaid: Number(row && row.count_unpaid) || 0,
+                        total_unpaid: Number(row && row.total_unpaid) || 0
+                    });
+                }
+            });
+        });
     }
 
     /**
@@ -2095,8 +2205,22 @@ ${year && month ? `
         });
     }
 
-    async getCustomers() {
+    async getCustomers(options = {}) {
         return new Promise(async (resolve, reject) => {
+            let whereClause = '';
+            const params = [];
+            const joinMonth = parseInt(String(options.joinMonth ?? ''), 10);
+            const joinYear = parseInt(String(options.joinYear ?? ''), 10);
+            if (Number.isFinite(joinMonth) && joinMonth >= 1 && joinMonth <= 12
+                && Number.isFinite(joinYear) && joinYear >= 2000) {
+                const startDate = `${joinYear}-${String(joinMonth).padStart(2, '0')}-01`;
+                const nextMonth = joinMonth === 12 ? 1 : joinMonth + 1;
+                const nextYear = joinMonth === 12 ? joinYear + 1 : joinYear;
+                const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
+                whereClause = ' WHERE date(c.join_date) >= date(?) AND date(c.join_date) < date(?)';
+                params.push(startDate, endDate);
+            }
+
             const sql = `
                 SELECT c.*, p.name as package_name, p.price as package_price, p.image as package_image, p.tax_rate,
                        c.latitude, c.longitude,
@@ -2129,10 +2253,11 @@ ${year && month ? `
                 LEFT JOIN collectors col_ca ON col_ca.id = ca.collector_id
                 LEFT JOIN collector_areas cra ON (c.area IS NOT NULL AND c.area != '' AND c.area = cra.area)
                 LEFT JOIN collectors col_cra ON col_cra.id = cra.collector_id
-                ORDER BY c.name ASC
+                ${whereClause}
+                ORDER BY c.join_date ASC, c.name ASC
             `;
             
-            this.db.all(sql, [], async (err, rows) => {
+            this.db.all(sql, params, async (err, rows) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -2202,77 +2327,141 @@ ${year && month ? `
 
     
     async getCustomerStatsByMonth(month, year, filters = {}) {
+        const m = parseInt(String(month), 10);
+        const y = parseInt(String(year), 10);
+        const startDate = `${y}-${String(m).padStart(2, '0')}-01`;
+        const nextMonth = m === 12 ? 1 : m + 1;
+        const nextYear = m === 12 ? y + 1 : y;
+        const cohortEnd = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
+        const endDateLast = new Date(y, m, 0).toISOString().split('T')[0];
+
+        const monthStr = String(m).padStart(2, '0');
+        const yearStr = String(y);
+
+        let filterJoins = '';
+        let filterWhere = '';
+        const filterParams = [];
+
+        if (filters.search) {
+            filterWhere += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.pppoe_username LIKE ?)';
+            const searchTerm = `%${filters.search}%`;
+            filterParams.push(searchTerm, searchTerm, searchTerm);
+        }
+        if (filters.package_id) {
+            filterWhere += ' AND c.package_id = ?';
+            filterParams.push(filters.package_id);
+        }
+        if (filters.area) {
+            filterWhere += ' AND c.area = ?';
+            filterParams.push(filters.area);
+        }
+        if (filters.collector_id) {
+            filterJoins += ' LEFT JOIN collector_assignments ca ON ca.customer_id = c.id';
+            filterJoins += ' LEFT JOIN collector_areas cra ON (c.area IS NOT NULL AND c.area != "" AND c.area = cra.area)';
+            filterWhere += ' AND (ca.collector_id = ? OR cra.collector_id = ?)';
+            filterParams.push(filters.collector_id, filters.collector_id);
+        }
+
+        const fjSub = filterJoins.replace(/ ca/g, ' ca_sub').replace(/ cra/g, ' cra_sub').replace(/ c\./g, ' c_sub.');
+        const fwSub = filterWhere.replace(/c\./g, 'c_sub.');
+        const fjSum = filterJoins.replace(/ ca/g, ' ca_sum').replace(/ cra/g, ' cra_sum').replace(/ c\./g, ' c_sum.');
+        const fwSum = filterWhere.replace(/c\./g, 'c_sum.');
+
+        const hasInvoiceType = await new Promise((resolve) => {
+            this.db.all('PRAGMA table_info(invoices)', (err, cols) => {
+                if (err) resolve(false);
+                else resolve((cols || []).some((c) => c.name === 'invoice_type'));
+            });
+        });
+        const voucherExcl = this._sqlInvoiceExcludeVoucher(hasInvoiceType);
+
+        const invoiceNominalSub = (extraInvoiceWhere = '', extraCustomerWhere = '') => `(
+            SELECT COALESCE(SUM(sub.amount), 0)
+            FROM (
+                SELECT DISTINCT i.id AS id, i.amount AS amount
+                FROM invoices i
+                INNER JOIN customers c_sub ON c_sub.id = i.customer_id
+                ${fjSub}
+                WHERE DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
+                  AND ${voucherExcl}
+                  AND date(c_sub.join_date) < date(?)
+                  ${extraInvoiceWhere}
+                  ${extraCustomerWhere}
+                  ${fwSub}
+            ) sub
+        )`;
+
+        const nominalBaseParams = [startDate, endDateLast, cohortEnd, ...filterParams];
+
+        /** Total paket (harga + pajak) per pelanggan — selaras penghitungan kartu Total / Isolir. */
+        const packageNominalSub = (extraCustomerWhere = '') => `(
+            SELECT COALESCE(SUM(line_amt), 0)
+            FROM (
+                SELECT c_sum.id AS id,
+                    MAX(CASE WHEN p_sum.price IS NOT NULL
+                        THEN CAST(ROUND(p_sum.price * (1.0 + COALESCE(p_sum.tax_rate, 0) / 100.0)) AS INTEGER)
+                        ELSE 0 END) AS line_amt
+                FROM customers c_sum
+                LEFT JOIN packages p_sum ON p_sum.id = c_sum.package_id
+                ${fjSum}
+                WHERE date(c_sum.join_date) < date(?)
+                ${extraCustomerWhere}
+                ${fwSum}
+                GROUP BY c_sum.id
+            )
+        )`;
+
+        const sql = `
+            SELECT 
+                COUNT(DISTINCT c.id) as total,
+                SUM(CASE WHEN c.status = 'active' THEN 1 ELSE 0 END) as aktif,
+                SUM(CASE WHEN c.status = 'suspended' OR c.status = 'isolir' THEN 1 ELSE 0 END) as nonaktif,
+                SUM(CASE WHEN date(c.join_date) >= date(?) AND date(c.join_date) < date(?) THEN 1 ELSE 0 END) as baru,
+                (
+                    SELECT COUNT(DISTINCT i.customer_id) 
+                    FROM invoices i 
+                    JOIN customers c_sub ON c_sub.id = i.customer_id
+                    ${fjSub}
+                    WHERE strftime('%m', i.created_at) = ? AND strftime('%Y', i.created_at) = ? AND i.status = 'paid'
+                    ${fwSub}
+                ) as lunas,
+                (
+                    SELECT COUNT(DISTINCT c2.id) 
+                    FROM customers c2 
+                    ${filterJoins.replace(/ ca/g, ' ca2').replace(/ cra/g, ' cra2').replace(/ c\./g, ' c2.')}
+                    WHERE date(c2.join_date) < date(?)
+                    AND NOT EXISTS (
+                        SELECT 1 FROM invoices i 
+                        WHERE i.customer_id = c2.id 
+                        AND strftime('%m', i.created_at) = ? AND strftime('%Y', i.created_at) = ? AND i.status = 'paid'
+                    )
+                    ${filterWhere.replace(/c\./g, 'c2.')}
+                ) as belum_lunas,
+                ${packageNominalSub()} AS total_nominal,
+                ${invoiceNominalSub("AND i.status IN ('paid', 'unpaid')", " AND c_sub.status = 'active'")} AS aktif_nominal,
+                ${packageNominalSub(" AND (c_sum.status = 'suspended' OR c_sum.status = 'isolir')")} AS nonaktif_nominal,
+                ${invoiceNominalSub("AND i.status = 'paid'")} AS lunas_nominal,
+                ${invoiceNominalSub("AND i.status = 'unpaid'")} AS belum_lunas_nominal,
+                ${packageNominalSub(' AND date(c_sum.join_date) >= date(?) AND date(c_sum.join_date) < date(?)')} AS baru_nominal
+            FROM customers c
+            ${filterJoins}
+            WHERE date(c.join_date) < date(?) ${filterWhere}
+        `;
+
+        const params = [
+            startDate, cohortEnd,
+            monthStr, yearStr, ...filterParams,
+            cohortEnd, monthStr, yearStr, ...filterParams,
+            cohortEnd, ...filterParams,
+            ...nominalBaseParams,
+            cohortEnd, ...filterParams,
+            ...nominalBaseParams,
+            ...nominalBaseParams,
+            cohortEnd, startDate, cohortEnd, ...filterParams,
+            cohortEnd, ...filterParams
+        ];
+
         return new Promise((resolve, reject) => {
-            const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
-            const nextMonth = month == 12 ? 1 : parseInt(month) + 1;
-            const nextYear = month == 12 ? parseInt(year) + 1 : year;
-            const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
-
-            const monthStr = String(month).padStart(2, '0');
-            const yearStr = String(year);
-
-            let filterJoins = '';
-            let filterWhere = '';
-            let filterParams = [];
-
-            if (filters.search) {
-                filterWhere += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.pppoe_username LIKE ?)';
-                const searchTerm = `%${filters.search}%`;
-                filterParams.push(searchTerm, searchTerm, searchTerm);
-            }
-            if (filters.package_id) {
-                filterWhere += ' AND c.package_id = ?';
-                filterParams.push(filters.package_id);
-            }
-            if (filters.area) {
-                filterWhere += ' AND c.area = ?';
-                filterParams.push(filters.area);
-            }
-            if (filters.collector_id) {
-                filterJoins += ' LEFT JOIN collector_assignments ca ON ca.customer_id = c.id';
-                filterJoins += ' LEFT JOIN collector_areas cra ON (c.area IS NOT NULL AND c.area != \"\" AND c.area = cra.area)';
-                filterWhere += ' AND (ca.collector_id = ? OR cra.collector_id = ?)';
-                filterParams.push(filters.collector_id, filters.collector_id);
-            }
-
-            const sql = `
-                SELECT 
-                    COUNT(DISTINCT c.id) as total,
-                    SUM(CASE WHEN c.status = 'active' THEN 1 ELSE 0 END) as aktif,
-                    SUM(CASE WHEN c.status = 'suspended' OR c.status = 'isolir' THEN 1 ELSE 0 END) as nonaktif,
-                    SUM(CASE WHEN date(c.join_date) >= date(?) AND date(c.join_date) < date(?) THEN 1 ELSE 0 END) as baru,
-                    (
-                        SELECT COUNT(DISTINCT i.customer_id) 
-                        FROM invoices i 
-                        JOIN customers c_sub ON c_sub.id = i.customer_id
-                        ${filterJoins.replace(/ ca/g, ' ca_sub').replace(/ cra/g, ' cra_sub').replace(/ c\./g, ' c_sub.')}
-                        WHERE strftime('%m', i.created_at) = ? AND strftime('%Y', i.created_at) = ? AND i.status = 'paid'
-                        ${filterWhere.replace(/c\./g, 'c_sub.')}
-                    ) as lunas,
-                    (
-                        SELECT COUNT(DISTINCT c2.id) 
-                        FROM customers c2 
-                        ${filterJoins.replace(/ ca/g, ' ca2').replace(/ cra/g, ' cra2').replace(/ c\./g, ' c2.')}
-                        WHERE date(c2.join_date) < date(?)
-                        AND NOT EXISTS (
-                            SELECT 1 FROM invoices i 
-                            WHERE i.customer_id = c2.id 
-                            AND strftime('%m', i.created_at) = ? AND strftime('%Y', i.created_at) = ? AND i.status = 'paid'
-                        )
-                        ${filterWhere.replace(/c\./g, 'c2.')}
-                    ) as belum_lunas
-                FROM customers c
-                ${filterJoins}
-                WHERE date(c.join_date) < date(?) ${filterWhere}
-            `;
-            
-            const params = [
-                startDate, endDate,
-                monthStr, yearStr, ...filterParams,
-                endDate, monthStr, yearStr, ...filterParams,
-                endDate, ...filterParams
-            ];
-            
             this.db.get(sql, params, (err, row) => {
                 if (err) {
                     reject(err);
@@ -2283,7 +2472,13 @@ ${year && month ? `
                         nonaktif: (row && row.nonaktif) ? row.nonaktif : 0,
                         lunas: (row && row.lunas) ? row.lunas : 0,
                         belum_lunas: (row && row.belum_lunas) ? row.belum_lunas : 0,
-                        baru: (row && row.baru) ? row.baru : 0
+                        baru: (row && row.baru) ? row.baru : 0,
+                        total_nominal: Number(row && row.total_nominal) || 0,
+                        aktif_nominal: Number(row && row.aktif_nominal) || 0,
+                        nonaktif_nominal: Number(row && row.nonaktif_nominal) || 0,
+                        lunas_nominal: Number(row && row.lunas_nominal) || 0,
+                        belum_lunas_nominal: Number(row && row.belum_lunas_nominal) || 0,
+                        baru_nominal: Number(row && row.baru_nominal) || 0
                     });
                 }
             });
@@ -2620,14 +2815,12 @@ ${year && month ? `
     async getCustomerByPhone(phone) {
         return new Promise((resolve, reject) => {
             try {
-                // Normalisasi nomor telepon ke beberapa varian agar lookup fleksibel
-                const digitsOnly = (phone || '').toString().replace(/\D/g, '');
-                const intl = digitsOnly.startsWith('62')
-                    ? digitsOnly
-                    : (digitsOnly.startsWith('0') ? ('62' + digitsOnly.slice(1)) : digitsOnly);
-                const local08 = digitsOnly.startsWith('62')
-                    ? ('0' + digitsOnly.slice(2))
-                    : (digitsOnly.startsWith('0') ? digitsOnly : ('0' + digitsOnly));
+                const variants = this.getIndonesianPhoneLookupVariants(phone);
+                if (!variants.length) {
+                    resolve(null);
+                    return;
+                }
+                const placeholders = variants.map(() => '?').join(', ');
 
                 const sql = `
                 SELECT c.*, p.name as package_name, p.price as package_price, p.speed as package_speed, p.image as package_image, p.tax_rate,
@@ -2652,11 +2845,10 @@ ${year && month ? `
                        END as payment_status
                 FROM customers c 
                 LEFT JOIN packages p ON c.package_id = p.id 
-                WHERE c.phone = ? OR c.phone = ? OR c.phone = ?
+                WHERE c.phone IN (${placeholders})
             `;
 
-                // Prioritaskan pencarian berdasarkan varian yang umum: intl, local, original digits
-                this.db.get(sql, [intl, local08, digitsOnly], (err, row) => {
+                this.db.get(sql, variants, (err, row) => {
                     if (err) {
                         reject(err);
                     } else {
@@ -3178,6 +3370,35 @@ ${year && month ? `
                 reject(error);
             }
         });
+    }
+
+    /**
+     * Perbaiki hanya kasus Excel: angka HP kehilangan awalan 0 (852… → 0852…).
+     * Format 628… vs 085… sengaja tidak disamakan agar 2 langganan dengan "nomor sama" tetap terbeda.
+     */
+    fixExcelStrippedPhoneForStorage(raw) {
+        let digits;
+        if (raw != null && typeof raw === 'number' && Number.isFinite(raw)) {
+            digits = String(Math.trunc(raw));
+        } else {
+            digits = String(raw ?? '').replace(/\D/g, '');
+        }
+        if (!digits || digits.length < 9 || digits.length > 15) return '';
+        if (/^8[1-9][0-9]{7,11}$/.test(digits)) return `0${digits}`;
+        return digits;
+    }
+
+    /** Varian nomor untuk pencarian saja (tidak mengubah nilai tersimpan di DB). */
+    getIndonesianPhoneLookupVariants(raw) {
+        const digits = String(raw ?? '').replace(/\D/g, '');
+        if (!digits) return [];
+        const excelFixed = this.fixExcelStrippedPhoneForStorage(digits) || digits;
+        const intl = digits.startsWith('62')
+            ? digits
+            : (digits.startsWith('0') ? `62${digits.slice(1)}` : (/^8[1-9]/.test(digits) ? `62${digits}` : digits));
+        const local08 = intl.startsWith('62') ? `0${intl.slice(2)}` : (digits.startsWith('0') ? digits : `0${digits}`);
+        const bareEight = intl.startsWith('62') ? intl.slice(2) : digits;
+        return Array.from(new Set([digits, excelFixed, intl, local08, bareEight].filter(Boolean)));
     }
 
     // Helper function to calculate price with tax
@@ -4392,21 +4613,110 @@ ${year && month ? `
         });
     }
 
+    /**
+     * Peta area → kolektor yang memegangnya (nama area persis seperti di collector_areas).
+     */
+    async _ensureCollectorAreaUniqueAreaIndex() {
+        if (this._collectorAreaUniqueEnsured) return;
+        await new Promise((resolve) => {
+            this.db.run(
+                `CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_areas_area_lower_unique ON collector_areas(LOWER(TRIM(area)))`,
+                (err) => {
+                    if (err) {
+                        console.warn('[billing] idx_collector_areas_area_lower_unique:', err.message);
+                    }
+                    this._collectorAreaUniqueEnsured = true;
+                    resolve();
+                }
+            );
+        });
+    }
+
+    async getCollectorAreaAssignmentMap() {
+        return new Promise((resolve, reject) => {
+            this.db.all(
+                `SELECT ca.area, ca.collector_id, c.name AS collector_name
+                 FROM collector_areas ca
+                 INNER JOIN collectors c ON c.id = ca.collector_id
+                 WHERE TRIM(IFNULL(ca.area, '')) != ''`,
+                [],
+                (err, rows) => {
+                    if (err) return reject(err);
+                    const map = {};
+                    (rows || []).forEach((r) => {
+                        const key = String(r.area || '').trim();
+                        if (!key) return;
+                        map[key] = {
+                            collectorId: Number(r.collector_id),
+                            collectorName: r.collector_name || ''
+                        };
+                    });
+                    resolve(map);
+                }
+            );
+        });
+    }
+
     async saveCollectorAreas(collectorId, areas) {
+        await this._ensureCollectorAreaUniqueAreaIndex();
+        const cid = parseInt(String(collectorId), 10);
+        if (!Number.isFinite(cid) || cid <= 0) {
+            throw new Error('ID kolektor tidak valid');
+        }
+        const normalized = [
+            ...new Set(
+                (areas || [])
+                    .map((a) => String(a || '').trim())
+                    .filter((a) => a.length > 0)
+            )
+        ];
+        const conflicts = await new Promise((resolve, reject) => {
+            if (normalized.length === 0) return resolve([]);
+            const placeholders = normalized.map(() => 'LOWER(TRIM(?)) = LOWER(TRIM(ca.area))').join(' OR ');
+            this.db.all(
+                `SELECT ca.area, ca.collector_id, c.name AS collector_name
+                 FROM collector_areas ca
+                 INNER JOIN collectors c ON c.id = ca.collector_id
+                 WHERE ca.collector_id != ?
+                   AND (${placeholders})`,
+                [cid, ...normalized],
+                (err, rows) => (err ? reject(err) : resolve(rows || []))
+            );
+        });
+        if (conflicts.length > 0) {
+            const detail = conflicts
+                .map((r) => `"${r.area}" → ${r.collector_name || 'kolektor lain'}`)
+                .join(', ');
+            throw new Error(`Area sudah di-assign ke kolektor lain: ${detail}`);
+        }
         return new Promise((resolve, reject) => {
             this.db.serialize(() => {
-                this.db.run('DELETE FROM collector_areas WHERE collector_id = ?', [collectorId], (err) => {
+                this.db.run('DELETE FROM collector_areas WHERE collector_id = ?', [cid], (err) => {
                     if (err) return reject(err);
-                    
-                    if (!areas || areas.length === 0) return resolve();
-                    
-                    const stmt = this.db.prepare('INSERT INTO collector_areas (collector_id, area) VALUES (?, ?)');
-                    areas.forEach(area => {
-                        if (area && area.trim()) stmt.run(collectorId, area.trim());
-                    });
-                    stmt.finalize((err) => {
-                        if (err) reject(err);
-                        else resolve();
+
+                    if (normalized.length === 0) return resolve();
+
+                    const stmt = this.db.prepare(
+                        'INSERT INTO collector_areas (collector_id, area) VALUES (?, ?)'
+                    );
+                    for (const area of normalized) {
+                        stmt.run(cid, area);
+                    }
+                    stmt.finalize((errFinalize) => {
+                        if (errFinalize) {
+                            const msg = String(errFinalize.message || '');
+                            if (msg.includes('UNIQUE') || msg.includes('unique')) {
+                                reject(
+                                    new Error(
+                                        'Area tidak boleh dobel. Satu area hanya untuk satu kolektor.'
+                                    )
+                                );
+                            } else {
+                                reject(errFinalize);
+                            }
+                        } else {
+                            resolve();
+                        }
                     });
                 });
             });
@@ -4459,17 +4769,22 @@ ${year && month ? `
                 LEFT JOIN collector_areas cra ON cra.collector_id = ? AND ${areaRowMatch}
                 LEFT JOIN collector_assignments casm ON casm.customer_id = c.id AND casm.collector_id = ?
             `;
-            const qTagihan = `
-                SELECT COUNT(i.id) as count, COALESCE(SUM(i.amount), 0) as total
+            /** Subquery DISTINCT agar 1 invoice tidak terjumlah 2x bila cocok >1 baris collector_areas. */
+            const poolInvoiceDistinct = `
+                SELECT DISTINCT i.id AS id, i.amount AS amount, i.status AS status, i.customer_id AS customer_id
                 ${poolJoin}
                 WHERE ${poolWhere}
+            `;
+            const qTagihan = `
+                SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total
+                FROM (${poolInvoiceDistinct})
             `;
 
             /** Sama kohort dengan qTagihan, hanya invoice sudah lunas (admin / portal / kolektor). Untuk progress dashboard. */
             const qTagihanLunas = `
-                SELECT COUNT(i.id) as count, COALESCE(SUM(i.amount), 0) as total
-                ${poolJoin}
-                WHERE i.status = 'paid' AND ${poolWhere}
+                SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total
+                FROM (${poolInvoiceDistinct})
+                WHERE status = 'paid'
             `;
             
             const qLunas = `
@@ -4481,9 +4796,9 @@ ${year && month ? `
             `;
             
             const qBelumLunas = `
-                SELECT COUNT(DISTINCT i.customer_id) as count, COALESCE(SUM(i.amount), 0) as total
-                ${poolJoin}
-                WHERE i.status = 'unpaid' AND ${poolWhere}
+                SELECT COUNT(DISTINCT customer_id) as count, COALESCE(SUM(amount), 0) as total
+                FROM (${poolInvoiceDistinct})
+                WHERE status = 'unpaid'
             `;
             
             const qLunasHariIni = `
@@ -5681,6 +5996,28 @@ ${year && month ? `
                                         recognized_revenue: stats.voucher_revenue,
                                         pending_revenue: stats.voucher_unpaid
                                     };
+                                }
+                                try {
+                                    const mNum = currentMonth + 1;
+                                    const mt = await this.getMonthlyTagihanTotals(mNum, currentYear, {
+                                        scope: 'all'
+                                    });
+                                    stats.monthly_total_tagihan = mt.total_tagihan;
+                                    stats.monthly_invoice_count_canonical = mt.count_total;
+                                    stats.monthly_lunas_canonical = mt.total_lunas;
+                                    stats.monthly_lunas_count_canonical = mt.count_lunas;
+                                    stats.monthly_belum_lunas_canonical = mt.total_belum_lunas;
+                                    stats.monthly_belum_lunas_count_canonical = mt.count_belum_lunas;
+                                    /** Selaras kartu dashboard: unpaid bulan ini (bukan seluruh piutang). */
+                                    stats.monthly_unpaid = mt.total_belum_lunas;
+                                    stats.unpaid_monthly_invoices = mt.count_belum_lunas;
+                                    const piutang = await this.getOutstandingUnpaidTotals();
+                                    stats.outstanding_unpaid_total = piutang.total_unpaid;
+                                    stats.outstanding_unpaid_count = piutang.count_unpaid;
+                                } catch (tagErr) {
+                                    console.warn('[billing] monthly_total_tagihan:', tagErr.message);
+                                    stats.monthly_total_tagihan =
+                                        (stats.monthly_revenue || 0) + (stats.monthly_unpaid || 0);
                                 } finally {
                                     resolve(stats);
                                 }
@@ -6382,6 +6719,335 @@ ${year && month ? `
                 } else {
                     resolve(rows);
                 }
+            });
+        });
+    }
+
+    _normalizeAreaIds(area_ids) {
+        const raw = Array.isArray(area_ids) ? area_ids : (area_ids != null ? [area_ids] : []);
+        return [...new Set(raw.map((id) => parseInt(id, 10)).filter((id) => Number.isFinite(id) && id > 0))];
+    }
+
+    _buildCustomersInAreasWhere(areaIds, alias = '') {
+        const a = alias ? `${alias}.` : '';
+        const placeholders = areaIds.map(() => '?').join(',');
+        return {
+            clause: `(
+                ${a}area_id IN (${placeholders})
+                OR LOWER(TRIM(IFNULL(${a}area, ''))) IN (
+                    SELECT LOWER(TRIM(nama_area)) FROM areas WHERE id IN (${placeholders})
+                )
+                OR LOWER(TRIM(IFNULL(${a}area, ''))) IN (
+                    SELECT LOWER(TRIM(kode_area)) FROM areas
+                    WHERE id IN (${placeholders}) AND kode_area IS NOT NULL AND TRIM(kode_area) != ''
+                )
+            )`,
+            params: [...areaIds, ...areaIds, ...areaIds]
+        };
+    }
+
+    /**
+     * Update masal tanggal jatuh tempo (fix_date) per wilayah + sesuaikan invoice unpaid.
+     */
+    async bulkUpdateDueDateByAreas({ area_ids, due_day }) {
+        const ids = this._normalizeAreaIds(area_ids);
+        if (ids.length === 0) {
+            throw new Error('Pilih minimal satu wilayah');
+        }
+
+        const normDay = Math.min(Math.max(parseInt(due_day, 10) || 15, 1), 28);
+        const { clause, params: areaParams } = this._buildCustomersInAreasWhere(ids);
+
+        return new Promise((resolve, reject) => {
+            this.db.get(`SELECT COUNT(*) AS total FROM customers WHERE ${clause}`, areaParams, (err, countRow) => {
+                if (err) return reject(err);
+
+                const total = Number(countRow?.total || 0);
+                const dbRef = this.db;
+
+                this.db.serialize(() => {
+                    this.db.run('BEGIN TRANSACTION');
+
+                    this.db.run(
+                        `UPDATE customers SET renewal_type = 'fix_date', fix_date = ? WHERE ${clause}`,
+                        [normDay, ...areaParams],
+                        function (uErr) {
+                            if (uErr) {
+                                dbRef.run('ROLLBACK');
+                                return reject(uErr);
+                            }
+
+                            const updated = this.changes;
+                            const failed = Math.max(0, total - updated);
+
+                            const invoiceSql = `
+                                UPDATE invoices SET due_date = date(
+                                    CASE
+                                        WHEN cast(strftime('%d','now','localtime') AS integer) <= ?
+                                        THEN strftime('%Y-%m','now','localtime') || '-' || printf('%02d', ?)
+                                        ELSE strftime('%Y-%m', date('now','localtime','start of month','+1 month')) || '-' || printf('%02d', ?)
+                                    END
+                                )
+                                WHERE status = 'unpaid'
+                                  AND customer_id IN (SELECT id FROM customers WHERE ${clause})
+                            `;
+                            const invoiceParams = [normDay, normDay, normDay, ...areaParams];
+
+                            dbRef.run(invoiceSql, invoiceParams, function (iErr) {
+                                if (iErr) {
+                                    dbRef.run('ROLLBACK');
+                                    return reject(iErr);
+                                }
+
+                                const invoicesUpdated = this.changes;
+                                dbRef.run('COMMIT', (cErr) => {
+                                    if (cErr) return reject(cErr);
+                                    resolve({
+                                        total,
+                                        updated,
+                                        failed,
+                                        invoices_updated: invoicesUpdated,
+                                        need_retry: failed > 0,
+                                        due_day: normDay,
+                                        area_ids: ids
+                                    });
+                                });
+                            });
+                        }
+                    );
+                });
+            });
+        });
+    }
+
+    /**
+     * Update masal tanggal auto isolir per wilayah (kolom auto_suspension_day per pelanggan).
+     */
+    async bulkUpdateAutoIsolirDayByAreas({ area_ids, auto_suspension_day }) {
+        const ids = this._normalizeAreaIds(area_ids);
+        if (ids.length === 0) {
+            throw new Error('Pilih minimal satu wilayah');
+        }
+
+        const normDay = Math.min(Math.max(parseInt(auto_suspension_day, 10) || 25, 1), 28);
+        const { clause, params: areaParams } = this._buildCustomersInAreasWhere(ids);
+
+        return new Promise((resolve, reject) => {
+            this.db.get(`SELECT COUNT(*) AS total FROM customers WHERE ${clause}`, areaParams, (err, countRow) => {
+                if (err) return reject(err);
+
+                const total = Number(countRow?.total || 0);
+
+                this.db.run(
+                    `UPDATE customers SET auto_suspension_day = ? WHERE ${clause}`,
+                    [normDay, ...areaParams],
+                    function (uErr) {
+                        if (uErr) return reject(uErr);
+
+                        const updated = this.changes;
+                        const failed = Math.max(0, total - updated);
+
+                        resolve({
+                            total,
+                            updated,
+                            failed,
+                            need_retry: failed > 0,
+                            auto_suspension_day: normDay,
+                            area_ids: ids
+                        });
+                    }
+                );
+            });
+        });
+    }
+
+    /**
+     * Ringkasan tanggal auto isolir per pelanggan (setelah update massal per wilayah).
+     */
+    async getAutoIsolirScheduleSummary(area_ids) {
+        const ids = this._normalizeAreaIds(area_ids);
+        let whereClause = '';
+        let areaParams = [];
+        let joinWhereClause = '';
+        if (ids.length > 0) {
+            const built = this._buildCustomersInAreasWhere(ids);
+            whereClause = `WHERE ${built.clause}`;
+            areaParams = built.params;
+            joinWhereClause = `WHERE ${this._buildCustomersInAreasWhere(ids, 'c').clause}`;
+        }
+
+        return new Promise((resolve, reject) => {
+            const daySql = `
+                SELECT auto_suspension_day AS day_value, COUNT(*) AS count
+                FROM customers
+                ${whereClause}
+                GROUP BY auto_suspension_day
+                ORDER BY count DESC, day_value ASC
+            `;
+
+            this.db.all(daySql, areaParams, (err, dayRows) => {
+                if (err) return reject(err);
+
+                const byAreaSql = `
+                    SELECT
+                        COALESCE(ar.nama_area, NULLIF(TRIM(c.area), ''), 'Tanpa wilayah') AS area_name,
+                        c.auto_suspension_day AS day_value,
+                        COUNT(*) AS count
+                    FROM customers c
+                    LEFT JOIN areas ar ON ar.id = c.area_id
+                    ${joinWhereClause}
+                    GROUP BY area_name, c.auto_suspension_day
+                    ORDER BY area_name ASC, day_value ASC
+                `;
+
+                this.db.all(byAreaSql, areaParams, (aErr, areaRows) => {
+                    if (aErr) return reject(aErr);
+
+                    const listSql = `
+                        SELECT
+                            c.id,
+                            c.username,
+                            c.name,
+                            COALESCE(ar.nama_area, NULLIF(TRIM(c.area), ''), '-') AS area_name,
+                            c.auto_suspension_day
+                        FROM customers c
+                        LEFT JOIN areas ar ON ar.id = c.area_id
+                        ${joinWhereClause}
+                        ORDER BY area_name ASC, c.name ASC
+                        LIMIT 500
+                    `;
+
+                    this.db.all(listSql, areaParams, (lErr, customers) => {
+                        if (lErr) return reject(lErr);
+
+                        const total = (dayRows || []).reduce((s, r) => s + Number(r.count || 0), 0);
+
+                        resolve({
+                            total,
+                            area_ids: ids,
+                            by_day: (dayRows || []).map((r) => ({
+                                day_value: r.day_value,
+                                count: Number(r.count || 0)
+                            })),
+                            by_area: (areaRows || []).map((r) => ({
+                                area_name: r.area_name,
+                                day_value: r.day_value,
+                                count: Number(r.count || 0)
+                            })),
+                            customers: customers || []
+                        });
+                    });
+                });
+            });
+        });
+    }
+
+    /**
+     * Update masal siklus tagihan/isolir seluruh pelanggan + sesuaikan jatuh tempo invoice unpaid (fix_date).
+     */
+    async bulkUpdateCustomerBillingCycle({ renewal_type, billing_day, fix_date }) {
+        return new Promise((resolve, reject) => {
+            this.db.get('SELECT COUNT(*) AS total FROM customers', [], (err, countRow) => {
+                if (err) return reject(err);
+
+                const total = Number(countRow?.total || 0);
+                let updateQuery;
+                let params;
+                let normFixDate = null;
+
+                if (renewal_type === 'fix_date') {
+                    normFixDate = Math.min(Math.max(parseInt(fix_date, 10) || 15, 1), 28);
+                    updateQuery = 'UPDATE customers SET renewal_type = ?, fix_date = ?';
+                    params = ['fix_date', normFixDate];
+                } else {
+                    const bDay = Math.min(Math.max(parseInt(billing_day, 10) || 30, 1), 365);
+                    updateQuery = 'UPDATE customers SET renewal_type = ?, billing_day = ?';
+                    params = ['renewal', bDay];
+                }
+
+                const dbRef = this.db;
+                this.db.serialize(() => {
+                    this.db.run('BEGIN TRANSACTION');
+
+                    this.db.run(updateQuery, params, function (uErr) {
+                        if (uErr) {
+                            dbRef.run('ROLLBACK');
+                            return reject(uErr);
+                        }
+
+                        const updated = this.changes;
+                        const failed = Math.max(0, total - updated);
+
+                        const done = (invoicesUpdated = 0) => {
+                            dbRef.run('COMMIT', (cErr) => {
+                                if (cErr) return reject(cErr);
+                                resolve({
+                                    total,
+                                    updated,
+                                    failed,
+                                    invoices_updated: invoicesUpdated,
+                                    need_retry: failed > 0,
+                                    renewal_type: params[0],
+                                    fix_date: normFixDate,
+                                    billing_day: renewal_type === 'renewal' ? params[1] : null
+                                });
+                            });
+                        };
+
+                        if (renewal_type !== 'fix_date' || !normFixDate) {
+                            return done(0);
+                        }
+
+                        const invoiceSql = `
+                            UPDATE invoices SET due_date = date(
+                                CASE
+                                    WHEN cast(strftime('%d','now','localtime') AS integer) <= ?
+                                    THEN strftime('%Y-%m','now','localtime') || '-' || printf('%02d', ?)
+                                    ELSE strftime('%Y-%m', date('now','localtime','start of month','+1 month')) || '-' || printf('%02d', ?)
+                                END
+                            )
+                            WHERE status = 'unpaid' AND customer_id IS NOT NULL
+                        `;
+                        dbRef.run(invoiceSql, [normFixDate, normFixDate, normFixDate], function (iErr) {
+                            if (iErr) {
+                                dbRef.run('ROLLBACK');
+                                return reject(iErr);
+                            }
+                            done(this.changes);
+                        });
+                    });
+                });
+            });
+        });
+    }
+
+    /** Semua tagihan belum lunas — dipakai isolir otomatis di tanggal tetap (mis. tgl 25). */
+    async getUnpaidInvoicesForAutoSuspension(limit = null) {
+        return new Promise((resolve, reject) => {
+            let sql = `
+                SELECT i.*, 
+                       c.username, c.name as customer_name, c.phone as customer_phone,
+                       m.hotspot_username as member_hotspot_username, m.name as member_name, m.phone as member_phone,
+                       p.name as package_name,
+                       CASE WHEN i.customer_id IS NOT NULL THEN 'customer' ELSE 'member' END as invoice_type_entity
+                FROM invoices i
+                LEFT JOIN customers c ON i.customer_id = c.id
+                LEFT JOIN members m ON i.member_id = m.id
+                LEFT JOIN packages p ON i.package_id = p.id
+                LEFT JOIN member_packages mp ON i.package_id = mp.id
+                WHERE i.status = 'unpaid'
+                ORDER BY i.due_date ASC
+            `;
+
+            const params = [];
+            if (limit) {
+                sql += ` LIMIT ?`;
+                params.push(limit);
+            }
+
+            this.db.all(sql, params, (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
             });
         });
     }
@@ -7601,6 +8267,9 @@ async handlePaymentWebhook(payload, gateway) {
                 ? parseInt(String(year), 10)
                 : NaN;
         const useRange = Number.isFinite(m) && m >= 1 && m <= 12 && Number.isFinite(y);
+        const hasAreas = await this._hasAreasReferenceTable();
+        const areaMatch = this._sqlCustomerMatchesCollectorAreaRow(hasAreas, 'ca', 'cust');
+        const joinCollectorArea = `JOIN collector_areas ca ON ca.collector_id = c.id AND ${areaMatch}`;
         let invDate = '1=1';
         let cpExtra = '';
         let cpCntExtra = '';
@@ -7615,59 +8284,41 @@ async handlePaymentWebhook(payload, gateway) {
             collectorId != null && Number.isFinite(parseInt(String(collectorId), 10))
                 ? `AND c.id = ${parseInt(String(collectorId), 10)}`
                 : '';
+        const invSubFrom = `
+                           FROM invoices i
+                           JOIN customers cust ON i.customer_id = cust.id
+                           ${joinCollectorArea}`;
         const sql = `
                 SELECT c.*,
                        (
                            SELECT COALESCE(SUM(i.amount), 0)
-                           FROM invoices i
-                           JOIN customers cust ON i.customer_id = cust.id
-                           JOIN collector_areas ca ON cust.area = ca.area
-                           WHERE ca.collector_id = c.id
-                           AND (${invDate})
+                           ${invSubFrom}
+                           WHERE (${invDate})
                        ) as total_tagihan_area,
                        (
                            SELECT COUNT(i.id)
-                           FROM invoices i
-                           JOIN customers cust ON i.customer_id = cust.id
-                           JOIN collector_areas ca ON cust.area = ca.area
-                           WHERE ca.collector_id = c.id
-                           AND (${invDate})
+                           ${invSubFrom}
+                           WHERE (${invDate})
                        ) as count_tagihan_area,
                        (
                            SELECT COALESCE(SUM(i.amount), 0)
-                           FROM invoices i
-                           JOIN customers cust ON i.customer_id = cust.id
-                           JOIN collector_areas ca ON cust.area = ca.area
-                           WHERE ca.collector_id = c.id
-                           AND i.status = 'paid'
-                           AND (${invDate})
+                           ${invSubFrom}
+                           WHERE i.status = 'paid' AND (${invDate})
                        ) as total_lunas_area,
                        (
                            SELECT COUNT(i.id)
-                           FROM invoices i
-                           JOIN customers cust ON i.customer_id = cust.id
-                           JOIN collector_areas ca ON cust.area = ca.area
-                           WHERE ca.collector_id = c.id
-                           AND i.status = 'paid'
-                           AND (${invDate})
+                           ${invSubFrom}
+                           WHERE i.status = 'paid' AND (${invDate})
                        ) as count_lunas_area,
                        (
                            SELECT COALESCE(SUM(i.amount), 0)
-                           FROM invoices i
-                           JOIN customers cust ON i.customer_id = cust.id
-                           JOIN collector_areas ca ON cust.area = ca.area
-                           WHERE ca.collector_id = c.id
-                           AND i.status = 'unpaid'
-                           AND (${invDate})
+                           ${invSubFrom}
+                           WHERE i.status = 'unpaid' AND (${invDate})
                        ) as total_belum_lunas_amount,
                        (
                            SELECT COUNT(i.id)
-                           FROM invoices i
-                           JOIN customers cust ON i.customer_id = cust.id
-                           JOIN collector_areas ca ON cust.area = ca.area
-                           WHERE ca.collector_id = c.id
-                           AND i.status = 'unpaid'
-                           AND (${invDate})
+                           ${invSubFrom}
+                           WHERE i.status = 'unpaid' AND (${invDate})
                        ) as total_belum_lunas_count,
                        (
                            SELECT COUNT(*)
@@ -7686,25 +8337,40 @@ async handlePaymentWebhook(payload, gateway) {
                 GROUP BY c.id
                 ORDER BY c.name
             `;
-        return new Promise((resolve, reject) => {
-            this.db.all(sql, [], (err, rows) => {
-                if (err) return reject(err);
-                const list = rows || [];
-                const summary = {
-                    total_tagihan: 0,
-                    total_lunas: 0,
-                    total_belum_lunas: 0,
-                    total_komisi: 0
-                };
-                list.forEach((c) => {
-                    summary.total_tagihan += Number(c.total_tagihan_area) || 0;
-                    summary.total_lunas += Number(c.total_lunas_area) || 0;
-                    summary.total_belum_lunas += Number(c.total_belum_lunas_amount) || 0;
-                    summary.total_komisi += Number(c.total_commission) || 0;
-                });
-                resolve({ rows: list, summary });
-            });
+        const list = await new Promise((resolve, reject) => {
+            this.db.all(sql, [], (err, rows) => (err ? reject(err) : resolve(rows || [])));
         });
+        let summary = {
+            total_tagihan: 0,
+            total_lunas: 0,
+            total_belum_lunas: 0,
+            total_komisi: 0
+        };
+        list.forEach((c) => {
+            summary.total_komisi += Number(c.total_commission) || 0;
+        });
+        if (useRange) {
+            const canon = await this.getMonthlyTagihanTotals(m, y, { scope: 'collector_territory' });
+            const global = await this.getMonthlyTagihanTotals(m, y, { scope: 'all' });
+            summary = {
+                total_tagihan: canon.total_tagihan,
+                total_lunas: canon.total_lunas,
+                total_belum_lunas: canon.total_belum_lunas,
+                total_komisi: summary.total_komisi,
+                total_tagihan_global: global.total_tagihan,
+                total_tagihan_outside_collector_pool: Math.max(
+                    0,
+                    global.total_tagihan - canon.total_tagihan
+                )
+            };
+        } else {
+            list.forEach((c) => {
+                summary.total_tagihan += Number(c.total_tagihan_area) || 0;
+                summary.total_lunas += Number(c.total_lunas_area) || 0;
+                summary.total_belum_lunas += Number(c.total_belum_lunas_amount) || 0;
+            });
+        }
+        return { rows: list, summary };
     }
 
     // Method untuk mendapatkan riwayat komisi (expenses) — bukan log setoran kasir (lihat getCollectorRemittanceReceipts).

@@ -206,7 +206,7 @@ router.get('/dashboard', adminAuth, async (req, res) => {
     console.log('✅ [DASHBOARD] Billing stats loaded');
   } catch (billingError) {
     console.warn('⚠️ [DASHBOARD] Billing stats tidak dapat dimuat:', billingError.message);
-    billingStats = { total_customers: 0, active_customers: 0, total_invoices: 0, paid_invoices: 0, unpaid_invoices: 0, total_revenue: 0, total_unpaid: 0, monthly_revenue: 0, voucher_revenue: 0, monthly_invoices: 0, paid_monthly_invoices: 0, unpaid_monthly_invoices: 0, monthly_unpaid: 0, voucher_invoices: 0, paid_voucher_invoices: 0, unpaid_voucher_invoices: 0, voucher_unpaid: 0 };
+    billingStats = { total_customers: 0, active_customers: 0, total_invoices: 0, paid_invoices: 0, unpaid_invoices: 0, total_revenue: 0, total_unpaid: 0, monthly_revenue: 0, voucher_revenue: 0, monthly_invoices: 0, paid_monthly_invoices: 0, unpaid_monthly_invoices: 0, monthly_unpaid: 0, monthly_total_tagihan: 0, monthly_belum_lunas_canonical: 0, monthly_lunas_canonical: 0, outstanding_unpaid_total: 0, outstanding_unpaid_count: 0, voucher_invoices: 0, paid_voucher_invoices: 0, unpaid_voucher_invoices: 0, voucher_unpaid: 0 };
   }
 
   let portalPackageRequests = [];

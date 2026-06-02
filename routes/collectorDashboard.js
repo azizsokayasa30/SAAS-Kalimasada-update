@@ -288,7 +288,7 @@ router.get('/customers', collectorAuth, async (req, res) => {
         if (statusFilter === 'isolir') {
             customers = customers.filter(c => collectorCustomerIsIsolir(c));
         } else if (statusFilter === 'baru') {
-            customers = customers.filter(c => joinDateThisCalendarMonth(c));
+            customers = customers.filter(c => (c.payment_status || '') === 'no_invoice');
         } else if (statusFilter === 'unpaid') {
             customers = customers.filter(c => matchesAdminBelumLunasFromPaymentStatus(c));
         } else if (statusFilter === 'paid') {

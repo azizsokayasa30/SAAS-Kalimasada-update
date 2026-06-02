@@ -871,6 +871,24 @@ router.put('/complete/:id', adminAuth, async (req, res) => {
             });
         });
 
+        setImmediate(() => {
+            (async () => {
+                try {
+                    const whatsappNotifications = require('../config/whatsapp-notifications');
+                    const waResult = await whatsappNotifications.sendWelcomeMessageOnInstallComplete(job);
+                    if (waResult && waResult.success && !waResult.skipped) {
+                        logger.info(`Welcome message sent after admin completed job ${jobId}`);
+                    } else if (waResult && waResult.skipped) {
+                        logger.info(`Welcome message skipped for job ${jobId}: ${waResult.reason}`);
+                    } else {
+                        logger.warn(`Welcome message failed for job ${jobId}:`, waResult?.error);
+                    }
+                } catch (waErr) {
+                    logger.warn(`Welcome message error for job ${jobId}:`, waErr.message || waErr);
+                }
+            })();
+        });
+
         return res.json({ success: true, message: 'Job berhasil ditandai selesai' });
     } catch (error) {
         logger.error('Error completing installation job:', error);

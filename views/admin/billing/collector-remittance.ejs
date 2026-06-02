@@ -318,7 +318,13 @@
                             <div class="f-stat-icon-wrapper bg-primary-glow"><i class="bi bi-receipt"></i></div>
                         </div>
                         <div class="f-stat-value f-premium-text">Rp <%= (sum.total_tagihan || 0).toLocaleString('id-ID') %></div>
-                        <div class="f-stat-desc">Total Bulan ini</div>
+                        <div class="f-stat-desc">Pool area kolektor (non-voucher)</div>
+                        <% if (sum.total_tagihan_global != null && sum.total_tagihan_outside_collector_pool > 0) { %>
+                        <div class="f-stat-desc text-warning mt-1" style="font-size:0.75rem;">
+                            Di luar pool: Rp <%= sum.total_tagihan_outside_collector_pool.toLocaleString('id-ID') %>
+                            · Total global: Rp <%= sum.total_tagihan_global.toLocaleString('id-ID') %>
+                        </div>
+                        <% } %>
                     </div>
                     <div class="f-stat-card animate-in" style="animation-delay: 0.1s;">
                         <div class="f-stat-header">

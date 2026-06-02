@@ -269,6 +269,23 @@ class WhatsAppMessageHandler {
             });
 
             logger.info(`Technician ${technician.name} completed installation for job ${job.job_number}`);
+
+            setImmediate(() => {
+                (async () => {
+                    try {
+                        const whatsappNotifications = require('./whatsapp-notifications');
+                        const waResult = await whatsappNotifications.sendWelcomeMessageOnInstallComplete(job);
+                        if (waResult && waResult.success && !waResult.skipped) {
+                            logger.info(`Welcome message sent to customer for job ${job.job_number} (via WA bot)`);
+                        } else if (waResult && !waResult.skipped) {
+                            logger.warn(`Welcome message failed for job ${job.job_number}:`, waResult.error);
+                        }
+                    } catch (waErr) {
+                        logger.warn(`Welcome message error for job ${job.job_number}:`, waErr.message || waErr);
+                    }
+                })();
+            });
+
             return { success: true, action: 'installation_completed', message: 'Instalasi selesai', notes: completionNotes };
 
         } catch (error) {

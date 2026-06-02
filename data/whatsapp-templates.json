@@ -1,22 +1,27 @@
 {
   "invoice_created": {
     "title": "Tagihan Baru",
-    "template": "\n📋 *TAGIHAN BARU*\n\nHalo {customer_name},\n\nTagihan bulanan Anda telah dibuat:\n\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n📅 *Jatuh Tempo:* {due_date}\n📦 *Paket:* {package_name} ({package_speed})\n📝 *Catatan:* {notes}\n\n*Cek Status Dan Lakukan Pembayaran Anda Di*\nwww.billlingskynet.kalimasada.id\n*_Login Dengan No Hp Terdaftar_*\n\nUntuk konfirmasi pembayaran hubungi nomer 0816411615\nSilakan lakukan pembayaran sebelum tanggal jatuh tempo untuk menghindari denda keterlambatan.\nTerima kasih atas kepercayaan Anda.\n\n\nKALIMASADA INTI SARANA",
+    "template": "\n📋 *TAGIHAN BARU*\n\nHalo {customer_name},\nSemoga Sehat selalu , ijin menyampaikan tagihan baru :\n\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n📅 *Jatuh Tempo:* {due_date}\n📦 *Paket:* {package_name} ({package_speed})\n📝 *Catatan:* {notes}\n\n*Cek Status Dan Lakukan Pembayaran Anda Di*\nhttp://bna.kalimasada-app.com/customer-app/login\n*_Login Dengan No Hp Terdaftar_*\n\nUntuk konfirmasi pembayaran hubungi nomer 0816411615\nSilakan lakukan pembayaran sebelum tanggal jatuh tempo untuk menghindari denda keterlambatan.\nTerima kasih atas kepercayaan Anda.\n\n\nKALIMASADA INTI SARANA",
     "enabled": true
   },
   "due_date_reminder": {
-    "title": "Peringatan Jatuh Tempo",
-    "template": "\n⚠️ PEMBERITAHUAN TAGIHAN TERLAMBAT\n\nTagihan Anda telah melewati jatuh tempo:\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n📅 *Jatuh Tempo:* {due_date}\n      * Status: TERLAMBAT ⚠️\n\nCek Status Dan Lakukan Pembayaran Anda Di\nwww.billlingskynet.kalimasada.id\nLogin Dengan No Hp Terdaftar\nSilakan lakukan pembayaran segera untuk menghindari denda keterlambatan.\nKALIMASADA INTI SARANA\n\nHubungi kami jika ada kendala dalam pembayaran.\nInfo tagihan atau konfirmasi hubungi : 0816411615",
+    "title": "Peringatan Sebelum Jatuh Tempo",
+    "template": "\n*Pengingat Tagihan*\n\nHalo {customer_name},\n\nIjin Mengingatkan Tagihan Anda akan jatuh tempo dalam *{days_remaining} hari*:\n\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n📅 *Jatuh Tempo:* {due_date}\n📦 *Paket:* {package_name} ({package_speed})\n\nMohon persiapkan pembayaran sebelum tanggal jatuh tempo agar layanan tetap lancar dan terhindar dari isolir\n+.\n\nTerima kasih.",
+    "enabled": true
+  },
+  "due_date_reminder_today": {
+    "title": "Pengingat Hari H Jatuh Tempo",
+    "template": "\n🙏 *PENGINGAT PEMBAYARAN*\n\nHalo {customer_name},\n\nHari ini (*{due_date}*) adalah tanggal jatuh tempo terakhir pembayaran tagihan Anda:\n\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n📦 *Paket:* {package_name} ({package_speed})\n\nApabila belum melakukan pembayaran, mohon kiranya dapat diselesaikan hari ini. Jika sudah bayar, abaikan pesan ini.\n\nTerima kasih atas kerja samanya.",
     "enabled": true
   },
   "payment_received": {
     "title": "Pembayaran Diterima",
-    "template": "✅ *PEMBAYARAN DITERIMA*\n\nHalo {customer_name},\n\nTerima kasih! Pembayaran Anda telah kami terima:\n\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n💳 *Metode Pembayaran:* {payment_method}\n📅 *Tanggal Pembayaran:* {payment_date}\n🔢 *No. Referensi:* {reference_number}\n\nLayanan internet Anda akan tetap aktif. Terima kasih atas kepercayaan Anda.",
+    "template": "\n*PEMBAYARAN DITERIMA*✅ \n\nHalo {customer_name},\n\nTerima kasih! Pembayaran Anda telah kami terima:\n\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n💳 *Metode Pembayaran:* {payment_method}\n📅 *Tanggal Pembayaran:* {payment_date}\n🔢 *No. Referensi:* {reference_number}\n\nLayanan internet Anda akan tetap aktif. Terima kasih atas kepercayaan Anda.",
     "enabled": true
   },
   "service_disruption": {
     "title": "Gangguan Layanan",
-    "template": "\n🚨 *GANGGUAN LAYANAN*\n\nHalo Pelanggan Setia,\n\nMohon maaf atas ketindaknyamannya, Kami informasikan bahwa sedang terjadi gangguan pada jaringan internet:\n\n📡 *Jenis Gangguan:* {disruption_type}\n📍 *Area Terdampak:* {affected_area}\n⏰ *Perkiraan Selesai:* {estimated_resolution}\n📞 *Hotline:* {support_phone}\n\nTerimakasih atas kesabaran dan pengertian anda\nUntuk update informasi bisa hubungi nomor  0816411615\n\n*Cek Status Di*\nwww.billlingskynet.kalimasada.id\n*_Login Dengan No Hp Terdaftar_*\n\n\nKALIMASADA INTI SARANA ",
+    "template": "\n🚨 *GANGGUAN LAYANAN*\n\nHalo Pelanggan Setia,\n\nMohon maaf atas ketindaknyamannya, Kami informasikan bahwa sedang terjadi gangguan pada jaringan internet:\n\n📡 *Jenis Gangguan:* {disruption_type}\n📍 *Area Terdampak:* {affected_area}\n⏰ *Perkiraan Selesai:* {estimated_resolution}\n📞 *Hotline:* {support_phone}\n\nTerimakasih atas kesabaran dan pengertian anda\nUntuk update informasi bisa hubungi nomor  0816411615\n\n*Cek Status Di*\nhttp://bna.kalimasada-app.com/customer-app/login\n*_Login Dengan No Hp Terdaftar_*\n\n\nKALIMASADA INTI SARANA ",
     "enabled": true
   },
   "service_announcement": {
@@ -26,22 +31,22 @@
   },
   "service_suspension": {
     "title": "Service Suspension",
-    "template": "\n⚠️ *LAYANAN INTERNET DINONAKTIFKAN*\n\nHalo {customer_name},\n\nLayanan internet Anda telah dinonaktifkan karena:\n📋 *Alasan:* {reason}\n\n💡 *Cara Mengaktifkan Kembali:*\n1. Lakukan pembayaran tagihan yang tertunggak\n2. Layanan akan aktif otomatis setelah pembayaran dikonfirmasi\n\n*Cek Status Dan Pembayaran Anda Di*\nwww.billlingskynet.kalimasada.id\n*_Login Dengan No Hp Terdaftar_*\n\n📞 Butuh Bantuan?\nHubungi kami di: 0816411615\n\nKALIMASADA INTI SARANA \nTerima kasih atas perhatian Anda.",
+    "template": "\n *LAYANAN INTERNET DINONAKTIFKAN* ⚠️\n\nHalo {customer_name},\n\nLayanan internet Anda telah dinonaktifkan karena:\n📋 *Alasan:* {reason}\n\n💡 *Cara Mengaktifkan Kembali:*\n1. Lakukan pembayaran tagihan yang tertunggak\n2. Layanan akan aktif otomatis setelah pembayaran dikonfirmasi\n\n*Cek Status Dan Pembayaran Anda Di*\nhttp://bna.kalimasada-app.com/customer-app/login\n*_Login Dengan No Hp Terdaftar_*\n\n📞 Butuh Bantuan?\nHubungi kami di: 0816411615\n\nKALIMASADA INTI SARANA \nTerima kasih atas perhatian Anda.",
     "enabled": true
   },
   "service_restoration": {
     "title": "Service Restoration",
-    "template": "✅ *LAYANAN INTERNET DIAKTIFKAN*\n\nHalo {customer_name},\n\nSelamat! Layanan internet Anda telah diaktifkan kembali.\n\n📋 *Informasi:*\n• Status: AKTIF ✅\n• Paket: {package_name}\n• Kecepatan: {package_speed}\n\nTerima kasih telah melakukan pembayaran tepat waktu.\n\n*JINOM-HOMENET*\nInfo: 0816411615",
+    "template": "\n *LAYANAN INTERNET DIAKTIFKAN* ✅\n\nHalo {customer_name},\n\nSelamat! Layanan internet Anda telah diaktifkan kembali.\n\n📋 *Informasi:*\n• Status: AKTIF ✅\n• Paket: {package_name}\n• Kecepatan: {package_speed}\n\nTerima kasih telah melakukan pembayaran tepat waktu.\n\nKalimasada Inti Sarana\nInfo: 0816411615",
     "enabled": true
   },
   "welcome_message": {
     "title": "Welcome Message",
-    "template": "👋 *SELAMAT DATANG*\n\nHalo {customer_name},\n\nSelamat datang di layanan internet kami!\n\n📦 *Paket:* {package_name} ({package_speed})\n🔑 *Password WiFi:* {wifi_password}\n📞 *Support:* {support_phone}\n\nTerima kasih telah memilih layanan kami.",
+    "template": "\n👋 *SELAMAT DATANG* 👋\n\nHalo {customer_name},\n\nSelamat datang di layanan internet kami!\n\n📦 *Paket:* {package_name} ({package_speed})\n📞 *Support:* {support_phone}\n\ncek portal pelanggan : http://bna.kalimasada-app.com/customer-app/login\n\nTerima kasih telah memilih layanan kami.",
     "enabled": true
   },
   "installation_job_assigned": {
     "title": "Tugas Instalasi Baru",
-    "template": "🔧 *TUGAS INSTALASI BARU*\n\nHalo {technician_name},\n\nAnda telah ditugaskan untuk instalasi baru:\n\n📋 *Detail Job:*\n• No. Job: {job_number}\n• Pelanggan: {customer_name}\n• Telepon: {customer_phone}\n• Alamat: {customer_address}\n\n📦 *Paket Internet:*\n• Nama: {package_name}\n• Harga: Rp {package_price}\n• PPPoE: {pppoe_username}\n• Password: {pppoe_password}\n\n📅 *Jadwal Instalasi:*\n• Tanggal: {installation_date}\n• Waktu: {installation_time}\n\n📝 *Catatan:* {notes}\n🛠️ *Peralatan:* {equipment_needed}\n\n📍 *Lokasi:* {customer_address}\n\n*Status:* Ditugaskan\n*Prioritas:* {priority}\n\n",
+    "template": " *TUGAS INSTALASI BARU* 🚀\n\nHalo {technician_name},\n\nAnda telah ditugaskan untuk instalasi baru:\n\n📋 *Detail Job:*\n• No. Job: {job_number}\n• Pelanggan: {customer_name}\n• Telepon: {customer_phone}\n• Alamat: {customer_address}\n\n📦 *Paket Internet:*\n• Nama: {package_name}\n• Harga: Rp {package_price}\n• PPPoE: {pppoe_username}\n• Password: {pppoe_password}\n\n📅 *Jadwal Instalasi:*\n• Tanggal: {installation_date}\n• Waktu: {installation_time}\n\n📝 *Catatan:* {notes}\n🛠️ *Peralatan:* {equipment_needed}\n\n📍 *Lokasi:* {customer_address}\n\n*Status:* Ditugaskan\n*Prioritas:* {priority}\n\n",
     "enabled": true
   },
   "installation_status_update": {
@@ -51,7 +56,7 @@
   },
   "installation_completed": {
     "title": "Instalasi Selesai",
-    "template": "✅ *INSTALASI SELESAI*\n\nHalo {technician_name},\n\nSelamat! Instalasi telah berhasil diselesaikan:\n\n📋 *Detail Job:*\n• No. Job: {job_number}\n• Pelanggan: {customer_name}\n• Status: SELESAI ✅\n• Waktu Selesai: {completion_time}\n\n📝 *Catatan Penyelesaian:* {completion_notes}\n",
+    "template": "\n*INSTALASI SELESAI* ✅\n\nTerimakasih {technician_name},\n\nInstalasi telah berhasil diselesaikan:\n\n📋 *Detail Job:*\n• No. Job: {job_number}\n• Pelanggan: {customer_name}\n• Status: SELESAI ✅\n• Waktu Selesai: {completion_time}\n\n📝 *Catatan Penyelesaian:* {completion_notes}\n",
     "enabled": true
   },
   "sales_order_new_customer": {
@@ -61,12 +66,12 @@
   },
   "trouble_report_new_technician": {
     "title": "Laporan gangguan — notifikasi ke teknisi/admin",
-    "template": "🚨 *LAPORAN GANGGUAN BARU*\n\n*{company_header}*\n\n📝 *ID Tiket*: {report_id}\n👤 *Pelanggan*: {customer_name}\n📱 *No. HP*: {phone}\n📍 *Lokasi*: {location}\n🔧 *Kategori*: {category}\n🕒 *Waktu Laporan*: {created_at}\n\n💬 *Deskripsi Masalah*:\n{description}\n\n📌 *Status*: {status}\n\n⚠️ *PRIORITAS TINGGI* - Silakan segera ditindaklanjuti!",
+    "template": "\n🚨 *LAPORAN GANGGUAN BARU*\n\n*{company_header}*\n\n📝 *ID Tiket*: {report_id}\n👤 *Pelanggan*: {customer_name}\n📱 *No. HP*: {phone}\n📍 *Lokasi*: {location}\n🔧 *Kategori*: {category}\n🕒 *Waktu Laporan*: {created_at}\n\n💬 *Deskripsi Masalah*:\n{description}\n\n📌 *Status*: {status}\n\n⚠️ *PRIORITAS TINGGI* - Silakan segera ditindaklanjuti!",
     "enabled": true
   },
   "trouble_report_customer_update": {
     "title": "Laporan gangguan — update ke pelanggan",
-    "template": "📣 *UPDATE LAPORAN GANGGUAN*\n\n*{company_header}*\n\n📝 *ID Tiket*: {report_id}\n🕒 *Update Pada*: {updated_at}\n📌 *Status Baru*: {status_label}\n\n{technician_note_section}{status_message}\n\nJika ada pertanyaan, silakan hubungi kami.",
+    "template": "\n📣 *UPDATE LAPORAN GANGGUAN*\n\n*{company_header}*\n\n📝 *ID Tiket*: {report_id}\n🕒 *Update Pada*: {updated_at}\n📌 *Status Baru*: {status_label}\n\n{technician_note_section}{status_message}\n\nJika ada pertanyaan, silakan hubungi kami.",
     "enabled": true
   }
 }

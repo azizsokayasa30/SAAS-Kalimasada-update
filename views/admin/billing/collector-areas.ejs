@@ -86,6 +86,37 @@
         }
         .area-check-item:hover { background: var(--surface-2); }
         .area-check-item.active { border-color: #2563eb; background: rgba(37,99,235,0.05); }
+        .area-check-item.area-taken-other {
+            cursor: not-allowed;
+            pointer-events: none;
+            opacity: 0.72;
+            background: #334155 !important;
+            border-color: #475569 !important;
+            color: #94a3b8;
+        }
+        .area-check-item.area-taken-other:hover { background: #334155 !important; }
+        .area-check-item.area-taken-other .area-check-label,
+        .area-check-item.area-taken-other .area-check-meta { color: #cbd5e1 !important; }
+        .area-check-item.area-taken-other input[type="checkbox"] {
+            pointer-events: none;
+            opacity: 0.35;
+        }
+        html[data-theme="light"] .area-check-item.area-taken-other {
+            background: #e2e8f0 !important;
+            border-color: #cbd5e1 !important;
+        }
+        html[data-theme="light"] .area-check-item.area-taken-other .area-check-label,
+        html[data-theme="light"] .area-check-item.area-taken-other .area-check-meta {
+            color: #64748b !important;
+        }
+        .area-check-meta {
+            display: block;
+            font-size: 0.7rem;
+            margin-top: 2px;
+            color: #fbbf24;
+            font-weight: 600;
+        }
+        html[data-theme="light"] .area-check-meta { color: #b45309; }
 
     </style>
 </head>
@@ -170,14 +201,19 @@
             </button>
         </div>
         <div class="modal-box-body">
-            <p class="text-muted small mb-3">Pilih (centang) area mana saja yang menjadi wilayah tagihan dari kolektor ini.</p>
+            <p class="text-muted small mb-3">
+                Satu area hanya boleh untuk <strong>satu kolektor</strong>. Area yang sudah dipakai kolektor lain tampil gelap dan tidak bisa dipilih.
+            </p>
             <input type="hidden" id="selectedCollectorId">
-            <div class="area-checkbox-list">
+            <div class="area-checkbox-list" id="areaCheckboxList">
                 <% if(areas && areas.length > 0) { %>
                     <% areas.forEach(function(a) { %>
-                    <label class="area-check-item">
+                    <label class="area-check-item" data-area-name="<%= String(a.nama_area || '').replace(/"/g, '&quot;') %>">
                         <input type="checkbox" class="area-checkbox" value="<%= a.nama_area %>">
-                        <span class="fw-medium" style="color:var(--text-secondary)"><%= a.nama_area %></span>
+                        <span>
+                            <span class="fw-medium area-check-label" style="color:var(--text-secondary)"><%= a.nama_area %></span>
+                            <span class="area-check-meta d-none"></span>
+                        </span>
                     </label>
                     <% }); %>
                 <% } else { %>
@@ -196,29 +232,84 @@
 
 <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
 <script>
-    // Styling the check items when clicked
-    document.querySelectorAll('.area-checkbox').forEach(cb => {
-        cb.addEventListener('change', function() {
-            if(this.checked) this.closest('.area-check-item').classList.add('active');
-            else this.closest('.area-check-item').classList.remove('active');
+    /** area name → { collectorId, collectorName } */
+    var AREA_ASSIGNMENTS = <%- JSON.stringify(typeof areaAssignmentMap !== 'undefined' ? areaAssignmentMap : {}) %>;
+
+    function normalizeAreaKey(name) {
+        return String(name || '').trim().toLowerCase();
+    }
+
+    function findAssignment(areaName) {
+        if (!areaName) return null;
+        if (AREA_ASSIGNMENTS[areaName]) return AREA_ASSIGNMENTS[areaName];
+        var key = normalizeAreaKey(areaName);
+        for (var k in AREA_ASSIGNMENTS) {
+            if (normalizeAreaKey(k) === key) return AREA_ASSIGNMENTS[k];
+        }
+        return null;
+    }
+
+    document.querySelectorAll('.area-checkbox').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+            var item = this.closest('.area-check-item');
+            if (item && item.classList.contains('area-taken-other')) {
+                this.checked = false;
+                return;
+            }
+            if (this.checked) item.classList.add('active');
+            else item.classList.remove('active');
+        });
+        cb.addEventListener('click', function (e) {
+            if (this.closest('.area-check-item').classList.contains('area-taken-other')) {
+                e.preventDefault();
+            }
         });
     });
 
     function openMappingModal(colId, colName, areasArr) {
+        var currentId = parseInt(String(colId), 10);
         document.getElementById('selectedCollectorId').value = colId;
         document.getElementById('colNameLabel').textContent = colName;
-        
-        // Reset and check matching
-        document.querySelectorAll('.area-checkbox').forEach(cb => {
-            if(areasArr.includes(cb.value)) {
-                cb.checked = true;
-                cb.closest('.area-check-item').classList.add('active');
-            } else {
+
+        var ownedSet = {};
+        (areasArr || []).forEach(function (a) {
+            ownedSet[normalizeAreaKey(a)] = true;
+        });
+
+        document.querySelectorAll('.area-checkbox').forEach(function (cb) {
+            var item = cb.closest('.area-check-item');
+            var meta = item ? item.querySelector('.area-check-meta') : null;
+            var assign = findAssignment(cb.value);
+            var takenByOther =
+                assign &&
+                Number(assign.collectorId) !== currentId &&
+                !ownedSet[normalizeAreaKey(cb.value)];
+
+            item.classList.remove('active', 'area-taken-other');
+            if (meta) {
+                meta.classList.add('d-none');
+                meta.textContent = '';
+            }
+
+            if (takenByOther) {
                 cb.checked = false;
-                cb.closest('.area-check-item').classList.remove('active');
+                cb.disabled = true;
+                item.classList.add('area-taken-other');
+                if (meta) {
+                    meta.textContent = 'Sudah: ' + (assign.collectorName || 'kolektor lain');
+                    meta.classList.remove('d-none');
+                }
+            } else {
+                cb.disabled = false;
+                if (areasArr.includes(cb.value) || ownedSet[normalizeAreaKey(cb.value)]) {
+                    cb.checked = true;
+                    item.classList.add('active');
+                } else {
+                    cb.checked = false;
+                }
             }
         });
-        
+
         document.getElementById('modalMapping').classList.add('show');
     }
 
@@ -228,8 +319,8 @@
 
     async function saveMapping() {
         var colId = document.getElementById('selectedCollectorId').value;
-        var inputs = document.querySelectorAll('.area-checkbox:checked');
-        var selectedAreas = Array.from(inputs).map(i => i.value);
+        var inputs = document.querySelectorAll('.area-checkbox:checked:not(:disabled)');
+        var selectedAreas = Array.from(inputs).map(function (i) { return i.value; });
         
         var btn = document.getElementById('btnSaveMapping');
         btn.disabled = true;

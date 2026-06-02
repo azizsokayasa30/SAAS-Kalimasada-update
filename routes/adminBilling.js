@@ -2473,88 +2473,342 @@ router.post('/customers/bulk-delete', async (req, res) => {
     }
 });
 
+function formatCustomerExportDate(val) {
+    if (val == null || val === '') return '';
+    const d = new Date(val);
+    if (Number.isNaN(d.getTime())) return String(val);
+    return d.toLocaleDateString('id-ID');
+}
+
+/**
+ * Setelah baris import lolos validasi: perbaiki hanya Excel (852→0852).
+ * 628… dan 085… tetap berbeda — untuk bedakan 2 langganan nomor "sama" format beda.
+ */
+function parsePhoneFromSpreadsheetCell(val) {
+    if (val == null || val === '') return '';
+    return billingManager.fixExcelStrippedPhoneForStorage(val);
+}
+
+/** Batch router + sandi PPPoE (hindari ribuan koneksi RADIUS per baris). */
+async function enrichCustomersForExport(customers) {
+    const db = require('../config/billing').db;
+    const { getUserAuthModeAsync, getRadiusConnection } = require('../config/mikrotik');
+    const authMode = await getUserAuthModeAsync();
+
+    const routerByCustomerId = await new Promise((resolve, reject) => {
+        db.all('SELECT customer_id, router_id FROM customer_router_map', [], (err, rows) => {
+            if (err) reject(err);
+            else {
+                const map = new Map();
+                for (const r of rows || []) {
+                    if (r.customer_id != null && !map.has(r.customer_id)) {
+                        map.set(r.customer_id, r.router_id);
+                    }
+                }
+                resolve(map);
+            }
+        });
+    });
+
+    const passwordByPppoe = new Map();
+    if (authMode === 'radius') {
+        const usernames = [...new Set(
+            customers.map((c) => (c.pppoe_username && String(c.pppoe_username).trim()) || '').filter(Boolean)
+        )];
+        if (usernames.length > 0) {
+            let conn;
+            try {
+                conn = await getRadiusConnection();
+                const chunkSize = 400;
+                for (let i = 0; i < usernames.length; i += chunkSize) {
+                    const chunk = usernames.slice(i, i + chunkSize);
+                    const placeholders = chunk.map(() => '?').join(',');
+                    const [rows] = await conn.execute(
+                        `SELECT username, value AS password FROM radcheck
+                         WHERE LOWER(TRIM(attribute)) = 'cleartext-password'
+                           AND username IN (${placeholders})`,
+                        chunk
+                    );
+                    for (const r of rows || []) {
+                        if (r.username) passwordByPppoe.set(r.username, r.password);
+                    }
+                }
+            } finally {
+                if (conn) {
+                    try {
+                        await conn.end();
+                    } catch (_) {
+                        /* abaikan */
+                    }
+                }
+            }
+        }
+    }
+
+    return customers.map((c) => {
+        const pppoe = (c.pppoe_username && String(c.pppoe_username).trim()) || '';
+        return {
+            ...c,
+            router_id: routerByCustomerId.get(c.id) || '',
+            pppoe_password: pppoe ? (passwordByPppoe.get(pppoe) || '') : ''
+        };
+    });
+}
+
+const CUSTOMER_EXPORT_COLUMNS = [
+    { header: 'ID DB', key: 'id', width: 8 },
+    { header: 'Kode Pelanggan', key: 'customer_id', width: 16 },
+    { header: 'Username', key: 'username', width: 16 },
+    { header: 'Nama', key: 'name', width: 28 },
+    { header: 'Phone', key: 'phone', width: 16 },
+    { header: 'Area', key: 'area', width: 18 },
+    { header: 'Kolektor', key: 'collector_name', width: 20 },
+    { header: 'Paket', key: 'package_name', width: 22 },
+    { header: 'Harga Paket', key: 'package_price', width: 14 },
+    { header: 'Status Layanan', key: 'status', width: 14 },
+    { header: 'Status Bayar', key: 'payment_status', width: 14 },
+    { header: 'PPPoE Username', key: 'pppoe_username', width: 20 },
+    { header: 'PPPoE Password', key: 'pppoe_password', width: 18 },
+    { header: 'PPPoE Profile', key: 'pppoe_profile', width: 16 },
+    { header: 'Router', key: 'router_name', width: 16 },
+    { header: 'Router ID', key: 'router_id', width: 10 },
+    { header: 'Email', key: 'email', width: 24 },
+    { header: 'Alamat', key: 'address', width: 36 },
+    { header: 'Latitude', key: 'latitude', width: 12 },
+    { header: 'Longitude', key: 'longitude', width: 12 },
+    { header: 'Package ID', key: 'package_id', width: 10 },
+    { header: 'Auto Suspension', key: 'auto_suspension', width: 14 },
+    { header: 'Billing Day', key: 'billing_day', width: 12 },
+    { header: 'Join Date', key: 'join_date', width: 14 },
+    { header: 'Created At', key: 'created_at', width: 14 }
+];
+
+/** Kolom tambahan khusus restore/import (tidak ada di export ringkas). */
+const CUSTOMER_IMPORT_EXTRA_COLUMNS = [
+    { header: 'Login Password', key: 'login_password', width: 18 },
+    { header: 'ODP ID', key: 'odp_id', width: 10 },
+    { header: 'Renewal Type', key: 'renewal_type', width: 14 },
+    { header: 'Fix Date', key: 'fix_date', width: 12 },
+    { header: 'Tipe Kabel', key: 'cable_type', width: 14 },
+    { header: 'Panjang Kabel', key: 'cable_length', width: 14 },
+    { header: 'Nomor Port', key: 'port_number', width: 12 },
+    { header: 'Status Kabel', key: 'cable_status', width: 14 },
+    { header: 'Catatan Kabel', key: 'cable_notes', width: 28 }
+];
+
+const CUSTOMER_TEMPLATE_COLUMNS = [
+    ...CUSTOMER_EXPORT_COLUMNS,
+    ...CUSTOMER_IMPORT_EXTRA_COLUMNS
+];
+
+/** Alias header Excel (export / template / import lama) → field internal. */
+const CUSTOMER_IMPORT_HEADER_ALIASES = {
+    name: 'name',
+    nama: 'name',
+    phone: 'phone',
+    telepon: 'phone',
+    'nomor hp': 'phone',
+    username: 'username',
+    'login password': 'login_password',
+    'password login': 'login_password',
+    'kata sandi login': 'login_password',
+    login_password: 'login_password',
+    email: 'email',
+    address: 'address',
+    alamat: 'address',
+    latitude: 'latitude',
+    longitude: 'longitude',
+    lintang: 'latitude',
+    bujur: 'longitude',
+    package: 'package_name',
+    'package name': 'package_name',
+    package_name: 'package_name',
+    paket: 'package_name',
+    'nama paket': 'package_name',
+    'harga paket': 'package_price',
+    'package id': 'package_id',
+    'id paket': 'package_id',
+    package_id: 'package_id',
+    'id db': 'id',
+    id: 'id',
+    'kode pelanggan': 'customer_id',
+    customer_id: 'customer_id',
+    area: 'area',
+    wilayah: 'area',
+    kolektor: 'collector_name',
+    collector_name: 'collector_name',
+    'status layanan': 'status',
+    status: 'status',
+    'status bayar': 'payment_status',
+    payment_status: 'payment_status',
+    'pppoe username': 'pppoe_username',
+    pppoe_username: 'pppoe_username',
+    'pppoe password': 'pppoe_password',
+    pppoe_password: 'pppoe_password',
+    'pppoe profile': 'pppoe_profile',
+    pppoe_profile: 'pppoe_profile',
+    router: 'router_name',
+    router_name: 'router_name',
+    'router id': 'router_id',
+    router_id: 'router_id',
+    'auto suspension': 'auto_suspension',
+    auto_suspension: 'auto_suspension',
+    'billing day': 'billing_day',
+    billing_day: 'billing_day',
+    'join date': 'join_date',
+    join_date: 'join_date',
+    'tanggal gabung': 'join_date',
+    'created at': 'created_at',
+    created_at: 'created_at',
+    'odp id': 'odp_id',
+    odp_id: 'odp_id',
+    'id odp': 'odp_id',
+    'renewal type': 'renewal_type',
+    renewal_type: 'renewal_type',
+    'fix date': 'fix_date',
+    fix_date: 'fix_date',
+    'tipe kabel': 'cable_type',
+    cable_type: 'cable_type',
+    'panjang kabel': 'cable_length',
+    cable_length: 'cable_length',
+    port: 'port_number',
+    'nomor port': 'port_number',
+    port_number: 'port_number',
+    'status kabel': 'cable_status',
+    cable_status: 'cable_status',
+    'catatan kabel': 'cable_notes',
+    cable_notes: 'cable_notes'
+};
+
+function buildCustomerImportUnifiedHeaderMap(headerRow) {
+    const headerMap = {};
+    headerRow.eachCell((cell, colNumber) => {
+        const key = String(cell.value || '').toLowerCase().trim();
+        if (key) headerMap[key] = colNumber;
+    });
+    const unifiedHeaderMap = {};
+    Object.keys(headerMap).forEach((key) => {
+        const normalizedKey = CUSTOMER_IMPORT_HEADER_ALIASES[key] || key;
+        unifiedHeaderMap[normalizedKey] = headerMap[key];
+    });
+    return unifiedHeaderMap;
+}
+
+function getCustomerImportWorksheet(workbook) {
+    return workbook.getWorksheet('Pelanggan') || workbook.worksheets[0] || null;
+}
+
+async function buildCustomerImportTemplateWorkbook() {
+    const workbook = new ExcelJS.Workbook();
+    const ws = workbook.addWorksheet('Pelanggan');
+    try {
+        ws.views = [{ state: 'frozen', ySplit: 1 }];
+    } catch (_) {
+        /* opsional */
+    }
+
+    ws.columns = CUSTOMER_TEMPLATE_COLUMNS.map((col) => ({ ...col }));
+
+    const headerRow = ws.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE8F5E9' }
+    };
+
+    ws.addRow({
+        id: '',
+        customer_id: '',
+        username: '',
+        name: 'Contoh Pelanggan',
+        phone: '6281234567890',
+        area: 'Wilayah A',
+        collector_name: '',
+        package_name: 'Paket 10 Mbps',
+        package_price: 150000,
+        status: 'active',
+        payment_status: '',
+        pppoe_username: 'userpppoe',
+        pppoe_password: 'rahasiaPPP',
+        pppoe_profile: 'default',
+        router_name: '',
+        router_id: '',
+        email: 'nama@email.com',
+        address: 'Jl. Contoh No. 1',
+        latitude: -6.253011,
+        longitude: 107.923009,
+        package_id: '',
+        auto_suspension: 1,
+        billing_day: 15,
+        join_date: '01/06/2026',
+        created_at: '',
+        login_password: '',
+        odp_id: '',
+        renewal_type: 'renewal',
+        fix_date: '',
+        cable_type: 'Fiber Optic',
+        cable_length: 85,
+        port_number: 1,
+        cable_status: 'connected',
+        cable_notes: 'Baris contoh — hapus sebelum import produksi'
+    });
+
+    const priceCol = ws.getColumn('package_price');
+    if (priceCol) priceCol.numFmt = '#,##0';
+    const phoneCol = ws.getColumn('phone');
+    if (phoneCol) phoneCol.numFmt = '@';
+
+    const help = workbook.addWorksheet('Petunjuk');
+    help.getColumn(1).width = 28;
+    help.getColumn(2).width = 88;
+    const rows = [
+        ['Kolom', 'Penjelasan'],
+        ['Nama *', 'Nama lengkap pelanggan (wajib). Sama dengan kolom export.'],
+        ['Phone *', 'Nomor HP (wajib). 628… dan 085… disimpan apa adanya (bisa beda langganan). Hanya angka 852… (tanpa 0/62) diperbaiki jadi 0852… karena Excel.'],
+        ['Paket *', 'Nama paket sesuai menu Paket (wajib). Boleh isi Package ID sebagai alternatif.'],
+        ['Username', 'Username login portal. Kosong = digenerate dari nomor HP.'],
+        ['Login Password', 'Password login portal (bukan PPPoE).'],
+        ['Area', 'Nama wilayah / cluster.'],
+        ['PPPoE Username / Password', 'Login PPPoE; jika diisi sistem push ke RADIUS/Mikrotik.'],
+        ['Router ID', 'ID router (angka) atau kosong untuk mode RADIUS.'],
+        ['Status Layanan', 'active, suspended, register, isolir, dll. Default active.'],
+        ['Auto Suspension', '1/ya = aktif, 0/tidak = nonaktif.'],
+        ['Billing Day', 'Tanggal tagih 1–28. Default 15.'],
+        ['Join Date', 'Format dd/mm/yyyy atau dd-mm-yy.'],
+        ['ODP ID, Tipe/Panjang Kabel, Port, Status Kabel', 'Opsional; untuk data jalur kabel saat pelanggan baru.'],
+        ['Kode Pelanggan, Kolektor, Harga Paket, Status Bayar', 'Kolom dari export — boleh diisi, diabaikan saat import.'],
+        ['', 'Baris 2 sheet Pelanggan adalah CONTOH — hapus sebelum import produksi.'],
+        ['', 'Format kolom sama dengan Export XLSX agar mudah bandingkan / restore data.']
+    ];
+    rows.forEach((r, i) => {
+        const row = help.addRow(r);
+        if (i === 0) row.font = { bold: true };
+    });
+
+    return workbook;
+}
+
 // Export customers to XLSX
 router.get('/export/customers.xlsx', async (req, res) => {
     try {
-        const customers = await billingManager.getCustomers();
+        const joinMonth = req.query.join_month ? parseInt(req.query.join_month, 10) : null;
+        const joinYear = req.query.join_year ? parseInt(req.query.join_year, 10) : null;
+        const customerOpts = (joinMonth && joinYear) ? { joinMonth, joinYear } : {};
+        const customers = await billingManager.getCustomers(customerOpts);
+        const enrichedCustomers = await enrichCustomersForExport(customers);
 
         const workbook = new ExcelJS.Workbook();
-        const worksheet = workbook.addWorksheet('Customers');
+        const worksheet = workbook.addWorksheet('Pelanggan');
+        try {
+            worksheet.views = [{ state: 'frozen', ySplit: 1 }];
+        } catch (_) {
+            /* opsional */
+        }
 
-        // Get PPPoE passwords and router_id for each customer
-        const { getUserAuthModeAsync, getRadiusConnection, getMikrotikConnection } = require('../config/mikrotik');
-        const authMode = await getUserAuthModeAsync();
-        const db = require('../config/billing').db;
-        
-        // Enrich customers with pppoe_password and router_id
-        const enrichedCustomers = await Promise.all(customers.map(async (customer) => {
-            const enriched = { ...customer };
-            
-            // Get router_id from customer_router_map
-            if (customer.id) {
-                try {
-                    const routerMap = await new Promise((resolve, reject) => {
-                        db.get('SELECT router_id FROM customer_router_map WHERE customer_id = ?', [customer.id], (err, row) => {
-                            if (err) reject(err);
-                            else resolve(row);
-                        });
-                    });
-                    if (routerMap && routerMap.router_id) {
-                        enriched.router_id = routerMap.router_id;
-                    }
-                } catch (e) {
-                    // No router mapping found, skip
-                }
-            }
-            
-            // Get PPPoE password if pppoe_username exists
-            if (customer.pppoe_username) {
-                try {
-                    if (authMode === 'radius') {
-                        const conn = await getRadiusConnection();
-                        try {
-                            const [rows] = await conn.execute(
-                                "SELECT value as password FROM radcheck WHERE username = ? AND attribute = 'Cleartext-Password' LIMIT 1",
-                                [customer.pppoe_username]
-                            );
-                            await conn.end();
-                            if (rows && rows.length > 0) {
-                                enriched.pppoe_password = rows[0].password;
-                            }
-                        } catch (radiusError) {
-                            await conn.end();
-                            logger.warn(`Failed to get password from RADIUS for ${customer.pppoe_username}: ${radiusError.message}`);
-                        }
-                    } else {
-                        const conn = await getMikrotikConnection();
-                        if (conn) {
-                            try {
-                                const secrets = await conn.write('/ppp/secret/print', ['?name=' + customer.pppoe_username]);
-                                if (secrets && secrets.length > 0) {
-                                    enriched.pppoe_password = secrets[0].password || null;
-                                }
-                            } catch (mikrotikError) {
-                                logger.warn(`Failed to get password from Mikrotik for ${customer.pppoe_username}: ${mikrotikError.message}`);
-                            }
-                        }
-                    }
-                } catch (e) {
-                    logger.warn(`Error getting PPPoE password for ${customer.pppoe_username}: ${e.message}`);
-                }
-            }
-            
-            return enriched;
-        }));
+        worksheet.columns = CUSTOMER_EXPORT_COLUMNS.map((col) => ({ ...col }));
 
-        // Header lengkap dengan koordinat map dan data lainnya
-        const headers = [
-            'ID', 'Username', 'Nama', 'Phone', 'PPPoE Username', 'PPPoE Password', 'Email', 'Alamat',
-            'Latitude', 'Longitude', 'Package ID', 'Package Name', 'PPPoE Profile', 
-            'Router ID', 'Status', 'Auto Suspension', 'Billing Day', 'Join Date', 'Created At'
-        ];
-        
-        // Set header dengan styling
-        const headerRow = worksheet.addRow(headers);
+        const headerRow = worksheet.getRow(1);
         headerRow.font = { bold: true };
         headerRow.fill = {
             type: 'pattern',
@@ -2562,53 +2816,34 @@ router.get('/export/customers.xlsx', async (req, res) => {
             fgColor: { argb: 'FFE6E6FA' }
         };
 
-        // Set column widths
-        worksheet.columns = [
-            { header: 'ID', key: 'id', width: 8 },
-            { header: 'Username', key: 'username', width: 15 },
-            { header: 'Nama', key: 'name', width: 25 },
-            { header: 'Phone', key: 'phone', width: 15 },
-            { header: 'PPPoE Username', key: 'pppoe_username', width: 20 },
-            { header: 'PPPoE Password', key: 'pppoe_password', width: 20 },
-            { header: 'Email', key: 'email', width: 25 },
-            { header: 'Alamat', key: 'address', width: 35 },
-            { header: 'Latitude', key: 'latitude', width: 12 },
-            { header: 'Longitude', key: 'longitude', width: 12 },
-            { header: 'Package ID', key: 'package_id', width: 10 },
-            { header: 'Package Name', key: 'package_name', width: 20 },
-            { header: 'PPPoE Profile', key: 'pppoe_profile', width: 15 },
-            { header: 'Router ID', key: 'router_id', width: 10 },
-            { header: 'Status', key: 'status', width: 10 },
-            { header: 'Auto Suspension', key: 'auto_suspension', width: 15 },
-            { header: 'Billing Day', key: 'billing_day', width: 12 },
-            { header: 'Join Date', key: 'join_date', width: 15 },
-            { header: 'Created At', key: 'created_at', width: 15 }
-        ];
-
-        enrichedCustomers.forEach(c => {
-            const row = worksheet.addRow([
-                c.id || '',
-                c.username || '',
-                c.name || '',
-                c.phone || '',
-                c.pppoe_username || '',
-                c.pppoe_password || '',
-                c.email || '',
-                c.address || '',
-                c.latitude || '',
-                c.longitude || '',
-                c.package_id || '',
-                c.package_name || '',
-                c.pppoe_profile || 'default',
-                c.router_id || '',
-                c.status || 'active',
-                typeof c.auto_suspension !== 'undefined' ? c.auto_suspension : 1,
-                c.billing_day || 15,
-                c.join_date ? new Date(c.join_date).toLocaleDateString('id-ID') : '',
-                c.created_at ? new Date(c.created_at).toLocaleDateString('id-ID') : ''
-            ]);
-
-            // Highlight rows dengan koordinat valid
+        for (const c of enrichedCustomers) {
+            const row = worksheet.addRow({
+                id: c.id || '',
+                customer_id: c.customer_id || '',
+                username: c.username || '',
+                name: c.name || '',
+                phone: c.phone || '',
+                area: c.area || '',
+                collector_name: c.collector_name || '',
+                package_name: c.package_name || '',
+                package_price: c.package_price != null ? Number(c.package_price) : '',
+                status: c.status || '',
+                payment_status: c.payment_status || '',
+                pppoe_username: c.pppoe_username || '',
+                pppoe_password: c.pppoe_password || '',
+                pppoe_profile: c.pppoe_profile || 'default',
+                router_name: c.router_name || '',
+                router_id: c.router_id || '',
+                email: c.email || '',
+                address: c.address || '',
+                latitude: c.latitude || '',
+                longitude: c.longitude || '',
+                package_id: c.package_id || '',
+                auto_suspension: typeof c.auto_suspension !== 'undefined' ? c.auto_suspension : 1,
+                billing_day: c.billing_day || 15,
+                join_date: formatCustomerExportDate(c.join_date),
+                created_at: formatCustomerExportDate(c.created_at)
+            });
             if (c.latitude && c.longitude) {
                 row.fill = {
                     type: 'pattern',
@@ -2616,157 +2851,54 @@ router.get('/export/customers.xlsx', async (req, res) => {
                     fgColor: { argb: 'FFF0F8FF' }
                 };
             }
-        });
+        }
 
-        // Add summary sheet
+        const priceCol = worksheet.getColumn('package_price');
+        if (priceCol) priceCol.numFmt = '#,##0';
+        const phoneColExport = worksheet.getColumn('phone');
+        if (phoneColExport) phoneColExport.numFmt = '@';
+
         const summarySheet = workbook.addWorksheet('Summary');
-        summarySheet.addRow(['Export Summary']);
-        summarySheet.addRow(['Total Customers', enrichedCustomers.length]);
-        summarySheet.addRow(['Customers with Coordinates', enrichedCustomers.filter(c => c.latitude && c.longitude).length]);
-        summarySheet.addRow(['Customers without Coordinates', enrichedCustomers.filter(c => !c.latitude || !c.longitude).length]);
-        summarySheet.addRow(['Customers with PPPoE Password', enrichedCustomers.filter(c => c.pppoe_password).length]);
-        summarySheet.addRow(['Export Date', new Date().toLocaleString('id-ID')]);
+        summarySheet.addRow(['Ringkasan Export Pelanggan']);
+        if (joinMonth && joinYear) {
+            const monthNames = ['', 'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+            summarySheet.addRow(['Filter Join Date', `${monthNames[joinMonth] || joinMonth} ${joinYear}`]);
+        }
+        summarySheet.addRow(['Total Pelanggan', enrichedCustomers.length]);
+        summarySheet.addRow(['Dengan Koordinat', enrichedCustomers.filter((c) => c.latitude && c.longitude).length]);
+        summarySheet.addRow(['Dengan Sandi PPPoE', enrichedCustomers.filter((c) => c.pppoe_password).length]);
+        summarySheet.addRow(['Total Harga Paket', enrichedCustomers.reduce((s, c) => s + (Number(c.package_price) || 0), 0)]);
+        summarySheet.addRow(['Tanggal Export', new Date().toLocaleString('id-ID')]);
 
+        const stamp = new Date().toISOString().slice(0, 10);
+        const monthPart = (joinMonth && joinYear)
+            ? `-join-${String(joinMonth).padStart(2, '0')}-${joinYear}`
+            : '';
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-        res.setHeader('Content-Disposition', 'attachment; filename="customers_complete.xlsx"');
+        res.setHeader('Content-Disposition', `attachment; filename="export-pelanggan${monthPart}-${stamp}.xlsx"`);
         await workbook.xlsx.write(res);
-        res.end();
+        if (!res.writableEnded) res.end();
     } catch (error) {
         logger.error('Error exporting customers (XLSX):', error);
-        res.status(500).json({ success: false, message: 'Error exporting customers (XLSX)', error: error.message });
+        if (!res.headersSent) {
+            res.status(500).json({ success: false, message: 'Error exporting customers (XLSX)', error: error.message });
+        }
     }
 });
 
-/** Template impor / restore pelanggan (tanpa .xlsx di path — hindari 404 dari nginx/static). */
+/** Template impor / restore pelanggan — format kolom selaras export XLSX. */
 router.get('/import/customers/template', async (req, res) => {
     try {
-        const workbook = new ExcelJS.Workbook();
-        const ws = workbook.addWorksheet('Pelanggan');
-        try {
-            ws.views = [{ state: 'frozen', ySplit: 1 }];
-        } catch (_) {
-            /* opsional */
-        }
-
-        const headers = [
-            'name',
-            'phone',
-            'username',
-            'login_password',
-            'email',
-            'address',
-            'latitude',
-            'longitude',
-            'package',
-            'odp_id',
-            'area',
-            'join_date',
-            'pppoe_username',
-            'pppoe_password',
-            'pppoe_profile',
-            'router_id',
-            'status',
-            'auto_suspension',
-            'billing_day',
-            'renewal_type',
-            'fix_date',
-            'cable_type',
-            'cable_length',
-            'port_number',
-            'cable_status',
-            'cable_notes'
-        ];
-
-        const headerRow = ws.addRow(headers);
-        headerRow.font = { bold: true };
-        headerRow.fill = {
-            type: 'pattern',
-            pattern: 'solid',
-            fgColor: { argb: 'FFE8F5E9' }
-        };
-
-        ws.addRow([
-            'Contoh Pelanggan',
-            '6281234567890',
-            '',
-            '',
-            'nama@email.com',
-            'Jl. Contoh No. 1',
-            '-6.253011',
-            '107.923009',
-            'Paket 10 Mbps',
-            '',
-            'Wilayah A',
-            '08-05-26',
-            'userpppoe',
-            'rahasiaPPP',
-            'default',
-            '',
-            'active',
-            'ya',
-            '15',
-            'renewal',
-            '',
-            'Fiber Optic',
-            '85',
-            '1',
-            'connected',
-            'Dari template import'
-        ]);
-
-        for (let c = 1; c <= headers.length; c++) {
-            ws.getColumn(c).width = Math.min(42, Math.max(12, String(headers[c - 1]).length + 8));
-        }
-
-        const help = workbook.addWorksheet('Petunjuk');
-        help.getColumn(1).width = 28;
-        help.getColumn(2).width = 88;
-        const rows = [
-            ['Kolom', 'Penjelasan'],
-            ['name *', 'Nama lengkap pelanggan (wajib). Boleh juga pakai header "Nama" / "nama".'],
-            ['phone *', 'Nomor HP utama (wajib). Dipakai sebagai kunci update jika sudah ada. Format angka/+62.'],
-            ['username', 'Username login portal billing. Kosong = digenerate dari nomor HP.'],
-            ['login_password', 'Password login portal billing (bukan PPPoE). Opsional.'],
-            ['email', 'Email.'],
-            ['address', 'Alamat pemasangan. Boleh header "Alamat" / "alamat".'],
-            ['latitude', 'Garis lintang (desimal). Opsional; kosong saat create = default peta server.'],
-            ['longitude', 'Garis bujur (desimal).'],
-            ['package *', 'Nama paket (teks) sesuai data di menu Paket. Wajib. Sistem akan otomatis mencari ID paketnya.'],
-            ['odp_id', 'ID ODP (angka) jika sudah terdaftar — memicu pembuatan cable_routes saat pelanggan baru.'],
-            ['area', 'Nama wilayah / cluster (teks).'],
-            ['join_date', 'Tanggal bergabung. Format: dd-mm-yy atau 01-October-2024. Opsional.'],
-            ['pppoe_username', 'Login PPPoE di Mikrotik/RADIUS. Boleh header "PPPoE Username".'],
-            ['pppoe_password', 'Password PPPoE. Jika diisi bersama username, sistem mencoba push ke router/RADIUS.'],
-            ['pppoe_profile', 'Profil PPPoE Mikrotik, default "default".'],
-            ['router_id', 'ID router (angka) dari halaman router, atau kosong / "RADIUS" untuk mode RADIUS.'],
-            ['status', 'active, suspended, register, nonaktif, dll. Default active.'],
-            ['auto_suspension', 'ya = ikut auto suspension, tidak = nonaktifkan auto suspension. Default ya. (0/1 tetap didukung)'],
-            ['billing_day', 'Tanggal tagih 1–28. Default 15.'],
-            ['renewal_type', 'renewal atau fix_date (sesuai pengaturan paket pelanggan).'],
-            ['fix_date', 'Jika renewal_type = fix_date, tanggal 1–28.'],
-            ['cable_type', 'Mis. Fiber Optic.'],
-            ['cable_length', 'Panjang kabel (meter), angka.'],
-            ['port_number', 'Port ODP, angka.'],
-            ['cable_status', 'connected atau disconnected.'],
-            ['cable_notes', 'Catatan jalur kabel.'],
-            ['', 'Baris 2 pada sheet Pelanggan adalah CONTOH — hapus atau ganti sebelum import produksi.'],
-            ['', 'Simpan sebagai .xlsx, lalu unggah lewat menu Restore Data Pelanggan (Import).']
-        ];
-        rows.forEach((r, i) => {
-            const row = help.addRow(r);
-            if (i === 0) {
-                row.font = { bold: true };
-            }
-        });
-
-        const buf = await workbook.xlsx.writeBuffer();
+        const workbook = await buildCustomerImportTemplateWorkbook();
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', 'attachment; filename="template-import-pelanggan.xlsx"');
-        res.setHeader('Content-Length', Buffer.byteLength(buf));
-        res.end(Buffer.from(buf));
+        await workbook.xlsx.write(res);
+        if (!res.writableEnded) res.end();
     } catch (error) {
         logger.error('Error generating customer import template:', error);
-        res.status(500).json({ success: false, message: 'Gagal membuat template', error: error.message });
+        if (!res.headersSent) {
+            res.status(500).json({ success: false, message: 'Gagal membuat template', error: error.message });
+        }
     }
 });
 
@@ -2880,7 +3012,7 @@ async function parseImportFileSummary({ sourceType, buffer }) {
     if (sourceType === 'xlsx') {
         const workbook = new ExcelJS.Workbook();
         await workbook.xlsx.load(buffer);
-        const worksheet = workbook.worksheets[0];
+        const worksheet = getCustomerImportWorksheet(workbook);
         if (!worksheet) {
             throw new Error('Worksheet tidak ditemukan dalam file XLSX');
         }
@@ -3172,65 +3304,13 @@ router.post('/import/customers/xlsx', upload.single('file'), async (req, res) =>
 
         const workbook = new ExcelJS.Workbook();
         await workbook.xlsx.load(req.file.buffer);
-        const worksheet = workbook.worksheets[0];
+        const worksheet = getCustomerImportWorksheet(workbook);
         if (!worksheet) {
             return res.status(400).json({ success: false, message: 'Worksheet tidak ditemukan dalam file' });
         }
 
-        // Build header map from first row with support for both formats
         const headerRow = worksheet.getRow(1);
-        const headerMap = {};
-        headerRow.eachCell((cell, colNumber) => {
-            const key = String(cell.value || '').toLowerCase().trim();
-            if (key) headerMap[key] = colNumber;
-        });
-
-        // Support for Indonesian headers (export lama + template restore)
-        const indonesianHeaderMap = {
-            nama: 'name',
-            phone: 'phone',
-            'pppoe username': 'pppoe_username',
-            'pppoe password': 'pppoe_password',
-            email: 'email',
-            alamat: 'address',
-            package: 'package_name',
-            'package name': 'package_name',
-            package_name: 'package_name',
-            'nama paket': 'package_name',
-            'package id': 'package_id',
-            'pppoe profile': 'pppoe_profile',
-            status: 'status',
-            'router id': 'router_id',
-            'auto suspension': 'auto_suspension',
-            'billing day': 'billing_day',
-            lintang: 'latitude',
-            bujur: 'longitude',
-            'id paket': 'package_id',
-            'id odp': 'odp_id',
-            wilayah: 'area',
-            'odp id': 'odp_id',
-            username: 'username',
-            'login password': 'login_password',
-            'password login': 'login_password',
-            'kata sandi login': 'login_password',
-            'join date': 'join_date',
-            'tanggal gabung': 'join_date',
-            'renewal type': 'renewal_type',
-            'fix date': 'fix_date',
-            'tipe kabel': 'cable_type',
-            'panjang kabel': 'cable_length',
-            port: 'port_number',
-            'nomor port': 'port_number',
-            'status kabel': 'cable_status',
-            'catatan kabel': 'cable_notes'
-        };
-
-        // Create unified header map
-        const unifiedHeaderMap = {};
-        Object.keys(headerMap).forEach(key => {
-            const normalizedKey = indonesianHeaderMap[key] || key;
-            unifiedHeaderMap[normalizedKey] = headerMap[key];
-        });
+        const unifiedHeaderMap = buildCustomerImportUnifiedHeaderMap(headerRow);
 
         const getVal = (row, key) => {
             const col = unifiedHeaderMap[key];
@@ -3297,9 +3377,19 @@ router.post('/import/customers/xlsx', upload.single('file'), async (req, res) =>
             if (rowNumber === 1) return; // skip header
             try {
                 const name = String(getVal(row, 'name') || '').trim();
-                const phone = String(getVal(row, 'phone') || '').trim();
-                if (!name || !phone) {
-                    failed++; errors.push({ row: rowNumber, name, phone, error: 'Nama/Phone wajib' }); return;
+                const phoneRawVal = getVal(row, 'phone');
+                const phoneRawDigits = (() => {
+                    if (phoneRawVal == null || phoneRawVal === '') return '';
+                    if (typeof phoneRawVal === 'number' && Number.isFinite(phoneRawVal)) {
+                        return String(Math.trunc(phoneRawVal));
+                    }
+                    return String(phoneRawVal).replace(/\D/g, '');
+                })();
+                if (!name || !phoneRawDigits || phoneRawDigits.length < 9) {
+                    failed++; errors.push({ row: rowNumber, name, phone: phoneRawDigits, error: 'Nama/Phone wajib' }); return;
+                }
+                if (/^contoh\b/i.test(name)) {
+                    return;
                 }
 
                 const cellStr = (key) => String(getVal(row, key) ?? '').trim();
@@ -3311,7 +3401,7 @@ router.post('/import/customers/xlsx', upload.single('file'), async (req, res) =>
                 };
                 const raw = {
                     name,
-                    phone,
+                    phone: phoneRawVal,
                     username: cellStr('username'),
                     login_password: cellStr('login_password') || cellStr('billing_password'),
                     pppoe_username: String(getVal(row, 'pppoe_username') || '').trim(),
@@ -3321,7 +3411,7 @@ router.post('/import/customers/xlsx', upload.single('file'), async (req, res) =>
                     latitude: cellNum('latitude'),
                     longitude: cellNum('longitude'),
                     package_id: getVal(row, 'package_id') ? Number(getVal(row, 'package_id')) : null,
-                    package_name: cellStr('package_name'),
+                    package_name: cellStr('package_name') || cellStr('package'),
                     odp_id: cellNum('odp_id'),
                     area: cellStr('area'),
                     join_date: parseCustomerImportJoinDate(getVal(row, 'join_date')),
@@ -3408,17 +3498,28 @@ router.post('/import/customers/xlsx', upload.single('file'), async (req, res) =>
             if (!raw) continue;
             try {
                 // Validasi data wajib
-                if (!raw.name || !raw.phone) {
+                if (!raw.name || raw.phone == null || raw.phone === '') {
                     failed++;
                     errors.push({ row: r, name: raw.name || '', phone: raw.phone || '', error: 'Nama dan nomor telepon wajib diisi' });
                     continue;
                 }
 
-                // Validasi nomor telepon format
+                // Validasi nomor telepon format (nilai mentah dari Excel — belum diperbaiki)
+                const phoneForFormatCheck = typeof raw.phone === 'number'
+                    ? String(Math.trunc(raw.phone))
+                    : String(raw.phone).trim();
                 const phoneRegex = /^[0-9+\-\s()]+$/;
-                if (!phoneRegex.test(raw.phone)) {
+                if (!phoneRegex.test(phoneForFormatCheck)) {
                     failed++;
-                    errors.push({ row: r, name: raw.name || '', phone: raw.phone || '', error: 'Format nomor telepon tidak valid' });
+                    errors.push({ row: r, name: raw.name || '', phone: phoneForFormatCheck, error: 'Format nomor telepon tidak valid' });
+                    continue;
+                }
+
+                // Setelah lolos validasi: perbaiki hanya kasus Excel (852→0852), 628/085 tetap beda
+                const phoneStored = parsePhoneFromSpreadsheetCell(raw.phone);
+                if (!phoneStored) {
+                    failed++;
+                    errors.push({ row: r, name: raw.name || '', phone: phoneForFormatCheck, error: 'Nomor telepon tidak valid' });
                     continue;
                 }
 
@@ -3474,7 +3575,7 @@ router.post('/import/customers/xlsx', upload.single('file'), async (req, res) =>
                 );
                 const customerData = {
                     name: raw.name.trim(),
-                    phone: raw.phone.trim(),
+                    phone: phoneStored,
                     pppoe_username: raw.pppoe_username ? raw.pppoe_username.trim() : '',
                     pppoe_password: raw.pppoe_password ? raw.pppoe_password.trim() : '',
                     email: raw.email ? raw.email.trim() : '',
@@ -3507,12 +3608,12 @@ router.post('/import/customers/xlsx', upload.single('file'), async (req, res) =>
                 let result;
                 if (existing) {
                     const beforeSnapshot = importFastMode ? null : await dbGet(`SELECT * FROM customers WHERE id = ?`, [existing.id]);
-                    result = await billingManager.updateCustomer(raw.phone, customerData);
+                    result = await billingManager.updateCustomer(existing.phone, customerData);
                     if (raw.join_date) {
                         await new Promise((resolve, reject) => {
                             db.run(
-                                `UPDATE customers SET join_date = ? WHERE phone = ?`,
-                                [raw.join_date, raw.phone.trim()],
+                                `UPDATE customers SET join_date = ? WHERE id = ?`,
+                                [raw.join_date, existing.id],
                                 (err) => (err ? reject(err) : resolve())
                             );
                         });
@@ -3520,7 +3621,7 @@ router.post('/import/customers/xlsx', upload.single('file'), async (req, res) =>
                     if (beforeSnapshot) opUpdatedBefore.push(beforeSnapshot);
                     updated++;
                     successRows++;
-                    logger.info(`Updated customer: ${raw.name} (${raw.phone})`);
+                    logger.info(`Updated customer: ${raw.name} (${phoneStored})`);
                 } else {
                     result = await billingManager.createCustomer(customerData);
                     if (raw.join_date) {
@@ -3890,72 +3991,8 @@ router.post('/import/customers/revert/:operationId', async (req, res) => {
 router.get('/export/customers.json', async (req, res) => {
     try {
         const customers = await billingManager.getCustomers();
-        
-        // Get PPPoE passwords and router_id for each customer
-        const { getUserAuthModeAsync, getRadiusConnection, getMikrotikConnection } = require('../config/mikrotik');
-        const authMode = await getUserAuthModeAsync();
-        const db = require('../config/billing').db;
-        
-        // Enrich customers with pppoe_password and router_id
-        const enrichedCustomers = await Promise.all(customers.map(async (customer) => {
-            const enriched = { ...customer };
-            
-            // Get router_id from customer_router_map
-            if (customer.id) {
-                try {
-                    const routerMap = await new Promise((resolve, reject) => {
-                        db.get('SELECT router_id FROM customer_router_map WHERE customer_id = ?', [customer.id], (err, row) => {
-                            if (err) reject(err);
-                            else resolve(row);
-                        });
-                    });
-                    if (routerMap && routerMap.router_id) {
-                        enriched.router_id = routerMap.router_id;
-                    }
-                } catch (e) {
-                    logger.debug(`No router mapping found for customer ${customer.id}`);
-                }
-            }
-            
-            // Get PPPoE password if pppoe_username exists
-            if (customer.pppoe_username) {
-                try {
-                    if (authMode === 'radius') {
-                        const conn = await getRadiusConnection();
-                        try {
-                            const [rows] = await conn.execute(
-                                "SELECT value as password FROM radcheck WHERE username = ? AND attribute = 'Cleartext-Password' LIMIT 1",
-                                [customer.pppoe_username]
-                            );
-                            await conn.end();
-                            if (rows && rows.length > 0) {
-                                enriched.pppoe_password = rows[0].password;
-                            }
-                        } catch (radiusError) {
-                            await conn.end();
-                            logger.warn(`Failed to get password from RADIUS for ${customer.pppoe_username}: ${radiusError.message}`);
-                        }
-                    } else {
-                        const conn = await getMikrotikConnection();
-                        if (conn) {
-                            try {
-                                const secrets = await conn.write('/ppp/secret/print', ['?name=' + customer.pppoe_username]);
-                                if (secrets && secrets.length > 0) {
-                                    enriched.pppoe_password = secrets[0].password || null;
-                                }
-                            } catch (mikrotikError) {
-                                logger.warn(`Failed to get password from Mikrotik for ${customer.pppoe_username}: ${mikrotikError.message}`);
-                            }
-                        }
-                    }
-                } catch (e) {
-                    logger.warn(`Error getting PPPoE password for ${customer.pppoe_username}: ${e.message}`);
-                }
-            }
-            
-            return enriched;
-        }));
-        
+        const enrichedCustomers = await enrichCustomersForExport(customers);
+
         res.setHeader('Content-Type', 'application/json');
         res.setHeader('Content-Disposition', 'attachment; filename=customers.json');
         res.json({ success: true, customers: enrichedCustomers });
@@ -4051,9 +4088,13 @@ router.post('/import/customers/json', upload.single('file'), async (req, res) =>
         for (const raw of items) {
             try {
                 const name = (raw.name || '').toString().trim();
-                const phone = (raw.phone || '').toString().trim();
-                if (!name || !phone) {
-                    failed++; errors.push({ name, phone, error: 'Nama/Phone wajib' }); continue;
+                const phoneRawDigits = String(raw.phone || '').replace(/\D/g, '');
+                if (!name || !phoneRawDigits || phoneRawDigits.length < 9) {
+                    failed++; errors.push({ name, phone: raw.phone, error: 'Nama/Phone wajib' }); continue;
+                }
+                const phone = parsePhoneFromSpreadsheetCell(raw.phone);
+                if (!phone) {
+                    failed++; errors.push({ name, phone: raw.phone, error: 'Nomor telepon tidak valid' }); continue;
                 }
 
                 const pppoeUsernameKey = String(raw.pppoe_username || '').trim();
@@ -4844,6 +4885,66 @@ router.post('/whatsapp-settings/templates', async (req, res) => {
     }
 });
 
+// Jadwal notifikasi WA tagihan (tagihan baru H-X, pengingat H-Y, peringatan hari H)
+router.get('/whatsapp-settings/billing-notify-schedule', async (req, res) => {
+    try {
+        const { getBillingNotifySchedule } = require('../config/billing-wa-schedule');
+        res.json({
+            success: true,
+            settings: getBillingNotifySchedule()
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/whatsapp-settings/billing-notify-schedule', adminAuth, async (req, res) => {
+    try {
+        const { invoice_notify_days_before, reminder_days_before, send_on_due_day } = req.body || {};
+
+        const invoiceDays = parseInt(invoice_notify_days_before, 10);
+        const reminderDays = parseInt(reminder_days_before, 10);
+
+        if (!Number.isFinite(invoiceDays) || invoiceDays < 1 || invoiceDays > 30) {
+            return res.status(400).json({
+                success: false,
+                message: 'Hari kirim tagihan baru harus antara 1–30'
+            });
+        }
+        if (!Number.isFinite(reminderDays) || reminderDays < 1 || reminderDays > 30) {
+            return res.status(400).json({
+                success: false,
+                message: 'Hari kirim pengingat harus antara 1–30'
+            });
+        }
+        if (invoiceDays === reminderDays) {
+            return res.status(400).json({
+                success: false,
+                message: 'Hari tagihan baru dan hari pengingat harus berbeda (mis. 3 dan 1)'
+            });
+        }
+
+        const ok1 = setSetting('billing_wa_invoice_notify_days_before', String(invoiceDays));
+        const ok2 = setSetting('billing_wa_reminder_days_before', String(reminderDays));
+        const ok3 = setSetting(
+            'billing_wa_send_on_due_day',
+            send_on_due_day === false || send_on_due_day === 'false' ? 'false' : 'true'
+        );
+        if (!ok1 || !ok2 || !ok3) {
+            return res.status(500).json({ success: false, message: 'Gagal menyimpan pengaturan' });
+        }
+        clearSettingsCache();
+
+        const { getBillingNotifySchedule } = require('../config/billing-wa-schedule');
+        res.json({
+            success: true,
+            settings: getBillingNotifySchedule()
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 // Get WhatsApp rate limit settings
 router.get('/whatsapp-settings/rate-limit', async (req, res) => {
     try {
@@ -5153,13 +5254,16 @@ router.get('/whatsapp-settings/status', async (req, res) => {
             whatsappStatus = global.whatsappStatus || { connected: false, status: 'disconnected' };
         }
         
+        const { getBillingNotifySchedule } = require('../config/billing-wa-schedule');
+        const sched = getBillingNotifySchedule();
+
         res.json({
             success: true,
             whatsappStatus: whatsappStatus.connected ? 'Connected' : 'Disconnected',
             whatsappProvider: whatsappStatus.provider || getSetting('whatsapp_active_provider', 'baileys'),
             activeCustomers: activeCustomers.length,
             pendingInvoices: pendingInvoices.length,
-            nextReminder: 'Daily at 09:00'
+            nextReminder: `H-${sched.invoice_notify_days_before} tagihan, H-${sched.reminder_days_before} pengingat, hari H — 09:00`
         });
     } catch (error) {
         logger.error('Error getting WhatsApp status:', error);
@@ -5193,6 +5297,15 @@ router.post('/whatsapp-settings/test', async (req, res) => {
                 amount: '500,000',
                 due_date: '15 Januari 2024',
                 days_remaining: '3',
+                package_name: 'Paket Premium',
+                package_speed: '50 Mbps'
+            },
+            due_date_reminder_today: {
+                customer_name: 'Test Customer',
+                invoice_number: 'INV-2024-001',
+                amount: '500,000',
+                due_date: '15 Januari 2024',
+                days_remaining: '0',
                 package_name: 'Paket Premium',
                 package_speed: '50 Mbps'
             },
@@ -6166,11 +6279,14 @@ router.get('/collector-areas', getAppSettings, async (req, res) => {
             areas: c.assigned_areas ? c.assigned_areas.split(',') : []
         }));
 
+        const areaAssignmentMap = await billingManager.getCollectorAreaAssignmentMap();
+
         res.render('admin/billing/collector-areas', {
             page: 'collector-areas',
             appSettings: req.appSettings,
             collectors: collectors,
-            areas: allAreas
+            areas: allAreas,
+            areaAssignmentMap
         });
     } catch (error) {
         console.error('Error loading collector areas:', error);
@@ -6548,8 +6664,10 @@ router.post('/customers', customerPhotoUpload.fields([
     try {
         const { name, username, password, phone, pppoe_username, email, address, area, area_id, package_id, odp_id, pppoe_profile, status: bodyStatus, auto_suspension, billing_day, renewal_type, fix_date, create_pppoe_user, pppoe_password, static_ip, assigned_ip, mac_address, latitude, longitude, cable_type, cable_length, port_number, cable_status, cable_notes, router_id, save_mode } = req.body;
         
+        const phoneStored = parsePhoneFromSpreadsheetCell(phone);
+
         // Validate required fields
-        if (!name || !username || !phone || !package_id) {
+        if (!name || !username || !phoneStored || !package_id) {
             return res.status(400).json({
                 success: false,
                 message: 'Nama, username, telepon, dan paket harus diisi'
@@ -6586,7 +6704,7 @@ router.post('/customers', customerPhotoUpload.fields([
             name,
             username,
             password: hashedPassword,
-            phone,
+            phone: phoneStored,
             pppoe_username,
             email,
             address,
@@ -7159,7 +7277,9 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
         const profileToUse = resolveCustomerPppoeProfile(pppoe_profile, packageRowForProfile, currentCustomer.pppoe_profile);
 
         // Extract new phone from request body, fallback to current if not provided
-        const newPhone = req.body.phone || currentCustomer.phone;
+        const newPhone = req.body.phone
+            ? parsePhoneFromSpreadsheetCell(req.body.phone)
+            : currentCustomer.phone;
         const password = req.body.password;
         
         let hashedPassword = undefined;
@@ -7846,22 +7966,7 @@ router.post('/invoices', async (req, res) => {
         // WA / email di background — jangan blokir respons (invoice sudah commit).
         setImmediate(() => {
             (async () => {
-                try {
-                    const whatsappNotifications = require('../config/whatsapp-notifications');
-                    if (isMemberInvoice && invoiceData.member_id) {
-                        await whatsappNotifications.sendMemberInvoiceCreatedNotification(
-                            invoiceData.member_id,
-                            newInvoice.id
-                        );
-                    } else if (invoiceData.customer_id) {
-                        await whatsappNotifications.sendInvoiceCreatedNotification(
-                            invoiceData.customer_id,
-                            newInvoice.id
-                        );
-                    }
-                } catch (notificationError) {
-                    logger.error('Error sending invoice WhatsApp (background):', notificationError);
-                }
+                // WA tagihan baru mengikuti jadwal harian (lihat billing-wa-schedule), bukan saat invoice dibuat
                 try {
                     const emailNotifications = require('../config/email-notifications');
                     if (isMemberInvoice && invoiceData.member_id) {
@@ -9602,7 +9707,7 @@ router.post('/test-auto-suspension', adminAuth, async (req, res) => {
         logger.info('Manual test auto suspension triggered by admin');
         
         const serviceSuspension = require('../config/serviceSuspension');
-        const result = await serviceSuspension.checkAndSuspendOverdueCustomers();
+        const result = await serviceSuspension.checkAndSuspendOverdueCustomers({ force: true });
         
         res.json({
             success: true,
@@ -9719,12 +9824,14 @@ router.post('/service-suspension/restore/:username', async (req, res) => {
 router.post('/service-suspension/check-overdue', async (req, res) => {
     try {
         const serviceSuspension = require('../config/serviceSuspension');
-        const result = await serviceSuspension.checkAndSuspendOverdueCustomers();
+        const result = await serviceSuspension.checkAndSuspendOverdueCustomers({ force: true });
+        const memberResult = await serviceSuspension.checkAndSuspendOverdueMembers({ force: true });
         
         res.json({
             success: true,
             message: 'Overdue customers check completed',
-            ...result
+            ...result,
+            members: memberResult
         });
     } catch (error) {
         logger.error('Error checking overdue customers:', error);
@@ -9812,6 +9919,41 @@ router.post('/service-suspension/grace-period', adminAuth, async (req, res) => {
     }
 });
 
+router.get('/service-suspension/auto-suspension-day', adminAuth, async (req, res) => {
+    try {
+        const serviceSuspension = require('../config/serviceSuspension');
+        const value = serviceSuspension.getAutoSuspensionDay();
+        res.json({ success: true, auto_suspension_day: String(value) });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/service-suspension/auto-suspension-day', adminAuth, async (req, res) => {
+    try {
+        const { auto_suspension_day } = req.body || {};
+        if (auto_suspension_day === undefined || auto_suspension_day === null || String(auto_suspension_day).trim() === '') {
+            return res.status(400).json({ success: false, message: 'auto_suspension_day tidak valid' });
+        }
+
+        const day = parseInt(String(auto_suspension_day).trim(), 10);
+        if (isNaN(day) || day < 1 || day > 28) {
+            return res.status(400).json({ success: false, message: 'Tanggal isolir harus antara 1-28' });
+        }
+
+        const ok = setSetting('auto_suspension_day', day.toString());
+        if (!ok) {
+            return res.status(500).json({ success: false, message: 'Gagal menyimpan ke settings.json' });
+        }
+
+        clearSettingsCache();
+
+        res.json({ success: true, auto_suspension_day: day.toString() });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 // Service Suspension: Isolir Profile Setting API
 router.get('/service-suspension/isolir-profile', adminAuth, async (req, res) => {
     try {
@@ -9871,45 +10013,241 @@ router.post('/service-suspension/toggle-feature', adminAuth, async (req, res) =>
     }
 });
 
+// Bulk update jatuh tempo per wilayah
+router.post('/service-suspension/bulk-update-due-date-by-areas', adminAuth, async (req, res) => {
+    try {
+        const { area_ids, due_day } = req.body || {};
+
+        const day = parseInt(due_day, 10);
+        if (isNaN(day) || day < 1 || day > 28) {
+            return res.status(400).json({
+                success: false,
+                message: 'Tanggal jatuh tempo harus antara 1-28',
+                total: 0,
+                updated: 0,
+                failed: 0,
+                invoices_updated: 0
+            });
+        }
+
+        const result = await billingManager.bulkUpdateDueDateByAreas({ area_ids, due_day: day });
+        const { total, updated, failed, invoices_updated, need_retry } = result;
+
+        let message = `Jatuh tempo diupdate: ${updated} dari ${total} pelanggan di wilayah terpilih.`;
+        if (failed > 0) message += ` Gagal: ${failed}.`;
+        message += ` Tagihan unpaid disesuaikan: ${invoices_updated}.`;
+
+        logger.info(`[BILLING] Bulk update due date by areas: ${message}`);
+
+        res.json({
+            success: failed === 0 || updated > 0,
+            message,
+            total,
+            updated,
+            failed,
+            invoices_updated: invoices_updated || 0,
+            need_retry: Boolean(need_retry),
+            due_day: result.due_day,
+            area_ids: result.area_ids
+        });
+    } catch (error) {
+        logger.error('Bulk update due date by areas error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message,
+            total: 0,
+            updated: 0,
+            failed: 0,
+            invoices_updated: 0
+        });
+    }
+});
+
+// Ringkasan tanggal auto isolir per pelanggan / wilayah
+router.get('/service-suspension/isolir-day-summary', adminAuth, async (req, res) => {
+    try {
+        const { getSetting } = require('../config/settingsManager');
+        const globalDefault = parseInt(getSetting('auto_suspension_day', '25'), 10) || 25;
+
+        let area_ids = req.query.area_ids;
+        if (typeof area_ids === 'string' && area_ids.trim()) {
+            area_ids = area_ids.split(',').map((s) => s.trim()).filter(Boolean);
+        } else if (!Array.isArray(area_ids)) {
+            area_ids = [];
+        }
+
+        const summary = await billingManager.getAutoIsolirScheduleSummary(area_ids);
+
+        const by_day = (summary.by_day || []).map((row) => {
+            const dayNum = row.day_value != null && row.day_value !== '' ? parseInt(row.day_value, 10) : null;
+            return {
+                day_value: dayNum,
+                label: dayNum != null && dayNum >= 1 && dayNum <= 28
+                    ? `Tanggal ${dayNum}`
+                    : `Global (tgl ${globalDefault})`,
+                count: row.count
+            };
+        });
+
+        const customers = (summary.customers || []).map((c) => {
+            const dayNum = c.auto_suspension_day != null && c.auto_suspension_day !== ''
+                ? parseInt(c.auto_suspension_day, 10)
+                : null;
+            return {
+                ...c,
+                isolir_day: dayNum != null && dayNum >= 1 && dayNum <= 28 ? dayNum : globalDefault,
+                isolir_label: dayNum != null && dayNum >= 1 && dayNum <= 28
+                    ? `Tgl ${dayNum}`
+                    : `Global (tgl ${globalDefault})`
+            };
+        });
+
+        res.json({
+            success: true,
+            global_default_day: globalDefault,
+            total: summary.total,
+            area_ids: summary.area_ids,
+            by_day,
+            by_area: (summary.by_area || []).map((row) => {
+                const dayNum = row.day_value != null && row.day_value !== '' ? parseInt(row.day_value, 10) : null;
+                return {
+                    area_name: row.area_name,
+                    day_value: dayNum,
+                    label: dayNum != null && dayNum >= 1 && dayNum <= 28
+                        ? `Tgl ${dayNum}`
+                        : `Global (tgl ${globalDefault})`,
+                    count: row.count
+                };
+            }),
+            customers
+        });
+    } catch (error) {
+        logger.error('Isolir day summary error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// Bulk update tanggal auto isolir per wilayah
+router.post('/service-suspension/bulk-update-auto-isolir-by-areas', adminAuth, async (req, res) => {
+    try {
+        const { area_ids, auto_suspension_day } = req.body || {};
+
+        const day = parseInt(auto_suspension_day, 10);
+        if (isNaN(day) || day < 1 || day > 28) {
+            return res.status(400).json({
+                success: false,
+                message: 'Tanggal auto isolir harus antara 1-28',
+                total: 0,
+                updated: 0,
+                failed: 0
+            });
+        }
+
+        const result = await billingManager.bulkUpdateAutoIsolirDayByAreas({ area_ids, auto_suspension_day: day });
+        const { total, updated, failed, need_retry } = result;
+
+        let message = `Tanggal auto isolir diupdate: ${updated} dari ${total} pelanggan di wilayah terpilih.`;
+        if (failed > 0) message += ` Gagal: ${failed}.`;
+
+        logger.info(`[BILLING] Bulk update auto isolir by areas: ${message}`);
+
+        res.json({
+            success: failed === 0 || updated > 0,
+            message,
+            total,
+            updated,
+            failed,
+            need_retry: Boolean(need_retry),
+            auto_suspension_day: result.auto_suspension_day,
+            area_ids: result.area_ids
+        });
+    } catch (error) {
+        logger.error('Bulk update auto isolir by areas error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message,
+            total: 0,
+            updated: 0,
+            failed: 0
+        });
+    }
+});
+
 // Bulk update isolir date
 router.post('/service-suspension/bulk-update-isolir-date', adminAuth, async (req, res) => {
     try {
         const { renewal_type, billing_day, fix_date } = req.body;
-        
-        let updateQuery = '';
-        let params = [];
 
         if (renewal_type === 'fix_date') {
             const fDate = parseInt(fix_date, 10);
             if (isNaN(fDate) || fDate < 1 || fDate > 28) {
-                return res.status(400).json({ success: false, message: 'Tanggal fix date harus antara 1-28' });
+                return res.status(400).json({
+                    success: false,
+                    message: 'Tanggal fix date harus antara 1-28',
+                    total: 0,
+                    updated: 0,
+                    failed: 0,
+                    need_retry: false
+                });
             }
-            updateQuery = 'UPDATE customers SET renewal_type = ?, fix_date = ?';
-            params = ['fix_date', fDate];
         } else {
             const bDay = parseInt(billing_day, 10);
             if (isNaN(bDay) || bDay < 1 || bDay > 365) {
-                return res.status(400).json({ success: false, message: 'Billing day (siklus) tidak valid' });
+                return res.status(400).json({
+                    success: false,
+                    message: 'Billing day (siklus) tidak valid (1-365)',
+                    total: 0,
+                    updated: 0,
+                    failed: 0,
+                    need_retry: false
+                });
             }
-            updateQuery = 'UPDATE customers SET renewal_type = ?, billing_day = ?';
-            params = ['renewal', bDay];
         }
 
-        const db = new sqlite3.Database(path.join(__dirname, '../data/billing.db'));
-        db.run(updateQuery, params, function(err) {
-            db.close();
-            if (err) {
-                logger.error('Bulk update isolir date error:', err);
-                return res.status(500).json({ success: false, message: 'Database error: ' + err.message });
-            }
-            res.json({ 
-                success: true, 
-                message: `Berhasil mengupdate siklus tagihan untuk ${this.changes} pelanggan.` 
-            });
+        const result = await billingManager.bulkUpdateCustomerBillingCycle({
+            renewal_type,
+            billing_day,
+            fix_date
+        });
+
+        const { total, updated, failed, invoices_updated, need_retry } = result;
+        let message = `Pelanggan berhasil diupdate: ${updated} dari ${total}.`;
+        if (failed > 0) {
+            message += ` Gagal: ${failed}.`;
+        }
+        if (renewal_type === 'fix_date') {
+            message += ` Tagihan belum lunas dengan jatuh tempo disesuaikan: ${invoices_updated}.`;
+        }
+        if (need_retry) {
+            message += ' Disarankan ulangi operasi.';
+        } else {
+            message += ' Tidak perlu diulang.';
+        }
+
+        logger.info(`[BILLING] Bulk update billing cycle: ${message}`);
+
+        res.json({
+            success: failed === 0 || updated > 0,
+            message,
+            total,
+            updated,
+            failed,
+            invoices_updated: invoices_updated || 0,
+            need_retry: Boolean(need_retry),
+            renewal_type: result.renewal_type,
+            fix_date: result.fix_date,
+            billing_day: result.billing_day
         });
     } catch (error) {
         logger.error('Bulk update isolir date unhandled error:', error);
-        res.status(500).json({ success: false, message: error.message });
+        res.status(500).json({
+            success: false,
+            message: error.message,
+            total: 0,
+            updated: 0,
+            failed: 0,
+            need_retry: true
+        });
     }
 });
 

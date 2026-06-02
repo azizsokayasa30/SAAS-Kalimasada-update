@@ -896,7 +896,8 @@ $(function() {
     function getFieldLabel(key) {
         const fieldLabels = {
             'auto_suspension_enabled': 'Isolir Otomatis',
-            'suspension_grace_period_days': 'Grace Period Isolir (Hari)',
+            'auto_suspension_day': 'Tanggal Isolir Otomatis (1-28)',
+            'suspension_grace_period_days': 'Grace Period Isolir (Hari, legacy)',
             'default_pppoe_profile': 'Profile PPPoE Default',
             'admins.0': 'Nomor Admin Utama',
             'admins.1': 'Nomor Admin Tambahan 1',
@@ -1059,6 +1060,7 @@ $(function() {
         // Isolir & suspension — dikelola di billing / routers / radius
         'isolir_profile',
         'auto_suspension_enabled',
+        'auto_suspension_day',
         'suspension_grace_period_days',
         'static_ip_suspension_method',
         'suspension_bandwidth_limit',

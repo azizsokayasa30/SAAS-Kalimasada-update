@@ -579,6 +579,16 @@
                     .summary-cards-solid > div:nth-child(4) .summary-card { background-image: linear-gradient(135deg, #10b981, #059669) !important; background-color: transparent !important; }
                     .summary-cards-solid > div:nth-child(5) .summary-card { background-image: linear-gradient(135deg, #f59e0b, #d97706) !important; background-color: transparent !important; }
                     .summary-cards-solid > div:nth-child(6) .summary-card { background-image: linear-gradient(135deg, #06b6d4, #0891b2) !important; background-color: transparent !important; }
+                    .summary-card-nominal {
+                        font-size: 0.78rem;
+                        font-weight: 600;
+                        line-height: 1.2;
+                        color: rgba(255, 255, 255, 0.92) !important;
+                    }
+                    .summary-card-nominal-hint {
+                        font-size: 0.62rem;
+                        color: rgba(255, 255, 255, 0.72) !important;
+                    }
 
                     /* Force same solid look in dark theme */
                     [data-theme="dark"] .summary-cards-solid .summary-card {
@@ -609,6 +619,8 @@
                                         <div>
                                             <p class="text-muted fw-semibold mb-1" style="font-size:0.75rem;">Total Pelanggan</p>
                                             <h3 class="mb-0 fw-bold mt-2" style="color:#fff !important;"><%= typeof customerStats !== 'undefined' ? customerStats.total : 0 %></h3>
+                                            <div class="summary-card-nominal mt-1">Rp <%= (typeof customerStats !== 'undefined' && customerStats.total_nominal != null ? customerStats.total_nominal : 0).toLocaleString('id-ID') %></div>
+                                            <div class="summary-card-nominal-hint">total paket (semua pelanggan)</div>
                                         </div>
                                         <div class="rounded-circle d-flex align-items-center justify-content-center" style="width:40px;height:40px;background:rgba(255,255,255,0.22);flex-shrink:0;">
                                             <i class="bi bi-people-fill" style="font-size:1.1rem;color:#fff !important;"></i>
@@ -627,6 +639,8 @@
                                         <div>
                                             <p class="text-muted fw-semibold mb-1" style="font-size:0.75rem;">Pelanggan Aktif</p>
                                             <h3 class="mb-0 fw-bold mt-2" style="color:#fff !important;"><%= typeof customerStats !== 'undefined' ? customerStats.aktif : 0 %></h3>
+                                            <div class="summary-card-nominal mt-1">Rp <%= (typeof customerStats !== 'undefined' && customerStats.aktif_nominal != null ? customerStats.aktif_nominal : 0).toLocaleString('id-ID') %></div>
+                                            <div class="summary-card-nominal-hint">tagihan aktif</div>
                                         </div>
                                         <div class="rounded-circle d-flex align-items-center justify-content-center" style="width:40px;height:40px;background:rgba(255,255,255,0.22);flex-shrink:0;">
                                             <i class="bi bi-person-check-fill" style="font-size:1.1rem;color:#fff !important;"></i>
@@ -645,6 +659,8 @@
                                         <div>
                                             <p class="text-muted fw-semibold mb-1" style="font-size:0.75rem;">Nonaktif/Isolir</p>
                                             <h3 class="mb-0 fw-bold mt-2" style="color:#fff !important;"><%= typeof customerStats !== 'undefined' ? customerStats.nonaktif : 0 %></h3>
+                                            <div class="summary-card-nominal mt-1">Rp <%= (typeof customerStats !== 'undefined' && customerStats.nonaktif_nominal != null ? customerStats.nonaktif_nominal : 0).toLocaleString('id-ID') %></div>
+                                            <div class="summary-card-nominal-hint">total paket (isolir/nonaktif)</div>
                                         </div>
                                         <div class="rounded-circle d-flex align-items-center justify-content-center" style="width:40px;height:40px;background:rgba(255,255,255,0.22);flex-shrink:0;">
                                             <i class="bi bi-slash-circle-fill" style="font-size:1.1rem;color:#fff !important;"></i>
@@ -663,6 +679,8 @@
                                         <div>
                                             <p class="text-muted fw-semibold mb-1" style="font-size:0.75rem;">Sudah Lunas</p>
                                             <h3 class="mb-0 fw-bold mt-2" style="color:#fff !important;"><%= typeof customerStats !== 'undefined' ? customerStats.lunas : 0 %></h3>
+                                            <div class="summary-card-nominal mt-1">Rp <%= (typeof customerStats !== 'undefined' && customerStats.lunas_nominal != null ? customerStats.lunas_nominal : 0).toLocaleString('id-ID') %></div>
+                                            <div class="summary-card-nominal-hint">terbayar bln ini</div>
                                         </div>
                                         <div class="rounded-circle d-flex align-items-center justify-content-center" style="width:40px;height:40px;background:rgba(255,255,255,0.22);flex-shrink:0;">
                                             <i class="bi bi-check-circle-fill" style="font-size:1.1rem;color:#fff !important;"></i>
@@ -681,6 +699,8 @@
                                         <div>
                                             <p class="text-muted fw-semibold mb-1" style="font-size:0.75rem;">Belum Lunas</p>
                                             <h3 class="mb-0 fw-bold mt-2" style="color:#fff !important;"><%= typeof customerStats !== 'undefined' ? customerStats.belum_lunas : 0 %></h3>
+                                            <div class="summary-card-nominal mt-1">Rp <%= (typeof customerStats !== 'undefined' && customerStats.belum_lunas_nominal != null ? customerStats.belum_lunas_nominal : 0).toLocaleString('id-ID') %></div>
+                                            <div class="summary-card-nominal-hint">invoice belum bayar</div>
                                         </div>
                                         <div class="rounded-circle d-flex align-items-center justify-content-center" style="width:40px;height:40px;background:rgba(255,255,255,0.22);flex-shrink:0;">
                                             <i class="bi bi-clock-history" style="font-size:1.1rem;color:#fff !important;"></i>
@@ -699,6 +719,8 @@
                                         <div>
                                             <p class="text-muted fw-semibold mb-1" style="font-size:0.75rem;">Pelanggan Baru</p>
                                             <h3 class="mb-0 fw-bold mt-2" style="color:#fff !important;"><%= typeof customerStats !== 'undefined' ? customerStats.baru : 0 %></h3>
+                                            <div class="summary-card-nominal mt-1">Rp <%= (typeof customerStats !== 'undefined' && customerStats.baru_nominal != null ? customerStats.baru_nominal : 0).toLocaleString('id-ID') %></div>
+                                            <div class="summary-card-nominal-hint">total paket (join bln ini)</div>
                                         </div>
                                         <div class="rounded-circle d-flex align-items-center justify-content-center" style="width:40px;height:40px;background:rgba(255,255,255,0.22);flex-shrink:0;">
                                             <i class="bi bi-person-plus-fill" style="font-size:1.1rem;color:#fff !important;"></i>
@@ -1768,7 +1790,7 @@
                             <a href="/admin/billing/import/customers/template" class="btn btn-outline-success btn-sm" download="template-import-pelanggan.xlsx">
                                 <i class="bi bi-download"></i> Unduh template Excel
                             </a>
-                            <small class="text-muted">Kolom lengkap + contoh baris + lembar &quot;Petunjuk&quot; agar restore data tidak ada yang tertinggal.</small>
+                            <small class="text-muted">Format kolom sama dengan <strong>Export XLSX</strong> + kolom tambahan restore. Lembar &quot;Petunjuk&quot; menjelaskan tiap kolom.</small>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Pilih File (JSON atau XLSX)</label>

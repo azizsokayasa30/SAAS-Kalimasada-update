@@ -11,14 +11,62 @@
     <!-- Admin Mobile Optimizations -->
     <link href="/css/admin-mobile.css" rel="stylesheet">
     <style>
-        .toast {
+        #toast-container {
             position: fixed;
             top: 20px;
             right: 20px;
-            z-index: 9999;
-            min-width: 300px;
+            z-index: 99999;
+            display: flex;
+            flex-direction: column;
+            gap: 0.65rem;
+            max-width: min(420px, calc(100vw - 2rem));
+            pointer-events: none;
         }
-        
+
+        #toast-container .billing-toast {
+            pointer-events: auto;
+            min-width: 300px;
+            border: none;
+            border-radius: 10px;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+            color: #fff !important;
+            background-color: #22c55e !important;
+            opacity: 1 !important;
+        }
+
+        #toast-container .billing-toast .toast-header {
+            background: transparent !important;
+            color: #fff !important;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.25) !important;
+            font-weight: 600;
+        }
+
+        #toast-container .billing-toast .toast-body {
+            background: transparent !important;
+            color: #fff !important;
+        }
+
+        #toast-container .billing-toast .toast-header i,
+        #toast-container .billing-toast .toast-header strong {
+            color: #fff !important;
+        }
+
+        #toast-container .billing-toast.billing-toast--success {
+            background-color: #22c55e !important;
+        }
+
+        #toast-container .billing-toast.billing-toast--error {
+            background-color: #dc3545 !important;
+        }
+
+        #toast-container .billing-toast.billing-toast--warning {
+            background-color: #f59e0b !important;
+        }
+
+        #toast-container .billing-toast.billing-toast--info {
+            background-color: #16a34a !important;
+        }
+
         .suspension-card {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
@@ -59,6 +107,25 @@
             color: white;
             transition: all 0.3s ease;
         }
+
+        .section-title {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin: 0 0 1rem;
+            padding-bottom: 0.4rem;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+        }
+
+        .action-card .card-body {
+            padding: 1.25rem 1rem;
+        }
+
+        .action-card i.bi {
+            font-size: 2.25rem !important;
+        }
     </style>
 
     <%- include('../../partials/theme-head') %>
@@ -87,55 +154,45 @@
                     </div>
                 </div>
 
-                <!-- Statistics Cards -->
-                <div class="row mb-4">
-                    <div class="col-md-3">
-                        <div class="card stats-card">
+                <!-- Statistics -->
+                <div class="row g-3 mb-4">
+                    <div class="col-md-4">
+                        <div class="card stats-card h-100">
                             <div class="card-body text-center">
                                 <i class="bi bi-person-check-fill text-primary" style="font-size: 2rem;"></i>
-                                <h3 class="text-primary" id="activeCustomers">-</h3>
-                                <p class="text-muted mb-0">Pelanggan Aktif</p>
+                                <h3 class="text-primary mb-1" id="activeCustomers">-</h3>
+                                <p class="text-muted mb-0 small">Pelanggan Aktif</p>
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-3">
-                        <div class="card stats-card">
+                    <div class="col-md-4">
+                        <div class="card stats-card h-100">
                             <div class="card-body text-center">
-                                <i class="bi bi-circle text-danger" style="font-size: 2rem;"></i>
-                                <h3 class="text-danger" id="suspendedCustomers">-</h3>
-                                <p class="text-muted mb-0">Pelanggan Suspended</p>
+                                <i class="bi bi-pause-circle-fill text-danger" style="font-size: 2rem;"></i>
+                                <h3 class="text-danger mb-1" id="suspendedCustomers">-</h3>
+                                <p class="text-muted mb-0 small">Pelanggan Isolir</p>
                             </div>
                         </div>
                     </div>
-                    <div class="col-md-3">
-                        <div class="card stats-card">
+                    <div class="col-md-4">
+                        <div class="card stats-card h-100">
                             <div class="card-body text-center">
-                                <i class="bi bi-circle text-warning" style="font-size: 2rem;"></i>
-                                <h3 class="text-warning" id="overdueInvoices">-</h3>
-                                <p class="text-muted mb-0">Tagihan Overdue</p>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="card stats-card">
-                            <div class="card-body text-center">
-                                <i class="bi bi-circle text-info" style="font-size: 2rem;"></i>
-                                <h3 class="text-info" id="currentGracePeriod"><%= appSettings.suspension_grace_period_days || '3' %></h3>
-                                <p class="text-muted mb-0">Grace Period (Hari)</p>
+                                <i class="bi bi-exclamation-triangle-fill text-warning" style="font-size: 2rem;"></i>
+                                <h3 class="text-warning mb-1" id="overdueInvoices">-</h3>
+                                <p class="text-muted mb-0 small">Tagihan Nunggak</p>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Isolir Profile Setting -->
-                <div class="row mb-4">
-                    <!-- Card 1: Toggle Auto Isolir -->
-                    <div class="col-md-4">
+                <h6 class="section-title"><i class="bi bi-gear me-1"></i> Pengaturan Sistem</h6>
+                <div class="row g-3 mb-4">
+                    <div class="col-lg-6">
                         <div class="card h-100 border-primary">
-                            <div class="card-header bg-primary text-white">
+                            <div class="card-header bg-primary text-white py-2">
                                 <strong><i class="bi bi-power me-2"></i>Status Auto Isolir</strong>
                             </div>
-                            <div class="card-body d-flex flex-column justify-content-center text-center">
+                            <div class="card-body d-flex flex-column justify-content-center text-center py-4">
                                 <% const autoSuspensionEnabled = appSettings.auto_suspension_enabled === true || appSettings.auto_suspension_enabled === 'true'; %>
                                 <div class="mb-3">
                                     <div class="form-check form-switch d-inline-block fs-3 m-0 p-0">
@@ -147,19 +204,18 @@
                                         <%= autoSuspensionEnabled ? 'AKTIF (ON)' : 'NON-AKTIF (OFF)' %>
                                     </span>
                                 </h4>
-                                <p class="text-muted small mb-0">Jika aktif (ON), sistem akan otomatis mengisolir pelanggan yang melewati batas waktu pembayaran & Grace Period. Jika OFF, pengecekan isolir otomatis akan dihentikan sementara.</p>
+                                <p class="text-muted small mb-0">Isolir otomatis pukul <strong>10:00</strong> (cek harian), restore pukul <strong>11:00</strong>. Tanggal isolir per pelanggan diatur per wilayah di bawah; fallback global tgl <strong><%= appSettings.auto_suspension_day || '25' %></strong> lewat <a href="/admin/settings">Pengaturan Admin</a>.</p>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Card 2: Profile Isolir -->
-                    <div class="col-md-4">
+                    <div class="col-lg-6">
                         <div class="card h-100">
-                            <div class="card-header d-flex justify-content-between align-items-center">
+                            <div class="card-header d-flex justify-content-between align-items-center py-2">
                                 <% if (typeof authMode !== 'undefined' && authMode === 'radius') { %>
-                                    <strong>Profile Isolir (RADIUS)</strong>
+                                    <strong><i class="bi bi-router me-1"></i> Profile Isolir (RADIUS)</strong>
                                 <% } else { %>
-                                    <strong>Pilih Profile (Mikrotik)</strong>
+                                    <strong><i class="bi bi-router me-1"></i> Profile Isolir (Mikrotik)</strong>
                                 <% } %>
                                 <div>
                                     <% if (typeof authMode !== 'undefined' && authMode !== 'radius') { %>
@@ -175,112 +231,164 @@
                             <div class="card-body">
                                 <label for="isolirProfileSelect" class="form-label">Profile Isolir</label>
                                 <% if (typeof authMode !== 'undefined' && authMode === 'radius') { %>
-                                    <input type="text" id="isolirProfileSelect" class="form-control mb-3" value="isolir" readonly>
-                                    <small class="text-muted">
-                                        <i class="bi bi-info-circle"></i> Di mode RADIUS, sistem menggunakan groupname <strong>'isolir'</strong> di tabel <code>radusergroup</code>. 
-                                        Pastikan group 'isolir' sudah ada di <code>radgroupreply</code>. Profile isolir tidak menggunakan rate-limit (biarkan loss) untuk redirect web isolir.
+                                    <input type="text" id="isolirProfileSelect" class="form-control" value="isolir" readonly>
+                                    <small class="text-muted d-block mt-2">
+                                        <i class="bi bi-info-circle"></i> Mode RADIUS memakai groupname <strong>isolir</strong> di <code>radusergroup</code>.
                                     </small>
                                 <% } else { %>
-                                    <select id="isolirProfileSelect" class="form-select mb-3">
+                                    <select id="isolirProfileSelect" class="form-select">
                                         <option value="default">Loading...</option>
                                     </select>
-                                    <small class="text-muted">Dipakai saat proses Suspend otomatis. Profil ini diambil dari daftar profil Mikrotik Anda dengan highlight pada profil yang saat ini sedang aktif di pengaturan.</small>
+                                    <small class="text-muted d-block mt-2">Profil dipakai saat suspend otomatis / manual.</small>
                                 <% } %>
                             </div>
                         </div>
                     </div>
+                </div>
 
-                    <!-- Card 3: Grace Period -->
-                    <div class="col-md-4">
-                        <div class="card h-100">
-                            <div class="card-header d-flex justify-content-between align-items-center">
-                                <strong>Pengaturan Grace Period</strong>
-                                <button class="btn btn-sm btn-success" id="saveGracePeriodBtn">
-                                    <i class="bi bi-floppy-fill me-1"></i>Simpan
-                                </button>
+                <h6 class="section-title"><i class="bi bi-geo-alt me-1"></i> Penyesuaian per Wilayah</h6>
+                <div class="row g-3 mb-4">
+                    <div class="col-lg-6">
+                        <div class="card border-success h-100">
+                            <div class="card-header bg-success text-white py-2">
+                                <strong><i class="bi bi-calendar-check me-2"></i>Jatuh Tempo per Wilayah</strong>
                             </div>
                             <div class="card-body">
-                                <label for="gracePeriodInput" class="form-label">Toleransi Keterlambatan (Hari)</label>
-                                <div class="input-group mb-3">
-                                    <input type="number" id="gracePeriodInput" class="form-control" min="1" max="30" placeholder="Contoh: 3">
-                                    <span class="input-group-text">Hari</span>
+                                <p class="text-muted small mb-3">Atur tanggal jatuh tempo tagihan (fix date) untuk pelanggan di wilayah tertentu. Tagihan <em>unpaid</em> ikut disesuaikan.</p>
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold">Pilih Wilayah <small class="text-muted">(bisa lebih dari satu)</small></label>
+                                    <div id="dueDateAreasLoading" class="text-muted small mb-2">Memuat daftar wilayah...</div>
+                                    <div id="dueDateAreasList" class="border rounded p-2" style="max-height: 180px; overflow-y: auto; display: none;"></div>
                                 </div>
-                                <small class="text-muted">Jumlah hari kelonggaran setelah tagihan pelanggan berstatus "overdue" (jatuh tempo) sebelum sistem otomatis melakukan suspend/isolir. Setting saat ini: <strong><span id="currentGracePeriod"><%= appSettings.suspension_grace_period_days || '3' %></span> hari</strong>.</small>
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold" for="bulkDueDateDay">Tanggal Jatuh Tempo <small class="text-muted">(1–28)</small></label>
+                                    <div class="input-group">
+                                        <span class="input-group-text">Tgl</span>
+                                        <input type="number" class="form-control" id="bulkDueDateDay" min="1" max="28" value="15" placeholder="Contoh: 15">
+                                    </div>
+                                </div>
+                                <button class="btn btn-success w-100" id="btnBulkDueDateByAreas">
+                                    <i class="bi bi-cloud-upload me-2"></i>Update Jatuh Tempo
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-lg-6">
+                        <div class="card border-warning h-100">
+                            <div class="card-header bg-warning text-dark py-2">
+                                <strong><i class="bi bi-shield-x me-2"></i>Auto Isolir per Wilayah</strong>
+                            </div>
+                            <div class="card-body">
+                                <p class="text-muted small mb-3">Tanggal isolir otomatis per pelanggan di wilayah terpilih (terpisah dari jatuh tempo). Pelanggan tanpa setting khusus memakai default global tgl <strong><%= appSettings.auto_suspension_day || '25' %></strong>.</p>
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold">Pilih Wilayah <small class="text-muted">(bisa lebih dari satu)</small></label>
+                                    <div id="isolirAreasLoading" class="text-muted small mb-2">Memuat daftar wilayah...</div>
+                                    <div id="isolirAreasList" class="border rounded p-2" style="max-height: 180px; overflow-y: auto; display: none;"></div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold" for="bulkAutoIsolirDay">Tanggal Auto Isolir <small class="text-muted">(1–28)</small></label>
+                                    <div class="input-group">
+                                        <span class="input-group-text">Tgl</span>
+                                        <input type="number" class="form-control" id="bulkAutoIsolirDay" min="1" max="28" value="25" placeholder="Contoh: 25">
+                                    </div>
+                                </div>
+                                <button class="btn btn-warning w-100 text-dark mb-2" id="btnBulkAutoIsolirByAreas">
+                                    <i class="bi bi-cloud-upload me-2"></i>Update Auto Isolir
+                                </button>
+                                <button type="button" class="btn btn-outline-dark w-100 btn-sm" id="btnCheckIsolirFromCard">
+                                    <i class="bi bi-eye me-1"></i>Cek Tanggal di Wilayah Ini
+                                </button>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Update Masal Tanggal Isolir -->
                 <div class="row mb-4">
                     <div class="col-12">
-                        <div class="card border-primary">
-                            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-                                <strong><i class="bi bi-calendar-event me-2"></i>Update Masal Tanggal Isolir / Jatuh Tempo</strong>
+                        <div class="card border-secondary">
+                            <div class="card-header bg-light py-2 d-flex flex-wrap justify-content-between align-items-center gap-2">
+                                <strong><i class="bi bi-table me-2"></i>Cek Tanggal Isolir</strong>
+                                <button type="button" class="btn btn-sm btn-secondary" id="btnLoadIsolirSummary">
+                                    <i class="bi bi-search me-1"></i>Tampilkan Ringkasan
+                                </button>
                             </div>
                             <div class="card-body">
-                                <p class="text-muted mb-3">Gunakan fitur ini untuk menyamakan siklus penagihan/isolir seluruh pelanggan secara masal. Sangat berguna untuk integrasi awal atau penyeragaman SOP.</p>
-                                <div class="row align-items-end">
-                                    <div class="col-md-4 mb-3">
-                                        <label class="form-label fw-bold">Tipe Tagihan</label>
-                                        <select class="form-select" id="bulkRenewalType">
-                                            <option value="renewal">Setiap X Hari (Renewal)</option>
-                                            <option value="fix_date">Tanggal Tetap (Fix Date)</option>
-                                        </select>
-                                    </div>
-                                    <div class="col-md-4 mb-3" id="bulkBillingDayCol">
-                                        <label class="form-label fw-bold">Jumlah Hari (Siklus) <small class="text-muted fw-normal ms-1">(Contoh: 30)</small></label>
-                                        <input type="number" class="form-control" id="bulkBillingDay" value="30" min="1" max="365">
-                                    </div>
-                                    <div class="col-md-4 mb-3" id="bulkFixDateCol" style="display:none;">
-                                        <label class="form-label fw-bold">Tanggal Isolir/Tagihan <small class="text-muted fw-normal ms-1">(Tgl 1-28)</small></label>
-                                        <input type="number" class="form-control" id="bulkFixDate" value="1" min="1" max="28">
-                                    </div>
-                                    <div class="col-md-4 mb-3">
-                                        <button class="btn btn-primary w-100" id="btnUpdateBulkDate">
-                                            <i class="bi bi-cloud-upload me-2"></i>Update Masal
-                                        </button>
-                                    </div>
+                                <p class="text-muted small mb-3">Lihat tanggal isolir yang tersimpan per pelanggan (<code>auto_suspension_day</code>). Kosongkan filter wilayah = semua pelanggan. Centang wilayah di kartu <em>Auto Isolir</em> lalu klik tampilkan, atau gunakan tombol <em>Cek Tanggal di Wilayah Ini</em>.</p>
+                                <div class="mb-3">
+                                    <label class="form-label fw-bold small mb-1">Filter wilayah (opsional)</label>
+                                    <div id="summaryAreasLoading" class="text-muted small">Memuat...</div>
+                                    <div id="summaryAreasList" class="border rounded p-2" style="max-height: 120px; overflow-y: auto; display: none;"></div>
                                 </div>
+                                <div id="isolirSummaryResult" class="d-none">
+                                    <p class="small mb-2" id="isolirSummaryMeta"></p>
+                                    <div class="table-responsive mb-3">
+                                        <table class="table table-sm table-bordered mb-0">
+                                            <thead class="table-light">
+                                                <tr>
+                                                    <th>Tanggal Isolir</th>
+                                                    <th class="text-end">Jumlah Pelanggan</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="isolirSummaryByDay"></tbody>
+                                        </table>
+                                    </div>
+                                    <details>
+                                        <summary class="small fw-semibold mb-2" style="cursor:pointer;">Detail per wilayah &amp; pelanggan</summary>
+                                        <div class="table-responsive" style="max-height: 320px; overflow-y: auto;">
+                                            <table class="table table-sm table-hover mb-0">
+                                                <thead class="table-light sticky-top">
+                                                    <tr>
+                                                        <th>Wilayah</th>
+                                                        <th>Pelanggan</th>
+                                                        <th>Username</th>
+                                                        <th>Tgl Isolir</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody id="isolirSummaryDetail"></tbody>
+                                            </table>
+                                        </div>
+                                    </details>
+                                </div>
+                                <div id="isolirSummaryEmpty" class="text-muted small">Belum ada data ditampilkan.</div>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Action Buttons -->
-                <div class="row mb-4">
+                <h6 class="section-title"><i class="bi bi-lightning me-1"></i> Aksi Manual</h6>
+                <div class="row g-3 mb-4">
                     <div class="col-md-4">
-                        <div class="card">
+                        <div class="card action-card h-100">
                             <div class="card-body text-center">
-                                <i class="bi bi-search text-warning" style="font-size: 3rem;"></i>
-                                <h5>Cek Pelanggan Overdue</h5>
-                                <p class="text-muted">Periksa dan suspend pelanggan yang telat bayar</p>
-                                <button class="btn btn-check w-100" id="checkOverdueBtn">
-                                    <i class="bi bi-search me-2"></i>Cek & Suspend Overdue
+                                <i class="bi bi-search text-warning d-block mb-2"></i>
+                                <h6 class="fw-semibold">Cek & Isolir Nunggak</h6>
+                                <p class="text-muted small mb-3">Suspend pelanggan yang nunggak / tagihan belum lunas (tanpa menunggu jadwal otomatis).</p>
+                                <button class="btn btn-check w-100 btn-sm" id="checkOverdueBtn">
+                                    <i class="bi bi-search me-1"></i>Jalankan
                                 </button>
                             </div>
                         </div>
                     </div>
                     <div class="col-md-4">
-                        <div class="card">
+                        <div class="card action-card h-100">
                             <div class="card-body text-center">
-                                <i class="bi bi-check-circle-fill text-success" style="font-size: 3rem;"></i>
-                                <h5>Restore Pelanggan Bayar</h5>
-                                <p class="text-muted">Aktifkan kembali pelanggan yang sudah bayar</p>
-                                <button class="btn btn-restore w-100" id="checkPaidBtn">
-                                    <i class="bi bi-check-lg me-2"></i>Cek & Restore Paid
+                                <i class="bi bi-check-circle-fill text-success d-block mb-2"></i>
+                                <h6 class="fw-semibold">Restore Pelanggan Bayar</h6>
+                                <p class="text-muted small mb-3">Aktifkan kembali pelanggan yang tagihannya sudah lunas.</p>
+                                <button class="btn btn-restore w-100 btn-sm" id="checkPaidBtn">
+                                    <i class="bi bi-check-lg me-1"></i>Jalankan
                                 </button>
                             </div>
                         </div>
                     </div>
                     <div class="col-md-4">
-                        <div class="card">
+                        <div class="card action-card h-100">
                             <div class="card-body text-center">
-                                <i class="bi bi-arrow-clockwise text-primary" style="font-size: 3rem;"></i>
-                                <h5>Refresh Statistics</h5>
-                                <p class="text-muted">Perbarui statistik terbaru</p>
-                                <button class="btn btn-check w-100" id="refreshStatsBtn">
-                                    <i class="bi bi-arrow-clockwise me-2"></i>Refresh Stats
+                                <i class="bi bi-arrow-clockwise text-primary d-block mb-2"></i>
+                                <h6 class="fw-semibold">Refresh Statistik</h6>
+                                <p class="text-muted small mb-3">Perbarui angka ringkasan dan tabel isolir di bawah.</p>
+                                <button class="btn btn-outline-primary w-100 btn-sm" id="refreshStatsBtn">
+                                    <i class="bi bi-arrow-clockwise me-1"></i>Refresh
                                 </button>
                             </div>
                         </div>
@@ -326,14 +434,15 @@
     </div>
 
     <!-- Toast Container -->
-    <div id="toast-container" style="position: fixed; top: 20px; right: 20px; z-index: 9999;"></div>
+    <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
 
     <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
     
     <script>
         // Toast function
-        function showToast(type, title, message) {
+        function showToast(type, title, message, delayMs) {
+            const hideMs = delayMs || 5000;
             const toastId = 'toast-' + Date.now();
             const iconMap = {
                 success: 'bi bi-check-circle-fill',
@@ -341,15 +450,19 @@
                 warning: 'bi bi-circle',
                 info: 'bi bi-info-circle-fill'
             };
+            const safeMsg = String(message || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+            const safeType = ['success', 'error', 'warning', 'info'].includes(type) ? type : 'success';
+            const safeTitle = String(title || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
             const toastHtml = `
-                <div id="${toastId}" class="toast ${type}" role="alert" aria-live="assertive" aria-atomic="true" data-bs-autohide="true" data-bs-delay="5000">
+                <div id="${toastId}" class="toast billing-toast billing-toast--${safeType} show" role="alert" aria-live="assertive" aria-atomic="true" data-bs-autohide="true" data-bs-delay="${hideMs}">
                     <div class="toast-header">
-                        <i class="${iconMap[type]} me-2"></i>
-                        <strong class="me-auto">${title}</strong>
-                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast"></button>
+                        <i class="${iconMap[safeType] || iconMap.success} me-2"></i>
+                        <strong class="me-auto">${safeTitle}</strong>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Tutup"></button>
                     </div>
-                    <div class="toast-body">${message}</div>
+                    <div class="toast-body" style="white-space: pre-line;">${safeMsg}</div>
                 </div>
             `;
 
@@ -358,7 +471,7 @@
 
             setTimeout(() => {
                 $(`#${toastId}`).remove();
-            }, 6000);
+            }, hideMs + 1000);
         }
 
         // Load statistics
@@ -420,7 +533,7 @@
             });
         }
 
-        // Check overdue customers
+        // Cek pelanggan nunggak
         $('#checkOverdueBtn').click(function() {
             const btn = $(this);
             btn.prop('disabled', true).html('<i class="bi bi-circle bx-spin me-2"></i>Checking...');
@@ -428,7 +541,7 @@
             $.post('/admin/billing/service-suspension/check-overdue', function(response) {
                 if (response.success) {
                     const message = `Checked: ${response.checked || 0}, Suspended: ${response.suspended || 0}, Errors: ${response.errors || 0}`;
-                    showToast('success', 'Check Overdue Complete', message);
+                    showToast('success', 'Cek Nunggak Selesai', message);
                     loadStats();
                     loadSuspendedCustomers();
                 } else {
@@ -438,7 +551,7 @@
                 const response = xhr.responseJSON || {};
                 showToast('error', 'Error', response.message || 'Request failed');
             }).always(function() {
-                btn.prop('disabled', false).html('<i class="bi bi-search me-2"></i>Cek & Suspend Overdue');
+                btn.prop('disabled', false).html('<i class="bi bi-search me-1"></i>Jalankan');
             });
         });
 
@@ -460,7 +573,7 @@
                 const response = xhr.responseJSON || {};
                 showToast('error', 'Error', response.message || 'Request failed');
             }).always(function() {
-                btn.prop('disabled', false).html('<i class="bi bi-check-lg me-2"></i>Cek & Restore Paid');
+                btn.prop('disabled', false).html('<i class="bi bi-check-lg me-1"></i>Jalankan');
             });
         });
 
@@ -470,11 +583,11 @@
             btn.prop('disabled', true).html('<i class="bi bi-circle bx-spin me-2"></i>Loading...');
 
             loadStats();
-            loadGracePeriod(); // Also reload grace period
 
             setTimeout(() => {
-                btn.prop('disabled', false).html('<i class="bi bi-arrow-clockwise me-2"></i>Refresh Stats');
-                showToast('success', 'Refreshed', 'Statistics updated');
+                loadSuspendedCustomers();
+                btn.prop('disabled', false).html('<i class="bi bi-arrow-clockwise me-1"></i>Refresh');
+                showToast('success', 'Refreshed', 'Statistik dan tabel diperbarui');
             }, 1000);
         });
 
@@ -517,10 +630,8 @@
 
         // Initialize
         $(document).ready(function() {
-            // Load isolir profiles and current setting
             loadIsolirProfiles();
             loadCurrentIsolirProfile();
-            loadGracePeriod();
             loadStats();
             loadSuspendedCustomers();
         });
@@ -617,62 +728,255 @@
                 });
         }
 
-        // Handle toggle bulk form
-        $('#bulkRenewalType').change(function() {
-            if ($(this).val() === 'fix_date') {
-                $('#bulkBillingDayCol').hide();
-                $('#bulkFixDateCol').show();
-            } else {
-                $('#bulkBillingDayCol').show();
-                $('#bulkFixDateCol').hide();
+        function getSelectedAreaIds(containerId) {
+            const ids = [];
+            document.querySelectorAll(`#${containerId} input.area-checkbox:checked`).forEach((el) => {
+                const id = parseInt(el.value, 10);
+                if (Number.isFinite(id) && id > 0) ids.push(id);
+            });
+            return ids;
+        }
+
+        function renderAreaCheckboxes(areas, containerId, loadingId) {
+            const listEl = document.getElementById(containerId);
+            const loadingEl = document.getElementById(loadingId);
+            if (!listEl) return;
+
+            if (!areas || areas.length === 0) {
+                if (loadingEl) loadingEl.textContent = 'Belum ada wilayah terdaftar. Tambahkan di menu Area.';
+                listEl.style.display = 'none';
+                return;
             }
+
+            if (loadingEl) loadingEl.style.display = 'none';
+            listEl.style.display = 'block';
+            listEl.innerHTML = areas.map((a) => `
+                <div class="form-check">
+                    <input class="form-check-input area-checkbox" type="checkbox" value="${a.id}" id="${containerId}_area_${a.id}">
+                    <label class="form-check-label" for="${containerId}_area_${a.id}">
+                        ${a.nama_area}${a.kode_area ? ` <small class="text-muted">(${a.kode_area})</small>` : ''}
+                    </label>
+                </div>
+            `).join('');
+        }
+
+        function loadBillingAreas() {
+            fetch('/admin/billing/areas/list')
+                .then((r) => r.json())
+                .then((data) => {
+                    const areas = (data && data.success && data.data) ? data.data : [];
+                    renderAreaCheckboxes(areas, 'dueDateAreasList', 'dueDateAreasLoading');
+                    renderAreaCheckboxes(areas, 'isolirAreasList', 'isolirAreasLoading');
+                    renderAreaCheckboxes(areas, 'summaryAreasList', 'summaryAreasLoading');
+                })
+                .catch(() => {
+                    ['dueDateAreasLoading', 'isolirAreasLoading', 'summaryAreasLoading'].forEach((id) => {
+                        const el = document.getElementById(id);
+                        if (el) el.textContent = 'Gagal memuat daftar wilayah.';
+                    });
+                    showToast('error', 'Gagal', 'Tidak dapat memuat daftar wilayah');
+                });
+        }
+
+        function renderIsolirSummary(data) {
+            const resultEl = document.getElementById('isolirSummaryResult');
+            const emptyEl = document.getElementById('isolirSummaryEmpty');
+            const metaEl = document.getElementById('isolirSummaryByDay');
+            const detailEl = document.getElementById('isolirSummaryDetail');
+            const metaText = document.getElementById('isolirSummaryMeta');
+
+            if (!data || !data.success) {
+                if (resultEl) resultEl.classList.add('d-none');
+                if (emptyEl) {
+                    emptyEl.classList.remove('d-none');
+                    emptyEl.textContent = data && data.message ? data.message : 'Gagal memuat ringkasan.';
+                }
+                return;
+            }
+
+            if (emptyEl) emptyEl.classList.add('d-none');
+            if (resultEl) resultEl.classList.remove('d-none');
+
+            const scope = (data.area_ids && data.area_ids.length)
+                ? `${data.area_ids.length} wilayah terpilih`
+                : 'semua pelanggan';
+            if (metaText) {
+                metaText.textContent =
+                    `Total ${data.total || 0} pelanggan (${scope}). Default global: tgl ${data.global_default_day}.`;
+            }
+
+            if (metaEl) {
+                const rows = data.by_day || [];
+                metaEl.innerHTML = rows.length
+                    ? rows.map((r) => `
+                        <tr>
+                            <td>${r.label}</td>
+                            <td class="text-end">${r.count}</td>
+                        </tr>
+                    `).join('')
+                    : '<tr><td colspan="2" class="text-muted">Tidak ada data</td></tr>';
+            }
+
+            if (detailEl) {
+                const list = data.customers || [];
+                detailEl.innerHTML = list.length
+                    ? list.map((c) => `
+                        <tr>
+                            <td>${c.area_name || '-'}</td>
+                            <td>${c.name || '-'}</td>
+                            <td><code>${c.username || '-'}</code></td>
+                            <td><span class="badge bg-warning text-dark">${c.isolir_label}</span></td>
+                        </tr>
+                    `).join('')
+                    : '<tr><td colspan="4" class="text-muted">Tidak ada pelanggan</td></tr>';
+            }
+        }
+
+        function fetchIsolirSummary(area_ids) {
+            const qs = (area_ids && area_ids.length)
+                ? `?area_ids=${area_ids.join(',')}`
+                : '';
+            return fetch(`/admin/billing/service-suspension/isolir-day-summary${qs}`)
+                .then((r) => r.json());
+        }
+
+        $('#btnLoadIsolirSummary').click(function () {
+            const area_ids = getSelectedAreaIds('summaryAreasList');
+            const btn = $(this);
+            btn.prop('disabled', true);
+            showToast('info', 'Memuat', 'Mengambil ringkasan tanggal isolir...', 4000);
+            fetchIsolirSummary(area_ids)
+                .then((data) => {
+                    renderIsolirSummary(data);
+                    if (data.success) {
+                        showToast('success', 'Ringkasan siap', `Total ${data.total || 0} pelanggan`, 6000);
+                    } else {
+                        showToast('error', 'Gagal', data.message || 'Gagal memuat', 8000);
+                    }
+                })
+                .catch((err) => {
+                    showToast('error', 'Gagal', err.message || 'Koneksi gagal', 8000);
+                })
+                .finally(() => btn.prop('disabled', false));
         });
 
-        // Handle bulk update isolir date
-        $('#btnUpdateBulkDate').click(function() {
-            const renewal_type = $('#bulkRenewalType').val();
-            const billing_day = $('#bulkBillingDay').val();
-            const fix_date = $('#bulkFixDate').val();
-
-            Swal.fire({
-                title: 'Update Masal?',
-                text: "Anda yakin ingin mengubah tipe dan siklus tagihan/isolir SELURUH pelanggan? Tindakan ini akan diterapkan ke seluruh data pelanggan yang ada di database dan mengubah tanggal penagihan invoice mereka.",
-                icon: 'warning',
-                showCancelButton: true,
-                confirmButtonColor: '#0d6efd',
-                cancelButtonColor: '#6c757d',
-                confirmButtonText: 'Ya, Lanjutkan'
-            }).then((result) => {
-                if (result.isConfirmed) {
-                    const btn = $(this);
-                    const originalText = btn.html();
-                    btn.prop('disabled', true).html('<i class="bi bi-arrow-repeat bx-spin me-2"></i>Memproses...');
-
-                    fetch('/admin/billing/service-suspension/bulk-update-isolir-date', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ renewal_type, billing_day, fix_date })
-                    })
-                    .then(r => r.json())
-                    .then(data => {
-                        if (data && data.success) {
-                            Swal.fire({
-                                icon: 'success',
-                                title: 'Berhasil',
-                                text: data.message || 'Siklus tagihan seluruh pelanggan telah diupdate.'
-                            });
-                        } else {
-                            Swal.fire('Gagal', data.message || 'Terjadi kesalahan sistem', 'error');
-                        }
-                    })
-                    .catch(err => {
-                        Swal.fire('Gagal', 'Terjadi kesalahan koneksi', 'error');
-                    })
-                    .finally(() => {
-                        btn.prop('disabled', false).html(originalText);
-                    });
-                }
+        $('#btnCheckIsolirFromCard').click(function () {
+            const area_ids = getSelectedAreaIds('isolirAreasList');
+            document.querySelectorAll('#summaryAreasList input.area-checkbox').forEach((cb) => {
+                cb.checked = area_ids.includes(parseInt(cb.value, 10));
             });
+            $('#btnLoadIsolirSummary').trigger('click');
+        });
+
+        loadBillingAreas();
+
+        $('#btnBulkDueDateByAreas').click(function () {
+            const area_ids = getSelectedAreaIds('dueDateAreasList');
+            const due_day = $('#bulkDueDateDay').val();
+
+            if (area_ids.length === 0) {
+                showToast('error', 'Validasi', 'Pilih minimal satu wilayah');
+                return;
+            }
+            if (!due_day || isNaN(due_day) || parseInt(due_day, 10) < 1 || parseInt(due_day, 10) > 28) {
+                showToast('error', 'Validasi', 'Tanggal jatuh tempo harus antara 1–28');
+                return;
+            }
+
+            if (!window.confirm(`Update jatuh tempo ke tanggal ${due_day} untuk ${area_ids.length} wilayah terpilih?\n\nTagihan unpaid akan disesuaikan.`)) {
+                return;
+            }
+
+            const btn = $(this);
+            const originalText = btn.html();
+            btn.prop('disabled', true).html('<i class="bi bi-arrow-repeat bx-spin me-2"></i>Memproses...');
+            showToast('info', 'Memproses', 'Update jatuh tempo per wilayah...', 6000);
+
+            fetch('/admin/billing/service-suspension/bulk-update-due-date-by-areas', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ area_ids, due_day: parseInt(due_day, 10) })
+            })
+                .then(async (r) => {
+                    const data = await r.json().catch(() => ({}));
+                    if (!r.ok && !data.message) throw new Error('HTTP ' + r.status);
+                    return data;
+                })
+                .then((data) => {
+                    const body = [
+                        data.message || '',
+                        `Pelanggan: ${data.updated ?? 0}/${data.total ?? 0}`,
+                        `Invoice disesuaikan: ${data.invoices_updated ?? 0}`
+                    ].filter(Boolean).join('\n');
+                    if (data.success) {
+                        showToast((data.failed || 0) > 0 ? 'warning' : 'success', 'Jatuh tempo diupdate', body, 12000);
+                    } else {
+                        showToast('error', 'Gagal', body || data.message || 'Terjadi kesalahan', 12000);
+                    }
+                })
+                .catch((err) => {
+                    showToast('error', 'Gagal', err.message || 'Koneksi gagal', 10000);
+                })
+                .finally(() => {
+                    btn.prop('disabled', false).html(originalText);
+                });
+        });
+
+        $('#btnBulkAutoIsolirByAreas').click(function () {
+            const area_ids = getSelectedAreaIds('isolirAreasList');
+            const auto_suspension_day = $('#bulkAutoIsolirDay').val();
+
+            if (area_ids.length === 0) {
+                showToast('error', 'Validasi', 'Pilih minimal satu wilayah');
+                return;
+            }
+            if (!auto_suspension_day || isNaN(auto_suspension_day) || parseInt(auto_suspension_day, 10) < 1 || parseInt(auto_suspension_day, 10) > 28) {
+                showToast('error', 'Validasi', 'Tanggal auto isolir harus antara 1–28');
+                return;
+            }
+
+            if (!window.confirm(`Set tanggal auto isolir ke tgl ${auto_suspension_day} untuk pelanggan di ${area_ids.length} wilayah terpilih?`)) {
+                return;
+            }
+
+            const btn = $(this);
+            const originalText = btn.html();
+            btn.prop('disabled', true).html('<i class="bi bi-arrow-repeat bx-spin me-2"></i>Memproses...');
+            showToast('info', 'Memproses', 'Update tanggal auto isolir per wilayah...', 6000);
+
+            fetch('/admin/billing/service-suspension/bulk-update-auto-isolir-by-areas', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ area_ids, auto_suspension_day: parseInt(auto_suspension_day, 10) })
+            })
+                .then(async (r) => {
+                    const data = await r.json().catch(() => ({}));
+                    if (!r.ok && !data.message) throw new Error('HTTP ' + r.status);
+                    return data;
+                })
+                .then((data) => {
+                    const body = [
+                        data.message || '',
+                        `Pelanggan: ${data.updated ?? 0}/${data.total ?? 0}`
+                    ].filter(Boolean).join('\n');
+                    if (data.success) {
+                        showToast((data.failed || 0) > 0 ? 'warning' : 'success', 'Auto isolir diupdate', body, 12000);
+                        if (data.area_ids && data.area_ids.length) {
+                            document.querySelectorAll('#summaryAreasList input.area-checkbox').forEach((cb) => {
+                                cb.checked = data.area_ids.includes(parseInt(cb.value, 10));
+                            });
+                            fetchIsolirSummary(data.area_ids).then(renderIsolirSummary);
+                        }
+                    } else {
+                        showToast('error', 'Gagal', body || data.message || 'Terjadi kesalahan', 12000);
+                    }
+                })
+                .catch((err) => {
+                    showToast('error', 'Gagal', err.message || 'Koneksi gagal', 10000);
+                })
+                .finally(() => {
+                    btn.prop('disabled', false).html(originalText);
+                });
         });
 
         // Get current isolir profile setting
@@ -857,55 +1161,6 @@
             });
         });
 
-        // Load current grace period setting
-        function loadGracePeriod() {
-            fetch('/admin/billing/service-suspension/grace-period')
-                .then(r => r.json())
-                .then(data => {
-                    if (data && data.success) {
-                        const current = data.grace_period_days || '3';
-                        document.getElementById('gracePeriodInput').value = current;
-                        document.getElementById('currentGracePeriod').textContent = current;
-                    }
-                })
-                .catch(err => {
-                    console.error('Error loading grace period:', err);
-                    // Set default value
-                    document.getElementById('gracePeriodInput').value = '3';
-                    document.getElementById('currentGracePeriod').textContent = '3';
-                });
-        }
-
-        // Save grace period
-        $('#saveGracePeriodBtn').click(function(){
-            const input = document.getElementById('gracePeriodInput');
-            const value = input.value.trim();
-
-            if (!value || isNaN(value) || parseInt(value) < 1 || parseInt(value) > 30) {
-                showToast('error', 'Error', 'Grace period harus antara 1-30 hari');
-                return;
-            }
-
-            const btn = $(this);
-            btn.prop('disabled', true).html('<i class="bi bi-circle bx-spin me-1"></i>Menyimpan...');
-
-            fetch('/admin/billing/service-suspension/grace-period', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-                body: new URLSearchParams({ grace_period_days: value }).toString()
-            }).then(r => r.json()).then(data => {
-                if (data && data.success) {
-                    showToast('success', 'Tersimpan', `Grace period diset ke: ${value} hari`);
-                    loadGracePeriod(); // Reload untuk update tampilan
-                } else {
-                    showToast('error', 'Gagal', data.message || 'Gagal menyimpan');
-                }
-            }).catch(err => {
-                showToast('error', 'Gagal', 'Gagal menyimpan');
-            }).finally(() => {
-                btn.prop('disabled', false).html('<i class="bi bi-floppy-fill me-1"></i>Simpan');
-            });
-        });
     </script>
 </body>
 </html>

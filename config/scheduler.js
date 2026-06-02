@@ -2,6 +2,11 @@ const cron = require('node-cron');
 const billingManager = require('./billing');
 const logger = require('./logger');
 const { getServerTimezone } = require('./settingsManager');
+const {
+    getDaysUntilDueDate,
+    getBillingNotifySchedule,
+    resolveBillingWaNotificationKind
+} = require('./billing-wa-schedule');
 
 class InvoiceScheduler {
     constructor() {
@@ -92,14 +97,15 @@ class InvoiceScheduler {
         
         logger.info('Monthly reset scheduler initialized - will run on 1st of every month at 00:01');
 
-        // Schedule daily service suspension check at 10:00
+        // Schedule service suspension check daily at 10:00 (hanya eksekusi isolir di tanggal yang dikonfigurasi, default tgl 25)
         cron.schedule('0 10 * * *', async () => {
             try {
-                logger.info('Starting daily service suspension check...');
                 const serviceSuspension = require('./serviceSuspension');
+                const suspensionDay = serviceSuspension.getAutoSuspensionDay();
+                logger.info(`Starting service suspension check (default global tgl ${suspensionDay}, per pelanggan sesuai auto_suspension_day)...`);
                 await serviceSuspension.checkAndSuspendOverdueCustomers();
                 await serviceSuspension.checkAndSuspendOverdueMembers();
-                logger.info('Daily service suspension check completed');
+                logger.info('Service suspension check completed');
             } catch (error) {
                 logger.error('Error in daily service suspension check:', error);
             }
@@ -140,7 +146,7 @@ class InvoiceScheduler {
         
         logger.info('Sync suspended status scheduler initialized - will run every 30 minutes');
 
-        logger.info('Service suspension/restoration scheduler initialized - will run daily at 10:00 and 11:00');
+        logger.info('Service suspension/restoration scheduler initialized - suspension on configured day (default 25) at 10:00, restoration daily at 11:00');
 
         // Schedule RADIUS Auto Backup every day at 02:00 AM
         cron.schedule('0 2 * * *', async () => {
@@ -301,32 +307,61 @@ class InvoiceScheduler {
 
             const whatsappNotifications = require('./whatsapp-notifications');
             const invoices = await billingManager.getInvoices();
-            const today = new Date();
-            
-            // Filter invoices that are due today or overdue
-            const dueInvoices = invoices.filter(invoice => {
-                if (invoice.status !== 'unpaid') return false;
-                
-                const dueDate = new Date(invoice.due_date);
-                const daysUntilDue = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
-                
-                // Send reminder for invoices due today or overdue (0 or negative days)
-                return daysUntilDue <= 0;
+            const schedule = getBillingNotifySchedule();
+
+            const dueInvoices = invoices.filter((invoice) => {
+                if (invoice.status !== 'unpaid' || !invoice.due_date) return false;
+                const daysUntilDue = getDaysUntilDueDate(invoice.due_date);
+                return resolveBillingWaNotificationKind(daysUntilDue, schedule) != null;
             });
-            
-            logger.info(`Found ${dueInvoices.length} invoices due today or overdue`);
-            
+
+            logger.info(
+                `Jadwal WA tagihan: ${dueInvoices.length} invoice ` +
+                `(tagihan baru H-${schedule.invoice_notify_days_before}, ` +
+                `pengingat H-${schedule.reminder_days_before}, ` +
+                `${schedule.send_on_due_day ? 'hari H' : 'tanpa hari H'})`
+            );
+
             for (const invoice of dueInvoices) {
                 try {
-                    // Check if this is a member invoice or customer invoice
+                    const daysUntilDue = getDaysUntilDueDate(invoice.due_date);
+                    const kind = resolveBillingWaNotificationKind(daysUntilDue, schedule);
+                    if (!kind) continue;
+
                     if (invoice.member_id) {
-                        await whatsappNotifications.sendMemberDueDateReminder(invoice.id);
-                    } else {
-                        await whatsappNotifications.sendDueDateReminder(invoice.id);
+                        if (kind === 'invoice_created') {
+                            await whatsappNotifications.sendMemberInvoiceCreatedNotification(
+                                invoice.member_id,
+                                invoice.id,
+                                { fromSchedule: true }
+                            );
+                        } else {
+                            const reminderType = kind === 'reminder_today' ? 'today' : 'before';
+                            await whatsappNotifications.sendMemberDueDateReminder(
+                                invoice.id,
+                                { reminderType }
+                            );
+                        }
+                    } else if (invoice.customer_id) {
+                        if (kind === 'invoice_created') {
+                            await whatsappNotifications.sendInvoiceCreatedNotification(
+                                invoice.customer_id,
+                                invoice.id,
+                                { fromSchedule: true }
+                            );
+                        } else {
+                            const reminderType = kind === 'reminder_today' ? 'today' : 'before';
+                            await whatsappNotifications.sendDueDateReminder(
+                                invoice.id,
+                                { reminderType }
+                            );
+                        }
                     }
-                    logger.info(`Due date reminder sent for invoice ${invoice.invoice_number}`);
+
+                    const dayLabel = daysUntilDue === 0 ? 'hari H' : `H-${daysUntilDue}`;
+                    logger.info(`WA tagihan (${kind}, ${dayLabel}) invoice ${invoice.invoice_number}`);
                 } catch (error) {
-                    logger.error(`Error sending due date reminder for invoice ${invoice.invoice_number}:`, error);
+                    logger.error(`Error sending scheduled billing WA for invoice ${invoice.invoice_number}:`, error);
                 }
             }
         } catch (error) {
@@ -341,18 +376,16 @@ class InvoiceScheduler {
      */
     _enqueueCustomerInvoiceNotifications(customerId, invoiceId) {
         void (async () => {
+            // WA tagihan baru mengikuti jadwal harian (H-X), bukan saat invoice dibuat
             try {
                 const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
                 if (isWaSystemMonitorEnabled('billing_scheduler_invoice_wa')) {
-                    const whatsappNotifications = require('./whatsapp-notifications');
-                    await whatsappNotifications.sendInvoiceCreatedNotification(customerId, invoiceId);
-                    logger.info(`WhatsApp notification queued/sent for invoice id ${invoiceId}`);
-                } else {
-                    logger.info('billing_scheduler_invoice_wa off — skip WA tagihan baru (async)');
+                    logger.info(
+                        `WA tagihan baru invoice ${invoiceId} ditunda ke jadwal harian ` +
+                        `(H-${getBillingNotifySchedule().invoice_notify_days_before}, pengingat, hari H)`
+                    );
                 }
-            } catch (notificationError) {
-                logger.error(`Async WhatsApp notification failed for invoice id ${invoiceId}:`, notificationError);
-            }
+            } catch (_) { /* ignore */ }
             try {
                 const emailNotifications = require('./email-notifications');
                 await emailNotifications.sendInvoiceCreatedNotification(customerId, invoiceId);
@@ -368,15 +401,11 @@ class InvoiceScheduler {
             try {
                 const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
                 if (isWaSystemMonitorEnabled('billing_scheduler_invoice_wa')) {
-                    const whatsappNotifications = require('./whatsapp-notifications');
-                    await whatsappNotifications.sendMemberInvoiceCreatedNotification(memberId, invoiceId);
-                    logger.info(`WhatsApp notification queued/sent for member invoice id ${invoiceId}`);
-                } else {
-                    logger.info('billing_scheduler_invoice_wa off — skip WA tagihan member (async)');
+                    logger.info(
+                        `WA tagihan member invoice ${invoiceId} ditunda ke jadwal harian`
+                    );
                 }
-            } catch (notificationError) {
-                logger.error(`Async WhatsApp notification failed for member invoice id ${invoiceId}:`, notificationError);
-            }
+            } catch (_) { /* ignore */ }
             try {
                 const emailNotifications = require('./email-notifications');
                 await emailNotifications.sendMemberInvoiceCreatedNotification(memberId, invoiceId);
