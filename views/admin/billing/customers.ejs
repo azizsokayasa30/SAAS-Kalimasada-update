@@ -2199,20 +2199,42 @@
                 }
             });
 
-            // Export customers JSON (Desktop & Mobile)
+            // Backup/export pelanggan — ikut filter bulan & kartu yang aktif di halaman ini
+            function buildCustomerExportQuery() {
+                const params = new URLSearchParams(window.location.search);
+                const q = new URLSearchParams();
+                const month = params.get('month') || '<%= typeof selectedMonth !== "undefined" ? selectedMonth : "" %>';
+                const year = params.get('year') || '<%= typeof selectedYear !== "undefined" ? selectedYear : "" %>';
+                if (month) q.set('month', month);
+                if (year) q.set('year', year);
+                ['customer_type', 'payment_status', 'package_id', 'area', 'collector_id', 'search', 'status', 'router'].forEach((key) => {
+                    const val = params.get(key);
+                    if (val) q.set(key, val);
+                });
+                const qs = q.toString();
+                return qs ? `?${qs}` : '';
+            }
+
             $('#exportCustomersJsonBtn, #exportCustomersJsonBtnMobile').on('click', function() {
-                window.location.href = '/admin/billing/export/customers.json';
+                window.location.href = '/admin/billing/export/customers.json' + buildCustomerExportQuery();
             });
 
-            // Export customers XLSX (Desktop & Mobile)
             $('#exportCustomersXlsxBtn, #exportCustomersXlsxBtnMobile').on('click', function() {
-                window.location.href = '/admin/billing/export/customers.xlsx';
+                window.location.href = '/admin/billing/export/customers.xlsx' + buildCustomerExportQuery();
             });
 
             const stripHtml = (html) => String(html || '').replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-            const MIN_POLLING_INTERVAL_MS = 10000;
+            const MIN_POLLING_INTERVAL_MS = 4000;
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
             const normalizePollingInterval = (ms) => Math.max(Number(ms) || MIN_POLLING_INTERVAL_MS, MIN_POLLING_INTERVAL_MS);
+            /** Batas polling disesuaikan jumlah baris (~2000 baris butuh ±40–60 menit). */
+            const computeImportPollPlan = (totalRows) => {
+                const rows = Math.max(0, Number(totalRows) || 0);
+                const intervalMs = MIN_POLLING_INTERVAL_MS;
+                const budgetMs = Math.max(30 * 60 * 1000, rows * 700 + 20 * 60 * 1000);
+                const maxAttempts = Math.min(900, Math.max(120, Math.ceil(budgetMs / intervalMs)));
+                return { maxAttempts, intervalMs };
+            };
             const composeImportDetails = (summary, errors) => {
                 const s = summary || {};
                 const created = Number(s.created || 0);
@@ -2248,7 +2270,7 @@
                 }
                 return detailLines.join('<br>');
             };
-            const recoverImportResult = async ({ sourceType, sinceMs, maxAttempts = 2, intervalMs = MIN_POLLING_INTERVAL_MS }) => {
+            const recoverImportResult = async ({ sourceType, sinceMs, maxAttempts = 8, intervalMs = MIN_POLLING_INTERVAL_MS }) => {
                 intervalMs = normalizePollingInterval(intervalMs);
                 for (let attempt = 0; attempt < maxAttempts; attempt++) {
                     try {
@@ -2331,6 +2353,14 @@
             const importProgressLabel = document.getElementById('importProgressLabel');
             const importProgressValue = document.getElementById('importProgressValue');
             let importProgressTimer = null;
+            let lastImportPct = 0;
+
+            const stopFakeProgress = () => {
+                if (importProgressTimer) {
+                    clearInterval(importProgressTimer);
+                    importProgressTimer = null;
+                }
+            };
 
             const setProgress = (value, label, colorClass = 'bg-success') => {
                 const pct = Math.min(100, Math.max(0, Number(value) || 0));
@@ -2350,31 +2380,25 @@
                 if (label) importProgressLabel.textContent = label;
             };
             const startProgress = ({ from = 0, to = 85, step = 4, everyMs = 450, label = 'Memproses...' } = {}) => {
-                if (importProgressTimer) clearInterval(importProgressTimer);
+                stopFakeProgress();
                 setProgress(from, label, 'bg-success');
                 importProgressTimer = setInterval(() => {
                     const current = Number(importProgressBar.getAttribute('aria-valuenow') || 0);
                     const next = Math.min(to, current + step);
                     setProgress(next, label, 'bg-success');
                     if (next >= to) {
-                        clearInterval(importProgressTimer);
-                        importProgressTimer = null;
+                        stopFakeProgress();
                     }
                 }, everyMs);
             };
             const finishProgress = (success, label) => {
-                if (importProgressTimer) {
-                    clearInterval(importProgressTimer);
-                    importProgressTimer = null;
-                }
+                stopFakeProgress();
                 setProgress(100, label || (success ? 'Selesai' : 'Gagal'), success ? 'bg-success' : 'bg-danger');
                 importProgressBar.classList.remove('progress-bar-animated');
             };
             const resetProgress = () => {
-                if (importProgressTimer) {
-                    clearInterval(importProgressTimer);
-                    importProgressTimer = null;
-                }
+                stopFakeProgress();
+                lastImportPct = 0;
                 importProgressWrap.classList.add('d-none');
                 importProgressBar.classList.add('progress-bar-animated');
                 setProgress(0, 'Menunggu proses...', 'bg-success');
@@ -2468,11 +2492,15 @@
 
                 const originalCommitText = commitBtn.innerHTML;
                 const importStartedAt = Date.now();
+                lastImportPct = 0;
                 commitBtn.disabled = true;
                 stageBtn.disabled = true;
                 commitBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Importing...';
-                startProgress({ from: 12, to: 92, step: 3, everyMs: 500, label: 'Import data pelanggan...' });
+                stopFakeProgress();
+                setProgress(3, 'Memulai import data pelanggan...', 'bg-success');
+                importProgressBar.classList.add('progress-bar-animated');
 
+                let commitJobId = null;
                 try {
                     const resp = await fetch(`/admin/billing/import/customers/commit/${encodeURIComponent(stagedImportData.stage_id)}`, {
                         method: 'POST',
@@ -2493,10 +2521,20 @@
                         throw new Error('Job import tidak terbentuk. Silakan coba lagi.');
                     }
 
-                    setProgress(96, 'Menunggu proses import di server...', 'bg-success');
+                    const pollPlan = computeImportPollPlan(stagedImportData.total_rows);
+                    const pollMinutes = Math.round((pollPlan.maxAttempts * pollPlan.intervalMs) / 60000);
+                    setProgress(
+                        Math.max(lastImportPct, 5),
+                        `Import berjalan (~${stagedImportData.total_rows || '?'} baris, tunggu hingga ±${pollMinutes} menit)...`,
+                        'bg-success'
+                    );
+                    commitJobId = data.job_id;
                     const finalData = await pollCommitJobStatus({
-                        jobId: data.job_id,
+                        jobId: commitJobId,
+                        maxAttempts: pollPlan.maxAttempts,
+                        intervalMs: pollPlan.intervalMs,
                         onProgress: (progress) => {
+                            stopFakeProgress();
                             const total = Number(progress.total_rows || 0);
                             const processed = Number(progress.processed_rows || 0);
                             const success = Number(progress.success_rows || 0);
@@ -2505,7 +2543,9 @@
                             const label = total > 0
                                 ? `Import pelanggan: ${processed}/${total} diproses, berhasil ${success}, gagal ${failed}`
                                 : `Import pelanggan: diproses ${processed}, berhasil ${success}, gagal ${failed}`;
-                            setProgress(Math.min(99, Math.max(1, pct)), label, 'bg-success');
+                            const nextPct = Math.min(99, Math.max(lastImportPct, pct, processed > 0 ? 1 : 0));
+                            lastImportPct = nextPct;
+                            setProgress(nextPct, label, 'bg-success');
                         }
                     });
                     data = finalData;
@@ -2528,16 +2568,54 @@
                     $('#importCustomersModal').modal('hide');
                 } catch (err) {
                     const errMessage = String(err.message || 'Unknown error');
+                    const looksLikePollTimeout = /terlalu lama|timeout saat polling/i.test(errMessage);
                     const looksLikeNetworkFailure =
                         /failed to fetch/i.test(errMessage) ||
                         /networkerror/i.test(errMessage) ||
-                        /load failed/i.test(errMessage);
+                        /load failed/i.test(errMessage) ||
+                        looksLikePollTimeout;
+
+                    if (looksLikePollTimeout && typeof commitJobId === 'string' && commitJobId) {
+                        setProgress(Math.max(lastImportPct, 90), 'Memeriksa apakah import masih/sudah selesai di server...', 'bg-info');
+                        try {
+                            const lateData = await pollCommitJobStatus({
+                                jobId: commitJobId,
+                                maxAttempts: 120,
+                                intervalMs: MIN_POLLING_INTERVAL_MS,
+                                onProgress: (progress) => {
+                                    const processed = Number(progress.processed_rows || 0);
+                                    const total = Number(progress.total_rows || 0);
+                                    const pct = Number(progress.percentage || 0);
+                                    const nextPct = Math.min(99, Math.max(lastImportPct, pct));
+                                    lastImportPct = nextPct;
+                                    setProgress(nextPct, total > 0 ? `Menunggu server: ${processed}/${total}` : 'Menunggu server...', 'bg-info');
+                                }
+                            });
+                            const s = lateData.summary || {};
+                            const hasFailures = (s.failed || 0) > 0;
+                            const hasSuccess = ((s.created || 0) + (s.updated || 0)) > 0;
+                            const title = hasFailures ? 'Import selesai (lambat)' : 'Import berhasil';
+                            const detailsHtml = composeImportDetails(s, lateData.errors || []);
+                            openImportResultDialog({
+                                title,
+                                detailsHtml,
+                                operationId: lateData.operation_id || null,
+                                canRevert: Boolean(stagedImportData.source_type === 'xlsx' && hasFailures && hasSuccess && lateData.operation_id)
+                            });
+                            finishProgress(true, 'Import selesai');
+                            $('#importCustomersModal').modal('hide');
+                            return;
+                        } catch (_) {
+                            /* lanjut ke recoverImportResult */
+                        }
+                    }
 
                     if (looksLikeNetworkFailure) {
-                        startProgress({ from: 92, to: 98, step: 1, everyMs: 600, label: 'Menyinkronkan hasil import...' });
+                        setProgress(Math.max(lastImportPct, 92), 'Menyinkronkan hasil import...', 'bg-info');
                         const recoveredOp = await recoverImportResult({
                             sourceType: stagedImportData.source_type,
-                            sinceMs: importStartedAt
+                            sinceMs: importStartedAt,
+                            maxAttempts: looksLikePollTimeout ? 20 : 8
                         });
                         if (recoveredOp && recoveredOp.summary) {
                             const s = recoveredOp.summary;
@@ -2562,7 +2640,12 @@
                         }
                     }
 
-                    const fallbackDetails = `Terjadi kesalahan saat import.<br><strong>Detail:</strong> ${errMessage}`;
+                    const stillRunningHint = looksLikePollTimeout
+                        ? '<br><br><strong>Catatan:</strong> Import besar (~2000 baris) bisa berjalan 30–60 menit di server. '
+                          + 'Jangan upload ulang dulu — refresh halaman Kelola Pelanggan setelah beberapa menit untuk cek data. '
+                          + 'Jika perlu, jalankan ulang import hanya setelah yakin proses sebelumnya benar-benar berhenti.'
+                        : '';
+                    const fallbackDetails = `Terjadi kesalahan saat import.<br><strong>Detail:</strong> ${errMessage}${stillRunningHint}`;
                     const modalShown = openImportResultDialog({
                         title: 'Import gagal',
                         detailsHtml: fallbackDetails,

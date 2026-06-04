@@ -190,6 +190,22 @@ function parseCustomerImportJoinDate(value) {
         return null;
     }
 
+    const ddmmyyyySlash = asString.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (ddmmyyyySlash) {
+        const day = parseInt(ddmmyyyySlash[1], 10);
+        const month = parseInt(ddmmyyyySlash[2], 10);
+        const year = parseInt(ddmmyyyySlash[3], 10);
+        const parsedSlash = new Date(Date.UTC(year, month - 1, day));
+        if (
+            !isNaN(parsedSlash.getTime()) &&
+            parsedSlash.getUTCFullYear() === year &&
+            parsedSlash.getUTCMonth() === month - 1 &&
+            parsedSlash.getUTCDate() === day
+        ) {
+            return `${year.toString().padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        }
+    }
+
     const ddmmyy = asString.match(/^(\d{2})-(\d{2})-(\d{2})$/);
     if (ddmmyy) {
         const day = parseInt(ddmmyy[1], 10);
@@ -212,6 +228,43 @@ function parseCustomerImportJoinDate(value) {
         return parsed.toISOString().slice(0, 10);
     }
     return null;
+}
+
+/** Tolak tanggal join dari Excel yang di masa depan (sering salah parse billing_day/fix date). */
+function sanitizeImportJoinDate(value) {
+    const parsed = parseCustomerImportJoinDate(value);
+    if (!parsed) return null;
+    const today = new Date().toISOString().slice(0, 10);
+    return parsed > today ? null : parsed;
+}
+
+/** Simpan join_date/created_at ke format DB (WIB). */
+function formatCustomerJoinDateStored(isoYmd) {
+    if (isoYmd && /^\d{4}-\d{2}-\d{2}$/.test(String(isoYmd).slice(0, 10))) {
+        return `${String(isoYmd).slice(0, 10)}T12:00:00+07:00`;
+    }
+    const { getLocalTimestamp } = require('../config/settingsManager');
+    const ts = getLocalTimestamp();
+    return `${String(ts).replace(/ /, 'T')}+07:00`;
+}
+
+function resolveImportJoinDate(getVal, row) {
+    const joinRaw = getVal(row, 'join_date');
+    const createdRaw = getVal(row, 'created_at');
+    const preferred = (joinRaw !== '' && joinRaw != null) ? joinRaw : createdRaw;
+    return sanitizeImportJoinDate(preferred);
+}
+
+async function applyCustomerJoinAndCreatedDates(db, customerId, isoJoinDate) {
+    if (!customerId || !isoJoinDate) return;
+    const stored = formatCustomerJoinDateStored(isoJoinDate);
+    await new Promise((resolve, reject) => {
+        db.run(
+            `UPDATE customers SET join_date = ?, created_at = ? WHERE id = ?`,
+            [stored, stored, customerId],
+            (err) => (err ? reject(err) : resolve())
+        );
+    });
 }
 
 // Ensure import can accept duplicate phone numbers by removing UNIQUE constraint on customers.phone.
@@ -1954,28 +2007,28 @@ router.get('/api/revenue/summary', adminAuth, async (req, res) => {
 // Halaman Semua Invoice (Invoice List)
 router.get('/invoice-list', getAppSettings, async (req, res) => {
     try {
-        const { page = 1, limit = 50, status, customer_username, type } = req.query;
+        const { page = 1, limit = 50, status, customer_username, search, type } = req.query;
         const offset = (page - 1) * limit;
+        const searchTerm = String(search || customer_username || '').trim();
         
         // Prepare filters object
         const filters = {};
         if (status) filters.status = status;
-        if (customer_username) filters.customer_username = customer_username;
+        if (searchTerm) filters.customer_username = searchTerm;
         if (type) filters.type = type;
         
-        // Get invoices with filters
-        const invoices = await billingManager.getInvoicesWithFilters(filters, limit, offset);
-        const customers = await billingManager.getCustomers();
-        const packages = await billingManager.getPackages();
-        
-        // Get total count for pagination with filters
-        const totalCount = await billingManager.getInvoicesCountWithFilters(filters);
+        filters.listMode = true;
+
+        const [invoices, totalCount, summary] = await Promise.all([
+            billingManager.getInvoicesWithFilters(filters, limit, offset),
+            billingManager.getInvoicesCountWithFilters(filters),
+            billingManager.getInvoiceListSummaryWithFilters(filters)
+        ]);
         
         res.render('admin/billing/invoice-list', {
             title: 'Semua Invoice',
             invoices,
-            customers,
-            packages,
+            summary: summary || { total: totalCount, paid: 0, unpaid: 0, overdue: 0 },
             pagination: {
                 currentPage: parseInt(page),
                 totalPages: Math.ceil(totalCount / limit),
@@ -1984,7 +2037,7 @@ router.get('/invoice-list', getAppSettings, async (req, res) => {
             },
             filters: {
                 status: status || '',
-                customer_username: customer_username || '',
+                customer_username: searchTerm || '',
                 type: type || ''
             },
             appSettings: req.appSettings,
@@ -2555,6 +2608,59 @@ async function enrichCustomersForExport(customers) {
     });
 }
 
+/** Filter export/backup pelanggan — selaras query halaman Kelola Pelanggan. */
+function parseCustomerExportFilters(req) {
+    const filters = {};
+    const month = req.query.month ? parseInt(req.query.month, 10) : null;
+    const year = req.query.year ? parseInt(req.query.year, 10) : null;
+    if (Number.isFinite(month) && month >= 1 && month <= 12 && Number.isFinite(year) && year >= 2000) {
+        filters.month = month;
+        filters.year = year;
+    }
+    if (req.query.search) filters.search = String(req.query.search).trim();
+    if (req.query.status) filters.status = String(req.query.status).trim();
+    if (req.query.package_id) filters.package_id = req.query.package_id;
+    if (req.query.area) filters.area = req.query.area;
+    if (req.query.collector_id) filters.collector_id = req.query.collector_id;
+    if (req.query.payment_status) filters.payment_status = req.query.payment_status;
+    if (req.query.customer_type) filters.customer_type = req.query.customer_type;
+    if (req.query.router) filters.router_id = parseInt(req.query.router, 10);
+    return filters;
+}
+
+async function loadCustomersForExport(req) {
+    const joinMonth = req.query.join_month ? parseInt(req.query.join_month, 10) : null;
+    const joinYear = req.query.join_year ? parseInt(req.query.join_year, 10) : null;
+    const listFilters = parseCustomerExportFilters(req);
+
+    if (Number.isFinite(joinMonth) && joinMonth >= 1 && joinMonth <= 12
+        && Number.isFinite(joinYear) && joinYear >= 2000
+        && !listFilters.month) {
+        return {
+            customers: await billingManager.getCustomers({ joinMonth, joinYear }),
+            joinMonth,
+            joinYear,
+            listFilters: null
+        };
+    }
+
+    if (listFilters.month && listFilters.year) {
+        return {
+            customers: await billingManager.getCustomersFiltered(listFilters),
+            joinMonth: null,
+            joinYear: null,
+            listFilters
+        };
+    }
+
+    return {
+        customers: await billingManager.getCustomers(),
+        joinMonth: null,
+        joinYear: null,
+        listFilters: null
+    };
+}
+
 const CUSTOMER_EXPORT_COLUMNS = [
     { header: 'ID DB', key: 'id', width: 8 },
     { header: 'Kode Pelanggan', key: 'customer_id', width: 16 },
@@ -2741,8 +2847,8 @@ async function buildCustomerImportTemplateWorkbook() {
         package_id: '',
         auto_suspension: 1,
         billing_day: 15,
-        join_date: '01/06/2026',
-        created_at: '',
+        join_date: '01/06/2020',
+        created_at: '01/06/2020',
         login_password: '',
         odp_id: '',
         renewal_type: 'renewal',
@@ -2775,7 +2881,7 @@ async function buildCustomerImportTemplateWorkbook() {
         ['Status Layanan', 'active, suspended, register, isolir, dll. Default active.'],
         ['Auto Suspension', '1/ya = aktif, 0/tidak = nonaktif.'],
         ['Billing Day', 'Tanggal tagih 1–28. Default 15.'],
-        ['Join Date', 'Format dd/mm/yyyy atau dd-mm-yy.'],
+        ['Join Date / Created At', 'Tanggal bergabung pelanggan (dd/mm/yyyy). Join Date dan Created At harus sama; import memakai Join Date, jika kosong pakai Created At.'],
         ['ODP ID, Tipe/Panjang Kabel, Port, Status Kabel', 'Opsional; untuk data jalur kabel saat pelanggan baru.'],
         ['Kode Pelanggan, Kolektor, Harga Paket, Status Bayar', 'Kolom dari export — boleh diisi, diabaikan saat import.'],
         ['', 'Baris 2 sheet Pelanggan adalah CONTOH — hapus sebelum import produksi.'],
@@ -2792,10 +2898,7 @@ async function buildCustomerImportTemplateWorkbook() {
 // Export customers to XLSX
 router.get('/export/customers.xlsx', async (req, res) => {
     try {
-        const joinMonth = req.query.join_month ? parseInt(req.query.join_month, 10) : null;
-        const joinYear = req.query.join_year ? parseInt(req.query.join_year, 10) : null;
-        const customerOpts = (joinMonth && joinYear) ? { joinMonth, joinYear } : {};
-        const customers = await billingManager.getCustomers(customerOpts);
+        const { customers, joinMonth, joinYear, listFilters } = await loadCustomersForExport(req);
         const enrichedCustomers = await enrichCustomersForExport(customers);
 
         const workbook = new ExcelJS.Workbook();
@@ -2842,7 +2945,7 @@ router.get('/export/customers.xlsx', async (req, res) => {
                 auto_suspension: typeof c.auto_suspension !== 'undefined' ? c.auto_suspension : 1,
                 billing_day: c.billing_day || 15,
                 join_date: formatCustomerExportDate(c.join_date),
-                created_at: formatCustomerExportDate(c.created_at)
+                created_at: formatCustomerExportDate(c.created_at || c.join_date)
             });
             if (c.latitude && c.longitude) {
                 row.fill = {
@@ -2859,9 +2962,17 @@ router.get('/export/customers.xlsx', async (req, res) => {
         if (phoneColExport) phoneColExport.numFmt = '@';
 
         const summarySheet = workbook.addWorksheet('Summary');
+        const monthNames = ['', 'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
         summarySheet.addRow(['Ringkasan Export Pelanggan']);
-        if (joinMonth && joinYear) {
-            const monthNames = ['', 'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+        if (listFilters && listFilters.month && listFilters.year) {
+            const endDay = new Date(listFilters.year, listFilters.month, 0).getDate();
+            summarySheet.addRow([
+                'Periode (s/d akhir bulan)',
+                `${monthNames[listFilters.month] || listFilters.month} ${listFilters.year} (${endDay} ${monthNames[listFilters.month] || listFilters.month} ${listFilters.year})`
+            ]);
+            if (listFilters.customer_type) summarySheet.addRow(['Jenis Pelanggan', listFilters.customer_type]);
+            if (listFilters.payment_status) summarySheet.addRow(['Status Bayar', listFilters.payment_status]);
+        } else if (joinMonth && joinYear) {
             summarySheet.addRow(['Filter Join Date', `${monthNames[joinMonth] || joinMonth} ${joinYear}`]);
         }
         summarySheet.addRow(['Total Pelanggan', enrichedCustomers.length]);
@@ -2871,9 +2982,12 @@ router.get('/export/customers.xlsx', async (req, res) => {
         summarySheet.addRow(['Tanggal Export', new Date().toLocaleString('id-ID')]);
 
         const stamp = new Date().toISOString().slice(0, 10);
-        const monthPart = (joinMonth && joinYear)
-            ? `-join-${String(joinMonth).padStart(2, '0')}-${joinYear}`
-            : '';
+        let monthPart = '';
+        if (listFilters && listFilters.month && listFilters.year) {
+            monthPart = `-${String(listFilters.year)}-${String(listFilters.month).padStart(2, '0')}`;
+        } else if (joinMonth && joinYear) {
+            monthPart = `-join-${String(joinMonth).padStart(2, '0')}-${joinYear}`;
+        }
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename="export-pelanggan${monthPart}-${stamp}.xlsx"`);
         await workbook.xlsx.write(res);
@@ -2994,6 +3108,94 @@ function loadCommitJob(jobId) {
         return parsed && parsed.job_id ? parsed : null;
     } catch (_) {
         return null;
+    }
+}
+
+/** Gabung progress dari memori + disk (hindari persen mundur saat polling). */
+function mergeImportProgress(a, b) {
+    if (!a) return b || null;
+    if (!b) return a || null;
+    const processedA = Number(a.processed_rows || 0);
+    const processedB = Number(b.processed_rows || 0);
+    return processedB >= processedA ? b : a;
+}
+
+function getCommitJobState(jobId) {
+    const fromMap = importCommitJobs.get(jobId) || null;
+    const fromDisk = loadCommitJob(jobId);
+    if (!fromMap && !fromDisk) return null;
+    const merged = { ...(fromDisk || {}), ...(fromMap || {}) };
+    merged.progress = mergeImportProgress(fromMap && fromMap.progress, fromDisk && fromDisk.progress);
+    importCommitJobs.set(jobId, merged);
+    return merged;
+}
+
+function createImportCaptureResponse() {
+    const capture = {
+        headersSent: false,
+        statusCode: 200,
+        body: null,
+        status(code) {
+            capture.statusCode = code;
+            return capture;
+        },
+        setHeader() {
+            return capture;
+        },
+        end() {},
+        json(payload) {
+            capture.body = payload;
+        }
+    };
+    return capture;
+}
+
+async function runStagedCustomerImport(req, { buffer, meta, jobId }) {
+    const priorFile = req.file;
+    const headerBackup = {
+        fast: req.headers['x-import-fast-mode'],
+        job: req.headers['x-import-job-id'],
+        total: req.headers['x-import-total-rows'],
+        bypass: req.headers['x-import-bypass-once']
+    };
+    try {
+        req.file = {
+            buffer,
+            originalname: meta.original_name || `import.${meta.source_type}`,
+            mimetype: meta.mime_type || ''
+        };
+        req.headers['x-import-fast-mode'] = '1';
+        req.headers['x-import-job-id'] = jobId;
+        req.headers['x-import-total-rows'] = String(meta.total_rows || 0);
+        if (headerBackup.bypass === undefined) {
+            req.headers['x-import-bypass-once'] = '';
+        }
+
+        const capture = createImportCaptureResponse();
+        if (meta.source_type === 'xlsx') {
+            await runCustomerXlsxImport(req, capture);
+        } else if (meta.source_type === 'json') {
+            await runCustomerJsonImport(req, capture);
+        } else {
+            throw new Error('Jenis file import tidak didukung');
+        }
+
+        if (capture.statusCode >= 400 || !capture.body || !capture.body.success) {
+            const msg = (capture.body && (capture.body.message || capture.body.error))
+                || `Import gagal (HTTP ${capture.statusCode})`;
+            throw new Error(msg);
+        }
+        return capture.body;
+    } finally {
+        req.file = priorFile;
+        if (headerBackup.fast === undefined) delete req.headers['x-import-fast-mode'];
+        else req.headers['x-import-fast-mode'] = headerBackup.fast;
+        if (headerBackup.job === undefined) delete req.headers['x-import-job-id'];
+        else req.headers['x-import-job-id'] = headerBackup.job;
+        if (headerBackup.total === undefined) delete req.headers['x-import-total-rows'];
+        else req.headers['x-import-total-rows'] = headerBackup.total;
+        if (headerBackup.bypass === undefined) delete req.headers['x-import-bypass-once'];
+        else req.headers['x-import-bypass-once'] = headerBackup.bypass;
     }
 }
 
@@ -3159,36 +3361,11 @@ router.post('/import/customers/commit/:stageId', async (req, res) => {
             persistCommitJob(job);
             try {
                 const dataBuffer = fs.readFileSync(dataPath);
-                const endpoint = `${req.protocol}://${req.get('host')}${req.baseUrl}/import/customers/${sourceType}`;
-                const fd = new FormData();
-                fd.append('file', new Blob([dataBuffer]), meta.original_name || `import.${sourceType}`);
-
-                const upstreamResp = await fetch(endpoint, {
-                    method: 'POST',
-                    body: fd,
-                    headers: {
-                        cookie: req.headers.cookie || '',
-                        'x-import-fast-mode': '1',
-                        'x-import-job-id': jobId,
-                        'x-import-bypass-once': String(req.headers['x-import-bypass-once'] || '')
-                    }
+                const upstreamJson = await runStagedCustomerImport(req, {
+                    buffer: dataBuffer,
+                    meta,
+                    jobId
                 });
-
-                const upstreamRaw = await upstreamResp.text();
-                let upstreamJson = null;
-                try {
-                    upstreamJson = upstreamRaw ? JSON.parse(upstreamRaw) : null;
-                } catch (_) {
-                    upstreamJson = null;
-                }
-
-                if (!upstreamResp.ok || !upstreamJson || !upstreamJson.success) {
-                    throw new Error(
-                        (upstreamJson && (upstreamJson.message || upstreamJson.error)) ||
-                        (upstreamRaw && upstreamRaw.slice(0, 1000)) ||
-                        `Gagal commit import (${upstreamResp.status})`
-                    );
-                }
 
                 job.status = 'finished';
                 job.result = {
@@ -3238,14 +3415,7 @@ router.get('/import/customers/commit-status/:jobId', async (req, res) => {
         if (!jobId) {
             return res.status(400).json({ success: false, message: 'job_id wajib diisi' });
         }
-        let job = importCommitJobs.get(jobId);
-        if (!job) {
-            const loaded = loadCommitJob(jobId);
-            if (loaded) {
-                job = loaded;
-                importCommitJobs.set(jobId, loaded);
-            }
-        }
+        const job = getCommitJobState(jobId);
         if (!job) {
             return res.status(404).json({ success: false, message: 'Job import tidak ditemukan atau sudah kedaluwarsa' });
         }
@@ -3289,7 +3459,7 @@ router.get('/import/customers/commit-status/:jobId', async (req, res) => {
 });
 
 // Import customers from XLSX file
-router.post('/import/customers/xlsx', upload.single('file'), async (req, res) => {
+async function runCustomerXlsxImport(req, res) {
     let db = null;
     let dbRun = null;
     let transactionStarted = false;
@@ -3353,12 +3523,15 @@ router.post('/import/customers/xlsx', upload.single('file'), async (req, res) =>
         const radiusSync = { attempted: 0, success: 0, failed: 0, skipped: 0 };
         const opCreatedIds = [];
         const opUpdatedBefore = [];
-        const totalRowsForProgress = Math.max(worksheet.rowCount - 1, 0);
+        const stagedTotal = parseInt(String(req.headers['x-import-total-rows'] || ''), 10);
+        const totalRowsForProgress = (Number.isFinite(stagedTotal) && stagedTotal > 0)
+            ? stagedTotal
+            : Math.max(worksheet.rowCount - 1, 0);
         let processedRows = 0;
         let successRows = 0;
         const reportProgress = (force = false) => {
             if (!importJobId) return;
-            if (!force && processedRows % 10 !== 0 && processedRows !== totalRowsForProgress) return;
+            if (!force && processedRows % 5 !== 0 && processedRows !== totalRowsForProgress) return;
             const percentage = totalRowsForProgress > 0
                 ? Math.min(99, Math.floor((processedRows / totalRowsForProgress) * 100))
                 : 99;
@@ -3414,7 +3587,7 @@ router.post('/import/customers/xlsx', upload.single('file'), async (req, res) =>
                     package_name: cellStr('package_name') || cellStr('package'),
                     odp_id: cellNum('odp_id'),
                     area: cellStr('area'),
-                    join_date: parseCustomerImportJoinDate(getVal(row, 'join_date')),
+                    join_date: resolveImportJoinDate(getVal, row),
                     pppoe_profile: String(getVal(row, 'pppoe_profile') || 'default').trim(),
                     status: String(getVal(row, 'status') || 'active').trim(),
                     router_id: getVal(row, 'router_id') ? (isNaN(getVal(row, 'router_id')) ? getVal(row, 'router_id') : Number(getVal(row, 'router_id'))) : null,
@@ -3610,28 +3783,17 @@ router.post('/import/customers/xlsx', upload.single('file'), async (req, res) =>
                     const beforeSnapshot = importFastMode ? null : await dbGet(`SELECT * FROM customers WHERE id = ?`, [existing.id]);
                     result = await billingManager.updateCustomer(existing.phone, customerData);
                     if (raw.join_date) {
-                        await new Promise((resolve, reject) => {
-                            db.run(
-                                `UPDATE customers SET join_date = ? WHERE id = ?`,
-                                [raw.join_date, existing.id],
-                                (err) => (err ? reject(err) : resolve())
-                            );
-                        });
+                        await applyCustomerJoinAndCreatedDates(db, existing.id, raw.join_date);
                     }
                     if (beforeSnapshot) opUpdatedBefore.push(beforeSnapshot);
                     updated++;
                     successRows++;
                     logger.info(`Updated customer: ${raw.name} (${phoneStored})`);
                 } else {
+                    if (raw.join_date) customerData.join_date = raw.join_date;
                     result = await billingManager.createCustomer(customerData);
-                    if (raw.join_date) {
-                        await new Promise((resolve, reject) => {
-                            db.run(
-                                `UPDATE customers SET join_date = ? WHERE id = ?`,
-                                [raw.join_date, result.id],
-                                (err) => (err ? reject(err) : resolve())
-                            );
-                        });
+                    if (raw.join_date && result && result.id) {
+                        await applyCustomerJoinAndCreatedDates(db, result.id, raw.join_date);
                     }
                     if (result && result.id) opCreatedIds.push(result.id);
                     created++;
@@ -3716,34 +3878,10 @@ router.post('/import/customers/xlsx', upload.single('file'), async (req, res) =>
                     logger.debug(`[IMPORT] Fast mode enabled: skip PPPoE provisioning for ${raw.phone}`);
                 }
 
+                // Fast mode: skip sinkron RADIUS per baris (import massal jauh lebih cepat).
                 if (importFastMode) {
                     const radiusUsername = (customerData.pppoe_username || (existing && existing.pppoe_username) || '').trim();
-                    if (!radiusUsername) {
-                        radiusSync.skipped++;
-                    } else {
-                        radiusSync.attempted++;
-                        try {
-                            const radiusRes = await syncCustomerToRadius(
-                                {
-                                    ...customerData,
-                                    pppoe_username: radiusUsername,
-                                    username: customerData.username || (existing && existing.username) || ''
-                                },
-                                {
-                                    ...customerData,
-                                    pppoe_password: raw.pppoe_password || '',
-                                    pppoe_profile: customerData.pppoe_profile,
-                                    status: customerData.status
-                                }
-                            );
-                            if (radiusRes && radiusRes.success) radiusSync.success++;
-                            else if (radiusRes && radiusRes.skipped) radiusSync.skipped++;
-                            else radiusSync.failed++;
-                        } catch (radiusErr) {
-                            radiusSync.failed++;
-                            logger.warn(`[IMPORT-RADIUS] Sync failed for ${radiusUsername}: ${radiusErr.message}`);
-                        }
-                    }
+                    if (radiusUsername) radiusSync.skipped++;
                 }
                 processedRows++;
                 reportProgress();
@@ -3836,7 +3974,8 @@ router.post('/import/customers/xlsx', upload.single('file'), async (req, res) =>
         logger.error('Error importing customers (XLSX):', error);
         res.status(500).json({ success: false, message: 'Error importing customers (XLSX)', error: error.message });
     }
-});
+}
+router.post('/import/customers/xlsx', upload.single('file'), runCustomerXlsxImport);
 
 // Get latest customer import operation result (for frontend recovery when network drops)
 router.get('/import/customers/last-operation', async (req, res) => {
@@ -3990,12 +4129,31 @@ router.post('/import/customers/revert/:operationId', async (req, res) => {
 // Export customers to JSON
 router.get('/export/customers.json', async (req, res) => {
     try {
-        const customers = await billingManager.getCustomers();
+        const { customers, joinMonth, joinYear, listFilters } = await loadCustomersForExport(req);
         const enrichedCustomers = await enrichCustomersForExport(customers);
 
+        const monthNames = ['', 'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+        let filename = 'customers.json';
+        if (listFilters && listFilters.month && listFilters.year) {
+            filename = `pelanggan-${listFilters.year}-${String(listFilters.month).padStart(2, '0')}.json`;
+        } else if (joinMonth && joinYear) {
+            filename = `pelanggan-join-${String(joinMonth).padStart(2, '0')}-${joinYear}.json`;
+        }
+
         res.setHeader('Content-Type', 'application/json');
-        res.setHeader('Content-Disposition', 'attachment; filename=customers.json');
-        res.json({ success: true, customers: enrichedCustomers });
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.json({
+            success: true,
+            export_period: (listFilters && listFilters.month && listFilters.year)
+                ? {
+                    month: listFilters.month,
+                    year: listFilters.year,
+                    label: `${monthNames[listFilters.month] || listFilters.month} ${listFilters.year}`,
+                    as_of: 'end_of_month'
+                }
+                : null,
+            customers: enrichedCustomers
+        });
     } catch (error) {
         logger.error('Error exporting customers (JSON):', error);
         res.status(500).json({
@@ -4007,7 +4165,7 @@ router.get('/export/customers.json', async (req, res) => {
 });
 
 // Import customers from JSON file
-router.post('/import/customers/json', upload.single('file'), async (req, res) => {
+async function runCustomerJsonImport(req, res) {
     let db = null;
     let dbRun = null;
     let transactionStarted = false;
@@ -4070,7 +4228,7 @@ router.post('/import/customers/json', upload.single('file'), async (req, res) =>
         let successRows = 0;
         const reportProgress = (force = false) => {
             if (!importJobId) return;
-            if (!force && processedRows % 10 !== 0 && processedRows !== totalRowsForProgress) return;
+            if (!force && processedRows % 5 !== 0 && processedRows !== totalRowsForProgress) return;
             const percentage = totalRowsForProgress > 0
                 ? Math.min(99, Math.floor((processedRows / totalRowsForProgress) * 100))
                 : 99;
@@ -4151,23 +4309,24 @@ router.post('/import/customers/json', upload.single('file'), async (req, res) =>
                 if (raw.cable_status) customerData.cable_status = String(raw.cable_status).trim();
                 if (raw.cable_notes) customerData.cable_notes = String(raw.cable_notes).trim();
 
-                const joinParsed = parseCustomerImportJoinDate(raw.join_date);
+                const joinParsed = resolveImportJoinDate((row, key) => row[key], raw);
 
                 let result;
                 let customerIdForJoin = null;
                 if (existing) {
-                    result = await billingManager.updateCustomer(phone, customerData);
+                    result = await billingManager.updateCustomer(existing.phone, customerData);
                     customerIdForJoin = existing.id;
                     updated++;
                     successRows++;
                 } else {
+                    if (joinParsed) customerData.join_date = joinParsed;
                     result = await billingManager.createCustomer(customerData);
                     customerIdForJoin = result && result.id ? result.id : null;
                     created++;
                     successRows++;
                 }
                 if (joinParsed && customerIdForJoin) {
-                    await dbRun(`UPDATE customers SET join_date = ? WHERE id = ?`, [joinParsed, customerIdForJoin]);
+                    await applyCustomerJoinAndCreatedDates(db, customerIdForJoin, joinParsed);
                 }
 
                 // Handle PPPoE user creation/update if pppoe_username and password provided
@@ -4370,7 +4529,8 @@ router.post('/import/customers/json', upload.single('file'), async (req, res) =>
             error: error.message
         });
     }
-});
+}
+router.post('/import/customers/json', upload.single('file'), runCustomerJsonImport);
 
 // Auto Invoice Management
 router.get('/auto-invoice', getAppSettings, async (req, res) => {
@@ -4408,23 +4568,99 @@ router.get('/auto-invoice', getAppSettings, async (req, res) => {
     }
 });
 
-// Generate invoices manually
+const {
+    createInvoiceGenerationJob,
+    updateInvoiceGenerationJob,
+    getInvoiceGenerationJob,
+    cleanupOldInvoiceJobs
+} = require('../config/invoiceGenerationJobs');
+
+let invoiceGenRunning = false;
+
+// Generate invoices manually (background — satu klik untuk semua pelanggan)
 router.post('/auto-invoice/generate', async (req, res) => {
     try {
+        if (invoiceGenRunning) {
+            return res.status(409).json({
+                success: false,
+                message: 'Generate invoice masih berjalan. Tunggu selesai atau cek status job.'
+            });
+        }
+
+        cleanupOldInvoiceJobs();
+        const job = createInvoiceGenerationJob();
+        invoiceGenRunning = true;
+        updateInvoiceGenerationJob(job.id, { status: 'running', progress: { phase: 'starting', processed: 0, total: 0 } });
+
         const invoiceScheduler = require('../config/scheduler');
-        await invoiceScheduler.triggerMonthlyInvoices();
-        
+
+        setImmediate(async () => {
+            try {
+                const result = await invoiceScheduler.triggerMonthlyInvoices({
+                    skipNotifications: true,
+                    onProgress: (p) => {
+                        updateInvoiceGenerationJob(job.id, {
+                            status: 'running',
+                            progress: {
+                                phase: p.phase || 'customers',
+                                processed: p.processed || 0,
+                                total: p.total || 0,
+                                created: p.created || 0,
+                                skipped: p.skipped || 0,
+                                failed: p.failed || 0
+                            }
+                        });
+                    }
+                });
+                const stats = result.stats || {};
+                const total = stats.customers_total || 0;
+                updateInvoiceGenerationJob(job.id, {
+                    status: 'completed',
+                    stats,
+                    progress: {
+                        phase: 'done',
+                        processed: total,
+                        total,
+                        created: stats.created || 0,
+                        skipped: stats.skipped || 0,
+                        failed: stats.failed || 0
+                    }
+                });
+            } catch (error) {
+                logger.error('Background invoice generation failed:', error);
+                updateInvoiceGenerationJob(job.id, {
+                    status: 'failed',
+                    error: error.message || String(error)
+                });
+            } finally {
+                invoiceGenRunning = false;
+            }
+        });
+
         res.json({
             success: true,
-            message: 'Invoice generation completed',
-            count: 'auto' // Will be logged by scheduler
+            message: 'Generate invoice dimulai di background',
+            job_id: job.id
         });
     } catch (error) {
-        logger.error('Error generating invoices:', error);
+        invoiceGenRunning = false;
+        logger.error('Error starting invoice generation:', error);
         res.status(500).json({
             success: false,
             message: 'Error generating invoices: ' + error.message
         });
+    }
+});
+
+router.get('/auto-invoice/generate/status/:jobId', async (req, res) => {
+    try {
+        const job = getInvoiceGenerationJob(req.params.jobId);
+        if (!job) {
+            return res.status(404).json({ success: false, message: 'Job tidak ditemukan' });
+        }
+        res.json({ success: true, job });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 

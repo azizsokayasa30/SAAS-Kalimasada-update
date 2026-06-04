@@ -586,53 +586,66 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
                         final contactLine = [phone, cid]
                             .where((s) => s.isNotEmpty)
                             .join(' · ');
-                        return ListTile(
-                          dense: true,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 6,
-                          ),
-                          title: Text(
-                            name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: textOnSurface,
-                              fontWeight: FontWeight.w600,
+                        return InkWell(
+                          onTap: () => _pickCustomer(row),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 10,
                             ),
-                          ),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              if (contactLine.isNotEmpty)
-                                Text(
-                                  contactLine,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    color: textOnSurfaceVariant,
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: textOnSurface,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                      if (contactLine.isNotEmpty) ...[
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          contactLine,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: textOnSurfaceVariant,
+                                          ),
+                                        ),
+                                      ],
+                                    ],
                                   ),
                                 ),
-                              if (area.isNotEmpty)
-                                Padding(
-                                  padding: EdgeInsets.only(
-                                    top: contactLine.isNotEmpty ? 4 : 0,
-                                  ),
-                                  child: Text(
-                                    area,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      color: primary,
+                                if (area.isNotEmpty) ...[
+                                  const SizedBox(width: 10),
+                                  ConstrainedBox(
+                                    constraints: const BoxConstraints(maxWidth: 112),
+                                    child: Text(
+                                      area,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      textAlign: TextAlign.right,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: primary,
+                                        height: 1.25,
+                                      ),
                                     ),
                                   ),
-                                ),
-                            ],
+                                ],
+                              ],
+                            ),
                           ),
-                          onTap: () => _pickCustomer(row),
                         );
                       },
                     ),

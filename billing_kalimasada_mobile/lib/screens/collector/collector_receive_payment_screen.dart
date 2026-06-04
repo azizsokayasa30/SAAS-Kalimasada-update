@@ -474,7 +474,13 @@ class _CollectorReceivePaymentScreenState extends State<CollectorReceivePaymentS
           ),
           const SizedBox(height: 8),
           const Text('Metode pembayaran', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-          const SizedBox(height: 4),
+          const Padding(
+            padding: EdgeInsets.only(top: 4, bottom: 4),
+            child: Text(
+              'Tunai wajib disetor ke kasir. Transfer langsung ke kantor (tidak masuk setoran).',
+              style: TextStyle(fontSize: 11, color: FieldCollectorColors.onSurfaceVariant),
+            ),
+          ),
           Container(
             decoration: BoxDecoration(
               color: Colors.white,

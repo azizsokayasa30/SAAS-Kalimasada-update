@@ -10,8 +10,9 @@
     <section class="bg-surface rounded-xl p-stack-md shadow-[0_4px_24px_rgba(0,0,0,0.04)] border border-outline-variant flex flex-col gap-stack-md relative overflow-hidden">
       <div class="absolute -top-10 -right-10 w-32 h-32 bg-primary-fixed opacity-30 rounded-full blur-2xl pointer-events-none"></div>
       <div class="flex flex-col gap-1 z-10">
-        <h2 class="font-label-caps text-label-caps text-outline uppercase">Total harus disetor (neto bulan ini)</h2>
+        <h2 class="font-label-caps text-label-caps text-outline uppercase">Total harus disetor tunai (neto bulan ini)</h2>
         <p class="font-numeric-data text-[28px] leading-tight text-primary-container tracking-tight">Rp <%= setoranUi.totalHarusSetor.toLocaleString('id-ID') %></p>
+        <p class="text-[11px] text-outline leading-snug mt-1">Pembayaran lunas via transfer tidak dihitung — langsung ke kantor.</p>
       </div>
       <div class="flex flex-col gap-base z-10 pt-stack-sm">
         <div class="flex justify-between items-end">

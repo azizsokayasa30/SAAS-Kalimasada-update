@@ -8,7 +8,6 @@
     <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.min.css" rel="stylesheet">
     <link href="/vendor/boxicons/boxicons.min.css" rel="stylesheet">
-    <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
     <!-- Admin Mobile Optimizations -->
     <link href="/css/admin-mobile.css" rel="stylesheet">
     <style>
@@ -166,7 +165,7 @@
                                     </div>
                                     <div>
                                         <div class="h4 text-primary">
-                                            <%= pagination.totalCount %>
+                                            <%= (typeof summary !== 'undefined' ? summary.total : pagination.totalCount) %>
                                         </div>
                                         <div class="text-muted">Total Invoice</div>
                                         <small class="text-muted">Semua jenis invoice</small>
@@ -184,10 +183,10 @@
                                     </div>
                                     <div>
                                         <div class="h4 text-success">
-                                            <%= invoices.filter(inv => inv.status === 'paid').length %>
+                                            <%= typeof summary !== 'undefined' ? summary.paid : 0 %>
                                         </div>
                                         <div class="text-muted">Lunas</div>
-                                        <small class="text-muted">Invoice yang sudah dibayar</small>
+                                        <small class="text-muted">Sesuai filter aktif</small>
                                     </div>
                                 </div>
                             </div>
@@ -202,10 +201,10 @@
                                     </div>
                                     <div>
                                         <div class="h4 text-warning">
-                                            <%= invoices.filter(inv => inv.status === 'pending').length %>
+                                            <%= typeof summary !== 'undefined' ? summary.unpaid : 0 %>
                                         </div>
-                                        <div class="text-muted">Pending</div>
-                                        <small class="text-muted">Menunggu pembayaran</small>
+                                        <div class="text-muted">Belum Bayar</div>
+                                        <small class="text-muted">Sesuai filter aktif</small>
                                     </div>
                                 </div>
                             </div>
@@ -220,10 +219,10 @@
                                     </div>
                                     <div>
                                         <div class="h4 text-danger">
-                                            <%= invoices.filter(inv => inv.status === 'overdue').length %>
+                                            <%= typeof summary !== 'undefined' ? summary.overdue : 0 %>
                                         </div>
-                                        <div class="text-muted">Jatuh Tempo</div>
-                                        <small class="text-muted">Invoice yang terlambat</small>
+                                        <div class="text-muted">Terlambat</div>
+                                        <small class="text-muted">Belum bayar & lewat jatuh tempo</small>
                                     </div>
                                 </div>
                             </div>
@@ -260,10 +259,11 @@
                                 </select>
                             </div>
                             <div class="col-md-4">
-                                <label class="form-label">Username Pelanggan</label>
+                                <label class="form-label">Cari Pelanggan</label>
                                 <input type="text" name="customer_username" class="form-control" 
-                                       placeholder="Masukkan username pelanggan" 
-                                       value="<%= filters.customer_username %>">
+                                       placeholder="Nama, username, PPPoE, HP, atau no. invoice" 
+                                       value="<%= filters.customer_username %>"
+                                       autocomplete="off">
                             </div>
                             <div class="col-md-2">
                                 <label class="form-label">&nbsp;</label>

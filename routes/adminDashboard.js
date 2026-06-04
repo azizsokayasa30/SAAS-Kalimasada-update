@@ -302,7 +302,7 @@ router.get('/dashboard', adminAuth, async (req, res) => {
       }),
       // Pelanggan baru bulan ini
       new Promise((resolve) => {
-        db.get(`SELECT COUNT(*) as cnt FROM customers WHERE strftime('%Y-%m', COALESCE(join_date, datetime('now','localtime'))) = ?`, [monthStr], (err, row) => {
+        db.get(`SELECT COUNT(*) as cnt FROM customers WHERE strftime('%Y-%m', COALESCE(join_date, created_at, datetime('now','localtime'))) = ? AND date(COALESCE(join_date, created_at)) <= date('now','localtime')`, [monthStr], (err, row) => {
           if (err) {
             console.warn('⚠️ [DASHBOARD] newCustomersThisMonth query failed:', err.message);
             newCustomersThisMonth = 0;

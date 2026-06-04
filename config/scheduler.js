@@ -18,7 +18,7 @@ class InvoiceScheduler {
         cron.schedule('0 8 1 * *', async () => {
             try {
                 logger.info('Starting automatic monthly invoice generation (08:00)...');
-                await this.generateMonthlyInvoices();
+                await this.generateMonthlyInvoices({ skipNotifications: true });
                 logger.info('Automatic monthly invoice generation completed');
             } catch (error) {
                 logger.error('Error in automatic monthly invoice generation:', error);
@@ -416,14 +416,70 @@ class InvoiceScheduler {
         })().catch((e) => logger.error('Unhandled async member invoice notifications:', e));
     }
 
-    async generateMonthlyInvoices() {
-        try {
-            // Get all active customers
-            const customers = await billingManager.getCustomers();
-            const activeCustomers = customers.filter(customer => 
-                customer.status === 'active' && customer.package_id
-            );
+    _sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
 
+    /** SQLite sibuk saat bulk generate + akses web bersamaan — retry singkat. */
+    async _createInvoiceWithRetry(invoiceData, maxAttempts = 10) {
+        let lastErr;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            try {
+                return await billingManager.createInvoice(invoiceData);
+            } catch (err) {
+                lastErr = err;
+                const msg = String(err && err.message ? err.message : err);
+                const busy = msg.includes('SQLITE_BUSY') || msg.includes('database is locked');
+                const uniqueInv = msg.includes('UNIQUE') && msg.includes('invoice');
+                if (!busy && !uniqueInv) throw err;
+                await this._sleep(40 * (attempt + 1) + Math.floor(Math.random() * 30));
+            }
+        }
+        throw lastErr;
+    }
+
+    _computeCustomerDueDate(customer, currentDate) {
+        const renewalType = customer.renewal_type || 'renewal';
+        const lastDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
+        if (renewalType === 'fix_date') {
+            const fixDate = customer.fix_date || customer.billing_day || 15;
+            const targetDay = Math.min(parseInt(fixDate, 10) || 15, 28);
+            const finalDay = Math.min(targetDay, lastDayOfMonth);
+            return new Date(currentDate.getFullYear(), currentDate.getMonth(), finalDay);
+        }
+        const billingDay = (() => {
+            const v = parseInt(customer.billing_day, 10);
+            if (Number.isFinite(v)) return Math.min(Math.max(v, 1), 28);
+            return 15;
+        })();
+        const targetDay = Math.min(billingDay, lastDayOfMonth);
+        return new Date(currentDate.getFullYear(), currentDate.getMonth(), targetDay);
+    }
+
+    /**
+     * Generate invoice bulan ini untuk semua pelanggan/member aktif yang belum punya invoice.
+     * @param {object} options
+     * @param {boolean} options.skipNotifications — tidak kirim email per invoice (bulk)
+     * @param {function} options.onProgress — ({ processed, total, created, skipped, failed, phase })
+     */
+    async generateMonthlyInvoices(options = {}) {
+        const { skipNotifications = false, onProgress } = options;
+        const stats = {
+            customers_total: 0,
+            customers_created: 0,
+            customers_skipped: 0,
+            customers_failed: 0,
+            members_created: 0,
+            members_skipped: 0,
+            members_failed: 0,
+            created: 0,
+            skipped: 0,
+            failed: 0
+        };
+
+        try {
+            const activeCustomers = await billingManager.getActiveCustomersForInvoiceGeneration();
+            stats.customers_total = activeCustomers.length;
             logger.info(`Found ${activeCustomers.length} active customers for invoice generation`);
 
             const currentDate = new Date();
@@ -432,89 +488,111 @@ class InvoiceScheduler {
 
             const [packageById, customersWithInvoiceThisMonth] = await Promise.all([
                 billingManager.getAllPackagesByIdMap(),
-                billingManager.getDistinctCustomerUsernamesWithInvoicesBetween(startOfMonth, endOfMonth)
+                billingManager.getDistinctCustomerIdsWithInvoicesBetween(startOfMonth, endOfMonth)
             ]);
 
+            const monthLabel = currentDate.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+            let processed = 0;
+            const report = () => {
+                if (typeof onProgress === 'function') {
+                    onProgress({
+                        phase: 'customers',
+                        processed,
+                        total: activeCustomers.length,
+                        created: stats.created,
+                        skipped: stats.skipped,
+                        failed: stats.failed
+                    });
+                }
+            };
+            report();
+
             for (const customer of activeCustomers) {
+                processed++;
                 try {
                     const packageData = packageById.get(customer.package_id);
                     if (!packageData) {
-                        logger.warn(`Package not found for customer ${customer.username}`);
+                        stats.customers_failed++;
+                        stats.failed++;
                         continue;
                     }
 
-                    if (customersWithInvoiceThisMonth.has(customer.username)) {
-                        logger.info(`Invoice already exists for customer ${customer.username} this month`);
+                    if (customersWithInvoiceThisMonth.has(customer.id)) {
+                        stats.customers_skipped++;
+                        stats.skipped++;
+                        if (processed % 50 === 0) report();
                         continue;
                     }
 
-                    // Set due date based on customer's renewal type
-                    let dueDate;
-                    const renewalType = customer.renewal_type || 'renewal';
-                    
-                    if (renewalType === 'fix_date') {
-                        // Fix Date: Use fix_date or billing_day
-                        const fixDate = customer.fix_date || customer.billing_day || 15;
-                        const targetDay = Math.min(fixDate, 28);
-                        const lastDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
-                        const finalDay = Math.min(targetDay, lastDayOfMonth);
-                        dueDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), finalDay);
-                    } else {
-                        // Renewal: Use billing_day (default behavior)
-                        const billingDay = (() => {
-                            const v = parseInt(customer.billing_day, 10);
-                            if (Number.isFinite(v)) return Math.min(Math.max(v, 1), 28);
-                            return 15;
-                        })();
-                        const lastDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
-                        const targetDay = Math.min(billingDay, lastDayOfMonth);
-                        dueDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), targetDay);
-                    }
-
-                    // Create invoice data with PPN calculation
+                    const dueDate = this._computeCustomerDueDate(customer, currentDate);
                     const basePrice = packageData.price;
                     const taxRate = (packageData.tax_rate === 0 || (typeof packageData.tax_rate === 'number' && packageData.tax_rate > -1))
                         ? Number(packageData.tax_rate)
-                        : 11.00; // Default 11% only when undefined/null/invalid
+                        : 11.00;
                     const amountWithTax = billingManager.calculatePriceWithTax(basePrice, taxRate);
-                    
-                    const invoiceData = {
+                    const renewalType = customer.renewal_type || 'renewal';
+
+                    const newInvoice = await this._createInvoiceWithRetry({
                         customer_id: customer.id,
                         package_id: customer.package_id,
-                        amount: amountWithTax, // Use price with tax
-                        base_amount: basePrice, // Store base price for reference
-                        tax_rate: taxRate, // Store tax rate for reference
+                        amount: amountWithTax,
+                        base_amount: basePrice,
+                        tax_rate: taxRate,
                         due_date: dueDate.toISOString().split('T')[0],
-                        notes: `Tagihan bulanan ${currentDate.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })} - ${renewalType === 'fix_date' ? 'Fix Date' : 'Renewal'} type`,
+                        notes: `Tagihan bulanan ${monthLabel} - ${renewalType === 'fix_date' ? 'Fix Date' : 'Renewal'} type`,
                         invoice_type: 'monthly',
                         package_name: packageData.name
-                    };
+                    });
 
-                    // Create the invoice
-                    const newInvoice = await billingManager.createInvoice(invoiceData);
-                    logger.info(`Created invoice ${newInvoice.invoice_number} for customer ${customer.username}`);
-                    customersWithInvoiceThisMonth.add(customer.username);
-                    this._enqueueCustomerInvoiceNotifications(customer.id, newInvoice.id);
-
+                    customersWithInvoiceThisMonth.add(customer.id);
+                    stats.customers_created++;
+                    stats.created++;
+                    if (!skipNotifications) {
+                        this._enqueueCustomerInvoiceNotifications(customer.id, newInvoice.id);
+                    }
                 } catch (error) {
+                    stats.customers_failed++;
+                    stats.failed++;
                     logger.error(`Error creating invoice for customer ${customer.username}:`, error);
                 }
+                if (processed % 25 === 0) {
+                    await this._sleep(15);
+                }
+                if (processed % 50 === 0 || processed === activeCustomers.length) report();
             }
 
-            // Generate invoices for members
-            await this.generateMonthlyInvoicesForMembers();
+            const memberStats = await this.generateMonthlyInvoicesForMembers({
+                skipNotifications
+            });
 
+            stats.members_created = memberStats.members_created;
+            stats.members_skipped = memberStats.members_skipped;
+            stats.members_failed = memberStats.members_failed;
+            stats.created = stats.customers_created + stats.members_created;
+            stats.skipped = stats.customers_skipped + stats.members_skipped;
+            stats.failed = stats.customers_failed + stats.members_failed;
+
+            logger.info(
+                `Monthly invoice generation done: created=${stats.created}, skipped=${stats.skipped}, failed=${stats.failed}`
+            );
+            return stats;
         } catch (error) {
             logger.error('Error in generateMonthlyInvoices:', error);
             throw error;
         }
     }
 
-    async generateMonthlyInvoicesForMembers() {
+    async generateMonthlyInvoicesForMembers(options = {}) {
+        const { skipNotifications = false } = options;
+        const stats = {
+            members_created: 0,
+            members_skipped: 0,
+            members_failed: 0
+        };
+
         try {
-            // Get all active members
             const members = await billingManager.getAllMembers({ status: 'active' });
-            const activeMembers = members.filter(member => 
+            const activeMembers = members.filter((member) =>
                 member.status === 'active' && member.package_id
             );
 
@@ -523,6 +601,7 @@ class InvoiceScheduler {
             const currentDate = new Date();
             const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
             const endOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
+            const monthLabel = currentDate.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
 
             const [allMemberPackages, memberKeysWithInvoice] = await Promise.all([
                 billingManager.getAllMemberPackages(false),
@@ -534,22 +613,21 @@ class InvoiceScheduler {
                 try {
                     const packageData = memberPackageById.get(member.package_id);
                     if (!packageData) {
-                        logger.warn(`Package not found for member ${member.hotspot_username || member.name}`);
+                        stats.members_failed++;
                         continue;
                     }
 
                     const memberUsername = member.hotspot_username || member.username;
                     if (!memberUsername) {
-                        logger.warn(`Member ${member.name} has no hotspot_username or username, skipping`);
+                        stats.members_failed++;
                         continue;
                     }
 
                     if (memberKeysWithInvoice.has(String(memberUsername).trim())) {
-                        logger.info(`Invoice already exists for member ${memberUsername} this month`);
+                        stats.members_skipped++;
                         continue;
                     }
 
-                    // Set due date based on member's billing_day
                     const billingDay = (() => {
                         const v = parseInt(member.billing_day, 10);
                         if (Number.isFinite(v)) return Math.min(Math.max(v, 1), 28);
@@ -559,37 +637,37 @@ class InvoiceScheduler {
                     const targetDay = Math.min(billingDay, lastDayOfMonth);
                     const dueDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), targetDay);
 
-                    // Create invoice data with PPN calculation
                     const basePrice = packageData.price;
                     const taxRate = (packageData.tax_rate === 0 || (typeof packageData.tax_rate === 'number' && packageData.tax_rate > -1))
                         ? Number(packageData.tax_rate)
                         : 11.00;
                     const amountWithTax = billingManager.calculatePriceWithTax(basePrice, taxRate);
-                    
-                    const invoiceData = {
+
+                    const newInvoice = await this._createInvoiceWithRetry({
                         member_id: member.id,
                         package_id: member.package_id,
                         amount: amountWithTax,
                         base_amount: basePrice,
                         tax_rate: taxRate,
                         due_date: dueDate.toISOString().split('T')[0],
-                        notes: `Tagihan bulanan member ${currentDate.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}`,
+                        notes: `Tagihan bulanan member ${monthLabel}`,
                         invoice_type: 'monthly',
                         package_name: packageData.name,
                         description: `Tagihan paket ${packageData.name}`
-                    };
+                    });
 
-                    // Create the invoice
-                    const newInvoice = await billingManager.createInvoice(invoiceData);
-                    logger.info(`Created invoice ${newInvoice.invoice_number} for member ${memberUsername}`);
                     memberKeysWithInvoice.add(String(memberUsername).trim());
-                    this._enqueueMemberInvoiceNotifications(member.id, newInvoice.id);
-
+                    stats.members_created++;
+                    if (!skipNotifications) {
+                        this._enqueueMemberInvoiceNotifications(member.id, newInvoice.id);
+                    }
                 } catch (error) {
+                    stats.members_failed++;
                     logger.error(`Error creating invoice for member ${member.hotspot_username || member.name}:`, error);
                 }
             }
 
+            return stats;
         } catch (error) {
             logger.error('Error in generateMonthlyInvoicesForMembers:', error);
             throw error;
@@ -668,7 +746,7 @@ class InvoiceScheduler {
                         notes: `Tagihan bulanan ${today.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })}`
                     };
 
-                    const newInvoice = await billingManager.createInvoice(invoiceData);
+                    const newInvoice = await this._createInvoiceWithRetry(invoiceData);
                     logger.info(`(Daily) Created invoice ${newInvoice.invoice_number} for customer ${customer.username}`);
                     this._enqueueCustomerInvoiceNotifications(customer.id, newInvoice.id);
 
@@ -682,13 +760,20 @@ class InvoiceScheduler {
         }
     }
 
-    // Manual trigger for testing
-    async triggerMonthlyInvoices() {
+    // Manual trigger — satu proses untuk semua pelanggan (tanpa notifikasi email per baris)
+    async triggerMonthlyInvoices(options = {}) {
         try {
             logger.info('Triggering monthly invoice generation manually...');
-            await this.generateMonthlyInvoices();
-            logger.info('Manual monthly invoice generation completed');
-            return { success: true, message: 'Monthly invoices generated successfully' };
+            const stats = await this.generateMonthlyInvoices({
+                skipNotifications: options.skipNotifications !== false,
+                onProgress: options.onProgress
+            });
+            logger.info('Manual monthly invoice generation completed', stats);
+            return {
+                success: true,
+                message: 'Monthly invoices generated successfully',
+                stats
+            };
         } catch (error) {
             logger.error('Error in manual monthly invoice generation:', error);
             throw error;

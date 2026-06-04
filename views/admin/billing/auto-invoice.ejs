@@ -99,7 +99,8 @@
                                 <button type="button" class="btn btn-primary btn-lg w-100 mb-3" id="generateInvoicesBtn">
                                     <i class="bi bi-calendar3-plus"></i> Generate Invoice Bulan Ini
                                 </button>
-                                <p class="text-muted small">Buat invoice untuk semua pelanggan aktif yang belum memiliki invoice bulan ini</p>
+                                <p class="text-muted small">Satu klik memproses <strong>semua</strong> pelanggan aktif sekaligus (background). Tidak perlu diklik berulang.</p>
+                                <div id="generateProgress" class="mt-2 small text-primary fw-semibold" style="display:none;"></div>
                             </div>
                             <div class="col-md-6">
                                 <button type="button" class="btn btn-outline-info btn-lg w-100 mb-3" id="previewInvoicesBtn">
@@ -155,33 +156,76 @@
     <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script>
-        // Generate Invoices
+        let generatePollTimer = null;
+
+        function pollInvoiceJob(jobId, btn) {
+            const progressEl = document.getElementById('generateProgress');
+            progressEl.style.display = 'block';
+
+            const tick = () => {
+                fetch('/admin/billing/auto-invoice/generate/status/' + encodeURIComponent(jobId))
+                    .then((r) => r.json())
+                    .then((data) => {
+                        if (!data.success || !data.job) return;
+                        const job = data.job;
+                        const p = job.progress || {};
+                        const pct = p.total > 0 ? Math.min(100, Math.round((p.processed / p.total) * 100)) : 0;
+                        const phaseLabel = p.phase === 'members' ? 'member' : 'pelanggan';
+                        progressEl.textContent =
+                            `Memproses ${phaseLabel}: ${p.processed || 0}/${p.total || '…'} (${pct}%) · dibuat ${p.created || 0}, dilewati ${p.skipped || 0}, gagal ${p.failed || 0}`;
+
+                        if (job.status === 'completed') {
+                            clearInterval(generatePollTimer);
+                            const s = job.stats || {};
+                            showAlert(
+                                'success',
+                                `Selesai: ${s.created || 0} invoice dibuat, ${s.skipped || 0} sudah ada, ${s.failed || 0} gagal.`
+                            );
+                            btn.disabled = false;
+                            btn.innerHTML = '<i class="bi bi-calendar3-plus"></i> Generate Invoice Bulan Ini';
+                            setTimeout(() => location.reload(), 2500);
+                        } else if (job.status === 'failed') {
+                            clearInterval(generatePollTimer);
+                            showAlert('danger', job.error || 'Generate gagal');
+                            btn.disabled = false;
+                            btn.innerHTML = '<i class="bi bi-calendar3-plus"></i> Generate Invoice Bulan Ini';
+                            progressEl.style.display = 'none';
+                        }
+                    })
+                    .catch(() => { /* retry on next tick */ });
+            };
+            tick();
+            generatePollTimer = setInterval(tick, 2000);
+        }
+
+        // Generate Invoices (background — satu klik untuk semua)
         document.getElementById('generateInvoicesBtn').addEventListener('click', function() {
-            if (confirm('Apakah Anda yakin ingin generate invoice untuk semua pelanggan aktif?')) {
-                this.disabled = true;
-                this.innerHTML = '<i class="bi bi-circle bx-spin"></i> Generating...';
-                
-                fetch('/admin/billing/auto-invoice/generate', {
-                    method: 'POST'
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        showAlert('success', `Berhasil generate ${data.count} invoice`);
-                        setTimeout(() => location.reload(), 2000);
+            if (!confirm('Generate invoice untuk SEMUA pelanggan aktif yang belum punya tagihan bulan ini?\n\nProses berjalan di background (bisa beberapa menit).')) {
+                return;
+            }
+            const btn = this;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Memulai...';
+
+            fetch('/admin/billing/auto-invoice/generate', { method: 'POST' })
+                .then((response) => response.json())
+                .then((data) => {
+                    if (data.success && data.job_id) {
+                        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Generate berjalan...';
+                        showAlert('info', 'Generate dimulai. Mohon tunggu sampai selesai — jangan klik ulang.');
+                        pollInvoiceJob(data.job_id, btn);
                     } else {
-                        showAlert('danger', data.message || 'Gagal generate invoice');
+                        showAlert('danger', data.message || 'Gagal memulai generate');
+                        btn.disabled = false;
+                        btn.innerHTML = '<i class="bi bi-calendar3-plus"></i> Generate Invoice Bulan Ini';
                     }
                 })
-                .catch(error => {
+                .catch((error) => {
                     console.error('Error:', error);
-                    showAlert('danger', 'Terjadi kesalahan');
-                })
-                .finally(() => {
-                    this.disabled = false;
-                    this.innerHTML = '<i class="bi bi-calendar3-plus"></i> Generate Invoice Bulan Ini';
+                    showAlert('danger', 'Terjadi kesalahan jaringan atau timeout. Cek menu Invoice apakah tagihan sudah terbentuk sebelum mengulang.');
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="bi bi-calendar3-plus"></i> Generate Invoice Bulan Ini';
                 });
-            }
         });
 
         // Preview Invoices

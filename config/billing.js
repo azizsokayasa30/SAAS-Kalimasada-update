@@ -44,6 +44,28 @@
         return Math.max(0, Math.round((j - c) * 100) / 100);
     }
 
+    /** Pembayaran kolektor via transfer — langsung ke kantor, bukan setoran tunai kolektor. */
+    function isCollectorTransferPaymentMethod(method) {
+        const m = String(method || '').trim().toLowerCase();
+        if (!m) return false;
+        return m === 'transfer' || m === 'transfer bank' || m === 'transfer_bank' || m.includes('transfer');
+    }
+
+    function paymentEligibleForCollectorRemittance(row) {
+        if (isCollectorTransferPaymentMethod(row.payment_method)) return false;
+        const st = row.remittance_status;
+        return st == null || st === 'pending';
+    }
+
+    function sqlPaymentMethodIsTransfer(alias = 'p') {
+        const pm = `LOWER(TRIM(COALESCE(${alias}.payment_method, '')))`;
+        return `(${pm} IN ('transfer', 'transfer bank', 'transfer_bank') OR ${pm} LIKE '%transfer%')`;
+    }
+
+    function sqlCollectorCashRemittancePending(alias = 'p') {
+        return `(NOT ${sqlPaymentMethodIsTransfer(alias)} AND (${alias}.remittance_status IS NULL OR ${alias}.remittance_status = 'pending'))`;
+    }
+
     class BillingManager {
         constructor() {
             this.dbPath = path.join(__dirname, '../data/billing.db');
@@ -1213,6 +1235,20 @@
             }
         });
 
+        this.db.run("ALTER TABLE customers ADD COLUMN created_at DATETIME", (err) => {
+            if (err && !err.message.includes('duplicate column name')) {
+                console.error('Error adding created_at column to customers:', err);
+            } else if (!err) {
+                console.log('Added created_at column to customers table');
+            }
+            this.db.run(
+                `UPDATE customers SET created_at = join_date WHERE created_at IS NULL AND join_date IS NOT NULL`,
+                (uErr) => {
+                    if (uErr) console.error('Error backfilling customers.created_at:', uErr);
+                }
+            );
+        });
+
         // Tambahkan kolom member_id ke invoices jika belum ada (untuk support member/hotspot billing)
         this.db.run("ALTER TABLE invoices ADD COLUMN member_id INTEGER REFERENCES members(id)", (err) => {
             if (err && !err.message.includes('duplicate column name')) {
@@ -1727,11 +1763,16 @@
             // Jika tidak, default ke 'active'
             const finalStatus = (status !== undefined && status !== null && status !== '') ? status : 'active';
 
-            // join_date eksplisit WIB (offset +07:00) agar tampilan detail selaras dengan waktu bisnis Indonesia,
-            // bukan hanya DEFAULT SQLite UTC yang sering membingungkan saat server timezone-nya UTC.
-            const joinDateStored = `${getLocalTimestamp().replace(/ /, 'T')}+07:00`;
+            // join_date/created_at dari import (YYYY-MM-DD) atau hari ini jika kosong
+            let joinDateStored = `${getLocalTimestamp().replace(/ /, 'T')}+07:00`;
+            if (customerData.join_date) {
+                const d = String(customerData.join_date).slice(0, 10);
+                if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+                    joinDateStored = `${d}T12:00:00+07:00`;
+                }
+            }
             
-            const sql = `INSERT INTO customers (customer_id, username, password, name, phone, pppoe_username, email, address, area, area_id, package_id, odp_id, pppoe_profile, status, auto_suspension, billing_day, static_ip, assigned_ip, mac_address, latitude, longitude, cable_type, cable_length, port_number, cable_status, cable_notes, ktp_photo_path, house_photo_path, join_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+            const sql = `INSERT INTO customers (customer_id, username, password, name, phone, pppoe_username, email, address, area, area_id, package_id, odp_id, pppoe_profile, status, auto_suspension, billing_day, static_ip, assigned_ip, mac_address, latitude, longitude, cable_type, cable_length, port_number, cable_status, cable_notes, ktp_photo_path, house_photo_path, join_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
             
             // Default coordinates untuk Jakarta jika tidak ada koordinat
             // Jika tag lokasi tidak diisi, simpan NULL agar teknisi bisa update di lapangan.
@@ -1771,6 +1812,7 @@
                 cable_notes || null,
                 ktp_photo_path || null,
                 house_photo_path || null,
+                joinDateStored,
                 joinDateStored
             ];
 
@@ -1966,6 +2008,142 @@
             return `(i.invoice_type != 'voucher' OR i.invoice_type IS NULL)`;
         }
         return `(i.invoice_number NOT LIKE 'INV-VCR-%' AND IFNULL(i.notes, '') NOT LIKE 'Voucher Hotspot%')`;
+    }
+
+    /** Cache PRAGMA kolom (invoice-list dipanggil berkali-kali). */
+    _ensureBillingSchemaFlags() {
+        if (this._billingSchemaFlags) {
+            return Promise.resolve(this._billingSchemaFlags);
+        }
+        if (this._billingSchemaFlagsPromise) {
+            return this._billingSchemaFlagsPromise;
+        }
+        this._billingSchemaFlagsPromise = new Promise((resolve, reject) => {
+            this.db.all('PRAGMA table_info(customers)', (errC, customerColumns) => {
+                if (errC) {
+                    reject(errC);
+                    return;
+                }
+                this.db.all('PRAGMA table_info(invoices)', (errI, invoiceColumns) => {
+                    if (errI) {
+                        reject(errI);
+                        return;
+                    }
+                    this._billingSchemaFlags = {
+                        hasRenewalType: (customerColumns || []).some((col) => col.name === 'renewal_type'),
+                        hasFixDate: (customerColumns || []).some((col) => col.name === 'fix_date'),
+                        hasCustomerId: (customerColumns || []).some((col) => col.name === 'customer_id'),
+                        hasInvoiceType: (invoiceColumns || []).some((col) => col.name === 'invoice_type')
+                    };
+                    resolve(this._billingSchemaFlags);
+                });
+            });
+        });
+        return this._billingSchemaFlagsPromise;
+    }
+
+    /** WHERE + params bersama untuk invoice-list (list, count, summary). */
+    _buildInvoiceListFilterSql(filters = {}, flags = {}) {
+        let sql = '';
+        const params = [];
+        const {
+            hasRenewalType = true,
+            hasFixDate = true,
+            hasCustomerId = true,
+            hasInvoiceType = true
+        } = flags;
+
+        if (filters.month) {
+            sql += ` AND strftime('%Y-%m', i.created_at) = ?`;
+            params.push(filters.month);
+        }
+
+        const searchPatch = this._appendInvoiceCustomerSearchFilter('', [], filters, {
+            hasCustomerId,
+            includeMembers: true
+        });
+        if (searchPatch.sql) {
+            sql += searchPatch.sql;
+            params.push(...searchPatch.params);
+        }
+
+        if (filters.status) {
+            if (filters.status === 'overdue') {
+                sql += ` AND i.status = 'unpaid' AND DATE(i.due_date) < DATE('now','localtime')`;
+            } else if (filters.status === 'unpaid') {
+                sql += ` AND i.status = 'unpaid'`;
+            } else {
+                sql += ` AND i.status = ?`;
+                params.push(filters.status);
+            }
+        }
+
+        if (filters.type) {
+            if (filters.type === 'monthly' && hasRenewalType) {
+                sql += ` AND c.renewal_type = 'renewal'`;
+            } else if (filters.type === 'fix_date' && hasRenewalType) {
+                sql += ` AND c.renewal_type = 'fix_date'`;
+            } else if (filters.type === 'manual' && hasInvoiceType) {
+                sql += ` AND i.invoice_type = 'manual'`;
+            }
+        }
+
+        return { sql, params };
+    }
+
+    /** Ringkasan status untuk kartu di invoice-list (satu query, selaras filter). */
+    async getInvoiceListSummaryWithFilters(filters = {}) {
+        const flags = await this._ensureBillingSchemaFlags();
+        const { sql: filterSql, params: filterParams } = this._buildInvoiceListFilterSql(filters, flags);
+        const sql = `
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN i.status = 'paid' THEN 1 ELSE 0 END) AS paid,
+                SUM(CASE WHEN i.status = 'unpaid' THEN 1 ELSE 0 END) AS unpaid,
+                SUM(CASE WHEN i.status = 'unpaid' AND DATE(i.due_date) < DATE('now','localtime') THEN 1 ELSE 0 END) AS overdue
+            FROM invoices i
+            LEFT JOIN customers c ON i.customer_id = c.id
+            LEFT JOIN members m ON i.member_id = m.id
+            WHERE 1=1 ${filterSql}
+        `;
+        return new Promise((resolve, reject) => {
+            this.db.get(sql, filterParams, (err, row) => {
+                if (err) reject(err);
+                else {
+                    resolve({
+                        total: Number(row && row.total) || 0,
+                        paid: Number(row && row.paid) || 0,
+                        unpaid: Number(row && row.unpaid) || 0,
+                        overdue: Number(row && row.overdue) || 0
+                    });
+                }
+            });
+        });
+    }
+
+    /** Pencarian invoice-list: nama, username, PPPoE, HP, kode pelanggan, no invoice. */
+    _appendInvoiceCustomerSearchFilter(sql, params, filters, options = {}) {
+        const q = String(filters.search || filters.customer_username || '').trim();
+        if (!q) return { sql: sql || '', params: [...params] };
+        const term = `%${q}%`;
+        const hasCustomerId = Boolean(options.hasCustomerId);
+        const parts = [
+            'c.name LIKE ?',
+            'c.username LIKE ?',
+            "IFNULL(c.pppoe_username, '') LIKE ?",
+            "IFNULL(c.phone, '') LIKE ?",
+            'i.invoice_number LIKE ?'
+        ];
+        const searchParams = [term, term, term, term, term];
+        if (hasCustomerId) {
+            parts.push("IFNULL(c.customer_id, '') LIKE ?");
+            searchParams.push(term);
+        }
+        if (options.includeMembers) {
+            parts.push('m.name LIKE ?', 'IFNULL(m.hotspot_username, \'\') LIKE ?', 'm.username LIKE ?');
+            searchParams.push(term, term, term);
+        }
+        return { sql: `${sql} AND (${parts.join(' OR ')})`, params: [...params, ...searchParams] };
     }
 
     /**
@@ -2217,7 +2395,7 @@ ${year && month ? `
                 const nextMonth = joinMonth === 12 ? 1 : joinMonth + 1;
                 const nextYear = joinMonth === 12 ? joinYear + 1 : joinYear;
                 const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
-                whereClause = ' WHERE date(c.join_date) >= date(?) AND date(c.join_date) < date(?)';
+                whereClause = ` WHERE ${this._customerJoinDateExpr('c')} >= date(?) AND ${this._customerJoinDateExpr('c')} < date(?)`;
                 params.push(startDate, endDate);
             }
 
@@ -2326,9 +2504,15 @@ ${year && month ? `
     }
 
     
+    /** Tanggal efektif bergabung: join_date, fallback created_at. */
+    _customerJoinDateExpr(alias = 'c') {
+        return `date(COALESCE(${alias}.join_date, ${alias}.created_at))`;
+    }
+
     async getCustomerStatsByMonth(month, year, filters = {}) {
         const m = parseInt(String(month), 10);
         const y = parseInt(String(year), 10);
+        const cjd = (a) => this._customerJoinDateExpr(a);
         const startDate = `${y}-${String(m).padStart(2, '0')}-01`;
         const nextMonth = m === 12 ? 1 : m + 1;
         const nextYear = m === 12 ? y + 1 : y;
@@ -2384,7 +2568,7 @@ ${year && month ? `
                 ${fjSub}
                 WHERE DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
                   AND ${voucherExcl}
-                  AND date(c_sub.join_date) < date(?)
+                  AND ${cjd('c_sub')} < date(?)
                   ${extraInvoiceWhere}
                   ${extraCustomerWhere}
                   ${fwSub}
@@ -2404,7 +2588,7 @@ ${year && month ? `
                 FROM customers c_sum
                 LEFT JOIN packages p_sum ON p_sum.id = c_sum.package_id
                 ${fjSum}
-                WHERE date(c_sum.join_date) < date(?)
+                WHERE ${cjd('c_sum')} < date(?)
                 ${extraCustomerWhere}
                 ${fwSum}
                 GROUP BY c_sum.id
@@ -2416,42 +2600,42 @@ ${year && month ? `
                 COUNT(DISTINCT c.id) as total,
                 SUM(CASE WHEN c.status = 'active' THEN 1 ELSE 0 END) as aktif,
                 SUM(CASE WHEN c.status = 'suspended' OR c.status = 'isolir' THEN 1 ELSE 0 END) as nonaktif,
-                SUM(CASE WHEN date(c.join_date) >= date(?) AND date(c.join_date) < date(?) THEN 1 ELSE 0 END) as baru,
+                SUM(CASE WHEN ${cjd('c')} >= date(?) AND ${cjd('c')} < date(?) AND ${cjd('c')} <= date('now','localtime') THEN 1 ELSE 0 END) as baru,
                 (
-                    SELECT COUNT(DISTINCT i.customer_id) 
+                    SELECT COUNT(DISTINCT i.id) 
                     FROM invoices i 
                     JOIN customers c_sub ON c_sub.id = i.customer_id
                     ${fjSub}
-                    WHERE strftime('%m', i.created_at) = ? AND strftime('%Y', i.created_at) = ? AND i.status = 'paid'
+                    WHERE DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
+                    AND i.status = 'paid'
+                    AND ${voucherExcl}
                     ${fwSub}
                 ) as lunas,
                 (
-                    SELECT COUNT(DISTINCT c2.id) 
-                    FROM customers c2 
-                    ${filterJoins.replace(/ ca/g, ' ca2').replace(/ cra/g, ' cra2').replace(/ c\./g, ' c2.')}
-                    WHERE date(c2.join_date) < date(?)
-                    AND NOT EXISTS (
-                        SELECT 1 FROM invoices i 
-                        WHERE i.customer_id = c2.id 
-                        AND strftime('%m', i.created_at) = ? AND strftime('%Y', i.created_at) = ? AND i.status = 'paid'
-                    )
-                    ${filterWhere.replace(/c\./g, 'c2.')}
+                    SELECT COUNT(DISTINCT i.id) 
+                    FROM invoices i 
+                    JOIN customers c_sub ON c_sub.id = i.customer_id
+                    ${fjSub}
+                    WHERE DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
+                    AND i.status = 'unpaid'
+                    AND ${voucherExcl}
+                    ${fwSub}
                 ) as belum_lunas,
                 ${packageNominalSub()} AS total_nominal,
                 ${invoiceNominalSub("AND i.status IN ('paid', 'unpaid')", " AND c_sub.status = 'active'")} AS aktif_nominal,
                 ${packageNominalSub(" AND (c_sum.status = 'suspended' OR c_sum.status = 'isolir')")} AS nonaktif_nominal,
                 ${invoiceNominalSub("AND i.status = 'paid'")} AS lunas_nominal,
                 ${invoiceNominalSub("AND i.status = 'unpaid'")} AS belum_lunas_nominal,
-                ${packageNominalSub(' AND date(c_sum.join_date) >= date(?) AND date(c_sum.join_date) < date(?)')} AS baru_nominal
+                ${packageNominalSub(` AND ${cjd('c_sum')} >= date(?) AND ${cjd('c_sum')} < date(?) AND ${cjd('c_sum')} <= date('now','localtime')`)} AS baru_nominal
             FROM customers c
             ${filterJoins}
-            WHERE date(c.join_date) < date(?) ${filterWhere}
+            WHERE ${cjd('c')} < date(?) ${filterWhere}
         `;
 
         const params = [
             startDate, cohortEnd,
-            monthStr, yearStr, ...filterParams,
-            cohortEnd, monthStr, yearStr, ...filterParams,
+            startDate, endDateLast, ...filterParams,
+            startDate, endDateLast, ...filterParams,
             cohortEnd, ...filterParams,
             ...nominalBaseParams,
             cohortEnd, ...filterParams,
@@ -2485,110 +2669,118 @@ ${year && month ? `
         });
     }
 
-    // OPTIMASI: Get customers dengan pagination untuk menghindari load semua data sekaligus
+    /** WHERE + params untuk daftar/export pelanggan (selaras filter bulan di admin). */
+    _buildCustomersListWhereClause(filters = {}) {
+        let whereClause = '';
+        const params = [];
 
-    async getCustomersPaginated(limit = 50, offset = 0, filters = {}) {
-        return new Promise(async (resolve, reject) => {
-            // Build WHERE clause dari filters
-            let whereClause = '';
-            const params = [];
-            
-            if (filters.status) {
-                whereClause += ' AND c.status = ?';
-                params.push(filters.status);
+        if (filters.status) {
+            whereClause += ' AND c.status = ?';
+            params.push(filters.status);
+        }
+
+        if (filters.search) {
+            whereClause += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.pppoe_username LIKE ?)';
+            const searchTerm = `%${filters.search}%`;
+            params.push(searchTerm, searchTerm, searchTerm);
+        }
+
+        if (filters.package_id) {
+            whereClause += ' AND c.package_id = ?';
+            params.push(filters.package_id);
+        }
+
+        if (filters.area) {
+            whereClause += ' AND c.area = ?';
+            params.push(filters.area);
+        }
+
+        if (filters.collector_id) {
+            whereClause += ' AND (ca.collector_id = ? OR cra.collector_id = ?)';
+            params.push(filters.collector_id, filters.collector_id);
+        }
+
+        if (filters.router_id) {
+            whereClause += ' AND m.router_id = ?';
+            params.push(filters.router_id);
+        }
+
+        if (filters.year && filters.month) {
+            const year = filters.year;
+            const month = String(filters.month).padStart(2, '0');
+            const nextMonth = month === '12' ? '01' : String(parseInt(month, 10) + 1).padStart(2, '0');
+            const nextYear = month === '12' ? String(parseInt(year, 10) + 1) : year;
+            const startDate = `${year}-${month}-01`;
+            const endDate = `${nextYear}-${nextMonth}-01`;
+
+            whereClause += ` AND ${this._customerJoinDateExpr('c')} < date(?)`;
+            params.push(endDate);
+
+            if (filters.customer_type === 'baru') {
+                whereClause += ` AND ${this._customerJoinDateExpr('c')} >= date(?) AND ${this._customerJoinDateExpr('c')} <= date('now','localtime')`;
+                params.push(startDate);
+            } else if (filters.customer_type === 'aktif') {
+                whereClause += " AND c.status = 'active'";
+            } else if (filters.customer_type === 'nonaktif') {
+                whereClause += " AND (c.status = 'suspended' OR c.status = 'isolir')";
             }
-            
-            if (filters.search) {
-                whereClause += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.pppoe_username LIKE ?)';
-                const searchTerm = `%${filters.search}%`;
-                params.push(searchTerm, searchTerm, searchTerm);
+
+            const endDateLast = new Date(parseInt(year, 10), parseInt(month, 10), 0).toISOString().split('T')[0];
+            if (filters.payment_status === 'paid') {
+                whereClause += ` AND EXISTS (
+                    SELECT 1 FROM invoices i 
+                    WHERE i.customer_id = c.id 
+                    AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
+                    AND i.status = 'paid'
+                )`;
+                params.push(startDate, endDateLast);
+            } else if (filters.payment_status === 'unpaid') {
+                whereClause += ` AND EXISTS (
+                    SELECT 1 FROM invoices i 
+                    WHERE i.customer_id = c.id 
+                    AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
+                    AND i.status = 'unpaid'
+                )`;
+                params.push(startDate, endDateLast);
             }
-            
-            if (filters.package_id) {
-                whereClause += ' AND c.package_id = ?';
-                params.push(filters.package_id);
+        } else {
+            if (filters.customer_type === 'aktif') {
+                whereClause += " AND c.status = 'active'";
+            } else if (filters.customer_type === 'nonaktif') {
+                whereClause += " AND (c.status = 'suspended' OR c.status = 'isolir')";
             }
 
-            if (filters.area) {
-                whereClause += ' AND c.area = ?';
-                params.push(filters.area);
-            }
-
-            if (filters.collector_id) {
-                whereClause += ' AND (ca.collector_id = ? OR cra.collector_id = ?)';
-                params.push(filters.collector_id, filters.collector_id);
-            }
-
-            if (filters.year && filters.month) {
-                const year = filters.year;
-                const month = String(filters.month).padStart(2, '0');
-                const nextMonth = month === '12' ? '01' : String(parseInt(month) + 1).padStart(2, '0');
-                const nextYear = month === '12' ? String(parseInt(year) + 1) : year;
-                const startDate = `${year}-${month}-01`;
-                const endDate = `${nextYear}-${nextMonth}-01`;
-
-                whereClause += ' AND date(c.join_date) < date(?)';
-                params.push(endDate);
-
-                if (filters.customer_type === 'baru') {
-                    whereClause += ' AND date(c.join_date) >= date(?)';
-                    params.push(startDate);
-                } else if (filters.customer_type === 'aktif') {
-                    whereClause += " AND c.status = 'active'";
-                } else if (filters.customer_type === 'nonaktif') {
-                    whereClause += " AND (c.status = 'suspended' OR c.status = 'isolir')";
-                }
-
-                if (filters.payment_status === 'paid') {
-                    whereClause += ` AND EXISTS (
-                        SELECT 1 FROM invoices i 
-                        WHERE i.customer_id = c.id 
-                        AND strftime('%m', i.created_at) = ? AND strftime('%Y', i.created_at) = ? AND i.status = 'paid'
-                    )`;
-                    params.push(month, String(year));
-                } else if (filters.payment_status === 'unpaid') {
-                    whereClause += ` AND NOT EXISTS (
-                        SELECT 1 FROM invoices i 
-                        WHERE i.customer_id = c.id 
-                        AND strftime('%m', i.created_at) = ? AND strftime('%Y', i.created_at) = ? AND i.status = 'paid'
-                    )`;
-                    params.push(month, String(year));
-                }
-            } else {
-                if (filters.customer_type === 'aktif') {
-                    whereClause += " AND c.status = 'active'";
-                } else if (filters.customer_type === 'nonaktif') {
-                    whereClause += " AND (c.status = 'suspended' OR c.status = 'isolir')";
-                }
-                
-                // Filter status pembayaran (Lunas/Belum Lunas) Default
-                if (filters.payment_status === 'paid') {
-                    whereClause += ` AND NOT EXISTS (
+            if (filters.payment_status === 'paid') {
+                whereClause += ` AND NOT EXISTS (
+                    SELECT 1 FROM invoices i 
+                    WHERE i.customer_id = c.id 
+                    AND i.status = 'unpaid'
+                ) AND EXISTS (
+                    SELECT 1 FROM invoices i 
+                    WHERE i.customer_id = c.id 
+                    AND i.status = 'paid'
+                )`;
+            } else if (filters.payment_status === 'unpaid') {
+                whereClause += ` AND (
+                    EXISTS (
                         SELECT 1 FROM invoices i 
                         WHERE i.customer_id = c.id 
                         AND i.status = 'unpaid'
-                    ) AND EXISTS (
+                    ) 
+                    OR NOT EXISTS (
                         SELECT 1 FROM invoices i 
                         WHERE i.customer_id = c.id 
                         AND i.status = 'paid'
-                    )`;
-                } else if (filters.payment_status === 'unpaid') {
-                    whereClause += ` AND (
-                        EXISTS (
-                            SELECT 1 FROM invoices i 
-                            WHERE i.customer_id = c.id 
-                            AND i.status = 'unpaid'
-                        ) 
-                        OR NOT EXISTS (
-                            SELECT 1 FROM invoices i 
-                            WHERE i.customer_id = c.id 
-                            AND i.status = 'paid'
-                        )
-                    )`;
-                }
+                    )
+                )`;
             }
+        }
 
-            const sql = `
+        return { whereClause, params };
+    }
+
+    _customersListBaseSql(whereClause) {
+        return `
                 SELECT c.*, p.name as package_name, p.price as package_price, p.image as package_image, p.tax_rate,
                        c.latitude, c.longitude,
                        r.name as router_name,
@@ -2621,6 +2813,84 @@ ${year && month ? `
                 LEFT JOIN collector_areas cra ON (c.area IS NOT NULL AND c.area != '' AND c.area = cra.area)
                 LEFT JOIN collectors col_cra ON col_cra.id = cra.collector_id
                 WHERE 1=1 ${whereClause}
+        `;
+    }
+
+    async _processCustomerListRows(rows) {
+        let processedRows = rows.map((row) => {
+            if (row.package_price && row.tax_rate !== null) {
+                row.package_price = this.calculatePriceWithTax(row.package_price, row.tax_rate);
+            }
+            return row;
+        });
+
+        try {
+            const { getUserAuthModeAsync, getRadiusConnection } = require('./mikrotik');
+            const authMode = await getUserAuthModeAsync();
+
+            if (authMode === 'radius') {
+                const radiusConn = await getRadiusConnection();
+                const pppUsers = processedRows
+                    .map((c) => (c.pppoe_username && String(c.pppoe_username).trim()) || (c.username && String(c.username).trim()))
+                    .filter((u) => u && u.length > 0);
+
+                if (pppUsers.length > 0) {
+                    const placeholders = pppUsers.map(() => '?').join(',');
+                    const [allGroups] = await radiusConn.execute(
+                        `SELECT username, groupname FROM radusergroup WHERE username IN (${placeholders})`,
+                        pppUsers
+                    );
+                    const profileMap = new Map();
+                    for (const g of allGroups || []) {
+                        if (g.username && !profileMap.has(g.username)) {
+                            profileMap.set(g.username, g.groupname);
+                        }
+                    }
+                    processedRows.forEach((customer) => {
+                        const pppUser = (customer.pppoe_username && String(customer.pppoe_username).trim())
+                            || (customer.username && String(customer.username).trim());
+                        if (pppUser && profileMap.has(pppUser)) {
+                            customer.pppoe_profile = profileMap.get(pppUser);
+                            customer.pppoe_profile_source = 'radius';
+                        }
+                    });
+                }
+                await radiusConn.end();
+            }
+        } catch (authError) {
+            /* tetap gunakan profil dari billing */
+        }
+
+        return processedRows;
+    }
+
+    /** Semua pelanggan sesuai filter halaman admin (tanpa pagination) — untuk export/backup. */
+    async getCustomersFiltered(filters = {}) {
+        const { whereClause, params } = this._buildCustomersListWhereClause(filters);
+        const sql = `${this._customersListBaseSql(whereClause)} ORDER BY c.id DESC`;
+
+        return new Promise((resolve, reject) => {
+            this.db.all(sql, params, async (err, rows) => {
+                if (err) {
+                    reject(err);
+                    return;
+                }
+                try {
+                    resolve(await this._processCustomerListRows(rows || []));
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        });
+    }
+
+    // OPTIMASI: Get customers dengan pagination untuk menghindari load semua data sekaligus
+
+    async getCustomersPaginated(limit = 50, offset = 0, filters = {}) {
+        return new Promise(async (resolve, reject) => {
+            const { whereClause, params } = this._buildCustomersListWhereClause(filters);
+
+            const sql = `${this._customersListBaseSql(whereClause)}
                 ORDER BY c.id DESC
                 LIMIT ? OFFSET ?
             `;
@@ -2649,67 +2919,19 @@ ${year && month ? `
                     if (err) {
                         reject(err);
                     } else {
-                        // Calculate price with tax for each customer
-                        let processedRows = rows.map(row => {
-                            if (row.package_price && row.tax_rate !== null) {
-                                row.package_price = this.calculatePriceWithTax(row.package_price, row.tax_rate);
-                            }
-                            return row;
-                        });
-                        
-                        // Jika menggunakan RADIUS mode, ambil profil dari RADIUS untuk customer yang punya pppoe_username
                         try {
-                            const { getUserAuthModeAsync, getRadiusConnection } = require('./mikrotik');
-                            const authMode = await getUserAuthModeAsync();
-                            
-                            if (authMode === 'radius' && processedRows.length > 0) {
-                                const radiusConn = await getRadiusConnection();
-                                
-                                // Kumpulkan semua pppoe_username yang valid
-                                const pppUsers = processedRows
-                                    .map(c => (c.pppoe_username && String(c.pppoe_username).trim()) || (c.username && String(c.username).trim()))
-                                    .filter(u => u && u.length > 0);
-                                
-                                if (pppUsers.length > 0) {
-                                    // Batch query: ambil semua group sekaligus
-                                    const placeholders = pppUsers.map(() => '?').join(',');
-                                    const [allGroups] = await radiusConn.execute(
-                                        `SELECT username, groupname FROM radusergroup WHERE username IN (${placeholders})`,
-                                        pppUsers
-                                    );
-                                    
-                                    // Buat map untuk lookup cepat
-                                    const profileMap = new Map();
-                                    allGroups.forEach(g => {
-                                        profileMap.set(g.username, g.groupname);
-                                    });
-                                    
-                                    // Update profil untuk setiap customer
-                                    processedRows.forEach(customer => {
-                                        const pppUser = (customer.pppoe_username && String(customer.pppoe_username).trim()) || 
-                                                       (customer.username && String(customer.username).trim());
-                                        
-                                        if (pppUser && profileMap.has(pppUser)) {
-                                            customer.pppoe_profile = profileMap.get(pppUser);
-                                            customer.pppoe_profile_source = 'radius';
-                                        }
-                                    });
-                                }
-                                
-                                await radiusConn.end();
-                            }
-                        } catch (authError) {
-                            // Jika error saat cek auth mode, tetap gunakan dari billing database
+                            const processedRows = await this._processCustomerListRows(rows || []);
+                            resolve({
+                                customers: processedRows,
+                                totalCount: totalCount,
+                                page: Math.floor(offset / limit) + 1,
+                                totalPages: Math.ceil(totalCount / limit),
+                                limit: limit,
+                                offset: offset
+                            });
+                        } catch (processErr) {
+                            reject(processErr);
                         }
-                        
-                        resolve({
-                            customers: processedRows,
-                            totalCount: totalCount,
-                            page: Math.floor(offset / limit) + 1,
-                            totalPages: Math.ceil(totalCount / limit),
-                            limit: limit,
-                            offset: offset
-                        });
                     }
                 });
             });
@@ -3451,216 +3673,86 @@ ${year && month ? `
     }
 
     async getInvoicesWithFilters(filters = {}, limit = null, offset = null) {
+        const flags = await this._ensureBillingSchemaFlags();
+        const { hasRenewalType, hasFixDate, hasCustomerId } = flags;
+        const listMode = Boolean(filters.listMode);
+        const { sql: filterSql, params: filterParams } = this._buildInvoiceListFilterSql(filters, flags);
+
+        let selectClause = `SELECT i.*, COALESCE(c.username, m.hotspot_username, m.username) as username, COALESCE(c.name, m.name) as customer_name, COALESCE(c.phone, m.phone) as customer_phone`;
+        if (hasCustomerId) selectClause += `, c.customer_id`;
+        if (hasRenewalType) selectClause += `, c.renewal_type`;
+        if (hasFixDate) selectClause += `, c.fix_date`;
+        selectClause += `, p.name as package_name, p.speed as package_speed`;
+
+        let sql = `
+            ${selectClause}
+            FROM invoices i
+            LEFT JOIN customers c ON i.customer_id = c.id
+            LEFT JOIN members m ON i.member_id = m.id
+            LEFT JOIN packages p ON i.package_id = p.id
+            WHERE 1=1 ${filterSql}
+            ORDER BY i.created_at DESC, i.id DESC
+        `;
+        const params = [...filterParams];
+
+        if (limit) {
+            sql += ` LIMIT ?`;
+            params.push(limit);
+            if (offset) {
+                sql += ` OFFSET ?`;
+                params.push(offset);
+            }
+        }
+
         return new Promise((resolve, reject) => {
-            // Check if renewal_type and invoice_type columns exist
-            this.db.all("PRAGMA table_info(customers)", (pragmaErr, customerColumns) => {
-                if (pragmaErr) {
-                    reject(pragmaErr);
+            this.db.all(sql, params, (err, rows) => {
+                if (err) {
+                    reject(err);
                     return;
                 }
-                
-                this.db.all("PRAGMA table_info(invoices)", (invoicePragmaErr, invoiceColumns) => {
-                    if (invoicePragmaErr) {
-                        reject(invoicePragmaErr);
-                        return;
+                const processedRows = (rows || []).map((row) => {
+                    const renewalType = hasRenewalType ? (row.renewal_type || 'renewal') : 'renewal';
+                    const fixDate = hasFixDate ? row.fix_date : null;
+                    let invoiceType = renewalType === 'fix_date'
+                        ? `Fix Date (${fixDate || 'N/A'})`
+                        : 'Renewal';
+                    let nextDueDate = null;
+                    if (!listMode && row.status === 'paid' && row.payment_date) {
+                        try {
+                            nextDueDate = this.calculateNextDueDate(
+                                { renewal_type: renewalType, fix_date: fixDate },
+                                row.due_date,
+                                row.payment_date
+                            );
+                        } catch (_) { /* ignore */ }
                     }
-                    
-                    const hasRenewalType = customerColumns.some(col => col.name === 'renewal_type');
-                    const hasFixDate = customerColumns.some(col => col.name === 'fix_date');
-                    const hasCustomerId = customerColumns.some(col => col.name === 'customer_id');
-                    const hasInvoiceType = invoiceColumns.some(col => col.name === 'invoice_type');
-                    
-                    // Build SELECT clause based on column existence
-                    let selectClause = `SELECT i.*, c.username, c.name as customer_name, c.phone as customer_phone`;
-                    if (hasCustomerId) selectClause += `, c.customer_id`;
-                    if (hasRenewalType) selectClause += `, c.renewal_type`;
-                    if (hasFixDate) selectClause += `, c.fix_date`;
-                    selectClause += `, p.name as package_name, p.speed as package_speed`;
-                    
-                    let sql = `
-                        ${selectClause}
-                        FROM invoices i
-                        LEFT JOIN customers c ON i.customer_id = c.id
-                        LEFT JOIN packages p ON i.package_id = p.id
-                        WHERE 1=1
-                    `;
-                    
-                    const params = [];
-                    
-                    // Filter by month if provided (format: YYYY-MM)
-                    if (filters.month) {
-                        sql += ` AND strftime('%Y-%m', i.created_at) = ?`;
-                        params.push(filters.month);
-                    }
-                    
-                    // Filter by customer username
-                    if (filters.customer_username) {
-                        sql += ` AND c.username LIKE ?`;
-                        params.push(`%${filters.customer_username}%`);
-                    }
-                    
-                    // Filter by status
-                    if (filters.status) {
-                        if (filters.status === 'overdue') {
-                            sql += ` AND i.status = 'unpaid' AND DATE(i.due_date) < DATE('now')`;
-                        } else if (filters.status === 'unpaid') {
-                            // Unified 'unpaid' now includes ALL unpaid regardless of due date
-                            sql += ` AND i.status = 'unpaid'`;
-                        } else {
-                            sql += ` AND i.status = ?`;
-                            params.push(filters.status);
-                        }
-                    }
-                    
-                    // Filter by invoice type (only if columns exist)
-                    if (filters.type) {
-                        if (filters.type === 'monthly' && hasRenewalType) {
-                            sql += ` AND c.renewal_type = 'renewal'`;
-                        } else if (filters.type === 'fix_date' && hasRenewalType) {
-                            sql += ` AND c.renewal_type = 'fix_date'`;
-                        } else if (filters.type === 'manual' && hasInvoiceType) {
-                            sql += ` AND i.invoice_type = 'manual'`;
-                        }
-                    }
-            
-                    sql += ` ORDER BY i.created_at DESC`;
-                    
-                    if (limit) {
-                        sql += ` LIMIT ?`;
-                        params.push(limit);
-                        
-                        if (offset) {
-                            sql += ` OFFSET ?`;
-                            params.push(offset);
-                        }
-                    }
-                    
-                    this.db.all(sql, params, (err, rows) => {
-                        if (err) {
-                            reject(err);
-                        } else {
-                            // Tambahkan informasi tipe tagihan dan next due date berdasarkan renewal_type dan status
-                            const currentDate = new Date();
-                            const currentMonth = currentDate.getMonth();
-                            const currentYear = currentDate.getFullYear();
-                            
-                            const processedRows = rows.map(row => {
-                                let invoiceType = 'Renewal';
-                                let nextDueDate = null;
-                                
-                                // Handle missing renewal_type column
-                                const renewalType = hasRenewalType ? (row.renewal_type || 'renewal') : 'renewal';
-                                const fixDate = hasFixDate ? row.fix_date : null;
-                                
-                                if (renewalType === 'fix_date') {
-                                    invoiceType = `Fix Date (${fixDate || 'N/A'})`;
-                                } else {
-                                    invoiceType = 'Renewal';
-                                }
-                                
-                                // Hitung next due date untuk invoice yang sudah lunas
-                                if (row.status === 'paid' && row.payment_date) {
-                                    try {
-                                        const customer = {
-                                            renewal_type: renewalType,
-                                            fix_date: fixDate
-                                        };
-                                        nextDueDate = this.calculateNextDueDate(customer, row.due_date, row.payment_date);
-                                    } catch (error) {
-                                        console.error('Error calculating next due date:', error);
-                                    }
-                                }
-                                
-                                return {
-                                    ...row,
-                                    renewal_type: renewalType,
-                                    fix_date: fixDate,
-                                    invoice_type: invoiceType,
-                                    next_due_date: nextDueDate
-                                };
-                            });
-                            
-                            resolve(processedRows);
-                        }
-                    });
+                    return {
+                        ...row,
+                        renewal_type: renewalType,
+                        fix_date: fixDate,
+                        invoice_type: invoiceType,
+                        next_due_date: nextDueDate
+                    };
                 });
+                resolve(processedRows);
             });
         });
     }
 
     async getInvoicesCountWithFilters(filters = {}) {
+        const flags = await this._ensureBillingSchemaFlags();
+        const { sql: filterSql, params: filterParams } = this._buildInvoiceListFilterSql(filters, flags);
+        const sql = `
+            SELECT COUNT(*) as count
+            FROM invoices i
+            LEFT JOIN customers c ON i.customer_id = c.id
+            LEFT JOIN members m ON i.member_id = m.id
+            WHERE 1=1 ${filterSql}
+        `;
         return new Promise((resolve, reject) => {
-            // Check if renewal_type and invoice_type columns exist
-            this.db.all("PRAGMA table_info(customers)", (pragmaErr, customerColumns) => {
-                if (pragmaErr) {
-                    reject(pragmaErr);
-                    return;
-                }
-                
-                this.db.all("PRAGMA table_info(invoices)", (invoicePragmaErr, invoiceColumns) => {
-                    if (invoicePragmaErr) {
-                        reject(invoicePragmaErr);
-                        return;
-                    }
-                    
-                    const hasRenewalType = customerColumns.some(col => col.name === 'renewal_type');
-                    const hasInvoiceType = invoiceColumns.some(col => col.name === 'invoice_type');
-                    
-                    const currentDate = new Date();
-                    const currentMonth = currentDate.getMonth();
-                    const currentYear = currentDate.getFullYear();
-                    
-                    // Hitung tanggal awal bulan berjalan saja (tidak termasuk bulan sebelumnya)
-                    const currentMonthStart = new Date(currentYear, currentMonth, 1);
-                    const currentMonthStartStr = currentMonthStart.toISOString().split('T')[0]; // Format: YYYY-MM-DD
-                    
-                    let sql = `
-                        SELECT COUNT(*) as count
-                        FROM invoices i
-                        LEFT JOIN customers c ON i.customer_id = c.id
-                        WHERE 1=1
-                    `;
-                    
-                    const params = [];
-                    
-                    // Filter by customer username
-                    if (filters.customer_username) {
-                        sql += ` AND c.username LIKE ?`;
-                        params.push(`%${filters.customer_username}%`);
-                    }
-                    
-                    // Filter by status
-                    if (filters.status) {
-                        if (filters.status === 'overdue') {
-                            sql += ` AND i.status = 'unpaid' AND DATE(i.due_date) < DATE('now')`;
-                        } else if (filters.status === 'unpaid') {
-                            // Unified 'unpaid' logic
-                            sql += ` AND i.status = 'unpaid'`;
-                        } else {
-                            sql += ` AND i.status = ?`;
-                            params.push(filters.status);
-                        }
-                    }
-                    
-                    // Filter by invoice type (only if columns exist)
-                    if (filters.type) {
-                        if (filters.type === 'monthly' && hasRenewalType) {
-                            sql += ` AND c.renewal_type = 'renewal'`;
-                        } else if (filters.type === 'fix_date' && hasRenewalType) {
-                            sql += ` AND c.renewal_type = 'fix_date'`;
-                        } else if (filters.type === 'manual' && hasInvoiceType) {
-                            sql += ` AND i.invoice_type = 'manual'`;
-                        }
-                    }
-                    
-                    this.db.get(sql, params, (err, row) => {
-                        if (err) {
-                            reject(err);
-                        } else {
-                            resolve(row.count);
-                        }
-                    });
-                });
+            this.db.get(sql, filterParams, (err, row) => {
+                if (err) reject(err);
+                else resolve(Number(row && row.count) || 0);
             });
         });
     }
@@ -4061,18 +4153,78 @@ ${year && month ? `
         });
     }
 
+    /** Rentang tanggal lokal YYYY-MM-DD untuk filter invoice bulan ini (hindari offset UTC). */
+    _localMonthDateRange(year, monthIndex0) {
+        const y = year;
+        const m = monthIndex0;
+        const startStr = `${y}-${String(m + 1).padStart(2, '0')}-01`;
+        const endStr = new Date(y, m + 1, 0).toISOString().split('T')[0];
+        return { startStr, endStr };
+    }
+
+    /** Pelanggan aktif — tanpa JOIN berat / RADIUS (untuk bulk auto invoice). */
+    async getActiveCustomersForInvoiceGeneration() {
+        return new Promise((resolve, reject) => {
+            const sql = `
+                SELECT id, username, status, package_id, billing_day, renewal_type, fix_date
+                FROM customers
+                WHERE status = 'active' AND package_id IS NOT NULL
+                ORDER BY id ASC
+            `;
+            this.db.all(sql, [], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows || []);
+            });
+        });
+    }
+
     /** Satu query untuk cek duplikat bulanan — hindari N× getInvoicesByCustomerAndDateRange saat bulk generate */
     async getDistinctCustomerUsernamesWithInvoicesBetween(startDate, endDate) {
+        const startStr = startDate instanceof Date
+            ? startDate.toISOString().split('T')[0]
+            : String(startDate).slice(0, 10);
+        const endStr = endDate instanceof Date
+            ? endDate.toISOString().split('T')[0]
+            : String(endDate).slice(0, 10);
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT DISTINCT c.username
                 FROM invoices i
                 JOIN customers c ON i.customer_id = c.id
-                WHERE i.created_at BETWEEN ? AND ?
+                WHERE DATE(i.created_at) >= DATE(?) AND DATE(i.created_at) <= DATE(?)
             `;
-            this.db.all(sql, [startDate.toISOString(), endDate.toISOString()], (err, rows) => {
+            this.db.all(sql, [startStr, endStr], (err, rows) => {
                 if (err) reject(err);
                 else resolve(new Set((rows || []).map((r) => r.username).filter(Boolean)));
+            });
+        });
+    }
+
+    /** Cek duplikat bulanan per customer_id (lebih akurat dari username). */
+    async getDistinctCustomerIdsWithInvoicesBetween(startDate, endDate) {
+        const startStr = startDate instanceof Date
+            ? startDate.toISOString().split('T')[0]
+            : String(startDate).slice(0, 10);
+        const endStr = endDate instanceof Date
+            ? endDate.toISOString().split('T')[0]
+            : String(endDate).slice(0, 10);
+        return new Promise((resolve, reject) => {
+            const sql = `
+                SELECT DISTINCT i.customer_id AS customer_id
+                FROM invoices i
+                WHERE i.customer_id IS NOT NULL
+                  AND DATE(i.created_at) >= DATE(?) AND DATE(i.created_at) <= DATE(?)
+            `;
+            this.db.all(sql, [startStr, endStr], (err, rows) => {
+                if (err) reject(err);
+                else {
+                    const ids = new Set();
+                    for (const r of rows || []) {
+                        const id = parseInt(String(r.customer_id), 10);
+                        if (Number.isFinite(id) && id > 0) ids.add(id);
+                    }
+                    resolve(ids);
+                }
             });
         });
     }
@@ -4084,9 +4236,15 @@ ${year && month ? `
                 SELECT m.hotspot_username, m.username
                 FROM invoices i
                 JOIN members m ON i.member_id = m.id
-                WHERE i.created_at BETWEEN ? AND ?
+                WHERE DATE(i.created_at) >= DATE(?) AND DATE(i.created_at) <= DATE(?)
             `;
-            this.db.all(sql, [startDate.toISOString(), endDate.toISOString()], (err, rows) => {
+            const startStr = startDate instanceof Date
+                ? startDate.toISOString().split('T')[0]
+                : String(startDate).slice(0, 10);
+            const endStr = endDate instanceof Date
+                ? endDate.toISOString().split('T')[0]
+                : String(endDate).slice(0, 10);
+            this.db.all(sql, [startStr, endStr], (err, rows) => {
                 if (err) {
                     reject(err);
                     return;
@@ -4454,7 +4612,8 @@ ${year && month ? `
                             return;
                         }
                         
-                        // Insert payment
+                        // Insert payment (transfer: remittance_status tetap pending/null;
+                        // kewajiban setoran dihitung hanya tunai lewat paymentEligibleForCollectorRemittance)
                         const sql = `INSERT INTO payments (
                             invoice_id, amount, payment_method, reference_number, notes, 
                             collector_id, commission_amount, payment_type, discount_amount
@@ -4813,7 +4972,7 @@ ${year && month ? `
                 SELECT 
                     COALESCE(SUM(COALESCE(p.remittance_net_applied, 0)), 0) as sudah_setor,
                     COALESCE(SUM(
-                        CASE WHEN (p.remittance_status IS NULL OR p.remittance_status = 'pending')
+                        CASE WHEN ${sqlCollectorCashRemittancePending('p')}
                              AND (
                                 (COALESCE(i.amount, 0) - COALESCE(p.discount_amount, 0) - COALESCE(p.commission_amount, 0))
                                 - COALESCE(p.remittance_net_applied, 0)
@@ -8207,6 +8366,7 @@ async handlePaymentWebhook(payload, gateway) {
         const payments = await new Promise((resolve, reject) => {
             this.db.all(
                 `SELECT p.collector_id, p.amount, p.commission_amount, p.discount_amount, p.notes,
+                        p.payment_method,
                         COALESCE(p.remittance_net_applied, 0) as remittance_net_applied, p.remittance_status, p.payment_date,
                         COALESCE(i.amount, 0) as invoice_amount
                  FROM payments p
@@ -8234,10 +8394,7 @@ async handlePaymentWebhook(payload, gateway) {
             const pool = paymentRemittancePoolRp(p);
             const applied = Number(p.remittance_net_applied) || 0;
             const remain = pool - applied;
-            if (
-                (p.remittance_status == null || p.remittance_status === 'pending') &&
-                remain > 0.009
-            ) {
+            if (paymentEligibleForCollectorRemittance(p) && remain > 0.009) {
                 sums[cid].pending_amount += remain;
                 sums[cid].pending_payments_count += 1;
             }
@@ -8589,12 +8746,14 @@ async handlePaymentWebhook(payload, gateway) {
              INNER JOIN invoices i ON i.id = p.invoice_id
              WHERE p.collector_id = ?
                AND p.payment_type = 'collector'
-               AND (p.remittance_status IS NULL OR p.remittance_status = 'pending')
+               AND ${sqlCollectorCashRemittancePending('p')}
              ORDER BY datetime(COALESCE(p.payment_date, '1970-01-01')) ASC, p.id ASC`,
             [collectorIdNum]
         );
         const rows = (rowsAll || []).filter(
-            (r) => paymentRemittancePoolRp(r) - (Number(r.remittance_net_applied) || 0) > 0.009
+            (r) =>
+                paymentEligibleForCollectorRemittance(r) &&
+                paymentRemittancePoolRp(r) - (Number(r.remittance_net_applied) || 0) > 0.009
         );
 
         const normalized = rows.map((r) => {
