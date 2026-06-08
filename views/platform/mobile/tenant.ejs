@@ -1,0 +1,133 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active: 'mobile-app', adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Mobile App — <%= tenant.name %></h2>
+      <p class="km-subtitle">
+        Tenant <code><%= tenant.subdomain %></code> · <code><%= hostname %></code>
+      </p>
+    </div>
+    <a href="/management/mobile-app" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-arrow-left"></i> Kembali
+    </a>
+  </div>
+
+  <% if (flash && flash.success === 'saved') { %>
+    <div class="alert alert-success py-2">Konfigurasi disimpan.</div>
+  <% } %>
+  <% if (flash && flash.success === 'generated') { %>
+    <div class="alert alert-success py-2">
+      Folder config dihasilkan di <code><%= cfg.workspaceDir %></code>
+      <% if (flash.pending === '1') { %> — build manual diperlukan (Flutter belum terinstall).<% } %>
+    </div>
+  <% } %>
+  <% if (flash && flash.success === 'built') { %>
+    <div class="alert alert-success py-2">Build APK berhasil<% if (flash.apk) { %>: <code><%= flash.apk %></code><% } %>.</div>
+  <% } %>
+  <% if (flash && flash.error) { %>
+    <div class="alert alert-danger py-2"><%= flash.error %></div>
+  <% } %>
+
+  <div class="row g-3">
+    <div class="col-lg-7">
+      <div class="km-card mb-3">
+        <h5 class="mb-3"><i class="bi bi-sliders me-1"></i> Konfigurasi Aplikasi</h5>
+        <form method="POST" action="/management/mobile-app/tenants/<%= tenant.id %>/save" id="mobileConfigForm">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Nama Aplikasi (label di HP)</label>
+              <input type="text" name="app_name" class="form-control" value="<%= cfg.appName %>" required
+                     placeholder="Contoh: Billing BNA">
+              <div class="form-text">Tampil di launcher Android</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Package ID</label>
+              <input type="text" name="package_id" class="form-control" value="<%= cfg.packageId %>"
+                     placeholder="com.kalimasada.billing.<%= tenant.subdomain %>">
+            </div>
+            <div class="col-12">
+              <label class="form-label">API URL (billing backend)</label>
+              <input type="url" name="api_url" class="form-control" value="<%= cfg.apiUrl %>" required>
+              <div class="form-text">Otomatis dari subdomain — sesuaikan jika tenant pakai server eksternal / reverse proxy</div>
+            </div>
+            <div class="col-12">
+              <label class="form-label">Catatan rilis (opsional)</label>
+              <textarea name="release_notes" class="form-control" rows="2"
+                        placeholder="Perubahan versi untuk manifest update APK"><%= cfg.releaseNotes || '' %></textarea>
+            </div>
+          </div>
+        </form>
+        <div class="d-flex flex-wrap gap-2 mt-4">
+          <button type="submit" form="mobileConfigForm" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-save"></i> Simpan
+          </button>
+          <button type="submit" form="mobileConfigForm" formaction="/management/mobile-app/tenants/<%= tenant.id %>/generate"
+                  class="btn btn-km-primary btn-sm">
+            <i class="bi bi-file-earmark-code"></i> Generate Config
+          </button>
+          <button type="submit" form="mobileConfigForm" formaction="/management/mobile-app/tenants/<%= tenant.id %>/build"
+                  class="btn btn-success btn-sm" <%= !flutter.installed ? 'title="Flutter belum terinstall — akan generate config saja"' : '' %>>
+            <i class="bi bi-hammer"></i> Build APK
+          </button>
+        </div>
+      </div>
+
+      <% if (outputFiles.length) { %>
+      <div class="km-card mb-3">
+        <h5 class="mb-3"><i class="bi bi-download me-1"></i> Hasil Build</h5>
+        <ul class="list-group list-group-flush">
+          <% outputFiles.forEach(function(f) { %>
+            <li class="list-group-item d-flex justify-content-between align-items-center px-0"
+                style="background: transparent; border-color: var(--border-color);">
+              <code><%= f %></code>
+              <a href="/management/mobile-app/tenants/<%= tenant.id %>/download/<%= encodeURIComponent(f) %>"
+                 class="btn btn-outline-primary btn-sm">
+                <i class="bi bi-download"></i> Unduh
+              </a>
+            </li>
+          <% }); %>
+        </ul>
+      </div>
+      <% } %>
+
+      <% if (buildLog) { %>
+      <div class="km-card">
+        <h6 class="mb-2">Log Build Terakhir</h6>
+        <pre class="mb-0 p-2 rounded small" style="max-height:240px;overflow:auto;background:var(--bg-elevated);border:1px solid var(--border-color);"><code><%= buildLog %></code></pre>
+      </div>
+      <% } %>
+    </div>
+
+    <div class="col-lg-5">
+      <div class="km-card mb-3">
+        <h6 class="mb-2"><i class="bi bi-filetype-env me-1"></i> Preview <code>.env</code></h6>
+        <pre class="mb-0 p-2 rounded small" style="background:var(--bg-elevated);border:1px solid var(--border-color);"><code><%= envPreview %></code></pre>
+      </div>
+
+      <div class="km-card mb-3">
+        <h6 class="mb-2"><i class="bi bi-folder2 me-1"></i> Lokasi Workspace</h6>
+        <pre class="mb-2 p-2 rounded small" style="background:var(--bg-elevated);border:1px solid var(--border-color);font-size:0.72rem;"><code><%= cfg.workspaceDir %></code></pre>
+        <table class="table table-sm mb-0 small">
+          <tr><td class="text-muted">Status config</td><td><%= cfg.lastGeneratedAt ? 'Generated ' + new Date(cfg.lastGeneratedAt).toLocaleString('id-ID') : 'Belum' %></td></tr>
+          <tr><td class="text-muted">Build terakhir</td><td><%= cfg.lastBuildAt ? new Date(cfg.lastBuildAt).toLocaleString('id-ID') : '—' %></td></tr>
+          <tr><td class="text-muted">Status build</td><td><%= cfg.lastBuildStatus || '—' %></td></tr>
+        </table>
+      </div>
+
+      <div class="km-card">
+        <h6 class="mb-2"><i class="bi bi-terminal me-1"></i> Build Manual</h6>
+        <p class="small text-muted mb-2">Jika Flutter terinstall di server:</p>
+        <pre class="mb-0 p-2 rounded small" style="background:var(--bg-elevated);border:1px solid var(--border-color);"><code>bash <%= cfg.workspaceDir %>/build.sh</code></pre>
+      </div>
+
+      <% if (!flutter.installed) { %>
+      <div class="alert alert-warning mt-3 small mb-0">
+        <i class="bi bi-info-circle me-1"></i>
+        Install Flutter SDK di server untuk build otomatis dari portal, atau salin folder <code>tenants/<%= tenant.subdomain %>/</code> ke mesin developer.
+      </div>
+      <% } %>
+    </div>
+  </div>
+</main>
+<%- include('../partials/footer') %>

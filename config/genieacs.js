@@ -7,6 +7,27 @@ const cacheManager = require('./cacheManager');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 
+function getConfiguredGenieacsUrlFromSettings() {
+    try {
+        const { hasTenantContext } = require('./platform/tenantContext');
+        const { getTenantSetting } = require('./platform/tenantSettings');
+        if (hasTenantContext()) {
+            return String(getTenantSetting('genieacs_url', '') || '').trim();
+        }
+    } catch (_) {
+        // single-tenant / non-platform mode
+    }
+    return String(getSetting('genieacs_url', '') || '').trim();
+}
+
+async function isGenieacsConfigured() {
+    const servers = await getAllGenieacsServers();
+    if (servers.some((s) => s && String(s.url || '').trim())) {
+        return true;
+    }
+    return !!getConfiguredGenieacsUrlFromSettings();
+}
+
 // Helper untuk mendapatkan GenieACS server berdasarkan customer router
 async function getGenieacsServerForCustomer(customer) {
     return new Promise((resolve, reject) => {
@@ -98,8 +119,7 @@ function getAxiosInstance(genieacsServer = null) {
         GENIEACS_USERNAME = genieacsServer.username;
         GENIEACS_PASSWORD = genieacsServer.password;
     } else {
-        // Fallback ke settings.json (untuk backward compatibility sementara)
-        GENIEACS_URL = getSetting('genieacs_url', 'http://localhost:7557');
+        GENIEACS_URL = getConfiguredGenieacsUrlFromSettings();
         GENIEACS_USERNAME = getSetting('genieacs_username', 'acs');
         GENIEACS_PASSWORD = getSetting('genieacs_password', '');
     }
@@ -134,6 +154,10 @@ function getAxiosInstance(genieacsServer = null) {
 const genieacsApi = {
     async getDevices() {
         try {
+            if (!(await isGenieacsConfigured())) {
+                return [];
+            }
+
             // Check cache first
             const cacheKey = 'genieacs:devices';
             const cachedData = cacheManager.get(cacheKey);
@@ -1035,6 +1059,10 @@ function scheduleMonitoring() {
  * Fallback ke fungsi original jika cache miss
  */
 async function getDevicesCached() {
+    if (!(await isGenieacsConfigured())) {
+        return [];
+    }
+
     // Use the same cache key as getDevices method
     const cacheKey = 'genieacs:devices';
     const cached = cacheManager.get(cacheKey);
@@ -1136,12 +1164,19 @@ async function getAllGenieacsServers() {
 
 // Get devices from all GenieACS servers
 async function getAllDevicesFromAllServers() {
+    if (!(await isGenieacsConfigured())) {
+        return [];
+    }
+
     try {
         const servers = await getAllGenieacsServers();
         if (servers.length === 0) {
-            // Fallback ke default jika tidak ada server
             const defaultDevices = await genieacsApi.getDevices();
-            return defaultDevices.map(device => ({ ...device, _genieacs_server_id: null, _genieacs_server_name: 'Default' }));
+            return (defaultDevices || []).map((device) => ({
+                ...device,
+                _genieacs_server_id: null,
+                _genieacs_server_name: 'Default',
+            }));
         }
 
         const allDevices = [];
@@ -1149,17 +1184,16 @@ async function getAllDevicesFromAllServers() {
             try {
                 const axiosInstance = getAxiosInstance(server);
                 const response = await axiosInstance.get('/devices', { timeout: 30000 });
-                const devices = (response.data || []).map(device => ({
+                const devices = (response.data || []).map((device) => ({
                     ...device,
                     _genieacs_server_id: server.id,
                     _genieacs_server_name: server.name,
-                    _genieacs_server_url: server.url
+                    _genieacs_server_url: server.url,
                 }));
                 allDevices.push(...devices);
                 console.log(`✅ Found ${devices.length} devices from server: ${server.name}`);
             } catch (error) {
                 console.error(`❌ Error fetching devices from server ${server.name}:`, error.message);
-                // Continue to next server
             }
         }
 
@@ -1167,13 +1201,7 @@ async function getAllDevicesFromAllServers() {
         return allDevices;
     } catch (error) {
         console.error('Error in getAllDevicesFromAllServers:', error);
-        // Fallback ke default
-        try {
-            const defaultDevices = await genieacsApi.getDevices();
-            return defaultDevices.map(device => ({ ...device, _genieacs_server_id: null, _genieacs_server_name: 'Default' }));
-        } catch (e) {
-            return [];
-        }
+        return [];
     }
 }
 
@@ -1188,6 +1216,8 @@ module.exports = {
     getAxiosInstance,
     getAllGenieacsServers,
     getAllDevicesFromAllServers,
+    isGenieacsConfigured,
+    getConfiguredGenieacsUrlFromSettings,
     getDeviceByPhoneNumber: genieacsApi.getDeviceByPhoneNumber,
     setParameterValues: genieacsApi.setParameterValues,
     reboot: genieacsApi.reboot,

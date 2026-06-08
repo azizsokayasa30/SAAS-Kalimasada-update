@@ -23,6 +23,14 @@ function getAdminCredentials() {
 // Middleware cek login admin
 function adminAuth(req, res, next) {
   if (req.session && req.session.isAdmin) {
+    if (req.tenantId && req.session.tenantId && Number(req.session.tenantId) !== Number(req.tenantId)) {
+      return req.session.destroy(() => {
+        if (req.path.startsWith('/api/') || req.headers.accept?.includes('application/json')) {
+          return res.status(403).json({ success: false, message: 'Sesi tidak valid untuk tenant ini.' });
+        }
+        return res.redirect('/login?error=tenant_session');
+      });
+    }
     next();
   } else {
     // Check if this is an API request

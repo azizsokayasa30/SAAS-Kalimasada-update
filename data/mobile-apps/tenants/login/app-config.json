@@ -1,0 +1,11 @@
+{
+  "tenant_id": 6,
+  "tenant_name": "login",
+  "subdomain": "login",
+  "app_name": "Kalimasada Login",
+  "api_url": "https://login.kalimasada-app.com",
+  "package_id": "com.kalimasada.billing.login",
+  "hostname": "login.kalimasada-app.com",
+  "base_domain": "kalimasada-app.com",
+  "generated_at": "2026-06-08T05:22:37.037Z"
+}

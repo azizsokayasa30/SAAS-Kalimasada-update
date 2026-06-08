@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <script>
+    (function(){
+      try {
+        var stored = localStorage.getItem('kalimasada_theme');
+        var theme = (stored === 'dark' || stored === 'light') ? stored
+          : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch(e) {
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
+    })();
+  </script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= title %> | Kalimasada Management</title>
+  <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+  <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+  <link rel="stylesheet" href="/css/theme-system.css?v=6">
+  <link rel="stylesheet" href="/css/management-portal.css?v=3">
+  <style>:root { --km-sidebar: 260px; }</style>
+</head>
+<body>
+<div class="km-shell">

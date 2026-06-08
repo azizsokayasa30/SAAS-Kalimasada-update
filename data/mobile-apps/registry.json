@@ -1,0 +1,33 @@
+{
+  "tenants": {
+    "login": {
+      "tenantId": 6,
+      "subdomain": "login",
+      "appName": "Kalimasada Login",
+      "apiUrl": "https://login.kalimasada-app.com",
+      "packageId": "com.kalimasada.billing.login",
+      "releaseNotes": "apk mobile untuk login.net kalimasada, versi aplikasi v5.9.2",
+      "updatedAt": "2026-06-08T05:24:11.423Z",
+      "lastGeneratedAt": "2026-06-08T05:22:37.048Z",
+      "lastBuildAt": "2026-06-08T05:24:11.423Z",
+      "lastBuildStatus": "success",
+      "lastBuildMessage": "APK berhasil: login-mobile-20260608-1224.apk",
+      "lastApkFile": "login-mobile-20260608-1224.apk"
+    },
+    "lebakwangi": {
+      "tenantId": 7,
+      "subdomain": "lebakwangi",
+      "appName": "lebakwangi Mobile",
+      "apiUrl": "https://lebakwangi.kalimasada-app.com",
+      "packageId": "com.kalimasada.billing.lebakwangi",
+      "releaseNotes": "lebakwangi v5.9.2",
+      "updatedAt": "2026-06-07T18:26:16.494Z",
+      "lastGeneratedAt": "2026-06-07T18:26:16.494Z",
+      "lastBuildAt": null,
+      "lastBuildStatus": null,
+      "lastBuildMessage": "Workspace config dihasilkan",
+      "lastApkFile": null
+    }
+  },
+  "updated_at": "2026-06-08T05:24:11.423Z"
+}

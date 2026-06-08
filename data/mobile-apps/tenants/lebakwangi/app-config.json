@@ -1,0 +1,11 @@
+{
+  "tenant_id": 7,
+  "tenant_name": "lebakwangi",
+  "subdomain": "lebakwangi",
+  "app_name": "lebakwangi Mobile",
+  "api_url": "https://lebakwangi.kalimasada-app.com",
+  "package_id": "com.kalimasada.billing.lebakwangi",
+  "hostname": "lebakwangi.kalimasada-app.com",
+  "base_domain": "kalimasada-app.com",
+  "generated_at": "2026-06-07T18:26:16.492Z"
+}

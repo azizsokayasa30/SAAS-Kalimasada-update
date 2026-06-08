@@ -561,6 +561,7 @@ warehouseSync.start();
 
 // Inisialisasi aplikasi Express
 const app = express();
+app.set('trust proxy', true);
 
 // Import route adminAuth
 const { router: adminAuthRouter, adminAuth } = require('./routes/adminAuth');
@@ -584,6 +585,9 @@ const apiSystemRouter = require('./routes/api/system');
 const apiPublicEndpointRouter = require('./routes/api/public-endpoint');
 const customerPortalV1Router = require('./routes/api/customerPortalV1');
 const unifiedAuthRouter = require('./routes/unifiedAuth');
+const managementPortalRouter = require('./routes/managementPortal');
+const { resolveTenantMiddleware, isCentralHost } = require('./middleware/resolveTenant');
+const tenantStore = require('./config/platform/tenantStore');
 
 // Import middleware untuk access control (harus diimport sebelum digunakan)
 const { blockTechnicianAccess } = require('./middleware/technicianAccessControl');
@@ -671,6 +675,26 @@ app.use((req, res, next) => {
   req.session.cookie.maxAge = timeoutMs;
   return next();
 });
+
+// Kalimasada SaaS — Management Portal & tenant context (shared DB)
+app.use('/management', managementPortalRouter);
+// Redirect URL lama /platform → /management
+app.use('/platform', (req, res) => {
+  const target = '/management' + (req.url === '/' ? '' : req.url);
+  return res.redirect(301, target);
+});
+
+app.use((req, res, next) => {
+  if (isCentralHost(req.get('host')) && req.path === '/') {
+    return res.redirect('/management/dashboard');
+  }
+  if (isCentralHost(req.get('host')) && req.path === '/login') {
+    return res.redirect('/management/login');
+  }
+  return next();
+});
+
+app.use(resolveTenantMiddleware);
 
 // Route khusus untuk login mobile (harus sebelum semua route admin)
 app.get('/admin/login/mobile', (req, res) => {
@@ -1519,6 +1543,11 @@ try {
 } catch (e) {
   logger.warn('Public endpoint config log skipped:', e.message);
 }
+
+// Initialize Kalimasada SaaS platform (tenants, super admin, tenant_id columns)
+tenantStore.initPlatform().catch((err) => {
+    logger.error('[platform] initPlatform failed:', err.message);
+});
 
 // Mulai server dengan port dari konfigurasi
 console.log(`🚀 [BOOTSTRAP] Final port selected: ${port}`);

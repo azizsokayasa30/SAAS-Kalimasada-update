@@ -1157,11 +1157,13 @@
                 monitoringInterval = setInterval(() => updateMonitoring(false), 30000); // 30 detik (dioptimasi untuk mengurangi beban API MikroTik)
             }
             
-            // Initialize
-            loadRouters().then(() => {
-                updateMonitoring(true); // Initial load with spinner
-                startAutoRefresh();
-            });
+            // Initialize — tunda agar halaman dashboard tampil dulu (NAS monitoring tidak blocking)
+            setTimeout(() => {
+                loadRouters().then(() => {
+                    updateMonitoring(true);
+                    startAutoRefresh();
+                });
+            }, 2500);
             // Grafik bandwidth real-time dengan 3 chart terpisah
             const maxPoints = 30; // tampilkan 30 data terakhir
             let currentInterface = localStorage.getItem('selectedInterface') || '05-ether2-ISP';
@@ -2107,24 +2109,22 @@ async function fetchSystemInfo() {
     }
 }
 
-// Initialize on page load
-document.addEventListener('DOMContentLoaded', function() {
-    // Wait for Chart.js to be loaded
+function initSystemInfoDashboard() {
     if (typeof Chart === 'undefined') {
-        console.warn('Chart.js not loaded yet, waiting...');
-        setTimeout(function() {
-            if (typeof Chart !== 'undefined') {
-                initializeSystemCharts();
-                fetchSystemInfo();
-                setupSystemInfoRefresh();
-            } else {
-                console.error('Chart.js failed to load');
-            }
-        }, 500);
+        setTimeout(initSystemInfoDashboard, 300);
+        return;
+    }
+    initializeSystemCharts();
+    fetchSystemInfo();
+    setupSystemInfoRefresh();
+}
+
+// Tunda agar statistik utama dashboard tampil lebih dulu
+document.addEventListener('DOMContentLoaded', function() {
+    if ('requestIdleCallback' in window) {
+        requestIdleCallback(initSystemInfoDashboard, { timeout: 6000 });
     } else {
-        initializeSystemCharts();
-        fetchSystemInfo();
-        setupSystemInfoRefresh();
+        setTimeout(initSystemInfoDashboard, 2000);
     }
 });
 

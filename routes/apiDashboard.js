@@ -71,11 +71,26 @@ router.get('/dashboard/resources-multi', async (req, res) => {
     }));
     db.close();
 
+    const withRouterTimeout = (promise, ms = 4000) => Promise.race([
+      promise,
+      new Promise((resolve) => setTimeout(() => resolve({
+        success: false,
+        message: 'Timeout koneksi ke router',
+        data: null,
+      }), ms)),
+    ]);
+
     const results = [];
     for (const router of routers) {
       if (router) {
         try {
-          const result = await getResourceInfoForRouter(router);
+          const result = await withRouterTimeout(getResourceInfoForRouter(router));
+          if (!result.routerId && router.id) {
+            result.routerId = router.id;
+          }
+          if (!result.routerName && router.name) {
+            result.routerName = router.name;
+          }
           results.push(result);
         } catch (e) {
           results.push({ success: false, message: `Error untuk router ${router.name}: ${e.message}`, routerId: router.id, routerName: router.name });

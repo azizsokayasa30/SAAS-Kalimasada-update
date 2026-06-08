@@ -1,0 +1,486 @@
+/**
+ * Kalimasada Management Portal — theme-aware (light/dark)
+ * Uses variables from /css/theme-system.css
+ */
+
+.km-shell {
+  display: flex;
+  min-height: 100vh;
+  background: var(--body-bg);
+  color: var(--text-primary);
+  transition: var(--theme-transition);
+}
+
+.km-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: var(--km-sidebar, 260px);
+  height: 100vh;
+  background: var(--surface-2);
+  border-right: 1px solid var(--border-color);
+  padding: 1.25rem 1rem;
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 100;
+  transition: var(--theme-transition);
+}
+
+[data-theme="dark"] .km-sidebar {
+  background: #111827;
+}
+
+.km-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 1rem;
+}
+
+.km-brand-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #0ea5e9, #6366f1);
+  color: #fff;
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+
+.km-brand h1 {
+  font-size: 1rem;
+  margin: 0;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.km-brand p {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.km-nav a,
+.km-nav button.km-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 0.7rem 0.85rem;
+  border-radius: 10px;
+  margin-bottom: 0.25rem;
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: var(--theme-transition);
+}
+
+.km-nav a:hover,
+.km-nav a.active,
+.km-nav button.km-nav-btn:hover {
+  background: var(--accent-glow);
+  color: var(--text-primary);
+}
+
+.km-nav a.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.km-nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.km-sidebar-bottom {
+  margin-top: auto;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.km-sidebar-footer-label {
+  margin: 0.75rem 0 0.5rem;
+  padding: 0 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.km-theme-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.65rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-3);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: var(--theme-transition);
+}
+
+.km-theme-toggle-btn:hover {
+  background: var(--accent-glow);
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.km-theme-toggle-btn i {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.km-main {
+  margin-left: var(--km-sidebar, 260px);
+  flex: 1;
+  padding: 1.5rem 1.75rem 2rem;
+  width: calc(100% - var(--km-sidebar, 260px));
+  min-height: 100vh;
+  background: var(--body-bg);
+}
+
+.km-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.km-topbar h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.km-topbar .km-subtitle {
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.km-card,
+.km-stat {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  padding: 1.25rem;
+  box-shadow: var(--card-shadow);
+  transition: var(--theme-transition);
+}
+
+.km-stat .label {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.km-stat .value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  margin-top: 0.25rem;
+  color: var(--text-primary);
+}
+
+.km-card .table,
+.km-main .table {
+  color: var(--text-primary);
+  --bs-table-bg: transparent;
+  --bs-table-color: var(--text-primary);
+  --bs-table-hover-bg: var(--table-row-hover);
+  --bs-table-hover-color: var(--text-primary);
+  --bs-table-border-color: var(--table-border);
+  margin-bottom: 0;
+}
+
+.km-card .table thead th {
+  background: var(--table-header-bg);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-color: var(--table-border);
+}
+
+.km-card .table td,
+.km-card .table th {
+  border-color: var(--table-border);
+  vertical-align: middle;
+}
+
+.km-card .table tbody tr:hover {
+  background: var(--table-row-hover);
+}
+
+.km-card code {
+  color: var(--accent);
+  background: var(--surface-3);
+  padding: 0.15rem 0.4rem;
+  border-radius: 6px;
+  font-size: 0.85em;
+}
+
+.badge-status-active {
+  background: var(--badge-success-bg);
+  color: var(--badge-success-text);
+}
+
+.badge-status-suspended,
+.badge-status-failed,
+.badge-status-deleted {
+  background: var(--badge-danger-bg);
+  color: var(--badge-danger-text);
+}
+
+.badge-status-provisioning {
+  background: var(--badge-warning-bg);
+  color: var(--badge-warning-text);
+}
+
+.btn-km-primary {
+  background: linear-gradient(135deg, #0ea5e9, #6366f1);
+  border: none;
+  color: #fff !important;
+}
+
+.btn-km-primary:hover {
+  filter: brightness(1.06);
+  color: #fff !important;
+}
+
+.km-main .form-control,
+.km-main .form-select,
+.km-modal .form-control {
+  background: var(--input-bg);
+  border-color: var(--input-border);
+  color: var(--input-text);
+}
+
+.km-main .form-control:focus,
+.km-main .form-select:focus,
+.km-modal .form-control:focus {
+  background: var(--input-bg);
+  border-color: var(--input-focus-border);
+  color: var(--input-text);
+  box-shadow: 0 0 0 0.2rem var(--accent-glow);
+}
+
+.km-main .form-label {
+  color: var(--text-muted);
+}
+
+.km-main .input-group-text {
+  background: var(--surface-3);
+  border-color: var(--input-border);
+  color: var(--text-muted);
+}
+
+.km-main .alert-success {
+  background: var(--badge-success-bg);
+  color: var(--badge-success-text);
+  border: 1px solid var(--badge-success-text);
+}
+
+.km-main .alert-danger {
+  background: var(--badge-danger-bg);
+  color: var(--badge-danger-text);
+  border: 1px solid var(--badge-danger-text);
+}
+
+.km-modal .modal-content {
+  background: var(--modal-bg);
+  color: var(--text-primary);
+  border-color: var(--modal-border);
+}
+
+.km-modal .modal-header,
+.km-modal .modal-footer {
+  border-color: var(--modal-border);
+}
+
+.km-modal .modal-header {
+  background: var(--modal-header-bg);
+}
+
+.km-modal .btn-close {
+  filter: none;
+}
+
+[data-theme="dark"] .km-modal .btn-close {
+  filter: invert(1);
+}
+
+.km-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+
+.km-user-footer {
+  margin-top: 0;
+  padding: 0.35rem 0.75rem 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.km-subtitle {
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.km-card .table-sm td:first-child {
+  color: var(--text-muted);
+  width: 38%;
+}
+
+.km-main a:not(.btn) {
+  color: var(--accent);
+}
+
+.km-main .btn-outline-secondary {
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+}
+
+.km-main .btn-outline-secondary:hover {
+  background: var(--surface-3);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+/* Reverse proxy — card Proxy ke Server Lain */
+.km-proxy-card .km-proxy-table th {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  white-space: nowrap;
+  border-bottom-width: 1px;
+}
+
+.km-proxy-card .km-proxy-table td {
+  vertical-align: middle;
+  font-size: 0.875rem;
+  width: auto;
+  color: var(--text-primary);
+}
+
+.km-proxy-card .km-proxy-table td:first-child {
+  width: auto;
+  color: var(--text-primary);
+}
+
+.km-proxy-card .km-proxy-table .col-action {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.km-proxy-card .km-proxy-form {
+  margin-top: 0;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.km-proxy-card .km-proxy-form-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 1rem;
+}
+
+.km-proxy-card .km-proxy-form .form-label {
+  font-size: 0.8rem;
+  font-weight: 500;
+  margin-bottom: 0.35rem;
+  color: var(--text-secondary);
+}
+
+.km-proxy-card .km-proxy-form .form-text {
+  font-size: 0.72rem;
+  margin-top: 0.25rem;
+}
+
+.km-proxy-card .km-proxy-upstream-group .input-group-text {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  background: var(--surface-3);
+  border-color: var(--border-color);
+}
+
+.km-proxy-card .km-proxy-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed var(--border-color);
+}
+
+.km-proxy-card .km-proxy-options .form-check {
+  margin: 0;
+  flex: 1 1 280px;
+}
+
+.km-proxy-card .km-proxy-options .form-check-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.km-proxy-card .km-proxy-submit {
+  flex: 0 0 auto;
+  min-width: 160px;
+}
+
+.km-proxy-card .km-proxy-empty {
+  padding: 1.25rem;
+  text-align: center;
+  border: 1px dashed var(--border-color);
+  border-radius: 10px;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
+  background: var(--surface-2);
+}
+
+@media (max-width: 992px) {
+  .km-sidebar {
+    position: static;
+    width: 100%;
+  }
+  .km-main {
+    margin-left: 0;
+    width: 100%;
+  }
+  .km-shell {
+    flex-direction: column;
+  }
+
+  .km-proxy-card .km-proxy-submit {
+    width: 100%;
+  }
+
+  .km-proxy-card .km-proxy-submit .btn {
+    width: 100%;
+  }
+}

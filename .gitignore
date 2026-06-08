@@ -60,6 +60,12 @@ Thumbs.db
 # Vite build output (jalankan npm run build:customer-portal)
 public/customer-app/
 
+# Mobile app build workspaces (registry di-commit; output APK diabaikan)
+data/mobile-apps/tenants/**/output/
+data/mobile-apps/tenants/**/logs/
+data/mobile-apps/tenants/**/.env
+public/mobile-app/**/*.apk
+
 tmp/
 temp/
 *.tmp

@@ -1,0 +1,39 @@
+{
+  "enabled": false,
+  "base_domain": "kalimasada-app.com",
+  "central_subdomain": "manage",
+  "upstream_host": "127.0.0.1",
+  "upstream_port": 4555,
+  "listen_port": 80,
+  "ssl_enabled": true,
+  "ssl_cert_path": "/etc/letsencrypt/live/kalimasada-app.com/fullchain.pem",
+  "ssl_key_path": "/etc/letsencrypt/live/kalimasada-app.com/privkey.pem",
+  "server_ip": "192.168.166.197",
+  "public_ip": "103.132.40.18",
+  "lan_access_enabled": true,
+  "custom_hosts": [],
+  "manual_subdomains": [],
+  "custom_proxies": [
+    {
+      "id": "bna",
+      "label": "Billing SKY-BNA",
+      "hostname": "bna.kalimasada-app.com",
+      "subdomain": "bna",
+      "upstream_host": "192.168.166.196",
+      "upstream_port": 3003,
+      "enabled": true,
+      "preserve_host": false,
+      "notes": "Billing nya Skynet"
+    }
+  ],
+  "tenant_subdomains": [
+    "lebakwangi",
+    "login",
+    "default"
+  ],
+  "auto_sync_on_tenant_change": true,
+  "last_synced_at": "2026-06-07T18:11:57.742Z",
+  "last_applied_at": "2026-06-07T18:12:09.955Z",
+  "last_apply_message": "OK: Konfigurasi Nginx diterapkan dan di-reload\n ==> Perluas SSL: kalimasada-app.com + 4 subdomain\nRenewing an existing certificate for kalimasada-app.com and 5 more domains\n\nSuccessfully received certificate.\nCertificate is saved at: /etc/letsencrypt/live/kalimasada-app.com/fullchain.pem\nKey is saved at:         /etc/letsencrypt/live/kalimasada-app.com/privkey.pem\nThis certificate expires on 2026-09-05.\nThese files will be updated when the certificate renews.\nCertbot has set up a scheduled task to automatically renew this certificate in the background.\n\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\nIf you like Certbot, please consider supporting our work by:\n * Donating to ISRG / Let's Encrypt:   https://letsencrypt.org/donate\n * Donating to EFF:                    https://eff.org/donate-le\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\nOK: Sertifikat diperluas",
+  "last_apply_ok": true
+}

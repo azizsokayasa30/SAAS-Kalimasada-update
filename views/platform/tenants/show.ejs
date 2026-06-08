@@ -1,0 +1,157 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active: 'tenants', adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2><%= tenant.name %></h2>
+      <p class="km-subtitle">
+        <code><%= tenantHostname %></code>
+        · <a href="<%= tenantLoginUrl %>" target="_blank" rel="noopener"><%= tenantLoginUrl %></a>
+      </p>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a href="/management/tenants" class="btn btn-outline-secondary btn-sm">← Daftar</a>
+      <a href="/management/tenants/<%= tenant.id %>/edit" class="btn btn-outline-primary btn-sm">Edit</a>
+      <% if (tenant.status === 'active') { %>
+        <button class="btn btn-outline-warning btn-sm" data-bs-toggle="modal" data-bs-target="#suspendModal">Suspend</button>
+      <% } else if (tenant.status === 'suspended') { %>
+        <form method="POST" action="/management/tenants/<%= tenant.id %>/activate" class="d-inline">
+          <button class="btn btn-outline-success btn-sm">Aktifkan</button>
+        </form>
+      <% } %>
+      <% if (tenant.id !== 1) { %>
+        <button class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deleteModal">Hapus</button>
+      <% } %>
+    </div>
+  </div>
+
+  <% if (flash && flash.success) { %>
+    <div class="alert alert-success">
+      <% if (flash.success === 'created') { %>Tenant berhasil dibuat. Subdomain otomatis diaktifkan di reverse proxy.<% } %>
+      <% if (flash.success === 'updated') { %>Perubahan tenant disimpan. Reverse proxy diperbarui.<% } %>
+      <% if (flash.success === 'suspended') { %>Tenant disuspend.<% } %>
+      <% if (flash.success === 'activated') { %>Tenant diaktifkan kembali.<% } %>
+    </div>
+  <% } %>
+  <% if (flash && flash.nginx_warn) { %>
+    <div class="alert alert-warning">
+      <strong>Reverse proxy:</strong> <%= flash.nginx_warn %>
+      <a href="/management/reverse-proxy" class="alert-link">Buka halaman Reverse Proxy</a> untuk aktivasi manual.
+    </div>
+  <% } %>
+  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+
+  <div class="row g-3 mb-4">
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Status</div><div class="value fs-5"><span class="badge badge-status-<%= tenant.status %>"><%= tenant.status %></span></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pelanggan</div><div class="value"><%= usage.customers %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Router</div><div class="value"><%= usage.routers %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Invoice</div><div class="value"><%= usage.invoices %></div></div></div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-6">
+      <div class="km-card h-100">
+        <h5 class="mb-3">Informasi Tenant</h5>
+        <table class="table table-sm mb-0">
+          <tr><td>Owner</td><td><%= tenant.owner_name %></td></tr>
+          <tr><td>Email</td><td><%= tenant.owner_email %></td></tr>
+          <tr><td>WhatsApp</td><td><%= tenant.owner_phone %></td></tr>
+          <tr><td>Paket</td><td><%= tenant.plan_name %> (<%= tenant.plan_code %>)</td></tr>
+          <tr><td>Berlangganan</td><td><%= tenant.subscription_starts_at || '-' %> s/d <%= tenant.subscription_ends_at || '-' %></td></tr>
+          <tr><td>Provisioned</td><td><%= tenant.provisioned_at || '-' %></td></tr>
+        </table>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="km-card h-100">
+        <h5 class="mb-3">Kredensial Admin Tenant</h5>
+        <p class="km-subtitle small">URL produksi memakai subdomain tenant. Untuk akses via IP/LAN, gunakan URL pengembangan.</p>
+        <table class="table table-sm mb-0">
+          <tr><td>Domain Tenant</td><td><code><%= tenantHostname %></code></td></tr>
+          <tr><td>URL Login</td><td><a href="<%= tenantLoginUrl %>" target="_blank" rel="noopener"><code><%= tenantLoginUrl %></code></a></td></tr>
+          <tr><td>URL Dev (IP/LAN)</td><td><a href="<%= tenantDevLoginUrl %>" target="_blank" rel="noopener"><code><%= tenantDevLoginUrl %></code></a></td></tr>
+          <tr>
+            <td>Username</td>
+            <td>
+              <code id="tenantAdminUser"><%= tenant.settings.admin_username %></code>
+              <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-1 ms-1" onclick="navigator.clipboard.writeText(document.getElementById('tenantAdminUser').textContent.trim())">Salin</button>
+            </td>
+          </tr>
+          <tr>
+            <td>Password</td>
+            <td>
+              <code id="tenantAdminPass"><%= tenant.settings.admin_password %></code>
+              <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-1 ms-1" onclick="navigator.clipboard.writeText(document.getElementById('tenantAdminPass').textContent.trim())">Salin</button>
+            </td>
+          </tr>
+        </table>
+      </div>
+    </div>
+    <div class="col-12">
+      <div class="km-card">
+        <h5 class="mb-3">Log Provisioning</h5>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead><tr><th>Step</th><th>Status</th><th>Waktu</th><th>Error</th></tr></thead>
+            <tbody>
+              <% if (!logs.length) { %><tr><td colspan="4" style="color: var(--text-muted)">Tidak ada log.</td></tr><% } %>
+              <% logs.forEach(function(l) { %>
+                <tr>
+                  <td><%= l.step %></td>
+                  <td><%= l.status %></td>
+                  <td><%= l.completed_at || l.started_at || '-' %></td>
+                  <td class="small" style="color: var(--color-danger)"><%= l.error_message || '' %></td>
+                </tr>
+              <% }); %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="modal fade km-modal" id="suspendModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <form method="POST" action="/management/tenants/<%= tenant.id %>/suspend" class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Suspend Tenant</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p>Tenant <strong><%= tenant.name %></strong> tidak akan bisa diakses hingga diaktifkan kembali.</p>
+        <label class="form-label">Alasan</label>
+        <input type="text" name="reason" class="form-control" placeholder="Subscription expired / pelanggaran kebijakan">
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-warning">Suspend</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<% if (tenant.id !== 1) { %>
+<div class="modal fade km-modal" id="deleteModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <form method="POST" action="/management/tenants/<%= tenant.id %>/delete" class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title text-danger"><i class="bi bi-exclamation-triangle me-1"></i> Hapus Tenant</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-2" style="color: var(--badge-warning-text); background: var(--badge-warning-bg); padding: 0.65rem 0.85rem; border-radius: 8px; font-size: 0.9rem;">
+          Soft delete — tenant ditandai deleted dan tidak bisa diakses.
+        </p>
+        <p class="mb-0">Yakin hapus <strong><%= tenant.name %></strong>?</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-danger">Hapus Tenant</button>
+      </div>
+    </form>
+  </div>
+</div>
+<% } %>
+
+<%- include('../partials/footer') %>

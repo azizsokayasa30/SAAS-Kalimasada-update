@@ -1,0 +1,137 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active: 'tenants', adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Kelola Tenant</h2>
+      <p class="km-subtitle">Tambah, edit, suspend, dan hapus tenant ISP/WiFi</p>
+    </div>
+    <a href="/management/tenants/new" class="btn btn-km-primary btn-sm px-3"><i class="bi bi-plus-lg me-1"></i> Tambah Tenant</a>
+  </div>
+
+  <% if (flash && flash.success === 'deleted') { %>
+    <div class="alert alert-success">Tenant berhasil dihapus.</div>
+  <% } %>
+  <% if (flash && flash.success === 'suspended') { %>
+    <div class="alert alert-success">Tenant berhasil disuspend.</div>
+  <% } %>
+  <% if (flash && flash.success === 'activated') { %>
+    <div class="alert alert-success">Tenant berhasil diaktifkan kembali.</div>
+  <% } %>
+  <% if (flash && flash.error) { %>
+    <div class="alert alert-danger"><%= flash.error %></div>
+  <% } %>
+
+  <div class="km-card">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Nama Tenant</th>
+            <th>Subdomain</th>
+            <th>Owner</th>
+            <th>Paket</th>
+            <th>Pelanggan</th>
+            <th>Status</th>
+            <th class="text-end">Aksi</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!tenants.length) { %>
+            <tr><td colspan="8" class="text-center py-4" style="color: var(--text-muted)">Belum ada tenant. Klik "Tambah Tenant" untuk memulai.</td></tr>
+          <% } %>
+          <% tenants.forEach(function(t) { %>
+            <tr>
+              <td>#<%= t.id %></td>
+              <td class="fw-semibold"><%= t.name %></td>
+              <td><code><%= t.subdomain %></code></td>
+              <td>
+                <div><%= t.owner_name %></div>
+                <small style="color: var(--text-muted)"><%= t.owner_email %></small>
+              </td>
+              <td><%= t.plan_name %></td>
+              <td><%= t.usage.customers %></td>
+              <td><span class="badge badge-status-<%= t.status %>"><%= t.status %></span></td>
+              <td>
+                <div class="km-actions">
+                  <a href="/management/tenants/<%= t.id %>" class="btn btn-sm btn-outline-secondary" title="Detail"><i class="bi bi-eye"></i></a>
+                  <a href="/management/tenants/<%= t.id %>/edit" class="btn btn-sm btn-outline-primary" title="Edit"><i class="bi bi-pencil"></i></a>
+                  <% if (t.status === 'active') { %>
+                    <button type="button" class="btn btn-sm btn-outline-warning" title="Suspend"
+                      data-bs-toggle="modal" data-bs-target="#suspendModal-<%= t.id %>"><i class="bi bi-pause-circle"></i></button>
+                  <% } else if (t.status === 'suspended') { %>
+                    <form method="POST" action="/management/tenants/<%= t.id %>/activate" class="d-inline">
+                      <input type="hidden" name="redirect" value="list">
+                      <button type="submit" class="btn btn-sm btn-outline-success" title="Aktifkan"><i class="bi bi-play-circle"></i></button>
+                    </form>
+                  <% } %>
+                  <% if (t.id !== 1) { %>
+                    <button type="button" class="btn btn-sm btn-outline-danger" title="Hapus"
+                      data-bs-toggle="modal" data-bs-target="#deleteModal-<%= t.id %>"><i class="bi bi-trash"></i></button>
+                  <% } %>
+                </div>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<% tenants.forEach(function(t) { %>
+  <% if (t.status === 'active') { %>
+  <div class="modal fade km-modal" id="suspendModal-<%= t.id %>" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <form method="POST" action="/management/tenants/<%= t.id %>/suspend" class="modal-content">
+        <input type="hidden" name="redirect" value="list">
+        <div class="modal-header">
+          <h5 class="modal-title">Suspend Tenant</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+        </div>
+        <div class="modal-body">
+          <p>Suspend <strong><%= t.name %></strong> (<code><%= t.subdomain %></code>)? Tenant tidak bisa diakses hingga diaktifkan kembali.</p>
+          <label class="form-label">Alasan (opsional)</label>
+          <input type="text" name="reason" class="form-control" placeholder="Subscription expired">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+          <button type="submit" class="btn btn-warning">Suspend</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  <% } %>
+
+  <% if (t.id !== 1) { %>
+  <div class="modal fade km-modal" id="deleteModal-<%= t.id %>" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <form method="POST" action="/management/tenants/<%= t.id %>/delete" class="modal-content">
+        <input type="hidden" name="redirect" value="list">
+        <div class="modal-header">
+          <h5 class="modal-title text-danger"><i class="bi bi-exclamation-triangle me-1"></i> Hapus Tenant</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+        </div>
+        <div class="modal-body">
+          <p class="mb-2">Anda akan menghapus tenant berikut:</p>
+          <ul class="mb-3">
+            <li><strong><%= t.name %></strong></li>
+            <li>Subdomain: <code><%= t.subdomain %></code></li>
+            <li>Owner: <%= t.owner_email %></li>
+          </ul>
+          <p class="mb-0" style="color: var(--badge-warning-text); background: var(--badge-warning-bg); padding: 0.65rem 0.85rem; border-radius: 8px; font-size: 0.9rem;">
+            Soft delete — data bisnis tenant tetap di database tetapi tenant tidak bisa diakses.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+          <button type="submit" class="btn btn-danger">Ya, Hapus Tenant</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  <% } %>
+<% }); %>
+
+<%- include('../partials/footer') %>

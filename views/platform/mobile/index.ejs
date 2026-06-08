@@ -1,0 +1,124 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active: 'mobile-app', adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Mobile App Management</h2>
+      <p class="km-subtitle">Build aplikasi mobile billing per tenant — config <code>.env</code> otomatis dari subdomain</p>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+      <% if (flutter.installed) { %>
+        <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i> Flutter: <%= flutter.version %></span>
+      <% } else { %>
+        <span class="badge bg-warning text-dark"><i class="bi bi-exclamation-triangle me-1"></i> Flutter belum terinstall</span>
+      <% } %>
+    </div>
+  </div>
+
+  <% if (flash && flash.success === 'saved') { %>
+    <div class="alert alert-success py-2">Konfigurasi disimpan.</div>
+  <% } %>
+  <% if (flash && flash.error) { %>
+    <div class="alert alert-danger py-2"><%= flash.error %></div>
+  <% } %>
+
+  <% if (!flutter.installed) { %>
+    <div class="alert alert-info">
+      <strong>Mode config-only.</strong> Server ini belum punya Flutter SDK — portal tetap bisa menghasilkan folder config &amp; <code>build.sh</code> per tenant.
+      Jalankan build di mesin developer atau install Flutter di server.
+    </div>
+  <% } %>
+
+  <div class="row g-3 mb-4">
+    <div class="col-md-4">
+      <div class="km-stat">
+        <div class="label">Total Tenant</div>
+        <div class="value"><%= rows.length %></div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="km-stat">
+        <div class="label">Sudah Ada Config</div>
+        <div class="value"><%= rows.filter(function(r){ return r.hasWorkspace; }).length %></div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="km-stat">
+        <div class="label">Folder Build</div>
+        <div class="value fs-6"><code>data/mobile-apps/tenants/</code></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="km-card">
+    <h5 class="mb-3"><i class="bi bi-phone me-1"></i> Daftar Tenant</h5>
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Tenant</th>
+            <th>Subdomain</th>
+            <th>Nama App</th>
+            <th>API URL</th>
+            <th>Config</th>
+            <th>Build</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!rows.length) { %>
+            <tr><td colspan="7" class="text-center py-4 text-muted">Belum ada tenant.</td></tr>
+          <% } %>
+          <% rows.forEach(function(r) { %>
+            <tr>
+              <td class="fw-medium"><%= r.name %></td>
+              <td><code><%= r.subdomain %>.<%= baseDomain %></code></td>
+              <td><%= r.appName %></td>
+              <td class="small"><code class="text-break"><%= r.apiUrl %></code></td>
+              <td>
+                <% if (r.hasWorkspace) { %>
+                  <span class="badge bg-success">Siap</span>
+                <% } else { %>
+                  <span class="badge bg-secondary">Belum</span>
+                <% } %>
+              </td>
+              <td>
+                <% if (r.lastBuildStatus === 'success') { %>
+                  <span class="badge bg-success" title="<%= r.lastApkFile %>">OK</span>
+                <% } else if (r.lastBuildStatus === 'failed') { %>
+                  <span class="badge bg-danger">Gagal</span>
+                <% } else if (r.lastBuildStatus === 'pending') { %>
+                  <span class="badge bg-warning text-dark">Manual</span>
+                <% } else { %>
+                  <span class="text-muted">—</span>
+                <% } %>
+                <% if (r.apkCount > 0) { %>
+                  <span class="badge bg-secondary"><%= r.apkCount %> APK</span>
+                <% } %>
+              </td>
+              <td>
+                <a href="/management/mobile-app/tenants/<%= r.id %>" class="btn btn-outline-primary btn-sm py-0 px-2">
+                  <i class="bi bi-gear"></i> Kelola
+                </a>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="km-card mt-3">
+    <h6 class="mb-2"><i class="bi bi-folder2-open me-1"></i> Struktur Folder</h6>
+    <pre class="mb-0 p-2 rounded small" style="background: var(--bg-elevated); border: 1px solid var(--border-color);"><code>data/mobile-apps/
+├── registry.json
+└── tenants/
+    └── {subdomain}/
+        ├── .env              # API_URL tenant
+        ├── app-config.json   # metadata
+        ├── build.sh          # script build APK
+        ├── output/           # hasil APK
+        └── logs/             # log build</code></pre>
+  </div>
+</main>
+<%- include('../partials/footer') %>

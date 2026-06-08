@@ -1,0 +1,513 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active: 'reverse-proxy', adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Reverse Proxy Nginx</h2>
+      <p class="km-subtitle">Kelola domain <code><%= config.base_domain %></code> — proxy lokal &amp; server lain</p>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <form method="POST" action="/management/reverse-proxy/sync" class="d-inline">
+        <button type="submit" class="btn btn-km-primary btn-sm" <%= !status.nginx_installed ? 'disabled' : '' %>>
+          <i class="bi bi-arrow-repeat"></i> Sync Semua Tenant
+        </button>
+      </form>
+      <form method="POST" action="/management/reverse-proxy/reload" class="d-inline">
+        <button type="submit" class="btn btn-outline-secondary btn-sm" <%= !status.nginx_installed ? 'disabled' : '' %>>
+          <i class="bi bi-arrow-clockwise"></i> Reload
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <% if (flash && flash.success) { %>
+    <div class="alert alert-success">
+      <% if (flash.success === 'synced') { %>
+        Nginx diperbarui — <strong><%= flash.count || config.tenant_subdomains.length %></strong> subdomain tenant aktif dan siap diakses.
+      <% } %>
+      <% if (flash.success === 'subdomain_added') { %>Subdomain manual <code><%= flash.sub %>.<%= config.base_domain %></code> ditambahkan.<% } %>
+      <% if (flash.success === 'subdomain_removed') { %>Subdomain manual dihapus dari proxy.<% } %>
+      <% if (flash.success === 'proxy_added') { %>Proxy eksternal <code><%= flash.host %></code> ditambahkan dan diterapkan.<% } %>
+      <% if (flash.success === 'proxy_removed') { %>Proxy eksternal dihapus dari nginx.<% } %>
+      <% if (flash.success === 'saved') { %>Pengaturan disimpan.<% } %>
+      <% if (flash.success === 'applied') { %>Konfigurasi Nginx berhasil diterapkan.<% } %>
+      <% if (flash.success === 'reloaded') { %>Nginx berhasil di-reload.<% } %>
+      <% if (flash.success === 'test_ok') { %>Test konfigurasi nginx -t berhasil.<% } %>
+    </div>
+  <% } %>
+  <% if (config.last_apply_message && config.last_apply_message.includes('expand-ssl')) { %>
+    <div class="alert alert-warning">
+      <strong>SSL expand belum otomatis.</strong> Jalankan sekali di server:
+      <pre class="mb-0 mt-2"><code>sudo bash /var/www/billing-kalimasada/scripts/install-nginx-sudoers.sh</code></pre>
+      <p class="mb-0 mt-2 small">Setelah itu, klik <strong>Simpan & Aktifkan Subdomain</strong> agar sertifikat SSL mencakup subdomain tenant baru.</p>
+    </div>
+  <% } %>
+  <% if (flash && flash.error === 'ssl_missing') { %>
+    <div class="alert alert-danger">
+      <strong>SSL tidak bisa diaktifkan</strong> — sertifikat Let's Encrypt belum ada di server.
+      <p class="mb-2 mt-2 small">Pastikan port 80 sudah di-forward ke server ini, lalu jalankan:</p>
+      <pre class="mb-0"><code>sudo bash /var/www/billing-kalimasada/scripts/setup-ssl-certbot.sh kalimasada-app.com</code></pre>
+      <p class="mb-0 mt-2 small">Setelah certbot berhasil, centang SSL lagi dan klik Simpan & Terapkan.</p>
+    </div>
+  <% } else if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+
+  <% if (typeof diagnostics !== 'undefined' && diagnostics.issues && diagnostics.issues.length) { %>
+    <div class="alert alert-warning">
+      <strong><i class="bi bi-exclamation-triangle me-1"></i> Domain belum bisa diakses — perbaiki ini:</strong>
+      <ul class="mb-2 mt-2">
+        <% diagnostics.issues.forEach(function(issue) { %><li><%= issue %></li><% }); %>
+      </ul>
+      <strong>Solusi:</strong>
+      <ol class="mb-0 mt-1">
+        <% diagnostics.fixes.forEach(function(fix) { %><li><%= fix %></li><% }); %>
+      </ol>
+    </div>
+  <% } else if (typeof diagnostics !== 'undefined' && diagnostics.localProxyOk) { %>
+    <div class="alert alert-success py-2">
+      <i class="bi bi-check-circle me-1"></i> Nginx proxy lokal OK.
+      <% if (!diagnostics.sslEnabled) { %>Gunakan <strong>http://</strong> (bukan https://) sampai SSL diaktifkan.<% } %>
+    </div>
+  <% } %>
+
+  <div class="row g-3 mb-4">
+    <div class="col-md-3 col-6">
+      <div class="km-stat">
+        <div class="label">Nginx</div>
+        <div class="value fs-6">
+          <% if (!status.nginx_installed) { %>
+            <span class="badge bg-secondary">Belum install</span>
+          <% } else if (status.nginx_active) { %>
+            <span class="badge bg-success">Aktif</span>
+          <% } else { %>
+            <span class="badge bg-warning text-dark">Terinstall, tidak aktif</span>
+          <% } %>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3 col-6">
+      <div class="km-stat">
+        <div class="label">Site Enabled</div>
+        <div class="value fs-6">
+          <span class="badge <%= status.sites_enabled ? 'bg-success' : 'bg-secondary' %>">
+            <%= status.sites_enabled ? 'Ya' : 'Belum' %>
+          </span>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3 col-6">
+      <div class="km-stat">
+        <div class="label">Upstream</div>
+        <div class="value fs-6"><code><%= config.upstream_host %>:<%= config.upstream_port %></code></div>
+      </div>
+    </div>
+    <div class="col-md-3 col-6">
+      <div class="km-stat">
+        <div class="label">Tenant di Proxy</div>
+        <div class="value"><%= (config.tenant_subdomains || []).length %></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="km-card mb-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h5 class="mb-0"><i class="bi bi-buildings me-1"></i> Kelola Tenant di Proxy</h5>
+      <span class="badge bg-success">Wildcard *.<%= config.base_domain %></span>
+    </div>
+    <p class="km-subtitle small">Semua tenant aktif otomatis masuk proxy. Klik <strong>Simpan & Terapkan</strong> di bawah agar subdomain langsung bisa dibuka.</p>
+    <% if (typeof tenantProxyRows !== 'undefined' && tenantProxyRows.length) { %>
+    <div class="table-responsive mb-3">
+      <table class="table table-sm table-hover mb-0">
+        <thead>
+          <tr><th>Tenant</th><th>Subdomain</th><th>Status</th><th>Di Proxy</th><th>URL Login</th><th></th></tr>
+        </thead>
+        <tbody>
+          <% tenantProxyRows.forEach(function(t) { %>
+            <tr>
+              <td><%= t.name %></td>
+              <td><code><%= t.hostname %></code></td>
+              <td><span class="badge badge-status-<%= t.status %>"><%= t.status %></span></td>
+              <td>
+                <% if (t.proxyActive) { %>
+                  <span class="badge bg-success">Aktif</span>
+                <% } else if (t.inProxy) { %>
+                  <span class="badge bg-warning text-dark">Pending</span>
+                <% } else { %>
+                  <span class="badge bg-secondary">Nonaktif</span>
+                <% } %>
+              </td>
+              <td>
+                <a href="<%= t.url %>" target="_blank" rel="noopener" class="text-decoration-none" style="color: var(--accent)"><%= t.url %></a>
+              </td>
+              <td>
+                <a href="/management/tenants/<%= t.id %>" class="btn btn-outline-secondary btn-sm py-0 px-1">Detail</a>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+    <% } %>
+    <form method="POST" action="/management/reverse-proxy/sync" class="mb-3">
+      <button type="submit" class="btn btn-km-primary btn-sm" <%= !status.nginx_installed ? 'disabled' : '' %>>
+        <i class="bi bi-lightning-charge"></i> Aktifkan Semua Subdomain Tenant Sekarang
+      </button>
+    </form>
+  </div>
+
+  <div class="km-card km-proxy-card mb-4">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <h5 class="mb-0"><i class="bi bi-hdd-network me-1"></i> Proxy ke Server Lain</h5>
+      <span class="badge bg-info text-dark">Multi-backend</span>
+    </div>
+    <p class="km-subtitle small mb-3">
+      Arahkan domain ke aplikasi di server berbeda — contoh <code>bna.<%= config.base_domain %></code> → <code>192.168.166.196:3003</code>
+    </p>
+
+    <% if (typeof customProxies !== 'undefined' && customProxies.length) { %>
+    <div class="table-responsive mb-0">
+      <table class="table table-sm table-hover km-proxy-table mb-0">
+        <thead>
+          <tr>
+            <th>Label</th>
+            <th>Domain</th>
+            <th>Target Server</th>
+            <th>Catatan</th>
+            <th class="col-action"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <% customProxies.forEach(function(p) { %>
+            <tr>
+              <td class="fw-medium"><%= p.label %></td>
+              <td><code class="text-break"><%= p.hostname %></code></td>
+              <td class="text-nowrap"><code><%= p.upstream_host %>:<%= p.upstream_port %></code></td>
+              <td class="text-muted small"><%= p.notes || (p.preserve_host ? 'Host → upstream' : '—') %></td>
+              <td class="col-action">
+                <form method="POST" action="/management/reverse-proxy/proxies/remove" class="d-inline"
+                      onsubmit="return confirm('Hapus proxy <%= p.hostname %>?');">
+                  <input type="hidden" name="proxy_id" value="<%= p.id %>">
+                  <button type="submit" class="btn btn-outline-danger btn-sm">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                </form>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+    <% } else { %>
+      <div class="km-proxy-empty">
+        <i class="bi bi-diagram-3 d-block mb-2" style="font-size:1.5rem;opacity:0.5;"></i>
+        Belum ada proxy eksternal
+      </div>
+    <% } %>
+
+    <form method="POST" action="/management/reverse-proxy/proxies/add" class="km-proxy-form">
+      <div class="km-proxy-form-title">Tambah Proxy Baru</div>
+      <div class="row g-3">
+        <div class="col-lg-3 col-md-6">
+          <label class="form-label" for="proxy_label">Label</label>
+          <input type="text" id="proxy_label" name="label" class="form-control form-control-sm"
+                 placeholder="Billing BNA" autocomplete="off">
+        </div>
+        <div class="col-lg-4 col-md-6">
+          <label class="form-label" for="proxy_hostname">Domain / Subdomain</label>
+          <div class="input-group input-group-sm">
+            <input type="text" id="proxy_hostname" name="hostname" class="form-control"
+                   placeholder="bna" required autocomplete="off">
+            <span class="input-group-text">.<%= config.base_domain %></span>
+          </div>
+          <div class="form-text">Subdomain saja, atau domain penuh di field terpisah</div>
+        </div>
+        <div class="col-lg-5 col-md-12">
+          <label class="form-label">Target Upstream</label>
+          <div class="input-group input-group-sm km-proxy-upstream-group">
+            <span class="input-group-text"><i class="bi bi-hdd-network"></i></span>
+            <input type="text" name="upstream_host" class="form-control"
+                   placeholder="192.168.166.196" required autocomplete="off"
+                   aria-label="IP atau host upstream">
+            <span class="input-group-text">:</span>
+            <input type="number" name="upstream_port" class="form-control"
+                   placeholder="3003" value="3003" min="1" max="65535" required
+                   style="max-width:6rem;" aria-label="Port upstream">
+          </div>
+        </div>
+        <div class="col-12">
+          <label class="form-label" for="proxy_notes">Catatan <span class="text-muted fw-normal">(opsional)</span></label>
+          <input type="text" id="proxy_notes" name="notes" class="form-control form-control-sm"
+                 placeholder="Billing server cabang BNA" autocomplete="off">
+        </div>
+      </div>
+      <div class="km-proxy-options">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="preserve_host" id="preserve_host">
+          <label class="form-check-label" for="preserve_host">
+            Kirim Host header ke upstream (untuk backend yang butuh hostname IP, bukan domain publik)
+          </label>
+        </div>
+        <div class="km-proxy-submit">
+          <button type="submit" class="btn btn-km-primary btn-sm px-4" <%= !status.nginx_installed ? 'disabled' : '' %>>
+            <i class="bi bi-plus-lg me-1"></i> Tambah & Terapkan
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div class="km-card mb-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h5 class="mb-0"><i class="bi bi-link-45deg me-1"></i> Subdomain di Proxy</h5>
+    </div>
+    <p class="km-subtitle small">Daftar lengkap hostname yang terdaftar di nginx (tenant + manual + eksternal + portal).</p>
+    <div class="table-responsive mb-3">
+      <table class="table table-sm table-hover mb-0">
+        <thead>
+          <tr><th>Sumber</th><th>Label</th><th>Hostname</th><th>Upstream</th><th>URL</th><th></th></tr>
+        </thead>
+        <tbody>
+          <% proxyEntries.forEach(function(e) { %>
+            <tr>
+              <td>
+                <% if (e.source === 'external') { %>
+                  <span class="badge bg-warning text-dark">Eksternal</span>
+                <% } else if (e.source === 'manual') { %>
+                  <span class="badge bg-info text-dark">Manual</span>
+                <% } else if (e.type === 'central') { %>
+                  <span class="badge bg-primary">Portal</span>
+                <% } else { %>
+                  <span class="badge bg-secondary">Tenant</span>
+                <% } %>
+              </td>
+              <td><%= e.label %></td>
+              <td><code><%= e.hostname %></code></td>
+              <td><code><%= e.upstream || (config.upstream_host + ':' + config.upstream_port) %></code></td>
+              <td>
+                <a href="<%= e.url %>" target="_blank" rel="noopener" class="text-decoration-none" style="color: var(--accent)">
+                  <%= e.url %>
+                </a>
+              </td>
+              <td>
+                <% if (e.source === 'external') { %>
+                  <form method="POST" action="/management/reverse-proxy/proxies/remove" class="d-inline"
+                        onsubmit="return confirm('Hapus proxy eksternal <%= e.hostname %>?');">
+                    <input type="hidden" name="proxy_id" value="<%= e.proxyId %>">
+                    <button type="submit" class="btn btn-outline-danger btn-sm py-0 px-1">Hapus</button>
+                  </form>
+                <% } else if (e.source === 'manual') { %>
+                  <form method="POST" action="/management/reverse-proxy/subdomains/remove" class="d-inline"
+                        onsubmit="return confirm('Hapus subdomain manual <%= e.subdomain %>?');">
+                    <input type="hidden" name="subdomain" value="<%= e.subdomain %>">
+                    <button type="submit" class="btn btn-outline-danger btn-sm py-0 px-1">Hapus</button>
+                  </form>
+                <% } %>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+    <form method="POST" action="/management/reverse-proxy/subdomains/add" class="row g-2 align-items-end">
+      <div class="col-md-5">
+        <label class="form-label small mb-1">Tambah Subdomain Manual</label>
+        <div class="input-group input-group-sm">
+          <input type="text" name="subdomain" class="form-control" placeholder="namatenant" pattern="[a-z0-9-]+" required>
+          <span class="input-group-text">.<%= config.base_domain %></span>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <button type="submit" class="btn btn-outline-primary btn-sm">
+          <i class="bi bi-plus-lg"></i> Tambah & Terapkan
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <% if (!status.nginx_installed) { %>
+    <div class="alert alert-warning">
+      <strong>Nginx belum terinstall.</strong> Jalankan di server:
+      <pre class="mb-0 mt-2"><code>sudo bash /var/www/billing-kalimasada/scripts/setup-nginx-proxy.sh</code></pre>
+    </div>
+  <% } else if (flash && flash.error && String(flash.error).includes('sudo')) { %>
+    <div class="alert alert-warning">
+      <strong>Izin sudo diperlukan.</strong> Jalankan sekali di server agar tombol Test/Apply bisa dari portal:
+      <pre class="mb-0 mt-2"><code>sudo bash /var/www/billing-kalimasada/scripts/install-nginx-sudoers.sh</code></pre>
+    </div>
+  <% } %>
+
+  <div class="row g-3">
+    <div class="col-lg-7">
+      <div class="km-card mb-3">
+        <h5 class="mb-3"><i class="bi bi-gear me-1"></i> Pengaturan Proxy</h5>
+        <form method="POST" action="/management/reverse-proxy/save">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Domain Utama</label>
+              <input type="text" name="base_domain" class="form-control" value="<%= config.base_domain %>" required>
+              <div class="form-text">Contoh: kalimasada-app.com</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Subdomain Management</label>
+              <input type="text" name="central_subdomain" class="form-control" value="<%= config.central_subdomain %>" required>
+              <div class="form-text"><%= config.central_subdomain %>.<%= config.base_domain %></div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Upstream Host</label>
+              <input type="text" name="upstream_host" class="form-control" value="<%= config.upstream_host %>" required>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Upstream Port</label>
+              <input type="number" name="upstream_port" class="form-control" value="<%= config.upstream_port %>" min="1" max="65535" required>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Listen Port</label>
+              <input type="number" name="listen_port" class="form-control" value="<%= config.listen_port %>" min="1" max="65535">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">IP LAN Server</label>
+              <input type="text" name="server_ip" class="form-control" value="<%= config.server_ip %>">
+              <div class="form-text">IP lokal VM, contoh: 192.168.166.197</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">IP Publik (DNS A record)</label>
+              <input type="text" name="public_ip" class="form-control" value="<%= config.public_ip || '' %>" placeholder="103.132.40.18">
+              <div class="form-text">IP yang diarahkan oleh DNS domain</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Domain Tambahan (opsional)</label>
+              <input type="text" name="custom_hosts" class="form-control"
+                     value="<%= (config.custom_hosts || []).join(', ') %>"
+                     placeholder="billing.example.com, app.example.com">
+            </div>
+            <div class="col-12">
+              <label class="form-label">Subdomain Manual (bulk, pisah baris/koma)</label>
+              <textarea name="manual_subdomains" class="form-control" rows="2"
+                        placeholder="staging&#10;demo"><%= (config.manual_subdomains || []).join('\n') %></textarea>
+              <div class="form-text">Subdomain ekstra tanpa tenant DB — berguna untuk staging, alias, atau custom host.</div>
+            </div>
+            <div class="col-12">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" name="ssl_enabled" id="ssl_enabled" <%= config.ssl_enabled ? 'checked' : '' %>>
+                <label class="form-check-label" for="ssl_enabled">Aktifkan HTTPS (SSL)</label>
+              </div>
+              <% if (typeof sslStatus !== 'undefined') { %>
+                <% if (sslStatus.ok) { %>
+                  <div class="form-text text-success"><i class="bi bi-shield-check"></i> Sertifikat SSL ditemukan — siap diaktifkan.</div>
+                <% } else { %>
+                  <div class="form-text text-warning"><i class="bi bi-shield-exclamation"></i> <%= sslStatus.error %></div>
+                <% } %>
+              <% } %>
+            </div>
+            <div class="col-md-6 ssl-fields" style="<%= config.ssl_enabled ? '' : 'display:none' %>">
+              <label class="form-label">SSL Certificate</label>
+              <input type="text" name="ssl_cert_path" class="form-control" value="<%= config.ssl_cert_path %>">
+            </div>
+            <div class="col-md-6 ssl-fields" style="<%= config.ssl_enabled ? '' : 'display:none' %>">
+              <label class="form-label">SSL Private Key</label>
+              <input type="text" name="ssl_key_path" class="form-control" value="<%= config.ssl_key_path %>">
+            </div>
+          </div>
+          <input type="hidden" name="auto_sync_on_tenant_change" value="on">
+          <div class="d-flex gap-2 mt-4 flex-wrap">
+            <button type="submit" class="btn btn-km-primary btn-sm px-3" <%= !status.nginx_installed ? 'disabled' : '' %>>
+              <i class="bi bi-lightning-charge"></i> Simpan & Aktifkan Subdomain
+            </button>
+            <button type="submit" formaction="/management/reverse-proxy/test" class="btn btn-outline-info btn-sm" <%= !status.nginx_installed ? 'disabled' : '' %>>
+              <i class="bi bi-check2-circle"></i> Test (nginx -t)
+            </button>
+          </div>
+          <p class="km-subtitle small mt-2 mb-0">Satu klik submit = simpan + sync semua subdomain tenant + reload Nginx.</p>
+        </form>
+      </div>
+
+      <div class="km-card">
+        <h5 class="mb-3"><i class="bi bi-diagram-3 me-1"></i> Routing Domain</h5>
+        <table class="table table-sm mb-0">
+          <thead><tr><th>URL</th><th>Fungsi</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>https://<%= config.central_subdomain %>.<%= config.base_domain %></code></td>
+              <td>Management Portal (Super Admin)</td>
+            </tr>
+            <tr>
+              <td><code>https://{tenant}.<%= config.base_domain %></code></td>
+              <td>Panel billing per tenant (server lokal)</td>
+            </tr>
+            <tr>
+              <td><code>https://{custom}.<%= config.base_domain %></code></td>
+              <td>Domain kustom → server lain (atur di <strong>Proxy ke Server Lain</strong>)</td>
+            </tr>
+            <tr>
+              <td><code>https://<%= config.base_domain %></code></td>
+              <td>Apex domain (default / landing)</td>
+            </tr>
+            <tr>
+              <td><code>http://<%= config.server_ip %>:<%= config.upstream_port %></code></td>
+              <td>Akses langsung (dev/LAN)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="col-lg-5">
+      <div class="km-card mb-3">
+        <h5 class="mb-3"><i class="bi bi-globe2 me-1"></i> Panduan DNS</h5>
+        <p class="km-subtitle small">Arahkan record berikut ke IP server:</p>
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Tipe</th><th>Host</th><th>Nilai</th></tr></thead>
+          <tbody>
+            <% dns.forEach(function(r) { %>
+              <tr>
+                <td><span class="badge bg-secondary"><%= r.type %></span></td>
+                <td><code><%= r.host %></code></td>
+                <td><code><%= r.value %></code></td>
+              </tr>
+            <% }); %>
+          </tbody>
+        </table>
+        <p class="km-subtitle small mt-2 mb-0"><%= dns[0].note %>, <%= dns[1].note %></p>
+      </div>
+
+      <div class="km-card mb-3">
+        <h5 class="mb-2"><i class="bi bi-pc-display me-1"></i> Testing Lokal (hosts file)</h5>
+        <p class="km-subtitle small">Jika DNS belum aktif, tambahkan ke <code>/etc/hosts</code> (Windows: <code>C:\Windows\System32\drivers\etc\hosts</code>):</p>
+        <pre class="p-2 rounded mb-2" style="font-size: 0.72rem; background: var(--bg-elevated); border: 1px solid var(--border); max-height: 160px; overflow: auto;"><code id="hostsSnippet"><%= hostsSnippet %></code></pre>
+        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="copyHosts()">
+          <i class="bi bi-clipboard"></i> Salin
+        </button>
+      </div>
+
+      <div class="km-card">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <h5 class="mb-0"><i class="bi bi-file-code me-1"></i> Preview Konfigurasi</h5>
+          <a href="/management/reverse-proxy/preview" target="_blank" class="btn btn-outline-secondary btn-sm">Buka</a>
+        </div>
+        <pre class="mb-0 p-2 rounded" style="max-height: 420px; overflow: auto; font-size: 0.72rem; background: var(--bg-elevated); border: 1px solid var(--border);"><code><%= preview %></code></pre>
+      </div>
+
+      <% if (config.last_apply_message) { %>
+        <div class="km-card mt-3">
+          <h6 class="mb-2">Log Terakhir</h6>
+          <p class="small mb-0 <%= config.last_apply_ok ? 'text-success' : 'text-danger' %>">
+            <%= config.last_apply_message %>
+          </p>
+        </div>
+      <% } %>
+    </div>
+  </div>
+</main>
+<%- include('../partials/footer') %>
+<script>
+document.getElementById('ssl_enabled')?.addEventListener('change', function() {
+  document.querySelectorAll('.ssl-fields').forEach(function(el) {
+    el.style.display = this.checked ? '' : 'none';
+  }.bind(this));
+});
+function copyHosts() {
+  const text = document.getElementById('hostsSnippet')?.textContent || '';
+  navigator.clipboard.writeText(text).then(function() {
+    alert('Hosts file disalin ke clipboard.');
+  });
+}
+</script>

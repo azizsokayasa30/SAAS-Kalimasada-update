@@ -8,14 +8,22 @@ const { exec } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
 
-const { getAllDevicesFromAllServers } = require('../config/genieacs');
-const { getMikrotikConnectionForRouter, getRadiusStatistics, getUserAuthModeAsync } = require('../config/mikrotik');
 const { getSettingsWithCache } = require('../config/settingsManager');
 const { getVersionInfo, getVersionBadge } = require('../config/version-utils');
 const { getRadiusConfigValue } = require('../config/radiusConfig');
-const { checkLicenseStatus } = require('../config/licenseManager');
 const billingManager = require('../config/billing');
+const cacheManager = require('../config/cacheManager');
 const sqlite3 = require('sqlite3').verbose();
+
+const DASHBOARD_CACHE_TTL_MS = 45 * 1000;
+const EMPTY_BILLING_STATS = {
+  total_customers: 0, active_customers: 0, total_invoices: 0, paid_invoices: 0, unpaid_invoices: 0,
+  total_revenue: 0, total_unpaid: 0, monthly_revenue: 0, voucher_revenue: 0, monthly_invoices: 0,
+  paid_monthly_invoices: 0, unpaid_monthly_invoices: 0, monthly_unpaid: 0, monthly_total_tagihan: 0,
+  monthly_belum_lunas_canonical: 0, monthly_lunas_canonical: 0, outstanding_unpaid_total: 0,
+  outstanding_unpaid_count: 0, voucher_invoices: 0, paid_voucher_invoices: 0, unpaid_voucher_invoices: 0,
+  voucher_unpaid: 0,
+};
 
 function resolveBestBillingDbPath() {
   const candidates = [
@@ -81,329 +89,238 @@ function resolveDashboardUserName(req, settings = {}) {
   return (fallback && String(fallback).trim()) ? String(fallback).trim() : 'Admin';
 }
 
-// GET: Dashboard admin
-router.get('/dashboard', adminAuth, async (req, res) => {
-  let genieacsTotal = 0, genieacsOnline = 0, genieacsOffline = 0;
-  let mikrotikTotal = 0, mikrotikAktif = 0, mikrotikOffline = 0;
-  let settings = {};
-  
-  try {
-    // Baca settings.json
-    settings = getSettingsWithCache();
-    
-    // GenieACS dengan timeout dan fallback - aggregate dari semua server
-    try {
-      const devices = await Promise.race([
-        getAllDevicesFromAllServers(),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('GenieACS timeout')), 10000) // Increased timeout untuk multiple servers
-        )
-      ]);
-      genieacsTotal = devices.length;
-      // Anggap device online jika ada _lastInform dalam 1 jam terakhir
-      const now = Date.now();
-      genieacsOnline = devices.filter(dev => dev._lastInform && (now - new Date(dev._lastInform).getTime()) < 3600*1000).length;
-      genieacsOffline = genieacsTotal - genieacsOnline;
-      console.log(`✅ [DASHBOARD] GenieACS data loaded successfully: ${genieacsTotal} devices from all servers`);
-    } catch (genieacsError) {
-      console.warn('⚠️ [DASHBOARD] GenieACS tidak dapat diakses - menggunakan data default:', genieacsError.message);
-      // Set default values jika GenieACS tidak bisa diakses
-      genieacsTotal = 0;
-      genieacsOnline = 0;
-      genieacsOffline = 0;
-      // Dashboard tetap bisa dimuat meskipun GenieACS bermasalah
-    }
-    
-    // Check auth mode - RADIUS atau Mikrotik API
-    let authMode = 'mikrotik';
-    try {
-      authMode = await getUserAuthModeAsync();
-    } catch (e) {
-      console.warn('⚠️ [DASHBOARD] Could not determine auth mode, defaulting to mikrotik');
-    }
-    
-    // Mikrotik agregasi seluruh NAS (jika mode Mikrotik API)
-    if (authMode === 'mikrotik') {
-      try {
-        const sqlite3 = require('sqlite3').verbose();
-        const db = new sqlite3.Database(path.join(process.cwd(), 'data/billing.db'));
-        const routers = await new Promise((resolve) => {
-          db.all('SELECT * FROM routers ORDER BY id', (err, rows) => resolve(rows || []));
-        });
-        db.close();
+function dashboardCacheKey(req, suffix) {
+  const tenantId = req.session?.tenantId || req.tenantId || 'global';
+  return `dash:${tenantId}:${suffix}`;
+}
 
-        let totalSecrets = 0, totalActive = 0;
-        await Promise.all((routers || []).map(async (r) => {
-          try {
-            const conn = await Promise.race([
-              getMikrotikConnectionForRouter(r),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('connect timeout')), 5000))
-            ]);
-            const [active, secrets] = await Promise.all([
-              conn.write('/ppp/active/print'),
-              conn.write('/ppp/secret/print')
-            ]);
-            totalActive += Array.isArray(active) ? active.length : 0;
-            totalSecrets += Array.isArray(secrets) ? secrets.length : 0;
-          } catch (e) {
-            console.warn('⚠️ [DASHBOARD] Skip router', r && r.nas_ip, e.message);
-          }
-        }));
+function withTimeout(promise, ms, label = 'timeout') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(label)), ms)),
+  ]);
+}
 
-        mikrotikAktif = totalActive;
-        mikrotikTotal = totalSecrets;
-        mikrotikOffline = Math.max(totalSecrets - totalActive, 0);
-        console.log('✅ [DASHBOARD] Mikrotik aggregated across NAS');
-      } catch (mikrotikError) {
-        console.warn('⚠️ [DASHBOARD] Mikrotik tidak dapat diakses - menggunakan data default:', mikrotikError.message);
-        // Set default values jika Mikrotik tidak bisa diakses
-        mikrotikTotal = 0;
-        mikrotikAktif = 0;
-        mikrotikOffline = 0;
-        // Dashboard tetap bisa dimuat meskipun Mikrotik bermasalah
-      }
-    } else {
-      // Mode RADIUS - ambil dari database RADIUS
-      try {
-        const stats = await getRadiusStatistics();
-        mikrotikTotal = stats.total;
-        mikrotikAktif = stats.active;
-        mikrotikOffline = stats.offline;
-        console.log('✅ [DASHBOARD] RADIUS statistics loaded:', stats);
-      } catch (radiusError) {
-        console.warn('⚠️ [DASHBOARD] RADIUS tidak dapat diakses - menggunakan data default:', radiusError.message);
-        mikrotikTotal = 0;
-        mikrotikAktif = 0;
-        mikrotikOffline = 0;
-      }
-    }
-  } catch (e) {
-    console.error('❌ [DASHBOARD] Error in dashboard route:', e);
-    // Jika error, biarkan value default 0
-  }
-  
-  // Check license status untuk ditampilkan di dashboard
-  let licenseStatus = null;
-  try {
-    licenseStatus = await checkLicenseStatus();
-  } catch (error) {
-    console.error('⚠️ [DASHBOARD] Error checking license status:', error);
-  }
+async function getCachedDashboardData(req, key, fetcher, ttl = DASHBOARD_CACHE_TTL_MS) {
+  const cacheKey = dashboardCacheKey(req, key);
+  const cached = cacheManager.get(cacheKey);
+  if (cached != null) return cached;
+  const value = await fetcher();
+  cacheManager.set(cacheKey, value, ttl);
+  return value;
+}
 
-  // ─── Billing Stats ────────────────────────────────────────────────────────
-  let billingStats = null;
-  let overdueInvoices = [];
-  let recentInvoices = [];
-  const withBillingTimeout = (promise, ms = 10000) =>
-    Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error('billing timeout')), ms))]);
+function scheduleReconcilePortalPackageRequests() {
+  setImmediate(() => {
+    billingManager.reconcilePortalPackageRequestsFulfilled().catch((e) => {
+      console.warn('[DASHBOARD] background reconcile:', e.message);
+    });
+  });
+}
 
-  try {
-    [billingStats, overdueInvoices, recentInvoices] = await Promise.all([
-      withBillingTimeout(billingManager.getBillingStats(), 15000),
-      withBillingTimeout(billingManager.getOverdueInvoices(10), 10000),
-      withBillingTimeout(billingManager.getInvoices(null, 10, 0), 10000)
-    ]);
-    console.log('✅ [DASHBOARD] Billing stats loaded');
-  } catch (billingError) {
-    console.warn('⚠️ [DASHBOARD] Billing stats tidak dapat dimuat:', billingError.message);
-    billingStats = { total_customers: 0, active_customers: 0, total_invoices: 0, paid_invoices: 0, unpaid_invoices: 0, total_revenue: 0, total_unpaid: 0, monthly_revenue: 0, voucher_revenue: 0, monthly_invoices: 0, paid_monthly_invoices: 0, unpaid_monthly_invoices: 0, monthly_unpaid: 0, monthly_total_tagihan: 0, monthly_belum_lunas_canonical: 0, monthly_lunas_canonical: 0, outstanding_unpaid_total: 0, outstanding_unpaid_count: 0, voucher_invoices: 0, paid_voucher_invoices: 0, unpaid_voucher_invoices: 0, voucher_unpaid: 0 };
-  }
-
-  let portalPackageRequests = [];
-  try {
-    await billingManager.reconcilePortalPackageRequestsFulfilled();
-  } catch (e) {
-    console.warn('⚠️ [DASHBOARD] reconcile portal package requests:', e.message);
-  }
-  try {
-    portalPackageRequests = await billingManager.listPortalPackageRequestsPending(20);
-  } catch (e) {
-    console.warn('⚠️ [DASHBOARD] portal package requests:', e.message);
-    portalPackageRequests = [];
-  }
-
-  let adminNotifBadgeTotal = 0;
-  try {
-    adminNotifBadgeTotal = await billingManager.getAdminNotificationBadgeCount();
-  } catch (e) {
-    console.warn('⚠️ [DASHBOARD] admin notification badge:', e.message);
-    adminNotifBadgeTotal = 0;
-  }
-
-  // ─── Recent Data Queries ──────────────────────────────────────────────────
-  let recentCustomers = [];
-  let recentPaidInvoices = [];
-  let recentTickets = [];
-  let newCustomersThisMonth = 0;
-  let operationalStats = {
-    pendingInstallations: 0,
-    pendingTroubleTickets: 0,
-    employeesAttendedToday: 0
-  };
-
-  try {
+function loadDashboardRecentData() {
+  return new Promise((resolve) => {
     const dbPath = resolveBestBillingDbPath();
     const db = new sqlite3.Database(dbPath);
     const now = new Date();
-    const monthStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const result = {
+      recentCustomers: [],
+      recentPaidInvoices: [],
+      newCustomersThisMonth: 0,
+      operationalStats: {
+        pendingInstallations: 0,
+        pendingTroubleTickets: 0,
+        employeesAttendedToday: 0,
+      },
+    };
 
-    await Promise.all([
-      // 5 pelanggan terbaru
-      new Promise((resolve) => {
-        db.all(`SELECT id, name, phone, area, status, join_date
-                FROM customers
-                ORDER BY datetime(COALESCE(join_date, '1970-01-01 00:00:00')) DESC, id DESC
-                LIMIT 5`, [], (err, rows) => {
-          if (err) {
-            console.warn('⚠️ [DASHBOARD] recentCustomers query failed, trying fallback:', err.message);
-            return db.all(`SELECT id, name, phone, area, status, join_date FROM customers ORDER BY id DESC LIMIT 5`, [], (err2, rows2) => {
-              if (err2) {
-                console.warn('⚠️ [DASHBOARD] recentCustomers fallback failed:', err2.message);
-                recentCustomers = [];
-              } else {
-                recentCustomers = rows2 || [];
-              }
-              resolve();
+    const finish = () => {
+      db.close();
+      resolve(result);
+    };
+
+    let pending = 5;
+    const done = () => {
+      pending -= 1;
+      if (pending <= 0) finish();
+    };
+
+    db.all(
+      `SELECT id, name, phone, area, status, join_date FROM customers
+       ORDER BY datetime(COALESCE(join_date, '1970-01-01 00:00:00')) DESC, id DESC LIMIT 5`,
+      [],
+      (err, rows) => {
+        result.recentCustomers = err ? [] : (rows || []);
+        done();
+      }
+    );
+
+    db.all(
+      `SELECT i.id, i.invoice_number, i.amount, i.payment_date, i.created_at,
+              COALESCE(c.name, 'Pelanggan') as customer_name
+       FROM invoices i LEFT JOIN customers c ON i.customer_id = c.id
+       WHERE i.status = 'paid'
+       ORDER BY datetime(COALESCE(i.payment_date, i.created_at, '1970-01-01 00:00:00')) DESC, i.id DESC
+       LIMIT 5`,
+      [],
+      (err, rows) => {
+        result.recentPaidInvoices = err ? [] : (rows || []);
+        done();
+      }
+    );
+
+    db.get(
+      `SELECT COUNT(*) as cnt FROM customers
+       WHERE strftime('%Y-%m', COALESCE(join_date, created_at, datetime('now','localtime'))) = ?
+         AND date(COALESCE(join_date, created_at)) <= date('now','localtime')`,
+      [monthStr],
+      (err, row) => {
+        result.newCustomersThisMonth = (!err && row) ? (row.cnt || 0) : 0;
+        done();
+      }
+    );
+
+    db.get(
+      `SELECT COUNT(*) AS cnt FROM installation_jobs
+       WHERE LOWER(COALESCE(status, '')) IN ('scheduled', 'assigned', 'in_progress')`,
+      [],
+      (err, row) => {
+        result.operationalStats.pendingInstallations = (!err && row) ? (row.cnt || 0) : 0;
+        done();
+      }
+    );
+
+    db.get(
+      `SELECT COUNT(DISTINCT employee_id) AS cnt FROM employee_attendance
+       WHERE date = date('now', 'localtime') AND TRIM(COALESCE(status, '')) != ''`,
+      [],
+      (err, row) => {
+        result.operationalStats.employeesAttendedToday = (!err && row) ? (row.cnt || 0) : 0;
+        done();
+      }
+    );
+  });
+}
+
+function loadDashboardTroubleSummary() {
+  return new Promise((resolve) => {
+    const dbPath = resolveBestBillingDbPath();
+    const db = new sqlite3.Database(dbPath);
+    db.get(
+      `SELECT COUNT(*) AS cnt FROM trouble_reports
+       WHERE LOWER(COALESCE(status, '')) IN ('open', 'pending', 'in_progress', 'baru')`,
+      [],
+      (err, countRow) => {
+        const pending = (!err && countRow) ? (countRow.cnt || 0) : 0;
+        db.all(
+          `SELECT id, name, customer_name, status, created_at FROM trouble_reports
+           ORDER BY datetime(COALESCE(created_at, '1970-01-01 00:00:00')) DESC LIMIT 5`,
+          [],
+          (err2, rows) => {
+            db.close();
+            resolve({
+              pendingTroubleTickets: pending,
+              recentTickets: err2 ? [] : (rows || []),
             });
           }
-          recentCustomers = rows || [];
-          resolve();
-        });
-      }),
-      // 5 tagihan lunas terbaru
-      new Promise((resolve) => {
-        db.all(`SELECT i.id, i.invoice_number, i.amount, i.payment_date, i.created_at,
-                  COALESCE(c.name, 'Pelanggan') as customer_name
-                FROM invoices i
-                LEFT JOIN customers c ON i.customer_id = c.id
-                WHERE i.status = 'paid'
-                ORDER BY datetime(COALESCE(i.payment_date, i.created_at, '1970-01-01 00:00:00')) DESC, i.id DESC
-                LIMIT 5`, [], (err, rows) => {
-          if (err) {
-            console.warn('⚠️ [DASHBOARD] recentPaidInvoices query failed, trying fallback:', err.message);
-            return db.all(`SELECT i.id, i.invoice_number, i.amount, i.payment_date, i.created_at,
-                              COALESCE(c.name, 'Pelanggan') as customer_name
-                            FROM invoices i
-                            LEFT JOIN customers c ON i.customer_id = c.id
-                            WHERE i.status = 'paid'
-                            ORDER BY i.id DESC LIMIT 5`, [], (err2, rows2) => {
-              if (err2) {
-                console.warn('⚠️ [DASHBOARD] recentPaidInvoices fallback failed:', err2.message);
-                recentPaidInvoices = [];
-              } else {
-                recentPaidInvoices = rows2 || [];
-              }
-              resolve();
-            });
-          }
-          recentPaidInvoices = rows || [];
-          resolve();
-        });
-      }),
-      // Pelanggan baru bulan ini
-      new Promise((resolve) => {
-        db.get(`SELECT COUNT(*) as cnt FROM customers WHERE strftime('%Y-%m', COALESCE(join_date, created_at, datetime('now','localtime'))) = ? AND date(COALESCE(join_date, created_at)) <= date('now','localtime')`, [monthStr], (err, row) => {
-          if (err) {
-            console.warn('⚠️ [DASHBOARD] newCustomersThisMonth query failed:', err.message);
-            newCustomersThisMonth = 0;
-            return resolve();
-          }
-          newCustomersThisMonth = (row && row.cnt) || 0;
-          resolve();
-        });
-      }),
-      // Pending job instalasi (belum selesai / belum dibatalkan)
-      new Promise((resolve) => {
-        db.get(
-          `SELECT COUNT(*) AS cnt
-           FROM installation_jobs
-           WHERE LOWER(COALESCE(status, '')) IN ('scheduled', 'assigned', 'in_progress')`,
-          [],
-          (err, row) => {
-            if (err) {
-              console.warn('⚠️ [DASHBOARD] pendingInstallations query failed:', err.message);
-              operationalStats.pendingInstallations = 0;
-            } else {
-              operationalStats.pendingInstallations = (row && row.cnt) || 0;
-            }
-            resolve();
-          }
         );
-      }),
-      // Karyawan yang sudah absen hari ini (unik per employee_id)
-      new Promise((resolve) => {
-        db.get(
-          `SELECT COUNT(DISTINCT employee_id) AS cnt
-           FROM employee_attendance
-           WHERE date = date('now', 'localtime')
-             AND TRIM(COALESCE(status, '')) != ''`,
-          [],
-          (err, row) => {
-            if (err) {
-              console.warn('⚠️ [DASHBOARD] employeesAttendedToday query failed:', err.message);
-              operationalStats.employeesAttendedToday = 0;
-            } else {
-              operationalStats.employeesAttendedToday = (row && row.cnt) || 0;
-            }
-            resolve();
-          }
-        );
-      }),
-    ]);
-    db.close();
+      }
+    );
+  });
+}
 
-    // Tiket gangguan terbaru (5) dari config troubleReport
-    try {
-      const { getAllTroubleReports } = require('../config/troubleReport');
-      const allTickets = await getAllTroubleReports();
-      const pendingStatuses = new Set(['open', 'pending', 'in_progress', 'baru']);
-      operationalStats.pendingTroubleTickets = (allTickets || []).filter((t) => {
-        const st = String(t && t.status ? t.status : '').toLowerCase().trim();
-        return pendingStatuses.has(st);
-      }).length;
-      recentTickets = (allTickets || [])
-        .sort((a, b) => {
-          const ad = new Date(a.createdAt || a.created_at || 0).getTime();
-          const bd = new Date(b.createdAt || b.created_at || 0).getTime();
-          return bd - ad;
-        })
-        .slice(0, 5);
-    } catch(e) {
-      operationalStats.pendingTroubleTickets = 0;
-      recentTickets = [];
-    }
-  } catch(dbErr) {
-    console.warn('⚠️ [DASHBOARD] Recent data queries failed:', dbErr.message);
+function pickSidebarSettings(full = {}) {
+  return {
+    logo_filename: full.logo_filename || 'logo.png',
+    company_header: full.company_header || full.company_name || 'Kalimasada Billing',
+    company_name: full.company_name || full.company_header || 'Kalimasada Billing',
+  };
+}
+
+function getLightSettingsForDashboard(req) {
+  if (req.tenant?.settings) {
+    return pickSidebarSettings(req.tenant.settings);
   }
+  return pickSidebarSettings(getSettingsWithCache());
+}
+
+async function loadDashboardOverviewData(req) {
+  const [
+    billingResult,
+    portalReqResult,
+    recentDataResult,
+    troubleResult,
+  ] = await Promise.allSettled([
+    getCachedDashboardData(req, 'billing-stats', () => withTimeout(billingManager.getBillingStats(), 12000, 'billing stats timeout')),
+    withTimeout(billingManager.listPortalPackageRequestsPending(20), 5000, 'portal requests timeout'),
+    getCachedDashboardData(req, 'recent-data', loadDashboardRecentData, 30 * 1000),
+    loadDashboardTroubleSummary(),
+  ]);
+
+  const billingStats = billingResult.status === 'fulfilled' ? billingResult.value : EMPTY_BILLING_STATS;
+  const portalPackageRequests = portalReqResult.status === 'fulfilled' ? portalReqResult.value : [];
+  const recentData = recentDataResult.status === 'fulfilled' ? recentDataResult.value : {};
+  const troubleData = troubleResult.status === 'fulfilled' ? troubleResult.value : {};
+
+  if (billingResult.status === 'rejected') {
+    console.warn('⚠️ [DASHBOARD] Billing stats:', billingResult.reason?.message || billingResult.reason);
+  }
+
+  return {
+    billingStats: billingStats || EMPTY_BILLING_STATS,
+    portalPackageRequests: portalPackageRequests || [],
+    recentCustomers: recentData.recentCustomers || [],
+    recentPaidInvoices: recentData.recentPaidInvoices || [],
+    recentTickets: troubleData.recentTickets || [],
+    newCustomersThisMonth: recentData.newCustomersThisMonth || 0,
+    operationalStats: {
+      pendingInstallations: recentData.operationalStats?.pendingInstallations || 0,
+      pendingTroubleTickets: troubleData.pendingTroubleTickets || 0,
+      employeesAttendedToday: recentData.operationalStats?.employeesAttendedToday || 0,
+    },
+  };
+}
+
+// GET: Dashboard admin — shell cepat; data statistik via /dashboard/api/overview (AJAX).
+router.get('/dashboard', adminAuth, (req, res) => {
+  const settings = getLightSettingsForDashboard(req);
+  scheduleReconcilePortalPackageRequests();
 
   res.render('adminDashboard', {
     title: 'Dashboard Admin',
     page: 'dashboard',
-    genieacsTotal,
-    genieacsOnline,
-    genieacsOffline,
-    mikrotikTotal,
-    mikrotikAktif,
-    mikrotikOffline,
+    deferStatsLoad: true,
     settings,
     versionInfo: getVersionInfo(),
     versionBadge: getVersionBadge(),
-    licenseStatus: licenseStatus,
-    // Billing data
-    billingStats: billingStats || {},
-    overdueInvoices: overdueInvoices || [],
-    recentInvoices: recentInvoices || [],
-    // Recent data
-    recentCustomers,
-    recentPaidInvoices,
-    recentTickets,
-    newCustomersThisMonth,
-    operationalStats,
-    portalPackageRequests: portalPackageRequests || [],
-    adminNotifBadgeTotal: adminNotifBadgeTotal || 0,
+    billingStats: EMPTY_BILLING_STATS,
+    recentCustomers: [],
+    recentPaidInvoices: [],
+    recentTickets: [],
+    newCustomersThisMonth: 0,
+    operationalStats: { pendingInstallations: 0, pendingTroubleTickets: 0, employeesAttendedToday: 0 },
+    portalPackageRequests: [],
+    adminNotifBadgeTotal: 0,
     dashboardGreetingUser: resolveDashboardUserName(req, settings),
-    dashboardGreetingDate: formatDashboardGreetingDate()
+    dashboardGreetingDate: formatDashboardGreetingDate(),
   });
+});
+
+router.get('/dashboard/api/overview', adminAuth, async (req, res) => {
+  try {
+    const cacheKey = dashboardCacheKey(req, 'overview-json');
+    const cached = cacheManager.get(cacheKey);
+    if (cached) {
+      return res.json({ success: true, cached: true, ...cached });
+    }
+    const data = await loadDashboardOverviewData(req);
+    cacheManager.set(cacheKey, data, 30 * 1000);
+    return res.json({ success: true, cached: false, ...data });
+  } catch (err) {
+    console.error('[DASHBOARD] overview API:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Gagal memuat data dashboard' });
+  }
 });
 
 // Halaman penuh pusat notifikasi admin

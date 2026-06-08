@@ -15,9 +15,120 @@ require('../../config/collectorFieldNotifications');
 
 const dbPath = path.join(__dirname, '../../data/billing.db');
 const db = new sqlite3.Database(dbPath);
+
+/** Tabel tugas teknisi (PSB + gangguan) — DB fresh sering belum punya karena hanya ada di script terpisah. */
+function ensureFieldOpsTables() {
+    const tableDdl = [
+        `CREATE TABLE IF NOT EXISTS installation_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_number VARCHAR(50) UNIQUE,
+            customer_name VARCHAR(255) NOT NULL,
+            customer_phone VARCHAR(20),
+            customer_address TEXT,
+            customer_id INTEGER,
+            package_id INTEGER,
+            installation_date DATE,
+            installation_time VARCHAR(20),
+            assigned_technician_id INTEGER,
+            status VARCHAR(50) DEFAULT 'scheduled',
+            priority VARCHAR(20) DEFAULT 'normal',
+            notes TEXT,
+            equipment_needed TEXT,
+            estimated_duration INTEGER DEFAULT 120,
+            created_by_admin_id INTEGER,
+            completed_at DATETIME,
+            completion_notes TEXT,
+            customer_latitude DECIMAL(10, 8),
+            customer_longitude DECIMAL(11, 8),
+            assigned_at DATETIME,
+            work_started_at DATETIME,
+            work_duration_seconds INTEGER,
+            tech_completion_latitude REAL,
+            tech_completion_longitude REAL,
+            install_cable_length_m REAL,
+            install_ont_sticker_photo_path TEXT,
+            created_at DATETIME DEFAULT (datetime('now','localtime')),
+            updated_at DATETIME DEFAULT (datetime('now','localtime')),
+            FOREIGN KEY (package_id) REFERENCES packages(id),
+            FOREIGN KEY (assigned_technician_id) REFERENCES technicians(id)
+        )`,
+        `CREATE TABLE IF NOT EXISTS installation_job_status_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id INTEGER NOT NULL,
+            old_status VARCHAR(50),
+            new_status VARCHAR(50) NOT NULL,
+            changed_by_type VARCHAR(20) NOT NULL,
+            changed_by_id INTEGER NOT NULL,
+            notes TEXT,
+            created_at DATETIME DEFAULT (datetime('now','localtime')),
+            FOREIGN KEY (job_id) REFERENCES installation_jobs(id)
+        )`,
+        `CREATE TABLE IF NOT EXISTS trouble_reports (
+            id TEXT PRIMARY KEY,
+            status TEXT DEFAULT 'open',
+            created_at DATETIME DEFAULT (datetime('now','localtime')),
+            updated_at DATETIME DEFAULT (datetime('now','localtime')),
+            name TEXT,
+            phone TEXT,
+            location TEXT,
+            category TEXT,
+            description TEXT,
+            assigned_technician_id INTEGER,
+            priority TEXT DEFAULT 'Normal',
+            notes TEXT,
+            customer_id INTEGER,
+            work_started_at DATETIME,
+            work_duration_seconds INTEGER
+        )`
+    ];
+    const indexDdl = [
+        'CREATE INDEX IF NOT EXISTS idx_installation_jobs_status ON installation_jobs(status)',
+        'CREATE INDEX IF NOT EXISTS idx_installation_jobs_technician ON installation_jobs(assigned_technician_id)',
+        'CREATE INDEX IF NOT EXISTS idx_trouble_reports_technician ON trouble_reports(assigned_technician_id)',
+        'CREATE INDEX IF NOT EXISTS idx_trouble_reports_status ON trouble_reports(status)'
+    ];
+    db.serialize(() => {
+        for (const sql of tableDdl) {
+            db.run(sql, (err) => {
+                if (err) logger.warn('[mobile-adapter] ensureFieldOpsTables table:', err.message);
+            });
+        }
+        for (const sql of indexDdl) {
+            db.run(sql, (err) => {
+                if (err) logger.warn('[mobile-adapter] ensureFieldOpsTables index:', err.message);
+            });
+        }
+    });
+}
+ensureFieldOpsTables();
+
+const MIKROTIK_NETWORK_MAP_TIMEOUT_MS = 8000;
+
+function withTimeout(promise, ms, label) {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => {
+            setTimeout(() => reject(new Error(`${label} timeout (${ms}ms)`)), ms);
+        })
+    ]);
+}
+
 const CableNetworkUtils = require('../../utils/cableNetworkUtils');
 const billingManager = require('../../config/billing');
+const { getTenantId, hasTenantContext } = require('../../config/platform/tenantContext');
 const { submitCollectorPayment, collectorPaymentMulter } = require('../../utils/collectorPaymentSubmit');
+
+db.run('ALTER TABLE customers ADD COLUMN customer_id TEXT', (err) => {
+    if (err && !/duplicate column/i.test(String(err.message))) {
+        logger.warn('[mobile-adapter] customers.customer_id:', err.message);
+    }
+});
+db.run(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_customer_id ON customers(customer_id)',
+    (err) => {
+        if (err) logger.warn('[mobile-adapter] idx_customers_customer_id:', err.message);
+    }
+);
 
 function requireCollector(req, res, next) {
     if (!req.user || String(req.user.role) !== 'collector') {
@@ -729,6 +840,10 @@ router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
 
     const params = [];
     let where = '1=1';
+    if (hasTenantContext()) {
+        where += ' AND c.tenant_id = ?';
+        params.push(getTenantId());
+    }
     if (status) {
         const role = req.user && req.user.role;
         const techId = role === 'technician' ? parseTechnicianId(req) : null;
@@ -936,17 +1051,23 @@ router.get('/customers/search', verifyToken, allowFieldOps, (req, res) => {
         return res.json({ success: true, data: [] });
     }
     const like = `%${q.replace(/%/g, '')}%`;
+    const searchParams = [like, like, like, like, like, like, like];
+    let searchWhere = `c.name LIKE ? OR c.phone LIKE ? OR CAST(c.customer_id AS TEXT) LIKE ? OR IFNULL(c.email, '') LIKE ?
+            OR IFNULL(c.area, '') LIKE ? OR IFNULL(ar.nama_area, '') LIKE ? OR IFNULL(ar.kode_area, '') LIKE ?`;
+    if (hasTenantContext()) {
+        searchWhere = `c.tenant_id = ? AND (${searchWhere})`;
+        searchParams.unshift(getTenantId());
+    }
     db.all(
         `SELECT c.id, c.customer_id, c.name, c.phone, c.email, c.status, c.address, c.area_id,
                 COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, ar.kode_area, '') AS area,
                 ar.nama_area AS nama_area
          FROM customers c
          LEFT JOIN areas ar ON c.area_id = ar.id
-         WHERE c.name LIKE ? OR c.phone LIKE ? OR CAST(c.customer_id AS TEXT) LIKE ? OR IFNULL(c.email, '') LIKE ?
-            OR IFNULL(c.area, '') LIKE ? OR IFNULL(ar.nama_area, '') LIKE ? OR IFNULL(ar.kode_area, '') LIKE ?
+         WHERE ${searchWhere}
          ORDER BY c.name
          LIMIT 30`,
-        [like, like, like, like, like, like, like],
+        searchParams,
         (err, rows) => {
             if (err) {
                 return res.status(500).json({ success: false, message: err.message });
@@ -3063,7 +3184,11 @@ router.get('/network-map', verifyToken, requireTechnician, async (req, res) => {
         let pppoeUptimeByLogin = Object.create(null);
         try {
             const { getActivePppoeLoginNamesSetWithUptimeMap } = require('../../config/mikrotik');
-            const batch = await getActivePppoeLoginNamesSetWithUptimeMap();
+            const batch = await withTimeout(
+                getActivePppoeLoginNamesSetWithUptimeMap(),
+                MIKROTIK_NETWORK_MAP_TIMEOUT_MS,
+                'MikroTik PPPoE'
+            );
             onlineLoginSet = batch.names || new Set();
             pppoeUptimeByLogin = batch.uptimeByLogin || Object.create(null);
         } catch (e) {

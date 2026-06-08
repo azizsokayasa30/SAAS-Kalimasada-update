@@ -1,0 +1,26 @@
+<aside class="km-sidebar">
+  <div class="km-brand">
+    <div class="km-brand-icon"><i class="bi bi-cloud-check-fill"></i></div>
+    <div>
+      <h1>Kalimasada</h1>
+      <p>Management Portal</p>
+    </div>
+  </div>
+  <nav class="km-nav">
+    <a href="/management/dashboard" class="<%= active === 'dashboard' ? 'active' : '' %>"><i class="bi bi-speedometer2"></i> Dashboard</a>
+    <a href="/management/tenants" class="<%= active === 'tenants' ? 'active' : '' %>"><i class="bi bi-buildings"></i> Tenant</a>
+    <a href="/management/reverse-proxy" class="<%= active === 'reverse-proxy' ? 'active' : '' %>"><i class="bi bi-hdd-network"></i> Reverse Proxy</a>
+    <a href="/management/mobile-app" class="<%= active === 'mobile-app' ? 'active' : '' %>"><i class="bi bi-phone"></i> Mobile App</a>
+    <a href="/management/logout"><i class="bi bi-box-arrow-right"></i> Logout</a>
+  </nav>
+  <div class="km-sidebar-bottom">
+    <div class="km-user-footer">
+      <i class="bi bi-person-circle"></i> <%= adminName || 'Super Admin' %>
+    </div>
+    <p class="km-sidebar-footer-label">Kalimasada Management</p>
+    <button type="button" class="km-theme-toggle-btn" id="globalThemeToggle" title="Ganti tema gelap / terang">
+      <i class="bi bi-moon-fill" id="themeToggleIcon"></i>
+      <span id="themeToggleLabel">Tema</span>
+    </button>
+  </div>
+</aside>

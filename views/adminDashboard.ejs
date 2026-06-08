@@ -6,16 +6,22 @@
     <meta charset="UTF-8">
     <title><% if (typeof isTechnicianView !== 'undefined' && isTechnicianView) { %>Dashboard Teknisi<% } else { %>Dashboard Admin<% } %></title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/fonts-inter-local.css" media="print" onload="this.media='all'">
+    <noscript><link rel="stylesheet" href="/css/fonts-inter-local.css"></noscript>
     <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
     <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
     
     
     <link href="/css/responsive-admin.css" rel="stylesheet">
     <link href="/css/dashboard-modern.css" rel="stylesheet">
-    
+    <% if (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) { %>
+    <style>.dash-stat-loading .sc-value, .dash-stat-loading .sc-sub { opacity: 0.45; }</style>
+    <script>
+    window.__dashOverviewPrefetch = fetch('/admin/dashboard/api/overview', { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .catch(function () { return null; });
+    </script>
+    <% } %>
 
     <%- include('partials/theme-head') %>
 </head>
@@ -170,13 +176,13 @@
 
             <!-- ====== STAT CARDS ====== -->
             <div class="db-section-label"><i class="bi bi-bar-chart-fill me-2"></i>Statistik Pelanggan & Tagihan</div>
-            <div class="stat-grid-6 mb-4">
+            <div class="stat-grid-6 mb-4<%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? ' dash-stat-loading' : '' %>" id="dashStatsGrid">
                 <a href="/admin/billing/customers" class="stat-card-big stat-indigo" id="sc-total-customer">
                     <div class="sc-header">
                         <span class="sc-label">Total Pelanggan</span>
                         <span class="sc-badge"><i class="bi bi-people-fill me-1"></i> Database</span>
                     </div>
-                    <div class="sc-value"><%= bs.total_customers || 0 %></div>
+                    <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : (bs.total_customers || 0) %></div>
                     <div class="sc-sub">Pelanggan terdaftar total</div>
                 </a>
                 <a href="/admin/billing/customers?status=active" class="stat-card-big stat-emerald" id="sc-active">
@@ -184,7 +190,7 @@
                         <span class="sc-label">Pelanggan Aktif</span>
                         <span class="sc-badge"><i class="bi bi-check-circle-fill me-1"></i> Aktif</span>
                     </div>
-                    <div class="sc-value"><%= bs.active_customers || 0 %></div>
+                    <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : (bs.active_customers || 0) %></div>
                     <div class="sc-sub">Status terkoneksi saat ini</div>
                 </a>
                 <a href="/admin/billing/customers?status=inactive" class="stat-card-big stat-rose" id="sc-inactive">
@@ -192,7 +198,7 @@
                         <span class="sc-label">Pelanggan Nonaktif</span>
                         <span class="sc-badge"><i class="bi bi-x-circle-fill me-1"></i> Isolir</span>
                     </div>
-                    <div class="sc-value"><%= (bs.total_customers || 0) - (bs.active_customers || 0) %></div>
+                    <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : ((bs.total_customers || 0) - (bs.active_customers || 0)) %></div>
                     <div class="sc-sub">Isolir / Berhenti berlangganan</div>
                 </a>
                 <% 
@@ -209,15 +215,15 @@
                         <span class="sc-label">Total Tagihan</span>
                         <span class="sc-badge"><i class="bi bi-receipt me-1"></i> <%= invBln %> Inv</span>
                     </div>
-                    <div class="sc-value">Rp <%= tagihanBln.toLocaleString('id-ID') %></div>
-                    <div class="sc-sub">Lunas Rp <%= lunasBln.toLocaleString('id-ID') %> · Blm Rp <%= blmBln.toLocaleString('id-ID') %></div>
+                    <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : ('Rp ' + tagihanBln.toLocaleString('id-ID')) %></div>
+                    <div class="sc-sub"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? 'Memuat…' : ('Lunas Rp ' + lunasBln.toLocaleString('id-ID') + ' · Blm Rp ' + blmBln.toLocaleString('id-ID')) %></div>
                 </a>
                 <a href="/admin/billing/invoices?status=unpaid" class="stat-card-big stat-amber" id="sc-unpaid">
                     <div class="sc-header">
                         <span class="sc-label">Belum Lunas</span>
                         <span class="sc-badge"><%= invBlmBln %> Inv · Bln Ini</span>
                     </div>
-                    <div class="sc-value">Rp <%= blmBln.toLocaleString('id-ID') %></div>
+                    <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : ('Rp ' + blmBln.toLocaleString('id-ID')) %></div>
                     <div class="sc-sub">Dari tagihan terbit bulan ini</div>
                 </a>
                 <a href="/admin/billing/invoices?status=unpaid" class="stat-card-big stat-rose" id="sc-piutang-all" title="Semua invoice belum lunas (termasuk bulan lalu)">
@@ -225,7 +231,7 @@
                         <span class="sc-label">Piutang Aktif</span>
                         <span class="sc-badge"><%= piutangCnt %> Inv</span>
                     </div>
-                    <div class="sc-value">Rp <%= piutangAll.toLocaleString('id-ID') %></div>
+                    <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : ('Rp ' + piutangAll.toLocaleString('id-ID')) %></div>
                     <div class="sc-sub">Total belum lunas (semua periode)</div>
                 </a>
                 <a href="/admin/billing/customers" class="stat-card-big stat-teal" id="sc-new-customer">
@@ -233,7 +239,7 @@
                         <span class="sc-label">Pelanggan Baru</span>
                         <span class="sc-badge"><i class="bi bi-graph-up-arrow me-1"></i> Plus</span>
                     </div>
-                    <div class="sc-value"><%= typeof newCustomersThisMonth !== 'undefined' ? newCustomersThisMonth : 0 %></div>
+                    <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : (typeof newCustomersThisMonth !== 'undefined' ? newCustomersThisMonth : 0) %></div>
                     <div class="sc-sub">Bulan berjalan</div>
                 </a>
             </div>
@@ -257,7 +263,7 @@
                             <span class="sc-label">Pending Job Instalasi</span>
                             <span class="sc-badge"><i class="bi bi-tools me-1"></i> Teknisi</span>
                         </div>
-                        <div class="sc-value"><%= pendingInstallations %></div>
+                        <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : pendingInstallations %></div>
                         <div class="sc-sub">Status scheduled / assigned / in progress</div>
                     </a>
                 </div>
@@ -267,7 +273,7 @@
                             <span class="sc-label">Pending Tiket Gangguan</span>
                             <span class="sc-badge"><i class="bi bi-exclamation-triangle-fill me-1"></i> Trouble</span>
                         </div>
-                        <div class="sc-value"><%= pendingTroubleTickets %></div>
+                        <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : pendingTroubleTickets %></div>
                         <div class="sc-sub">Tiket open / pending / in progress</div>
                     </a>
                 </div>
@@ -277,7 +283,7 @@
                             <span class="sc-label">Karyawan Sudah Absen</span>
                             <span class="sc-badge"><i class="bi bi-calendar-check-fill me-1"></i> Hari Ini</span>
                         </div>
-                        <div class="sc-value"><%= employeesAttendedToday %></div>
+                        <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : employeesAttendedToday %></div>
                         <div class="sc-sub">Jumlah karyawan unik yang tercatat absen hari ini</div>
                     </a>
                 </div>
@@ -319,8 +325,10 @@
                             <span><i class="bi bi-person-lines-fill me-2"></i>Pelanggan Terbaru</span>
                             <a href="/admin/billing/customers" class="btn btn-xs btn-outline-primary">Lihat Semua</a>
                         </div>
-                        <div class="card-body p-0">
-                            <% if (typeof recentCustomers !== 'undefined' && recentCustomers && recentCustomers.length > 0) { %>
+                        <div class="card-body p-0" id="dashRecentCustomers">
+                            <% if (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) { %>
+                            <div class="text-center py-4 text-muted small">Memuat data…</div>
+                            <% } else if (typeof recentCustomers !== 'undefined' && recentCustomers && recentCustomers.length > 0) { %>
                             <ul class="recent-list">
                                 <% recentCustomers.forEach(function(c) { %>
                                 <li class="recent-item">
@@ -352,8 +360,10 @@
                             <span><i class="bi bi-receipt-check me-2"></i>Tagihan Lunas Terbaru</span>
                             <a href="/admin/billing/invoices?status=paid" class="btn btn-xs btn-outline-success">Lihat Semua</a>
                         </div>
-                        <div class="card-body p-0">
-                            <% if (typeof recentPaidInvoices !== 'undefined' && recentPaidInvoices && recentPaidInvoices.length > 0) { %>
+                        <div class="card-body p-0" id="dashRecentInvoices">
+                            <% if (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) { %>
+                            <div class="text-center py-4 text-muted small">Memuat data…</div>
+                            <% } else if (typeof recentPaidInvoices !== 'undefined' && recentPaidInvoices && recentPaidInvoices.length > 0) { %>
                             <ul class="recent-list">
                                 <% recentPaidInvoices.forEach(function(inv) { %>
                                 <li class="recent-item">
@@ -379,8 +389,10 @@
                             <span><i class="bi bi-bug-fill me-2"></i>Tiket Gangguan Terbaru</span>
                             <a href="/admin/trouble" class="btn btn-xs btn-outline-danger">Lihat Semua</a>
                         </div>
-                        <div class="card-body p-0">
-                            <% if (typeof recentTickets !== 'undefined' && recentTickets && recentTickets.length > 0) { %>
+                        <div class="card-body p-0" id="dashRecentTickets">
+                            <% if (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) { %>
+                            <div class="text-center py-4 text-muted small">Memuat data…</div>
+                            <% } else if (typeof recentTickets !== 'undefined' && recentTickets && recentTickets.length > 0) { %>
                             <ul class="recent-list">
                                 <% recentTickets.forEach(function(t) { %>
                                 <li class="recent-item">
@@ -434,7 +446,7 @@
 </div>
 <!-- Toast Container -->
 <div id="toast-container" style="position: fixed; top: 20px; right: 20px; z-index: 9999;"></div>
-<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="/vendor/jquery/jquery.min.js"></script>
 <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
 <script>
 // Fungsi toast notification
@@ -673,7 +685,32 @@ function sendWaReminderFromBtn(btn) {
 
 </script>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="/js/dashboard-charts.js"></script>
+<% if (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) { %>
+<script src="/js/dashboard-overview.js?v=2"></script>
+<% } %>
+<script>
+(function () {
+  function loadScript(src) {
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = src;
+      s.async = true;
+      s.onload = resolve;
+      s.onerror = reject;
+      document.body.appendChild(s);
+    });
+  }
+  function loadCharts() {
+    loadScript('https://cdn.jsdelivr.net/npm/chart.js')
+      .then(function () { return loadScript('/js/dashboard-charts.js'); })
+      .catch(function (e) { console.warn('[dashboard] deferred charts:', e); });
+  }
+  if ('requestIdleCallback' in window) {
+    requestIdleCallback(loadCharts, { timeout: 5000 });
+  } else {
+    window.addEventListener('load', function () { setTimeout(loadCharts, 800); });
+  }
+})();
+</script>
 </body>
 </html>

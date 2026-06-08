@@ -1,0 +1,119 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active: 'tenants', adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2><%= tenant && tenant.id ? 'Edit Tenant' : 'Tambah Tenant' %></h2>
+      <p class="km-subtitle">Provisioning otomatis — tanpa setup manual database/radius</p>
+    </div>
+    <a href="/management/tenants" class="btn btn-outline-secondary btn-sm">Kembali</a>
+  </div>
+
+  <% if (error) { %><div class="alert alert-danger"><%= error %></div><% } %>
+
+  <div class="km-card" style="max-width: 720px;">
+    <form method="POST" action="<%= tenant && tenant.id ? '/management/tenants/' + tenant.id : '/management/tenants' %>">
+      <div class="row g-3">
+        <div class="col-md-12">
+          <label class="form-label">Nama Tenant *</label>
+          <input type="text" name="name" class="form-control" value="<%= tenant ? tenant.name || '' : '' %>" required placeholder="ISP Nusantara">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Nama Owner *</label>
+          <input type="text" name="owner_name" class="form-control" value="<%= tenant ? tenant.owner_name || '' : '' %>" required>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Email Owner *</label>
+          <input type="email" name="owner_email" class="form-control" value="<%= tenant ? tenant.owner_email || '' : '' %>" required>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">WhatsApp Owner *</label>
+          <input type="text" name="owner_phone" class="form-control" value="<%= tenant ? tenant.owner_phone || '' : '' %>" required placeholder="62812...">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Subdomain *</label>
+          <div class="input-group">
+            <input type="text" name="subdomain" class="form-control" value="<%= tenant ? tenant.subdomain || '' : '' %>" required pattern="[a-z0-9-]+" title="huruf kecil, angka, strip">
+            <span class="input-group-text">.<%= typeof tenantBaseDomain !== 'undefined' ? tenantBaseDomain : 'kalimasada-app.com' %></span>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Paket Berlangganan *</label>
+          <select name="subscription_plan_id" class="form-select" required>
+            <% plans.forEach(function(p) { %>
+              <option value="<%= p.id %>" <%= tenant && Number(tenant.subscription_plan_id) === p.id ? 'selected' : '' %>>
+                <%= p.name %> — <%= p.max_customers ? p.max_customers + ' pelanggan' : 'Unlimited' %>
+              </option>
+            <% }); %>
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Durasi Langganan (bulan)</label>
+          <input type="number" name="subscription_months" class="form-control" min="1" max="36" value="<%= tenant && tenant.subscription_months ? tenant.subscription_months : 1 %>">
+        </div>
+
+        <div class="col-12 mt-2">
+          <hr class="my-2">
+          <h6 class="mb-1"><i class="bi bi-shield-lock me-1"></i> Kredensial Login Admin Tenant</h6>
+          <p class="km-subtitle small mb-0">Digunakan untuk login di <code>{subdomain}.<%= typeof tenantBaseDomain !== 'undefined' ? tenantBaseDomain : 'kalimasada-app.com' %>/login</code></p>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Username Admin *</label>
+          <input type="text" name="admin_username" class="form-control" required
+            pattern="[a-zA-Z0-9._-]+" title="huruf, angka, titik, strip, underscore"
+            value="<%= tenant ? (tenant.settings && tenant.settings.admin_username) || tenant.admin_username || 'admin' : 'admin' %>"
+            placeholder="admin">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Password Admin<% if (!tenant || !tenant.id) { %> <span class="text-muted fw-normal">(kosongkan = generate otomatis)</span><% } %></label>
+          <div class="input-group">
+            <input type="password" name="admin_password" id="adminPassword" class="form-control" autocomplete="new-password"
+              placeholder="<%= tenant && tenant.id ? 'Kosongkan jika tidak diubah' : 'Minimal 4 karakter atau kosongkan untuk auto-generate' %>"
+              minlength="4">
+            <button type="button" class="btn btn-outline-secondary" id="toggleAdminPass" title="Tampilkan/sembunyikan">
+              <i class="bi bi-eye"></i>
+            </button>
+            <% if (!tenant || !tenant.id) { %>
+            <button type="button" class="btn btn-outline-secondary" id="genAdminPass" title="Generate password">
+              <i class="bi bi-shuffle"></i>
+            </button>
+            <% } %>
+          </div>
+        </div>
+      </div>
+      <div class="mt-4 d-flex gap-2">
+        <button type="submit" class="btn btn-km-primary px-4">
+          <i class="bi bi-check2-circle me-1"></i> <%= tenant && tenant.id ? 'Simpan Perubahan' : 'Create Tenant' %>
+        </button>
+        <a href="/management/tenants" class="btn btn-outline-secondary">Batal</a>
+      </div>
+    </form>
+  </div>
+</main>
+<script>
+(function () {
+  const passInput = document.getElementById('adminPassword');
+  const toggleBtn = document.getElementById('toggleAdminPass');
+  const genBtn = document.getElementById('genAdminPass');
+
+  if (toggleBtn && passInput) {
+    toggleBtn.addEventListener('click', function () {
+      const show = passInput.type === 'password';
+      passInput.type = show ? 'text' : 'password';
+      toggleBtn.innerHTML = show ? '<i class="bi bi-eye-slash"></i>' : '<i class="bi bi-eye"></i>';
+    });
+  }
+
+  if (genBtn && passInput) {
+    genBtn.addEventListener('click', function () {
+      const chars = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      let pwd = '';
+      for (let i = 0; i < 12; i++) pwd += chars[Math.floor(Math.random() * chars.length)];
+      passInput.value = pwd;
+      passInput.type = 'text';
+      if (toggleBtn) toggleBtn.innerHTML = '<i class="bi bi-eye-slash"></i>';
+    });
+  }
+})();
+</script>
+<%- include('../partials/footer') %>

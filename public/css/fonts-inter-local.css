@@ -1,0 +1,7 @@
+/* Non-blocking fallback: system UI stack until Inter loads (optional CDN below). */
+:root {
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+body, .sb-item, .stat-card, .dashboard-greeting {
+  font-family: var(--font-sans);
+}

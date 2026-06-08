@@ -3,6 +3,25 @@ const path = require('path');
 const performanceMonitor = require('./performanceMonitor');
 
 const settingsPath = path.join(process.cwd(), 'settings.json');
+const settingsTemplatePath = path.join(process.cwd(), 'settings.server.template.json');
+
+function ensureSettingsFile() {
+  try {
+    if (fs.existsSync(settingsPath)) return false;
+    if (!fs.existsSync(settingsTemplatePath)) {
+      console.warn('[settings] settings.json tidak ada dan template tidak ditemukan');
+      return false;
+    }
+    fs.copyFileSync(settingsTemplatePath, settingsPath);
+    console.log('[settings] settings.json dibuat dari settings.server.template.json');
+    return true;
+  } catch (e) {
+    console.warn('[settings] ensureSettingsFile gagal:', e.message);
+    return false;
+  }
+}
+
+ensureSettingsFile();
 
 // In-memory cache untuk performa
 let settingsCache = null;
@@ -39,7 +58,9 @@ function readSettingsFromDisk() {
 function loadSettingsFromFile() {
   const startTime = Date.now();
   let wasCacheHit = false;
-  
+
+  ensureSettingsFile();
+
   try {
     const stats = fs.statSync(settingsPath);
     const fileModified = stats.mtime.getTime();
@@ -195,6 +216,7 @@ module.exports = {
   setSetting, 
   clearSettingsCache,
   deleteSetting,
+  ensureSettingsFile,
   getServerTimezone,
   getLocalTimestamp,
   getPerformanceStats: () => performanceMonitor.getStats(),

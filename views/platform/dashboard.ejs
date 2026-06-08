@@ -1,0 +1,44 @@
+<%- include('partials/head', { title }) %>
+<%- include('partials/sidebar', { active: 'dashboard', adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Dashboard</h2>
+      <p class="km-subtitle">Ringkasan platform SaaS Kalimasada Billing</p>
+    </div>
+    <a href="/management/tenants/new" class="btn btn-km-primary btn-sm px-3"><i class="bi bi-plus-lg me-1"></i> Tambah Tenant</a>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Total Tenant</div><div class="value"><%= stats.totalTenants %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Aktif</div><div class="value" style="color: var(--color-success)"><%= stats.activeTenants %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Suspended</div><div class="value" style="color: var(--color-danger)"><%= stats.suspendedTenants %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Total Pelanggan</div><div class="value"><%= stats.totalCustomers %></div></div></div>
+  </div>
+
+  <div class="km-card">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h5 class="mb-0">Tenant Terbaru</h5>
+      <a href="/management/tenants" class="btn btn-outline-secondary btn-sm">Lihat Semua</a>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead><tr><th>Nama</th><th>Subdomain</th><th>Paket</th><th>Status</th></tr></thead>
+        <tbody>
+          <% if (!recentTenants.length) { %>
+            <tr><td colspan="4" class="text-center py-3" style="color: var(--text-muted)">Belum ada tenant.</td></tr>
+          <% } %>
+          <% recentTenants.forEach(function(t) { %>
+            <tr>
+              <td><a href="/management/tenants/<%= t.id %>" class="fw-semibold text-decoration-none" style="color: var(--accent)"><%= t.name %></a></td>
+              <td><code><%= t.subdomain %></code></td>
+              <td><%= t.plan_name || '-' %></td>
+              <td><span class="badge badge-status-<%= t.status %>"><%= t.status %></span></td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+<%- include('partials/footer') %>

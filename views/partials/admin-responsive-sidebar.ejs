@@ -777,7 +777,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (serverTimeValue) serverTimeValue.textContent = 'Gagal memuat';
         }
     }
-    fetchServerInfo();
+    setTimeout(fetchServerInfo, 3000);
     setInterval(renderServerTime, 1000);
 
     function updateSidebarActive(url) {

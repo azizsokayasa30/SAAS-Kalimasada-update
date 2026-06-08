@@ -6,6 +6,7 @@
     const { syncCustomerToRadius } = require('../utils/radiusCustomerSync');
     const { getCompanyHeader } = require('./message-templates');
     const { getSetting, getLocalTimestamp } = require('./settingsManager');
+    const { getTenantId, hasTenantContext } = require('./platform/tenantContext');
 
     /** Diskon dari catatan admin: "… | Diskon: Rp 50.000 | …" (format id-ID) */
     function parseDiscountFromPaymentNotes(notes) {
@@ -71,6 +72,8 @@
             this.dbPath = path.join(__dirname, '../data/billing.db');
             this.paymentGateway = new PaymentGatewayManager();
             this._paymentsDiscountColumnEnsured = false;
+            this._collectorPaymentColumnsEnsured = false;
+            this._customerIdColumnEnsured = false;
             this._remittanceNetAppliedEnsured = false;
             this._collectorAreaUniqueEnsured = false;
             this.initDatabase();
@@ -95,12 +98,82 @@
             });
         }
 
+        /** ID pelanggan 6 digit — SQLite tidak boleh ADD COLUMN … UNIQUE (gagal diam-diam di startup). */
+        async _ensureCustomerIdColumn() {
+            if (this._customerIdColumnEnsured) return;
+            await new Promise((resolve) => {
+                this.db.run('ALTER TABLE customers ADD COLUMN customer_id TEXT', (err) => {
+                    if (err && !String(err.message || '').toLowerCase().includes('duplicate')) {
+                        try {
+                            logger.warn('[billing] customers.customer_id:', err.message);
+                        } catch (_) {}
+                    }
+                    resolve();
+                });
+            });
+            await new Promise((resolve) => {
+                this.db.run(
+                    'CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_customer_id ON customers(customer_id)',
+                    () => resolve()
+                );
+            });
+            try {
+                await this.generateCustomerIdsForExistingCustomers();
+            } catch (e) {
+                try {
+                    logger.warn('[billing] generate customer_id:', e.message);
+                } catch (_) {}
+            }
+            this._customerIdColumnEnsured = true;
+        }
+
+        /** Kolom pembayaran kolektor di tabel payments (legacy DB sering belum punya). */
+        async _ensureCollectorPaymentColumns() {
+            if (this._collectorPaymentColumnsEnsured) return;
+            const alters = [
+                'ALTER TABLE payments ADD COLUMN collector_id INTEGER',
+                'ALTER TABLE payments ADD COLUMN commission_amount DECIMAL(15,2) DEFAULT 0',
+                "ALTER TABLE payments ADD COLUMN payment_type TEXT DEFAULT 'direct'",
+                'ALTER TABLE payments ADD COLUMN remittance_status TEXT',
+                'ALTER TABLE payments ADD COLUMN remittance_date DATETIME',
+                'ALTER TABLE payments ADD COLUMN remittance_notes TEXT',
+                'ALTER TABLE payments ADD COLUMN payment_proof TEXT'
+            ];
+            for (const sql of alters) {
+                await new Promise((resolve) => {
+                    this.db.run(sql, (err) => {
+                        if (err && !String(err.message || '').toLowerCase().includes('duplicate')) {
+                            try {
+                                logger.warn('[billing] payments collector column:', err.message);
+                            } catch (_) {}
+                        }
+                        resolve();
+                    });
+                });
+            }
+            await new Promise((resolve) => {
+                this.db.run(
+                    `UPDATE payments SET payment_type = 'direct' WHERE payment_type IS NULL OR TRIM(payment_type) = ''`,
+                    () => resolve()
+                );
+            });
+            await new Promise((resolve) => {
+                this.db.run(
+                    `UPDATE payments SET remittance_status = 'pending'
+                     WHERE payment_type = 'collector' AND remittance_status IS NULL`,
+                    () => resolve()
+                );
+            });
+            this._collectorPaymentColumnsEnsured = true;
+        }
+
         /**
          * Akumulasi net setoran ke kasir per baris payments (tanpa memecah baris untuk setoran parsial).
          * Memperbaiki baris legacy hasil INSERT split "[setoran parsial terima]".
          */
         async _ensureRemittanceNetAppliedColumn() {
             if (this._remittanceNetAppliedEnsured) return;
+            await this._ensureCollectorPaymentColumns();
             await new Promise((resolve) => {
                 this.db.run(
                     'ALTER TABLE payments ADD COLUMN remittance_net_applied REAL NOT NULL DEFAULT 0',
@@ -1187,6 +1260,83 @@
 
     addColumnsAndCreateIndexes() {
         this.db.run(
+            `CREATE TABLE IF NOT EXISTS installation_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_number VARCHAR(50) UNIQUE,
+                customer_name VARCHAR(255) NOT NULL,
+                customer_phone VARCHAR(20),
+                customer_address TEXT,
+                customer_id INTEGER,
+                package_id INTEGER,
+                installation_date DATE,
+                installation_time VARCHAR(20),
+                assigned_technician_id INTEGER,
+                status VARCHAR(50) DEFAULT 'scheduled',
+                priority VARCHAR(20) DEFAULT 'normal',
+                notes TEXT,
+                equipment_needed TEXT,
+                estimated_duration INTEGER DEFAULT 120,
+                created_by_admin_id INTEGER,
+                completed_at DATETIME,
+                completion_notes TEXT,
+                customer_latitude DECIMAL(10, 8),
+                customer_longitude DECIMAL(11, 8),
+                assigned_at DATETIME,
+                work_started_at DATETIME,
+                work_duration_seconds INTEGER,
+                tech_completion_latitude REAL,
+                tech_completion_longitude REAL,
+                install_cable_length_m REAL,
+                install_ont_sticker_photo_path TEXT,
+                created_at DATETIME DEFAULT (datetime('now','localtime')),
+                updated_at DATETIME DEFAULT (datetime('now','localtime')),
+                FOREIGN KEY (package_id) REFERENCES packages(id),
+                FOREIGN KEY (assigned_technician_id) REFERENCES technicians(id)
+            )`,
+            (err) => {
+                if (err) console.error('Error ensuring installation_jobs:', err.message);
+            }
+        );
+        this.db.run(
+            `CREATE TABLE IF NOT EXISTS installation_job_status_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                old_status VARCHAR(50),
+                new_status VARCHAR(50) NOT NULL,
+                changed_by_type VARCHAR(20) NOT NULL,
+                changed_by_id INTEGER NOT NULL,
+                notes TEXT,
+                created_at DATETIME DEFAULT (datetime('now','localtime')),
+                FOREIGN KEY (job_id) REFERENCES installation_jobs(id)
+            )`,
+            (err) => {
+                if (err) console.error('Error ensuring installation_job_status_history:', err.message);
+            }
+        );
+        this.db.run(
+            `CREATE TABLE IF NOT EXISTS trouble_reports (
+                id TEXT PRIMARY KEY,
+                status TEXT DEFAULT 'open',
+                created_at DATETIME DEFAULT (datetime('now','localtime')),
+                updated_at DATETIME DEFAULT (datetime('now','localtime')),
+                name TEXT,
+                phone TEXT,
+                location TEXT,
+                category TEXT,
+                description TEXT,
+                assigned_technician_id INTEGER,
+                priority TEXT DEFAULT 'Normal',
+                notes TEXT,
+                customer_id INTEGER,
+                work_started_at DATETIME,
+                work_duration_seconds INTEGER
+            )`,
+            (err) => {
+                if (err) console.error('Error ensuring trouble_reports:', err.message);
+            }
+        );
+
+        this.db.run(
             `CREATE TABLE IF NOT EXISTS customer_portal_package_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 customer_id INTEGER NOT NULL,
@@ -1210,23 +1360,21 @@
             }
         );
 
-        // Tambahkan kolom customer_id jika belum ada (ID Pelanggan 6 digit)
-        this.db.run("ALTER TABLE customers ADD COLUMN customer_id TEXT UNIQUE", (err) => {
+        // Tambahkan kolom customer_id (tanpa UNIQUE di ALTER — SQLite menolak UNIQUE pada ADD COLUMN)
+        this.db.run('ALTER TABLE customers ADD COLUMN customer_id TEXT', (err) => {
             if (err && !err.message.includes('duplicate column name')) {
                 console.error('Error adding customer_id column:', err);
             } else if (!err) {
                 console.log('Added customer_id column to customers table');
-                // Generate customer_id untuk customer yang sudah ada
                 this.generateCustomerIdsForExistingCustomers();
             }
         });
-        
-        // Buat index untuk customer_id
-        this.db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_customer_id ON customers(customer_id)", (err) => {
-            if (err) {
-                console.error('Error creating index for customer_id:', err);
+        this.db.run(
+            'CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_customer_id ON customers(customer_id)',
+            (err) => {
+                if (err) console.error('Error creating index for customer_id:', err);
             }
-        });
+        );
         
         // Tambahkan kolom pppoe_username jika belum ada
         this.db.run("ALTER TABLE customers ADD COLUMN pppoe_username TEXT", (err) => {
@@ -1330,6 +1478,23 @@
             } else if (!err) {
                 console.log('Added discount_amount column to payments table');
             }
+        });
+
+        const collectorPaymentAlters = [
+            'ALTER TABLE payments ADD COLUMN collector_id INTEGER',
+            'ALTER TABLE payments ADD COLUMN commission_amount DECIMAL(15,2) DEFAULT 0',
+            "ALTER TABLE payments ADD COLUMN payment_type TEXT DEFAULT 'direct'",
+            'ALTER TABLE payments ADD COLUMN remittance_status TEXT',
+            'ALTER TABLE payments ADD COLUMN remittance_date DATETIME',
+            'ALTER TABLE payments ADD COLUMN remittance_notes TEXT',
+            'ALTER TABLE payments ADD COLUMN payment_proof TEXT'
+        ];
+        collectorPaymentAlters.forEach((sql) => {
+            this.db.run(sql, (err) => {
+                if (err && !err.message.includes('duplicate column name')) {
+                    console.error('Error adding collector payment column:', err);
+                }
+            });
         });
 
         // Tambahkan kolom password ke customers untuk login via username/password
@@ -2673,6 +2838,11 @@ ${year && month ? `
     _buildCustomersListWhereClause(filters = {}) {
         let whereClause = '';
         const params = [];
+
+        if (hasTenantContext()) {
+            whereClause += ' AND c.tenant_id = ?';
+            params.push(getTenantId());
+        }
 
         if (filters.status) {
             whereClause += ' AND c.status = ?';
@@ -4579,6 +4749,7 @@ ${year && month ? `
 
     async recordCollectorPayment(paymentData) {
         await this._ensurePaymentsDiscountColumn();
+        await this._ensureCollectorPaymentColumns();
         const {
             invoice_id,
             amount,
@@ -4914,6 +5085,7 @@ ${year && month ? `
         const todayStr = new Date(dateObj.getTime() - (dateObj.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
 
         try {
+            await this._ensureCollectorPaymentColumns();
             await this._ensureRemittanceNetAppliedColumn();
             const hasAreas = await this._hasAreasReferenceTable();
             const areaRowMatch = this._sqlCustomerMatchesCollectorAreaRow(hasAreas, 'cra');

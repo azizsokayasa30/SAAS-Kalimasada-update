@@ -68,6 +68,28 @@ const billingQrUpload = multer({
 });
 
 const settingsPath = path.join(__dirname, '../settings.json');
+const { ensureSettingsFile } = require('../config/settingsManager');
+
+async function getSettingsForAdmin(req) {
+    const tenantId = req.session?.tenantId || req.tenantId;
+    if (tenantId) {
+        const { getFullSettingsForTenantId } = require('../config/platform/tenantSettingsManager');
+        return getFullSettingsForTenantId(tenantId);
+    }
+    ensureSettingsFile();
+    return getSettingsWithCache();
+}
+
+async function saveSettingsForAdmin(req, sanitizedSettings) {
+    const tenantId = req.session?.tenantId || req.tenantId;
+    if (tenantId) {
+        const { saveFullSettingsForTenantId } = require('../config/platform/tenantSettingsManager');
+        await saveFullSettingsForTenantId(tenantId, sanitizedSettings);
+        return;
+    }
+    await fsPromises.writeFile(settingsPath, JSON.stringify(sanitizedSettings, null, 2), 'utf8');
+    clearSettingsCache();
+}
 const PAYMENT_GATEWAY_KEY_PREFIX = 'payment_gateway';
 const WHATSAPP_SETTING_PREFIXES = [
     'whatsapp_',
@@ -147,7 +169,7 @@ function collapseDottedKeysIntoObjects(target) {
 // GET: Render halaman Setting
 router.get('/', async (req, res) => {
     try {
-        const settings = getSettingsWithCache();
+        const settings = await getSettingsForAdmin(req);
         const appSettings = await getAppSettings(billing.db);
         res.render('adminSetting', { settings, appSettings });
     } catch (error) {
@@ -157,9 +179,9 @@ router.get('/', async (req, res) => {
 });
 
 // GET: Ambil semua setting
-router.get('/data', (req, res) => {
+router.get('/data', async (req, res) => {
     try {
-        const settings = { ...getSettingsWithCache() };
+        const settings = { ...(await getSettingsForAdmin(req)) };
         if (settings.admin_session_timeout_minutes === undefined) {
             settings.admin_session_timeout_minutes = 60;
         }
@@ -227,10 +249,9 @@ router.post('/save', async (req, res) => {
         // Baca settings lama
         let oldSettings = {};
         try {
-            oldSettings = getSettingsWithCache();
+            oldSettings = await getSettingsForAdmin(req);
         } catch (e) {
-            console.warn('Gagal membaca settings.json lama, menggunakan default:', e.message);
-            // Jika file tidak ada atau corrupt, gunakan default
+            console.warn('Gagal membaca settings lama, menggunakan default:', e.message);
             oldSettings = {
                 logo_filename: 'logo.png'
             };
@@ -293,12 +314,10 @@ router.post('/save', async (req, res) => {
             });
         }
 
-        // Tulis ke file dengan error handling yang proper
         try {
-            await fsPromises.writeFile(settingsPath, JSON.stringify(sanitizedSettings, null, 2), 'utf8');
-            clearSettingsCache();
+            await saveSettingsForAdmin(req, sanitizedSettings);
         } catch (err) {
-            console.error('Error menyimpan settings.json:', err);
+            console.error('Error menyimpan pengaturan:', err);
             return res.status(500).json({ 
                 success: false,
                 message: 'Gagal menyimpan pengaturan'
