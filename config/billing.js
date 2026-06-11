@@ -71,6 +71,7 @@
             this.dbPath = path.join(__dirname, '../data/billing.db');
             this.paymentGateway = new PaymentGatewayManager();
             this._paymentsDiscountColumnEnsured = false;
+            this._paymentsProofColumnEnsured = false;
             this._remittanceNetAppliedEnsured = false;
             this._collectorAreaUniqueEnsured = false;
             this.initDatabase();
@@ -90,6 +91,22 @@
                         } catch (_) {}
                     }
                     this._paymentsDiscountColumnEnsured = true;
+                    resolve();
+                });
+            });
+        }
+
+        /** Bukti transfer kolektor — wajib sebelum updatePaymentProof / cleanup worker. */
+        async _ensurePaymentsProofColumn() {
+            if (this._paymentsProofColumnEnsured) return;
+            await new Promise((resolve) => {
+                this.db.run('ALTER TABLE payments ADD COLUMN payment_proof TEXT', (err) => {
+                    if (err && !String(err.message || '').toLowerCase().includes('duplicate')) {
+                        try {
+                            logger.warn('[billing] payments.payment_proof:', err.message);
+                        } catch (_) {}
+                    }
+                    this._paymentsProofColumnEnsured = true;
                     resolve();
                 });
             });
@@ -1329,6 +1346,14 @@
                 console.error('Error adding discount_amount to payments:', err);
             } else if (!err) {
                 console.log('Added discount_amount column to payments table');
+            }
+        });
+
+        this.db.run('ALTER TABLE payments ADD COLUMN payment_proof TEXT', (err) => {
+            if (err && !err.message.includes('duplicate column name')) {
+                console.error('Error adding payment_proof to payments:', err);
+            } else if (!err) {
+                console.log('Added payment_proof column to payments table');
             }
         });
 
@@ -4711,9 +4736,26 @@ ${year && month ? `
         return isCollectorTransferPaymentMethod(method);
     }
 
+    /** Pembayaran kolektor aktif untuk tagihan (cegah lunas ganda). */
+    async getCollectorPaymentForInvoice(invoiceId, collectorId) {
+        await this._ensurePaymentsDiscountColumn();
+        return new Promise((resolve, reject) => {
+            this.db.get(
+                `SELECT id, invoice_id, collector_id, amount, payment_method, payment_date, remittance_status
+                 FROM payments
+                 WHERE invoice_id = ? AND collector_id = ?
+                   AND IFNULL(payment_type, 'collector') = 'collector'
+                 ORDER BY id DESC LIMIT 1`,
+                [invoiceId, collectorId],
+                (err, row) => (err ? reject(err) : resolve(row || null))
+            );
+        });
+    }
+
     /** Simpan bukti transfer pada baris payments (bukan collector_payments). */
     async updatePaymentProof(paymentId, relativePath) {
         if (!paymentId || !relativePath) return;
+        await this._ensurePaymentsProofColumn();
         return new Promise((resolve, reject) => {
             this.db.run(
                 'UPDATE payments SET payment_proof = ? WHERE id = ?',
@@ -4729,10 +4771,12 @@ ${year && month ? `
      */
     async markCollectorPaymentAsOfficeTransferReceived(paymentId) {
         await this._ensureRemittanceNetAppliedColumn();
+        await this._ensurePaymentsProofColumn();
         const row = await new Promise((resolve, reject) => {
             this.db.get(
                 `SELECT p.id, p.collector_id, p.invoice_id, p.amount, p.commission_amount,
                         p.discount_amount, p.notes, p.payment_method, p.payment_proof,
+                        p.remittance_status,
                         COALESCE(i.amount, 0) as invoice_amount, i.invoice_number
                  FROM payments p
                  INNER JOIN invoices i ON i.id = p.invoice_id
@@ -4742,6 +4786,7 @@ ${year && month ? `
             );
         });
         if (!row || !isCollectorTransferPaymentMethod(row.payment_method)) return;
+        if (row.remittance_status === 'remitted') return;
 
         const jumlah = paymentJumlahSetelahDiskon(row);
         const invLabel = row.invoice_number ? String(row.invoice_number) : `INV-${row.invoice_id}`;

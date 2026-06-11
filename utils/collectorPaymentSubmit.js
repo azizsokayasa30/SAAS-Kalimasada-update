@@ -55,6 +55,38 @@ function collectorPaymentMulterSingle(fieldName) {
     };
 }
 
+async function resolveCollectorInvoiceTargets(billingManager, collectorId, parsedInvoiceIds) {
+    if (!parsedInvoiceIds.length) {
+        return { ok: true, targets: [], allAlreadyRecorded: false, existingPaymentIds: [] };
+    }
+    const targets = [];
+    const existingPaymentIds = [];
+    for (const invoiceId of parsedInvoiceIds) {
+        const inv = await billingManager.getInvoiceById(invoiceId);
+        if (!inv) {
+            return { ok: false, status: 400, message: `Tagihan #${invoiceId} tidak ditemukan` };
+        }
+        const isPaid = String(inv.status || '').toLowerCase() === 'paid';
+        if (isPaid) {
+            const existing = await billingManager.getCollectorPaymentForInvoice(invoiceId, collectorId);
+            if (existing) {
+                targets.push({ invoiceId, inv, skip: true, existingPaymentId: existing.id });
+                existingPaymentIds.push(existing.id);
+                continue;
+            }
+            const label = inv.invoice_number ? String(inv.invoice_number) : `#${invoiceId}`;
+            return {
+                ok: false,
+                status: 409,
+                message: `Tagihan ${label} sudah lunas. Jangan kirim ulang — refresh daftar tagihan.`
+            };
+        }
+        targets.push({ invoiceId, inv, skip: false });
+    }
+    const allAlreadyRecorded = targets.length > 0 && targets.every((t) => t.skip);
+    return { ok: true, targets, allAlreadyRecorded, existingPaymentIds };
+}
+
 function parseInvoiceIds(invoice_ids) {
     let parsed = [];
     if (Array.isArray(invoice_ids)) {
@@ -128,11 +160,37 @@ async function submitCollectorPayment(opts) {
 
     const commissionAmount = Math.round((paymentAmountNum * commissionRate) / 100);
 
+    const isTransfer = billingManager.isCollectorTransferPaymentMethod(payment_method);
+    if (isTransfer && !paymentProofRelativePath) {
+        return { ok: false, status: 400, message: 'Foto bukti transfer wajib diunggah' };
+    }
+
+    await billingManager._ensurePaymentsProofColumn();
+
+    const invoiceTargets = await resolveCollectorInvoiceTargets(
+        billingManager,
+        collectorId,
+        parsedInvoiceIds
+    );
+    if (!invoiceTargets.ok) {
+        return invoiceTargets;
+    }
+    if (invoiceTargets.allAlreadyRecorded) {
+        const firstExisting = invoiceTargets.existingPaymentIds[0] || null;
+        return {
+            ok: true,
+            payment_id: firstExisting,
+            commission_amount: commissionAmount,
+            already_recorded: true,
+            message: 'Pembayaran sudah tercatat sebelumnya (tidak diduplikasi).'
+        };
+    }
+
     if (parsedInvoiceIds.length > 0) {
         let grossSum = 0;
-        for (const invoiceId of parsedInvoiceIds) {
-            const inv = await billingManager.getInvoiceById(invoiceId);
-            grossSum += parseFloat(inv?.amount || 0) || 0;
+        for (const target of invoiceTargets.targets) {
+            if (target.skip) continue;
+            grossSum += parseFloat(target.inv?.amount || 0) || 0;
         }
         grossSum = Math.round(grossSum);
         if (discountTotal > grossSum) {
@@ -148,18 +206,6 @@ async function submitCollectorPayment(opts) {
         }
     }
 
-    const paymentId = await billingManager.recordCollectorPaymentRecord({
-        collector_id: collectorId,
-        customer_id,
-        amount: paymentAmountNum,
-        payment_amount: paymentAmountNum,
-        commission_amount: commissionAmount,
-        payment_method,
-        notes,
-        status: 'completed'
-    });
-
-    const isTransfer = billingManager.isCollectorTransferPaymentMethod(payment_method);
     let lastPaymentId = null;
     let proofAttached = false;
     const baseNotes = notes && String(notes).trim() ? String(notes).trim() : '';
@@ -172,10 +218,22 @@ async function submitCollectorPayment(opts) {
 
     if (parsedInvoiceIds && parsedInvoiceIds.length > 0) {
         let isFirst = true;
-        for (const invoiceId of parsedInvoiceIds) {
-            await billingManager.updateInvoiceStatus(invoiceId, 'paid', payment_method);
-            const inv = await billingManager.getInvoiceById(invoiceId);
+        for (const target of invoiceTargets.targets) {
+            const invoiceId = target.invoiceId;
+            if (target.skip) {
+                lastPaymentId = target.existingPaymentId || lastPaymentId;
+                isFirst = false;
+                continue;
+            }
+            const inv = target.inv;
             const invAmount = parseFloat(inv?.amount || 0) || 0;
+            const dup = await billingManager.getCollectorPaymentForInvoice(invoiceId, collectorId);
+            if (dup) {
+                lastPaymentId = dup.id || lastPaymentId;
+                isFirst = false;
+                continue;
+            }
+            await billingManager.updateInvoiceStatus(invoiceId, 'paid', payment_method);
             const newPayment = await billingManager.recordCollectorPayment({
                 invoice_id: invoiceId,
                 amount: invAmount,
@@ -209,6 +267,14 @@ async function submitCollectorPayment(opts) {
             for (const inv of unpaidInvoices) {
                 const invAmount = parseFloat(inv.amount || 0) || 0;
                 if (remaining >= invAmount && invAmount > 0) {
+                    const dup = await billingManager.getCollectorPaymentForInvoice(inv.id, collectorId);
+                    if (dup) {
+                        lastPaymentId = dup.id || lastPaymentId;
+                        remaining -= invAmount;
+                        isFirst = false;
+                        if (remaining <= 0) break;
+                        continue;
+                    }
                     await billingManager.updateInvoiceStatus(inv.id, 'paid', payment_method);
                     const newPayment = await billingManager.recordCollectorPayment({
                         invoice_id: inv.id,
@@ -294,7 +360,26 @@ async function submitCollectorPayment(opts) {
         console.error('Collector payment: restore prep failed:', restorePrepErr);
     }
 
-    return { ok: true, payment_id: paymentId, commission_amount: commissionAmount };
+    if (!lastPaymentId) {
+        return {
+            ok: false,
+            status: 400,
+            message: 'Tidak ada tagihan yang dapat dibayar. Refresh daftar tagihan.'
+        };
+    }
+
+    const paymentId = await billingManager.recordCollectorPaymentRecord({
+        collector_id: collectorId,
+        customer_id,
+        amount: paymentAmountNum,
+        payment_amount: paymentAmountNum,
+        commission_amount: commissionAmount,
+        payment_method,
+        notes,
+        status: 'completed'
+    });
+
+    return { ok: true, payment_id: paymentId?.id || lastPaymentId, commission_amount: commissionAmount };
 }
 
 module.exports = {

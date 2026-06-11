@@ -4188,14 +4188,17 @@ router.post(
             if (!result.ok) {
                 return res.status(result.status || 400).json({ success: false, message: result.message });
             }
-            const savedMsg = needsProof
-                ? 'Pembayaran transfer tersimpan — masuk rekapan setoran kantor (bukan setoran tunai kolektor).'
-                : 'Pembayaran berhasil disimpan';
+            const savedMsg =
+                result.message ||
+                (needsProof
+                    ? 'Pembayaran transfer tersimpan — masuk penerimaan kantor (bukan setoran tunai kolektor).'
+                    : 'Pembayaran berhasil disimpan');
             res.json({
                 success: true,
                 message: savedMsg,
                 payment_id: result.payment_id,
-                commission_amount: result.commission_amount
+                commission_amount: result.commission_amount,
+                already_recorded: !!result.already_recorded
             });
         } catch (error) {
             logger.error('[mobile-adapter] collector/payment', error);

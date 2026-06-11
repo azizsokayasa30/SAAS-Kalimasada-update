@@ -562,9 +562,10 @@ router.post('/api/payment', collectorAuth, collectorPaymentMulterSingle('payment
 
         res.json({
             success: true,
-            message: 'Payment recorded successfully',
+            message: result.message || 'Payment recorded successfully',
             payment_id: result.payment_id,
-            commission_amount: result.commission_amount
+            commission_amount: result.commission_amount,
+            already_recorded: !!result.already_recorded
         });
     } catch (error) {
         console.error('Error recording payment:', error);

@@ -245,6 +245,7 @@ function createBaseTables() {
                 remittance_status TEXT CHECK(remittance_status IN ('pending', 'remitted', 'cancelled')),
                 remittance_date DATETIME,
                 remittance_notes TEXT,
+                payment_proof TEXT,
                 FOREIGN KEY (invoice_id) REFERENCES invoices (id)
             )`,
             `CREATE TABLE IF NOT EXISTS payment_gateway_transactions (
@@ -392,6 +393,7 @@ async function initDatabase() {
                 "ALTER TABLE payments ADD COLUMN remittance_status TEXT CHECK(remittance_status IN ('pending', 'remitted', 'cancelled'))",
                 'ALTER TABLE payments ADD COLUMN remittance_date DATETIME',
                 'ALTER TABLE payments ADD COLUMN remittance_notes TEXT',
+                'ALTER TABLE payments ADD COLUMN payment_proof TEXT',
                 'ALTER TABLE collector_payments ADD COLUMN collected_at DATETIME DEFAULT CURRENT_TIMESTAMP',
                 'ALTER TABLE collector_payments ADD COLUMN amount DECIMAL(15,2)'
             ];
