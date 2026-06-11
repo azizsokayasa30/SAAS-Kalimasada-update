@@ -1305,8 +1305,21 @@ router.get('/collector-remittance', getAppSettings, async (req, res) => {
             return { ...c, ...extra };
         });
 
-        // Riwayat = log penerimaan setoran kasir (bukan biaya komisi)
-        const remittances = await billingManager.getCollectorRemittanceReceipts(80);
+        const historyCollectorRaw = req.query.history_collector;
+        const historyCollectorId =
+            historyCollectorRaw != null &&
+            String(historyCollectorRaw).trim() !== '' &&
+            String(historyCollectorRaw) !== 'all'
+                ? parseInt(String(historyCollectorRaw), 10)
+                : null;
+
+        // Riwayat = log penerimaan setoran kasir (seluruh bulan sesuai filter, bukan potongan 80 baris)
+        const remittances = await billingManager.getCollectorRemittanceReceipts({
+            month: filterMonth != null ? filterMonth : month,
+            year: filterYear != null ? filterYear : year,
+            collector_id: Number.isFinite(historyCollectorId) ? historyCollectorId : null,
+            limit: 10000
+        });
 
         const settings = getSettingsWithCache();
         res.render('admin/billing/collector-remittance', {
@@ -1316,7 +1329,14 @@ router.get('/collector-remittance', getAppSettings, async (req, res) => {
             summary,
             remittances,
             settings: settings,
-            filters: { month, year },
+            filters: {
+                month,
+                year,
+                history_collector:
+                    historyCollectorRaw != null && String(historyCollectorRaw).trim() !== ''
+                        ? String(historyCollectorRaw)
+                        : 'all'
+            },
             page: 'collector-remittance'
         });
         
@@ -1355,9 +1375,17 @@ router.get('/collector-remittance/export.xlsx', getAppSettings, adminAuth, async
         const reportById = new Map((reportRows || []).map((r) => [r.id, r]));
         const collectors = collectorsPending.map((c) => ({ ...c, ...(reportById.get(c.id) || {}) }));
 
+        const exportCollectorId =
+            req.query.collector_id != null &&
+            String(req.query.collector_id).trim() !== '' &&
+            String(req.query.collector_id) !== 'all'
+                ? parseInt(String(req.query.collector_id), 10)
+                : null;
+
         const remittances = await billingManager.getCollectorRemittanceReceiptsExported({
             month: filterMonth != null ? String(filterMonth) : 'all',
             year: filterYear != null ? String(filterYear) : 'all',
+            collector_id: Number.isFinite(exportCollectorId) ? exportCollectorId : null,
             limit: 12000
         });
 
@@ -1516,9 +1544,16 @@ router.get('/collector-remittance/export.csv', getAppSettings, adminAuth, async 
             });
         } else {
             filename = 'setoran-kolektor-riwayat-terima.csv';
+            const exportCollectorId =
+                req.query.collector_id != null &&
+                String(req.query.collector_id).trim() !== '' &&
+                String(req.query.collector_id) !== 'all'
+                    ? parseInt(String(req.query.collector_id), 10)
+                    : null;
             const remittances = await billingManager.getCollectorRemittanceReceiptsExported({
                 month: filterMonth != null ? String(filterMonth) : 'all',
                 year: filterYear != null ? String(filterYear) : 'all',
+                collector_id: Number.isFinite(exportCollectorId) ? exportCollectorId : null,
                 limit: 12000
             });
             body += remitExportCsvRow(['ID', 'Kolektor', 'Waktu_terima', 'Metode', 'Catatan', 'Jumlah_Rp', 'Status']);
@@ -1547,6 +1582,65 @@ router.get('/collector-remittance/export.csv', getAppSettings, adminAuth, async 
     } catch (error) {
         logger.error('Error exporting collector remittance csv:', error);
         res.status(500).send(error.message || 'Export gagal');
+    }
+});
+
+// API: Koreksi riwayat setoran (edit entri log penerimaan)
+router.put('/api/collector-remittance/:id', adminAuth, async (req, res) => {
+    try {
+        const receiptId = parseInt(String(req.params.id), 10);
+        if (!Number.isFinite(receiptId) || receiptId <= 0) {
+            return res.status(400).json({ success: false, message: 'ID riwayat tidak valid' });
+        }
+        const { collector_id, amount, remittance_amount, payment_method, notes, received_at, remittance_date } =
+            req.body || {};
+        const amountVal = remittance_amount != null ? remittance_amount : amount;
+        const dateVal = received_at != null ? received_at : remittance_date;
+
+        const result = await billingManager.updateCollectorRemittanceReceipt(receiptId, {
+            collector_id,
+            amount: amountVal,
+            payment_method,
+            notes,
+            received_at: dateVal
+        });
+
+        res.json({
+            success: true,
+            message: 'Riwayat setoran berhasil diperbarui',
+            data: result
+        });
+    } catch (error) {
+        console.error('Error updating collector remittance receipt:', error);
+        const msg = error && error.message ? error.message : String(error);
+        const isBiz =
+            msg.includes('tidak ditemukan') ||
+            msg.includes('tidak valid') ||
+            msg.includes('wajib') ||
+            msg.includes('melebihi') ||
+            msg.includes('Tidak ada sisa') ||
+            msg.includes('Koreksi') ||
+            msg.includes('Alokasi');
+        res.status(isBiz ? 400 : 500).json({
+            success: false,
+            message: isBiz ? msg : 'Gagal memperbarui riwayat: ' + msg
+        });
+    }
+});
+
+router.get('/api/collector-remittance/:id', adminAuth, async (req, res) => {
+    try {
+        const receiptId = parseInt(String(req.params.id), 10);
+        if (!Number.isFinite(receiptId) || receiptId <= 0) {
+            return res.status(400).json({ success: false, message: 'ID riwayat tidak valid' });
+        }
+        const row = await billingManager.getCollectorRemittanceReceiptById(receiptId);
+        if (!row) {
+            return res.status(404).json({ success: false, message: 'Riwayat setoran tidak ditemukan' });
+        }
+        res.json({ success: true, data: row });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message || 'Gagal memuat riwayat' });
     }
 });
 

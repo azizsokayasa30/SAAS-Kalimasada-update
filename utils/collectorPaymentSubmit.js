@@ -3,7 +3,6 @@
  */
 const path = require('path');
 const fs = require('fs');
-const sqlite3 = require('sqlite3').verbose();
 const multer = require('multer');
 const billingManager = require('../config/billing');
 const serviceSuspension = require('../config/serviceSuspension');
@@ -27,8 +26,34 @@ const storage = multer.diskStorage({
 
 const collectorPaymentMulter = multer({
     storage,
-    limits: { fileSize: 2.5 * 1024 * 1024 }
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter(req, file, cb) {
+        const ok =
+            !file.mimetype ||
+            file.mimetype.startsWith('image/') ||
+            file.mimetype === 'application/octet-stream';
+        cb(ok ? null : new Error('Bukti transfer harus berupa gambar (JPG/PNG)'), ok);
+    }
 });
+
+/** Tangani error Multer agar Flutter mendapat JSON, bukan HTML 500. */
+function collectorPaymentMulterSingle(fieldName) {
+    return (req, res, next) => {
+        collectorPaymentMulter.single(fieldName)(req, res, (err) => {
+            if (!err) return next();
+            if (err.code === 'LIMIT_FILE_SIZE') {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Ukuran foto bukti transfer maksimal 5 MB'
+                });
+            }
+            return res.status(400).json({
+                success: false,
+                message: err.message || 'Gagal mengunggah bukti transfer'
+            });
+        });
+    };
+}
 
 function parseInvoiceIds(invoice_ids) {
     let parsed = [];
@@ -134,19 +159,9 @@ async function submitCollectorPayment(opts) {
         status: 'completed'
     });
 
-    if (paymentId && paymentProofRelativePath) {
-        const dbPath = path.join(__dirname, '../data/billing.db');
-        const db = new sqlite3.Database(dbPath);
-        await new Promise((resolve, reject) => {
-            db.run('UPDATE payments SET payment_proof = ? WHERE id = ?', [paymentProofRelativePath, paymentId], (err) => {
-                db.close();
-                if (err) reject(err);
-                else resolve();
-            });
-        });
-    }
-
+    const isTransfer = billingManager.isCollectorTransferPaymentMethod(payment_method);
     let lastPaymentId = null;
+    let proofAttached = false;
     const baseNotes = notes && String(notes).trim() ? String(notes).trim() : '';
     const discountNote =
         discountTotal > 0 ? `Diskon: Rp ${discountTotal.toLocaleString('id-ID')}` : '';
@@ -172,6 +187,15 @@ async function submitCollectorPayment(opts) {
                 discount_amount: isFirst ? discountTotal : 0
             });
             lastPaymentId = newPayment?.id || lastPaymentId;
+            if (newPayment?.id) {
+                if (isTransfer && paymentProofRelativePath && !proofAttached) {
+                    await billingManager.updatePaymentProof(newPayment.id, paymentProofRelativePath);
+                    proofAttached = true;
+                }
+                if (isTransfer) {
+                    await billingManager.markCollectorPaymentAsOfficeTransferReceived(newPayment.id);
+                }
+            }
             isFirst = false;
         }
     } else {
@@ -197,6 +221,15 @@ async function submitCollectorPayment(opts) {
                         discount_amount: isFirst ? discountTotal : 0
                     });
                     lastPaymentId = newPayment?.id || lastPaymentId;
+                    if (newPayment?.id) {
+                        if (isTransfer && paymentProofRelativePath && !proofAttached) {
+                            await billingManager.updatePaymentProof(newPayment.id, paymentProofRelativePath);
+                            proofAttached = true;
+                        }
+                        if (isTransfer) {
+                            await billingManager.markCollectorPaymentAsOfficeTransferReceived(newPayment.id);
+                        }
+                    }
                     isFirst = false;
                     remaining -= invAmount;
                     if (remaining <= 0) break;
@@ -267,5 +300,6 @@ async function submitCollectorPayment(opts) {
 module.exports = {
     submitCollectorPayment,
     collectorPaymentMulter,
+    collectorPaymentMulterSingle,
     uploadDir
 };

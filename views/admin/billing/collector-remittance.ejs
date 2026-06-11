@@ -255,6 +255,27 @@
         html[data-theme="dark"] #remittanceModal .btn-close {
             filter: invert(1) grayscale(1) opacity(0.85);
         }
+        .btn-edit-remit {
+            min-height: 2rem;
+            padding: 0 0.65rem;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.75rem;
+            border: 1px solid color-mix(in srgb, var(--f-primary) 40%, var(--f-border));
+            background: var(--f-card);
+            color: var(--f-primary) !important;
+        }
+        .btn-edit-remit:hover {
+            background: color-mix(in srgb, var(--f-accent) 70%, var(--f-card));
+        }
+        .remit-edited-badge {
+            display: inline-block;
+            margin-left: 0.35rem;
+            font-size: 0.65rem;
+            font-weight: 700;
+            color: var(--f-muted-foreground);
+            vertical-align: middle;
+        }
     </style>
     <%- include('../../partials/theme-head') %>
 </head>
@@ -375,6 +396,17 @@
                                     <% } %>
                                 </select>
                             </div>
+                            <div class="col-md-3">
+                                <label class="f-label">Kolektor (riwayat setoran)</label>
+                                <select class="f-select" id="historyCollectorFilter">
+                                    <option value="all" <%= typeof filters !== 'undefined' && filters.history_collector === 'all' ? 'selected' : '' %>>Semua kolektor</option>
+                                    <% if (typeof collectors !== 'undefined' && collectors.length > 0) { %>
+                                        <% collectors.forEach(function (c) { %>
+                                            <option value="<%= c.id %>" <%= typeof filters !== 'undefined' && String(filters.history_collector) === String(c.id) ? 'selected' : '' %>><%= c.name %></option>
+                                        <% }); %>
+                                    <% } %>
+                                </select>
+                            </div>
                             <div class="col-md-3 d-flex align-items-end">
                                 <button type="button" class="btn btn-filter-remit w-100 py-2" onclick="applyRemittanceFilters()">
                                     <i class="bi bi-funnel-fill me-1"></i>Terapkan filter
@@ -387,7 +419,7 @@
                 <div class="alert alert-info border-0 mb-4" role="note" style="border-radius: 12px;">
                     <i class="bi bi-info-circle me-2"></i>
                     <strong>Setoran kolektor hanya untuk pembayaran tunai.</strong>
-                    Jika kolektor menandai lunas dengan <em>transfer bank</em>, nominal tidak masuk kewajiban setoran di sini — dianggap langsung ke kantor.
+                    Jika kolektor menandai lunas dengan <em>transfer bank</em>, nominal tidak masuk kewajiban setoran tunai kolektor — otomatis tercatat di riwayat setoran sebagai penerimaan kantor.
                 </div>
 
                 <section class="mb-4">
@@ -546,7 +578,22 @@
                     <div class="f-page-header mb-3">
                         <div>
                             <h2 class="f-card-title"><i class="bi bi-clock-history me-2"></i>Riwayat setoran</h2>
-                            <p class="f-card-description mb-0">Log penerimaan kasir (nilai net).</p>
+                            <% 
+                                var histMonth = typeof filters !== 'undefined' ? filters.month : '';
+                                var histYear = typeof filters !== 'undefined' ? filters.year : '';
+                                var histCollector = typeof filters !== 'undefined' ? filters.history_collector : 'all';
+                                var monthNames = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+                                var periodHistLabel = 'semua waktu';
+                                if (histMonth !== 'all' && histYear !== 'all' && histMonth && histYear) {
+                                    periodHistLabel = (monthNames[parseInt(histMonth, 10) - 1] || histMonth) + ' ' + histYear;
+                                }
+                                var remitCount = typeof remittances !== 'undefined' ? remittances.length : 0;
+                            %>
+                            <p class="f-card-description mb-0">
+                                Log penerimaan kasir — periode <strong><%= periodHistLabel %></strong>
+                                (<%= remitCount %> entri).
+                                Gunakan filter bulan/tahun di atas untuk melihat satu bulan penuh.
+                            </p>
                         </div>
                     </div>
                     <div class="f-card overflow-hidden">
@@ -560,28 +607,38 @@
                                         <th>Catatan</th>
                                         <th class="text-end">Jumlah</th>
                                         <th class="text-center">Status</th>
+                                        <th class="text-center" style="width: 5.5rem;">Aksi</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <% if (typeof remittances !== 'undefined' && remittances.length > 0) { %>
                                         <% remittances.forEach(function (remittance) { %>
-                                            <tr>
+                                            <tr data-receipt-id="<%= remittance.id %>">
                                                 <td><div class="fw-bold text-dark"><%= remittance.collector_name %></div></td>
                                                 <td>
                                                     <div class="small">
                                                         <%= new Date(remittance.received_at).toLocaleDateString('id-ID') %>
                                                         <span class="text-muted ms-1"><%= new Date(remittance.received_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) %></span>
+                                                        <% if (remittance.updated_at) { %>
+                                                            <span class="remit-edited-badge" title="Terakhir diedit">(diedit)</span>
+                                                        <% } %>
                                                     </div>
                                                 </td>
                                                 <td><span class="text-capitalize"><%= remittance.payment_method || 'Tunai' %></span></td>
                                                 <td><span class="text-muted small"><%= remittance.notes || '—' %></span></td>
                                                 <td class="text-end fw-bold">Rp <%= Number(remittance.amount || 0).toLocaleString('id-ID') %></td>
                                                 <td class="text-center"><span class="remit-history-status">Diterima</span></td>
+                                                <td class="text-center">
+                                                    <button type="button" class="btn-edit-remit" title="Edit riwayat"
+                                                        onclick="openEditRemittanceModal(<%= remittance.id %>)">
+                                                        <i class="bi bi-pencil-square"></i> Edit
+                                                    </button>
+                                                </td>
                                             </tr>
                                         <% }); %>
                                     <% } else { %>
                                         <tr>
-                                            <td colspan="6" class="text-center py-5 text-muted">Belum ada riwayat setoran.</td>
+                                            <td colspan="7" class="text-center py-5 text-muted">Belum ada riwayat setoran untuk filter ini.</td>
                                         </tr>
                                     <% } %>
                                 </tbody>
@@ -589,6 +646,74 @@
                         </div>
                     </div>
                 </section>
+
+                <div class="modal fade" id="editRemittanceModal" tabindex="-1" aria-labelledby="editRemittanceModalTitle" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
+                        <div class="modal-content">
+                            <form id="editRemittanceFormData">
+                                <div class="modal-header">
+                                    <div>
+                                        <h2 class="modal-title fs-5 fw-bold" id="editRemittanceModalTitle">Edit riwayat setoran</h2>
+                                        <p class="mb-0 small text-muted">Koreksi kesalahan input. Setoran tunai akan menyesuaikan alokasi ke pembayaran kolektor.</p>
+                                    </div>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+                                </div>
+                                <div class="modal-body">
+                                    <input type="hidden" id="editReceiptId" name="receipt_id">
+                                    <div class="row g-3">
+                                        <div class="col-md-6">
+                                            <div class="f-form-group mb-0">
+                                                <label class="f-label" for="editCollectorId">Kolektor</label>
+                                                <select class="f-select" id="editCollectorId" name="collector_id" required>
+                                                    <% if (typeof collectors !== 'undefined' && collectors.length > 0) { %>
+                                                        <% collectors.forEach(function (c) { %>
+                                                            <option value="<%= c.id %>"><%= c.name %></option>
+                                                        <% }); %>
+                                                    <% } %>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="f-form-group mb-0">
+                                                <label class="f-label" for="editReceivedAt">Tanggal &amp; waktu terima</label>
+                                                <input type="datetime-local" class="f-input" id="editReceivedAt" name="received_at" required>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="f-form-group mb-0">
+                                                <label class="f-label" for="editPaymentMethod">Metode</label>
+                                                <select class="f-select" id="editPaymentMethod" name="payment_method" required>
+                                                    <option value="cash">Tunai</option>
+                                                    <option value="transfer">Transfer bank</option>
+                                                    <option value="check">Cek / giro</option>
+                                                    <option value="other">Lainnya</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="f-form-group mb-0">
+                                                <label class="f-label" for="editAmount">Jumlah (Rp)</label>
+                                                <input type="number" class="f-input" id="editAmount" name="remittance_amount" min="1" step="1" required>
+                                            </div>
+                                        </div>
+                                        <div class="col-12">
+                                            <div class="f-form-group mb-0">
+                                                <label class="f-label" for="editNotes">Catatan</label>
+                                                <input type="text" class="f-input" id="editNotes" name="notes" placeholder="Opsional">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="modal-footer flex-wrap gap-2 border-secondary">
+                                    <button type="button" class="remittance-btn remittance-btn-cancel" data-bs-dismiss="modal">Batal</button>
+                                    <button type="submit" class="remittance-btn remittance-btn-submit">
+                                        <i class="bi bi-check2-circle"></i>Simpan perubahan
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
             </div>
                 </div>
             </main>
@@ -608,18 +733,22 @@
         function applyRemittanceFilters() {
             const month = document.getElementById('monthFilter').value;
             const year = document.getElementById('yearFilter').value;
+            const historyCollector = document.getElementById('historyCollectorFilter').value;
             const params = new URLSearchParams();
             if (month) params.append('month', month);
             if (year) params.append('year', year);
+            if (historyCollector) params.append('history_collector', historyCollector);
             window.location.href = '/admin/billing/collector-remittance?' + params.toString();
         }
 
         function downloadRemittanceExport(kind) {
             const month = document.getElementById('monthFilter').value;
             const year = document.getElementById('yearFilter').value;
+            const historyCollector = document.getElementById('historyCollectorFilter').value;
             const params = new URLSearchParams();
             if (month) params.append('month', month);
             if (year) params.append('year', year);
+            if (historyCollector && historyCollector !== 'all') params.append('collector_id', historyCollector);
             if (kind === 'xlsx') {
                 window.location.href = '/admin/billing/collector-remittance/export.xlsx?' + params.toString();
                 return;
@@ -671,6 +800,40 @@
                 'Rp ' + parseInt(amount || 0, 10).toLocaleString('id-ID');
         }
 
+        function getEditRemittanceModal() {
+            var el = document.getElementById('editRemittanceModal');
+            return el && typeof bootstrap !== 'undefined' ? bootstrap.Modal.getOrCreateInstance(el) : null;
+        }
+
+        function toDatetimeLocalValue(isoOrDateStr) {
+            if (!isoOrDateStr) return '';
+            var d = new Date(isoOrDateStr);
+            if (isNaN(d.getTime())) return '';
+            return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+        }
+
+        async function openEditRemittanceModal(receiptId) {
+            try {
+                var response = await fetch('/admin/billing/api/collector-remittance/' + receiptId);
+                var result = await response.json();
+                if (!result.success || !result.data) {
+                    alert('Gagal memuat data: ' + (result.message || 'Tidak diketahui'));
+                    return;
+                }
+                var row = result.data;
+                document.getElementById('editReceiptId').value = row.id;
+                document.getElementById('editCollectorId').value = String(row.collector_id);
+                document.getElementById('editReceivedAt').value = toDatetimeLocalValue(row.received_at);
+                document.getElementById('editPaymentMethod').value = row.payment_method || 'cash';
+                document.getElementById('editAmount').value = Math.round(Number(row.amount) || 0);
+                document.getElementById('editNotes').value = row.notes || '';
+                var modal = getEditRemittanceModal();
+                if (modal) modal.show();
+            } catch (error) {
+                alert('Terjadi kesalahan: ' + error.message);
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', function () {
             var ra = document.getElementById('remittanceAmount');
             if (ra) ra.addEventListener('input', updateDisplayAmount);
@@ -682,6 +845,42 @@
                     });
                     selectedCollector = null;
                 });
+            }
+        });
+
+        document.getElementById('editRemittanceFormData').addEventListener('submit', async function (e) {
+            e.preventDefault();
+            var receiptId = document.getElementById('editReceiptId').value;
+            var data = {
+                collector_id: document.getElementById('editCollectorId').value,
+                received_at: document.getElementById('editReceivedAt').value,
+                payment_method: document.getElementById('editPaymentMethod').value,
+                remittance_amount: document.getElementById('editAmount').value,
+                notes: document.getElementById('editNotes').value
+            };
+            var amtNum = parseFloat(String(data.remittance_amount).replace(',', '.'));
+            if (!Number.isFinite(amtNum) || amtNum <= 0) {
+                alert('Jumlah setoran harus lebih dari 0.');
+                return;
+            }
+            if (!confirm('Simpan perubahan riwayat setoran ini? Alokasi tunai kolektor akan disesuaikan.')) {
+                return;
+            }
+            try {
+                var response = await fetch('/admin/billing/api/collector-remittance/' + receiptId, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                var result = await response.json();
+                if (result.success) {
+                    alert('Riwayat setoran berhasil diperbarui.');
+                    location.reload();
+                } else {
+                    alert('Gagal: ' + (result.message || 'Tidak diketahui'));
+                }
+            } catch (error) {
+                alert('Terjadi kesalahan: ' + error.message);
             }
         });
 

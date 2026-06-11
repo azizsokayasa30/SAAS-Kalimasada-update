@@ -2035,6 +2035,104 @@ router.get('/api/resolve-dns', adminAuth, async (req, res) => {
     }
 });
 
+// --- Tool Android: build APK Flutter ---
+const mobileAndroidBuild = require('../utils/mobileAndroidBuild');
+
+router.get('/android-tool', async (req, res) => {
+    try {
+        const settings = getSettingsWithCache();
+        const appSettings = await getAppSettings(billing.db);
+        res.render('adminAndroidTool', { settings, appSettings });
+    } catch (error) {
+        logger.error('Error loading android tool page:', error);
+        res.status(500).send('Gagal memuat halaman Tool Android');
+    }
+});
+
+router.get('/api/android-tool/config', adminAuth, (req, res) => {
+    try {
+        const config = mobileAndroidBuild.readMobileBuildConfig();
+        res.json({ success: true, data: config });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message || 'Gagal membaca konfigurasi' });
+    }
+});
+
+router.post('/api/android-tool/config', adminAuth, async (req, res) => {
+    try {
+        const body = req.body || {};
+        const saved = mobileAndroidBuild.saveMobileBuildConfig({
+            api_url: body.api_url,
+            app_name: body.app_name,
+            version_name: body.version_name,
+            version_code: body.version_code,
+            release_notes: body.release_notes,
+            force_update: body.force_update === true || body.force_update === 'true' || body.force_update === 1,
+            flutter_path: body.flutter_path,
+            apk_file_name: body.apk_file_name,
+            update_manifest: body.update_manifest !== false
+        });
+        await logAdminActivity(req, 'android_tool_config', 'Menyimpan konfigurasi build mobile Android', {
+            version: `${saved.version_name}+${saved.version_code}`,
+            api_url: saved.api_url
+        });
+        res.json({ success: true, message: 'Konfigurasi mobile tersimpan', data: saved });
+    } catch (error) {
+        logger.error('[android-tool] save config:', error);
+        res.status(400).json({ success: false, message: error.message || 'Gagal menyimpan' });
+    }
+});
+
+router.get('/api/android-tool/build-status', adminAuth, (req, res) => {
+    try {
+        const status = mobileAndroidBuild.readBuildStatus();
+        res.json({ success: true, data: status });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/api/android-tool/build', adminAuth, async (req, res) => {
+    try {
+        const body = req.body || {};
+        if (body.api_url || body.app_name || body.version_name) {
+            mobileAndroidBuild.saveMobileBuildConfig({
+                api_url: body.api_url,
+                app_name: body.app_name,
+                version_name: body.version_name,
+                version_code: body.version_code,
+                release_notes: body.release_notes,
+                force_update: body.force_update,
+                flutter_path: body.flutter_path,
+                update_manifest: true
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Build dimulai di server. Pantau log di bawah.',
+            data: mobileAndroidBuild.readBuildStatus()
+        });
+
+        setImmediate(() => {
+            mobileAndroidBuild.startAndroidApkBuild(body).catch((err) => {
+                logger.error('[android-tool] build failed:', err.message);
+            });
+        });
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message || 'Gagal memulai build' });
+    }
+});
+
+router.post('/api/android-tool/build-cancel', adminAuth, (req, res) => {
+    const cancelled = mobileAndroidBuild.cancelActiveBuild();
+    res.json({
+        success: true,
+        cancelled,
+        message: cancelled ? 'Build dibatalkan' : 'Tidak ada build aktif'
+    });
+});
+
 // Export fungsi untuk testing
 module.exports = {
     router,

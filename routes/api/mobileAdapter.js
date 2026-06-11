@@ -17,7 +17,7 @@ const dbPath = path.join(__dirname, '../../data/billing.db');
 const db = new sqlite3.Database(dbPath);
 const CableNetworkUtils = require('../../utils/cableNetworkUtils');
 const billingManager = require('../../config/billing');
-const { submitCollectorPayment, collectorPaymentMulter } = require('../../utils/collectorPaymentSubmit');
+const { submitCollectorPayment, collectorPaymentMulterSingle } = require('../../utils/collectorPaymentSubmit');
 
 function requireCollector(req, res, next) {
     if (!req.user || String(req.user.role) !== 'collector') {
@@ -4148,7 +4148,7 @@ router.post(
     '/collector/payment',
     verifyToken,
     requireCollector,
-    collectorPaymentMulter.single('payment_proof'),
+    collectorPaymentMulterSingle('payment_proof'),
     async (req, res) => {
         const collectorId = parseCollectorId(req);
         if (!collectorId) {
@@ -4160,8 +4160,13 @@ router.post(
         if (!Number.isFinite(customerIdNum) || customerIdNum <= 0) {
             return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
         }
-        const method = (payment_method || '').toString();
-        if (method === 'transfer' && !req.file) {
+        const method = (payment_method || '').toString().trim().toLowerCase();
+        const needsProof =
+            method === 'transfer' ||
+            method === 'transfer bank' ||
+            method === 'transfer_bank' ||
+            method.includes('transfer');
+        if (needsProof && !req.file) {
             return res.status(400).json({ success: false, message: 'Foto bukti transfer wajib diunggah' });
         }
         try {
@@ -4183,9 +4188,12 @@ router.post(
             if (!result.ok) {
                 return res.status(result.status || 400).json({ success: false, message: result.message });
             }
+            const savedMsg = needsProof
+                ? 'Pembayaran transfer tersimpan — masuk rekapan setoran kantor (bukan setoran tunai kolektor).'
+                : 'Pembayaran berhasil disimpan';
             res.json({
                 success: true,
-                message: 'Pembayaran berhasil disimpan',
+                message: savedMsg,
                 payment_id: result.payment_id,
                 commission_amount: result.commission_amount
             });

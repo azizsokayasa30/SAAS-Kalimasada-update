@@ -224,7 +224,14 @@ class _CollectorReceivePaymentScreenState extends State<CollectorReceivePaymentS
       final files = <http.MultipartFile>[];
       if (_method == 'transfer' && _proof != null) {
         final p = _proof!;
-        files.add(await http.MultipartFile.fromPath('payment_proof', p.path, filename: p.name));
+        final bytes = await p.readAsBytes();
+        var fname = p.name.trim();
+        if (fname.isEmpty) {
+          fname = 'bukti_transfer.jpg';
+        } else if (!fname.contains('.')) {
+          fname = '$fname.jpg';
+        }
+        files.add(http.MultipartFile.fromBytes('payment_proof', bytes, filename: fname));
       }
       final resp = await ApiClient.postMultipart(
         '/api/mobile-adapter/collector/payment',

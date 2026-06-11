@@ -71,8 +71,12 @@ node_modules
 
 # Settings files (contains sensitive data)
 settings.json
+data/settings.json.bak-*
 # But allow template
 !settings.server.template.json
+
+# Log build APK dari panel admin (path lokal mesin)
+data/mobile-android-build.json
 
 # License generation script (should not be pushed)
 scripts/generate-license.js
@@ -89,6 +93,14 @@ public/uploads/
 # Rilis APK mobile (unggah di server; manifest contoh: public/mobile-app/manifest.example.json)
 public/mobile-app/manifest.json
 public/mobile-app/*.apk
+public/mobile-app/flutter-sdk/
+public/mobile-app/android-sdk/
+public/mobile-app/.gradle-home/
+public/mobile-app/.pub-cache/
+public/mobile-app/keystore/*.jks
+public/mobile-app/keystore/*.keystore
+!public/mobile-app/keystore/README.md
+public/mobile-app/cmdline-tools.zip
 
 # One-off SQL/debug scripts
 scripts/tmp-*.js

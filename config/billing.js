@@ -4707,6 +4707,68 @@ ${year && month ? `
         });
     }
 
+    isCollectorTransferPaymentMethod(method) {
+        return isCollectorTransferPaymentMethod(method);
+    }
+
+    /** Simpan bukti transfer pada baris payments (bukan collector_payments). */
+    async updatePaymentProof(paymentId, relativePath) {
+        if (!paymentId || !relativePath) return;
+        return new Promise((resolve, reject) => {
+            this.db.run(
+                'UPDATE payments SET payment_proof = ? WHERE id = ?',
+                [relativePath, paymentId],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+    }
+
+    /**
+     * Pembayaran kolektor via transfer — langsung masuk rekapan setoran kantor (bukan setoran tunai kolektor).
+     * Mencatat riwayat penerimaan kasir dan menandai baris payment sudah diakui kantor.
+     */
+    async markCollectorPaymentAsOfficeTransferReceived(paymentId) {
+        await this._ensureRemittanceNetAppliedColumn();
+        const row = await new Promise((resolve, reject) => {
+            this.db.get(
+                `SELECT p.id, p.collector_id, p.invoice_id, p.amount, p.commission_amount,
+                        p.discount_amount, p.notes, p.payment_method, p.payment_proof,
+                        COALESCE(i.amount, 0) as invoice_amount, i.invoice_number
+                 FROM payments p
+                 INNER JOIN invoices i ON i.id = p.invoice_id
+                 WHERE p.id = ? AND IFNULL(p.payment_type, 'collector') = 'collector'`,
+                [paymentId],
+                (err, r) => (err ? reject(err) : resolve(r))
+            );
+        });
+        if (!row || !isCollectorTransferPaymentMethod(row.payment_method)) return;
+
+        const jumlah = paymentJumlahSetelahDiskon(row);
+        const invLabel = row.invoice_number ? String(row.invoice_number) : `INV-${row.invoice_id}`;
+        const receiptNotes = `Transfer langsung ke rekening kantor — ${invLabel}`;
+
+        await new Promise((resolve, reject) => {
+            this.db.run(
+                `UPDATE payments SET
+                    remittance_status = 'remitted',
+                    remittance_date = datetime('now','localtime'),
+                    remittance_notes = ?,
+                    remittance_net_applied = 0
+                 WHERE id = ?`,
+                [receiptNotes, paymentId],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+
+        await this.insertCollectorRemittanceReceipt({
+            collector_id: row.collector_id,
+            amount_net: jumlah,
+            payment_method: 'transfer',
+            notes: receiptNotes,
+            received_at: new Date().toISOString()
+        });
+    }
+
     async getCollectorById(collectorId) {
         return new Promise((resolve, reject) => {
             this.db.get('SELECT * FROM collectors WHERE id = ?', [collectorId], (err, row) => {
@@ -4970,7 +5032,10 @@ ${year && month ? `
             
             const qSetoran = `
                 SELECT 
-                    COALESCE(SUM(COALESCE(p.remittance_net_applied, 0)), 0) as sudah_setor,
+                    COALESCE(SUM(
+                        CASE WHEN NOT ${sqlPaymentMethodIsTransfer('p')}
+                        THEN COALESCE(p.remittance_net_applied, 0) ELSE 0 END
+                    ), 0) as sudah_setor,
                     COALESCE(SUM(
                         CASE WHEN ${sqlCollectorCashRemittancePending('p')}
                              AND (
@@ -8390,7 +8455,9 @@ async handlePaymentWebhook(payload, gateway) {
             if (!sums[cid]) continue;
             const jumlah = paymentJumlahSetelahDiskon(p);
             sums[cid].total_lunas_gross += jumlah;
-            sums[cid].sudah_setor += Number(p.remittance_net_applied) || 0;
+            if (!isCollectorTransferPaymentMethod(p.payment_method)) {
+                sums[cid].sudah_setor += Number(p.remittance_net_applied) || 0;
+            }
             const pool = paymentRemittancePoolRp(p);
             const applied = Number(p.remittance_net_applied) || 0;
             const remain = pool - applied;
@@ -8570,10 +8637,15 @@ async handlePaymentWebhook(payload, gateway) {
                 notes TEXT,
                 received_at TEXT NOT NULL,
                 created_at TEXT DEFAULT (datetime('now','localtime')),
+                updated_at TEXT,
                 FOREIGN KEY (collector_id) REFERENCES collectors(id)
             )`;
             this.db.run(sql, (err) => {
                 if (err) return reject(err);
+                this.db.run(
+                    'ALTER TABLE collector_remittance_receipts ADD COLUMN updated_at TEXT',
+                    () => {}
+                );
                 this.db.run(
                     'CREATE INDEX IF NOT EXISTS idx_crr_collector ON collector_remittance_receipts(collector_id)',
                     () => {}
@@ -8609,38 +8681,8 @@ async handlePaymentWebhook(payload, gateway) {
         });
     }
 
-    /** Riwayat penerimaan setoran (nilai net yang disetor ke kasir). */
-    async getCollectorRemittanceReceipts(limit = 80) {
-        await this.ensureCollectorRemittanceReceiptsTable();
-        const lim = Math.min(500, Math.max(1, parseInt(String(limit), 10) || 80));
-        return new Promise((resolve, reject) => {
-            const sql = `
-                SELECT 
-                    r.id,
-                    r.amount_net as amount,
-                    r.payment_method,
-                    r.notes,
-                    r.received_at,
-                    c.name as collector_name
-                FROM collector_remittance_receipts r
-                JOIN collectors c ON c.id = r.collector_id
-                ORDER BY datetime(COALESCE(r.received_at, r.created_at)) DESC, r.id DESC
-                LIMIT ?
-            `;
-            this.db.all(sql, [lim], (err, rows) => {
-                if (err) reject(err);
-                else resolve(rows || []);
-            });
-        });
-    }
-
-    /**
-     * Riwayat penerimaan setoran untuk export (batas aman, filter periode opsional).
-     * month/year = 'all' atau kosong → tanpa filter tanggal.
-     */
-    async getCollectorRemittanceReceiptsExported({ limit = 8000, month = null, year = null } = {}) {
-        await this.ensureCollectorRemittanceReceiptsTable();
-        const lim = Math.min(20000, Math.max(1, parseInt(String(limit), 10) || 8000));
+    /** Filter tanggal + kolektor untuk riwayat setoran (UI & export). */
+    _buildRemittanceReceiptDateWhere(month, year, collectorId, alias = 'r') {
         const m =
             month != null && String(month).trim() !== '' && String(month) !== 'all'
                 ? parseInt(String(month), 10)
@@ -8650,36 +8692,354 @@ async handlePaymentWebhook(payload, gateway) {
                 ? parseInt(String(year), 10)
                 : NaN;
         const useRange = Number.isFinite(m) && m >= 1 && m <= 12 && Number.isFinite(y);
-        let dateWhere = '';
+        let where = '';
         const params = [];
         if (useRange) {
             const startDate = `${y}-${String(m).padStart(2, '0')}-01`;
             const endDate = new Date(y, m, 0).toISOString().split('T')[0];
-            dateWhere =
-                ' WHERE date(COALESCE(r.received_at, r.created_at)) >= date(?) AND date(COALESCE(r.received_at, r.created_at)) <= date(?) ';
+            where +=
+                ' WHERE date(COALESCE(' +
+                alias +
+                '.received_at, ' +
+                alias +
+                '.created_at)) >= date(?) AND date(COALESCE(' +
+                alias +
+                '.received_at, ' +
+                alias +
+                '.created_at)) <= date(?)';
             params.push(startDate, endDate);
         }
-        const sql = `
-                SELECT
+        const cid = parseInt(String(collectorId), 10);
+        if (Number.isFinite(cid) && cid > 0) {
+            where += where ? ' AND ' : ' WHERE ';
+            where += alias + '.collector_id = ?';
+            params.push(cid);
+        }
+        return { where, params, useRange, month: m, year: y };
+    }
+
+    /** Riwayat penerimaan setoran (nilai net yang disetor ke kasir). */
+    async getCollectorRemittanceReceipts(opts = 80) {
+        await this.ensureCollectorRemittanceReceiptsTable();
+        const conf =
+            typeof opts === 'number' || typeof opts === 'string'
+                ? { limit: opts }
+                : opts && typeof opts === 'object'
+                  ? opts
+                  : {};
+        const lim = Math.min(20000, Math.max(1, parseInt(String(conf.limit), 10) || 5000));
+        const { where, params } = this._buildRemittanceReceiptDateWhere(
+            conf.month,
+            conf.year,
+            conf.collector_id,
+            'r'
+        );
+        return new Promise((resolve, reject) => {
+            const sql = `
+                SELECT 
                     r.id,
+                    r.collector_id,
                     r.amount_net as amount,
                     r.payment_method,
                     r.notes,
                     r.received_at,
+                    r.updated_at,
                     c.name as collector_name
                 FROM collector_remittance_receipts r
                 JOIN collectors c ON c.id = r.collector_id
-                ${dateWhere}
+                ${where}
                 ORDER BY datetime(COALESCE(r.received_at, r.created_at)) DESC, r.id DESC
                 LIMIT ?
             `;
-        params.push(lim);
-        return new Promise((resolve, reject) => {
+            params.push(lim);
             this.db.all(sql, params, (err, rows) => {
                 if (err) reject(err);
                 else resolve(rows || []);
             });
         });
+    }
+
+    async getCollectorRemittanceReceiptById(receiptId) {
+        await this.ensureCollectorRemittanceReceiptsTable();
+        const id = parseInt(String(receiptId), 10);
+        if (!Number.isFinite(id) || id <= 0) return null;
+        return new Promise((resolve, reject) => {
+            this.db.get(
+                `SELECT r.id, r.collector_id, r.amount_net as amount, r.payment_method, r.notes,
+                        r.received_at, r.created_at, r.updated_at, c.name as collector_name
+                 FROM collector_remittance_receipts r
+                 JOIN collectors c ON c.id = r.collector_id
+                 WHERE r.id = ?`,
+                [id],
+                (err, row) => (err ? reject(err) : resolve(row || null))
+            );
+        });
+    }
+
+    _isAutoOfficeTransferReceipt(row) {
+        const notes = String(row?.notes || '').toLowerCase();
+        const method = String(row?.payment_method || '').toLowerCase();
+        return (
+            notes.includes('transfer langsung ke rekening kantor') ||
+            (isCollectorTransferPaymentMethod(method) && notes.includes('transfer'))
+        );
+    }
+
+    /** Batalkan alokasi setoran tunai kolektor (LIFO) — dipakai saat koreksi riwayat. */
+    async _rollbackCollectorRemittanceNet(collectorId, amountRp) {
+        const collectorIdNum = parseInt(String(collectorId), 10);
+        const targetCents = Math.round(Number(amountRp) * 100);
+        if (!Number.isFinite(collectorIdNum) || collectorIdNum <= 0 || targetCents <= 0) return;
+
+        await this._ensureRemittanceNetAppliedColumn();
+        const dbRun = (sql, params = []) =>
+            new Promise((resolve, reject) => {
+                this.db.run(sql, params, function (err) {
+                    if (err) reject(err);
+                    else resolve({ changes: this.changes });
+                });
+            });
+        const dbAll = (sql, params = []) =>
+            new Promise((resolve, reject) => {
+                this.db.all(sql, params, (err, rows) => {
+                    if (err) reject(err);
+                    else resolve(rows || []);
+                });
+            });
+
+        const rows = await dbAll(
+            `SELECT p.id, p.amount, p.commission_amount, p.discount_amount, p.notes, p.payment_method,
+                    COALESCE(p.remittance_net_applied, 0) as remittance_net_applied,
+                    COALESCE(i.amount, 0) as invoice_amount
+             FROM payments p
+             INNER JOIN invoices i ON i.id = p.invoice_id
+             WHERE p.collector_id = ?
+               AND p.payment_type = 'collector'
+               AND COALESCE(p.remittance_net_applied, 0) > 0.009
+               AND NOT ${sqlPaymentMethodIsTransfer('p')}
+             ORDER BY datetime(COALESCE(p.remittance_date, p.payment_date, '1970-01-01')) DESC, p.id DESC`,
+            [collectorIdNum]
+        );
+
+        let remaining = targetCents;
+        for (const row of rows) {
+            if (remaining <= 0) break;
+            const appliedCents = Math.round((Number(row.remittance_net_applied) || 0) * 100);
+            if (appliedCents <= 0) continue;
+            const poolCents = Math.round(paymentRemittancePoolRp(row) * 100);
+
+            if (remaining >= appliedCents) {
+                await dbRun(
+                    `UPDATE payments SET
+                        remittance_net_applied = 0,
+                        remittance_status = NULL,
+                        remittance_date = NULL,
+                        remittance_notes = NULL
+                     WHERE id = ?`,
+                    [row.id]
+                );
+                remaining -= appliedCents;
+            } else {
+                const newAppliedCents = appliedCents - remaining;
+                const newAppliedRp = newAppliedCents / 100;
+                const fullyRemitted = newAppliedCents >= poolCents - 1;
+                await dbRun(
+                    `UPDATE payments SET
+                        remittance_net_applied = ?,
+                        remittance_status = ?,
+                        remittance_date = CASE WHEN ? THEN remittance_date ELSE NULL END
+                     WHERE id = ?`,
+                    [newAppliedRp, fullyRemitted ? 'remitted' : 'pending', fullyRemitted, row.id]
+                );
+                remaining = 0;
+            }
+        }
+        if (remaining > 1) {
+            throw new Error(
+                'Koreksi setoran gagal: alokasi pembayaran kolektor tidak cukup untuk mengembalikan jumlah lama'
+            );
+        }
+    }
+
+    /** Alokasi setoran tunai ke baris payments (tanpa insert log riwayat). */
+    async _applyCollectorRemittanceAllocation(collectorId, amountRp, remitDate, noteStr) {
+        const collectorIdNum = parseInt(String(collectorId), 10);
+        const targetNet = Number(amountRp);
+        const targetCents = Math.round(targetNet * 100);
+        if (!Number.isFinite(collectorIdNum) || collectorIdNum <= 0) {
+            throw new Error('ID kolektor tidak valid');
+        }
+        if (!Number.isFinite(targetNet) || targetNet <= 0) return { updatedPayments: 0 };
+
+        await this._ensurePaymentsDiscountColumn();
+        await this._ensureRemittanceNetAppliedColumn();
+
+        const dbRun = (sql, params = []) =>
+            new Promise((resolve, reject) => {
+                this.db.run(sql, params, function (err) {
+                    if (err) reject(err);
+                    else resolve({ changes: this.changes });
+                });
+            });
+        const dbAll = (sql, params = []) =>
+            new Promise((resolve, reject) => {
+                this.db.all(sql, params, (err, rows) => {
+                    if (err) reject(err);
+                    else resolve(rows || []);
+                });
+            });
+
+        const rowsAll = await dbAll(
+            `SELECT p.id, p.invoice_id, p.amount, p.commission_amount, p.payment_method, p.reference_number, p.notes, p.payment_date,
+                    COALESCE(p.remittance_net_applied, 0) as remittance_net_applied,
+                    COALESCE(i.amount, 0) as invoice_amount, COALESCE(p.discount_amount, 0) as discount_amount
+             FROM payments p
+             INNER JOIN invoices i ON i.id = p.invoice_id
+             WHERE p.collector_id = ?
+               AND p.payment_type = 'collector'
+               AND ${sqlCollectorCashRemittancePending('p')}
+             ORDER BY datetime(COALESCE(p.payment_date, '1970-01-01')) ASC, p.id ASC`,
+            [collectorIdNum]
+        );
+        const rows = (rowsAll || []).filter(
+            (r) =>
+                paymentEligibleForCollectorRemittance(r) &&
+                paymentRemittancePoolRp(r) - (Number(r.remittance_net_applied) || 0) > 0.009
+        );
+        const normalized = rows.map((r) => {
+            const poolRp = paymentRemittancePoolRp(r);
+            const poolCents = Math.round(poolRp * 100);
+            const appliedCents = Math.round((Number(r.remittance_net_applied) || 0) * 100);
+            const pendingNetCents = Math.max(0, poolCents - appliedCents);
+            return { ...r, _poolCents: poolCents, _appliedCents: appliedCents, _pendingNetCents: pendingNetCents };
+        });
+        const pendingNetCents = normalized.reduce((s, row) => s + row._pendingNetCents, 0);
+        if (pendingNetCents <= 0) {
+            throw new Error('Tidak ada sisa setoran untuk kolektor ini');
+        }
+        if (targetCents > pendingNetCents + 1) {
+            const maxRp = pendingNetCents / 100;
+            throw new Error(
+                `Jumlah setoran (Rp ${targetNet.toLocaleString('id-ID')}) melebihi sisa belum setor (Rp ${maxRp.toLocaleString('id-ID')})`
+            );
+        }
+
+        let rowsTouched = 0;
+        let remaining = targetCents;
+        for (const row of normalized) {
+            if (remaining <= 0) break;
+            if (row._pendingNetCents <= 0) continue;
+            if (remaining >= row._pendingNetCents) {
+                const newAppliedRp = row._poolCents / 100;
+                await dbRun(
+                    `UPDATE payments SET
+                        remittance_net_applied = ?,
+                        remittance_status = 'remitted',
+                        remittance_date = ?,
+                        remittance_notes = ?
+                     WHERE id = ?`,
+                    [newAppliedRp, remitDate, noteStr, row.id]
+                );
+                remaining -= row._pendingNetCents;
+                rowsTouched += 1;
+            } else {
+                const newAppliedCents = row._appliedCents + remaining;
+                const newAppliedRp = newAppliedCents / 100;
+                await dbRun(
+                    `UPDATE payments SET
+                        remittance_net_applied = ?,
+                        remittance_status = 'pending',
+                        remittance_notes = CASE WHEN TRIM(?) != '' THEN ? ELSE remittance_notes END
+                     WHERE id = ?`,
+                    [newAppliedRp, noteStr, noteStr, row.id]
+                );
+                rowsTouched += 1;
+                remaining = 0;
+                break;
+            }
+        }
+        if (remaining > 0) {
+            throw new Error('Alokasi setoran tidak selesai; coba ulangi dengan jumlah yang lebih kecil');
+        }
+        return { updatedPayments: rowsTouched };
+    }
+
+    /**
+     * Koreksi entri riwayat setoran (jumlah, kolektor, tanggal, metode, catatan).
+     * Setoran tunai: sesuaikan ulang alokasi di tabel payments.
+     * Transfer otomatis ke kantor: hanya perbarui log riwayat.
+     */
+    async updateCollectorRemittanceReceipt(receiptId, patch = {}) {
+        await this.ensureCollectorRemittanceReceiptsTable();
+        const existing = await this.getCollectorRemittanceReceiptById(receiptId);
+        if (!existing) throw new Error('Riwayat setoran tidak ditemukan');
+
+        const oldAmount = Number(existing.amount) || 0;
+        const oldCollectorId = Number(existing.collector_id);
+        const newCollectorId =
+            patch.collector_id != null && patch.collector_id !== ''
+                ? parseInt(String(patch.collector_id), 10)
+                : oldCollectorId;
+        const newAmount =
+            patch.amount_net != null && patch.amount_net !== ''
+                ? Number(patch.amount_net)
+                : patch.amount != null && patch.amount !== ''
+                  ? Number(patch.amount)
+                  : oldAmount;
+        const newMethod =
+            patch.payment_method != null ? String(patch.payment_method).trim() : String(existing.payment_method || '');
+        const newNotes = patch.notes != null ? String(patch.notes) : String(existing.notes || '');
+        const newReceivedAt = patch.received_at != null ? String(patch.received_at) : String(existing.received_at || '');
+
+        if (!Number.isFinite(newCollectorId) || newCollectorId <= 0) {
+            throw new Error('Kolektor tidak valid');
+        }
+        if (!Number.isFinite(newAmount) || newAmount <= 0) {
+            throw new Error('Jumlah setoran harus lebih dari 0');
+        }
+        if (!newMethod) throw new Error('Metode penerimaan wajib diisi');
+        if (!newReceivedAt) throw new Error('Tanggal penerimaan wajib diisi');
+
+        const isAutoTransfer = this._isAutoOfficeTransferReceipt(existing);
+        const newIsTransfer = isCollectorTransferPaymentMethod(newMethod);
+
+        if (!isAutoTransfer) {
+            if (oldAmount > 0.009) {
+                await this._rollbackCollectorRemittanceNet(oldCollectorId, oldAmount);
+            }
+            if (!newIsTransfer && newAmount > 0.009) {
+                await this._applyCollectorRemittanceAllocation(
+                    newCollectorId,
+                    newAmount,
+                    newReceivedAt,
+                    newNotes
+                );
+            }
+        }
+
+        await new Promise((resolve, reject) => {
+            this.db.run(
+                `UPDATE collector_remittance_receipts SET
+                    collector_id = ?,
+                    amount_net = ?,
+                    payment_method = ?,
+                    notes = ?,
+                    received_at = ?,
+                    updated_at = datetime('now','localtime')
+                 WHERE id = ?`,
+                [newCollectorId, newAmount, newMethod, newNotes, newReceivedAt, receiptId],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+        return { success: true, id: receiptId };
+    }
+
+    /**
+     * Riwayat penerimaan setoran untuk export (batas aman, filter periode opsional).
+     * month/year = 'all' atau kosong → tanpa filter tanggal.
+     */
+    async getCollectorRemittanceReceiptsExported({ limit = 8000, month = null, year = null, collector_id = null } = {}) {
+        return this.getCollectorRemittanceReceipts({ limit, month, year, collector_id });
     }
 
     async insertCollectorRemittanceReceipt({ collector_id, amount_net, payment_method, notes, received_at }) {
@@ -8721,143 +9081,42 @@ async handlePaymentWebhook(payload, gateway) {
         await this._ensurePaymentsDiscountColumn();
         await this._ensureRemittanceNetAppliedColumn();
 
-        const targetCents = Math.round(targetNet * 100);
-
-        const dbRun = (sql, params = []) =>
-            new Promise((resolve, reject) => {
-                this.db.run(sql, params, function (err) {
-                    if (err) reject(err);
-                    else resolve({ lastID: this.lastID, changes: this.changes });
-                });
-            });
-        const dbAll = (sql, params = []) =>
-            new Promise((resolve, reject) => {
-                this.db.all(sql, params, (err, rows) => {
-                    if (err) reject(err);
-                    else resolve(rows || []);
-                });
-            });
-
-        const rowsAll = await dbAll(
-            `SELECT p.id, p.invoice_id, p.amount, p.commission_amount, p.payment_method, p.reference_number, p.notes, p.payment_date,
-                    COALESCE(p.remittance_net_applied, 0) as remittance_net_applied,
-                    COALESCE(i.amount, 0) as invoice_amount, COALESCE(p.discount_amount, 0) as discount_amount
-             FROM payments p
-             INNER JOIN invoices i ON i.id = p.invoice_id
-             WHERE p.collector_id = ?
-               AND p.payment_type = 'collector'
-               AND ${sqlCollectorCashRemittancePending('p')}
-             ORDER BY datetime(COALESCE(p.payment_date, '1970-01-01')) ASC, p.id ASC`,
-            [collectorIdNum]
+        const alloc = await this._applyCollectorRemittanceAllocation(
+            collectorIdNum,
+            targetNet,
+            remitDate,
+            noteStr
         );
-        const rows = (rowsAll || []).filter(
-            (r) =>
-                paymentEligibleForCollectorRemittance(r) &&
-                paymentRemittancePoolRp(r) - (Number(r.remittance_net_applied) || 0) > 0.009
-        );
+        const rowsTouched = alloc.updatedPayments || 0;
 
-        const normalized = rows.map((r) => {
-            const poolRp = paymentRemittancePoolRp(r);
-            const poolCents = Math.round(poolRp * 100);
-            const appliedCents = Math.round((Number(r.remittance_net_applied) || 0) * 100);
-            const pendingNetCents = Math.max(0, poolCents - appliedCents);
-            return { ...r, _poolCents: poolCents, _appliedCents: appliedCents, _pendingNetCents: pendingNetCents };
-        });
-
-        const pendingNetCents = normalized.reduce((s, row) => s + row._pendingNetCents, 0);
-
-        if (pendingNetCents <= 0) {
-            throw new Error('Tidak ada sisa setoran untuk kolektor ini');
-        }
-        if (targetCents > pendingNetCents + 1) {
-            const maxRp = pendingNetCents / 100;
-            throw new Error(
-                `Jumlah setoran (Rp ${targetNet.toLocaleString('id-ID')}) melebihi sisa belum setor (Rp ${maxRp.toLocaleString('id-ID')})`
-            );
-        }
-
-        let rowsTouched = 0;
-        let partialApplied = false;
-
-        await dbRun('BEGIN IMMEDIATE');
+        let receiptLogId = null;
         try {
-            let remaining = targetCents;
-
-            for (const row of normalized) {
-                if (remaining <= 0) break;
-                if (row._pendingNetCents <= 0) continue;
-
-                if (remaining >= row._pendingNetCents) {
-                    const newAppliedRp = row._poolCents / 100;
-                    await dbRun(
-                        `UPDATE payments SET
-                            remittance_net_applied = ?,
-                            remittance_status = 'remitted',
-                            remittance_date = ?,
-                            remittance_notes = ?
-                         WHERE id = ?`,
-                        [newAppliedRp, remitDate, noteStr, row.id]
-                    );
-                    remaining -= row._pendingNetCents;
-                    rowsTouched += 1;
-                } else {
-                    const newAppliedCents = row._appliedCents + remaining;
-                    const newAppliedRp = newAppliedCents / 100;
-                    await dbRun(
-                        `UPDATE payments SET
-                            remittance_net_applied = ?,
-                            remittance_status = 'pending',
-                            remittance_notes = CASE
-                                WHEN TRIM(?) != '' THEN ?
-                                ELSE remittance_notes END
-                         WHERE id = ?`,
-                        [newAppliedRp, noteStr, noteStr, row.id]
-                    );
-                    partialApplied = true;
-                    rowsTouched += 1;
-                    remaining = 0;
-                    break;
-                }
-            }
-
-            if (remaining > 0) {
-                throw new Error('Alokasi setoran tidak selesai; coba ulangi dengan jumlah yang lebih kecil');
-            }
-
-            await dbRun('COMMIT');
-
-            let receiptLogId = null;
-            try {
-                const rec = await this.insertCollectorRemittanceReceipt({
-                    collector_id: collectorIdNum,
-                    amount_net: targetNet,
-                    payment_method,
-                    notes: noteStr,
-                    received_at: remitDate
-                });
-                receiptLogId = rec && rec.id != null ? rec.id : null;
-            } catch (logErr) {
-                console.error('[billing] Gagal mencatat riwayat setoran (payments sudah commit):', logErr.message);
-            }
-            if (receiptLogId != null) {
-                setImmediate(() => {
-                    try {
-                        const cfn = require('./collectorFieldNotifications');
-                        cfn.notifyAdminRemittanceRecorded(collectorIdNum, receiptLogId, targetNet);
-                    } catch (_) {}
-                });
-            }
-
-            return {
-                success: true,
-                updatedPayments: rowsTouched,
-                splitPayment: partialApplied,
-                ...remittanceData
-            };
-        } catch (e) {
-            await dbRun('ROLLBACK').catch(() => {});
-            throw e;
+            const rec = await this.insertCollectorRemittanceReceipt({
+                collector_id: collectorIdNum,
+                amount_net: targetNet,
+                payment_method,
+                notes: noteStr,
+                received_at: remitDate
+            });
+            receiptLogId = rec && rec.id != null ? rec.id : null;
+        } catch (logErr) {
+            console.error('[billing] Gagal mencatat riwayat setoran (alokasi payments sudah selesai):', logErr.message);
         }
+        if (receiptLogId != null) {
+            setImmediate(() => {
+                try {
+                    const cfn = require('./collectorFieldNotifications');
+                    cfn.notifyAdminRemittanceRecorded(collectorIdNum, receiptLogId, targetNet);
+                } catch (_) {}
+            });
+        }
+
+        return {
+            success: true,
+            updatedPayments: rowsTouched,
+            splitPayment: false,
+            ...remittanceData
+        };
     }
 
     async getPaymentTransactions(invoiceId = null) {
