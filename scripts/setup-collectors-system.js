@@ -42,7 +42,7 @@ async function setupCollectorsSystem() {
             console.log(`  ✅ ${table.name}`);
         });
         
-        // Check sample data
+        // Check collectors count
         const collectors = await new Promise((resolve, reject) => {
             db.all("SELECT COUNT(*) as count FROM collectors", (err, rows) => {
                 if (err) reject(err);
@@ -50,7 +50,7 @@ async function setupCollectorsSystem() {
             });
         });
         
-        console.log(`👥 Sample collectors created: ${collectors}`);
+        console.log(`👥 Collectors in database: ${collectors}`);
         
         db.close();
         console.log('🎉 Collectors system setup completed successfully!');

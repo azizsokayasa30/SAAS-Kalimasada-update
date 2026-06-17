@@ -11,8 +11,6 @@
     <!-- Admin Mobile Optimizations -->
     <link href="/css/admin-mobile.css" rel="stylesheet">
     <style>
-        .text-purple { color: #6f42c1 !important; }
-        .border-purple { border-left: 4px solid #6f42c1 !important; }
         .main-content { min-height: 100vh; }
     </style>
 
@@ -72,86 +70,25 @@
                     </div>
                 </div>
 
-                <!-- Summary Cards -->
-                <div class="row mb-4">
-                    <div class="col-md-3">
-                        <div class="card border-danger">
-                            <div class="card-body">
-                                <div class="d-flex align-items-center">
-                                    <div class="me-3">
-                                        <i class="bi bi-graph-down-arrow text-danger" style="font-size: 2rem;"></i>
-                                    </div>
-                                    <div>
-                                        <div class="h4 text-danger">
-                                            Rp <%= (expenses && expenses.length > 0) ? expenses.reduce((sum, exp) => sum + (exp.amount || 0), 0).toLocaleString('id-ID') : '0' %>
-                                        </div>
-                                        <div class="text-muted">Total Pengeluaran</div>
-                                        <small class="text-muted"><%= (expenses && expenses.length > 0) ? expenses.length : 0 %> transaksi</small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="card border-warning">
-                            <div class="card-body">
-                                <div class="d-flex align-items-center">
-                                    <div class="me-3">
-                                        <i class="bi bi-grid text-warning" style="font-size: 2rem;"></i>
-                                    </div>
-                                    <div>
-                                        <div class="h4 text-warning">
-                                            <%= (expenses && expenses.length > 0) ? [...new Set(expenses.map(exp => exp.category))].length : 0 %>
-                                        </div>
-                                        <div class="text-muted">Kategori Aktif</div>
-                                        <small class="text-muted">Berbagai jenis pengeluaran</small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="card border-info">
-                            <div class="card-body">
-                                <div class="d-flex align-items-center">
-                                    <div class="me-3">
-                                        <i class="bi bi-calendar3 text-info" style="font-size: 2rem;"></i>
-                                    </div>
-                                    <div>
-                                        <div class="h4 text-info">
-                                            <%= (expenses && expenses.length > 0) ? Math.round(expenses.reduce((sum, exp) => sum + (exp.amount || 0), 0) / expenses.length) : 0 %>
-                                        </div>
-                                        <div class="text-muted">Rata-rata per Transaksi</div>
-                                        <small class="text-muted">Dalam Rupiah</small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="card border-purple">
-                            <div class="card-body">
-                                <div class="d-flex align-items-center">
-                                    <div class="me-3">
-                                        <i class="bi bi-person-check-fill text-purple" style="font-size: 2rem;"></i>
-                                    </div>
-                                    <div>
-                                        <div class="h4 text-purple" id="commissionTotal">
-                                            Rp 0
-                                        </div>
-                                        <div class="text-muted">Komisi Kolektor</div>
-                                        <small class="text-muted">Biaya operasional</small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                <%- include('../../partials/finance-category-summary', {
+                    categorySummary: typeof categorySummary !== 'undefined' ? categorySummary : null,
+                    summaryTitle: 'Ringkasan per Kategori Pengeluaran',
+                    summaryVariant: 'expense',
+                    amountClass: 'text-danger',
+                    startDate: typeof startDate !== 'undefined' ? startDate : '',
+                    endDate: typeof endDate !== 'undefined' ? endDate : '',
+                    transactionBodyId: 'expenseTransactionBody',
+                    listTitleId: 'financeTransactionListTitle',
+                    listTitleDefault: 'Daftar Pengeluaran'
+                }) %>
 
                 <!-- Expenses Table -->
                 <div class="card">
-                    <div class="card-header">
-                        <h5 class="card-title mb-0">Daftar Pengeluaran</h5>
+                    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <h5 class="card-title mb-0" id="financeTransactionListTitle">Daftar Pengeluaran</h5>
+                        <button type="button" class="btn btn-sm btn-outline-secondary d-none" id="financeCategoryFilterClear">
+                            <i class="bi bi-x-lg me-1"></i> Tampilkan Semua
+                        </button>
                     </div>
                     <div class="card-body">
                         <div class="table-responsive">
@@ -159,18 +96,18 @@
                                 <thead class="table-light">
                                     <tr>
                                         <th>Tanggal</th>
-                                        <th>Kategori Expenses</th>
-                                        <th>Account Expenses</th>
+                                        <th>Kategori Pengeluaran</th>
+                                        <th>Akun Pengeluaran</th>
                                         <th>Jumlah</th>
                                         <th>Metode Pembayaran</th>
                                         <th>Catatan</th>
                                         <th>Aksi</th>
                                     </tr>
                                 </thead>
-                                <tbody>
+                                <tbody id="expenseTransactionBody">
                                     <% if (expenses && expenses.length > 0) { %>
                                         <% expenses.forEach(function(expense) { %>
-                                            <tr data-id="<%= expense.id %>">
+                                            <tr data-id="<%= expense.id %>" data-category="<%= expense.category %>">
                                                 <td><%= new Date(expense.expense_date).toLocaleDateString('id-ID') %></td>
                                                 <td><span class="badge bg-info"><%= expense.category || '-' %></span></td>
                                                 <td><%= expense.account_expenses || '-' %></td>
@@ -185,6 +122,11 @@
                                                 </td>
                                             </tr>
                                         <% }); %>
+                                        <tr class="finance-filter-empty d-none">
+                                            <td colspan="7" class="text-center text-muted">
+                                                Tidak ada pengeluaran untuk kategori ini
+                                            </td>
+                                        </tr>
                                     <% } else { %>
                                         <tr>
                                             <td colspan="7" class="text-center text-muted">
@@ -212,18 +154,12 @@
                 <form id="addExpenseForm">
                     <div class="modal-body">
                         <div class="mb-3">
-                            <label for="category" class="form-label">Kategori Expenses *</label>
+                            <label for="category" class="form-label">Kategori Pengeluaran *</label>
                             <select class="form-select" id="category" name="category" required>
-                                <option value="">Pilih Kategori Expenses</option>
+                                <option value="">Pilih Kategori Pengeluaran</option>
                                 <option value="Harga Pokok Penjualan (HPP)">Harga Pokok Penjualan (HPP)</option>
                                 <option value="Beban Operasional (OPEX)">Beban Operasional (OPEX)</option>
                                 <option value="Beban Lainnya">Beban Lainnya</option>
-                            </select>
-                        </div>
-                        <div class="mb-3">
-                            <label for="account_expenses" class="form-label">Account Expenses *</label>
-                            <select class="form-select" id="account_expenses" name="account_expenses" required>
-                                <option value="">Pilih Kategori Expenses terlebih dahulu</option>
                             </select>
                         </div>
                         <div class="mb-3">
@@ -270,18 +206,18 @@
                     <input type="hidden" id="edit_id" name="id">
                     <div class="modal-body">
                         <div class="mb-3">
-                            <label for="edit_category" class="form-label">Kategori Expenses *</label>
+                            <label for="edit_category" class="form-label">Kategori Pengeluaran *</label>
                             <select class="form-select" id="edit_category" name="category" required>
-                                <option value="">Pilih Kategori Expenses</option>
+                                <option value="">Pilih Kategori Pengeluaran</option>
                                 <option value="Harga Pokok Penjualan (HPP)">Harga Pokok Penjualan (HPP)</option>
                                 <option value="Beban Operasional (OPEX)">Beban Operasional (OPEX)</option>
                                 <option value="Beban Lainnya">Beban Lainnya</option>
                             </select>
                         </div>
                         <div class="mb-3">
-                            <label for="edit_account_expenses" class="form-label">Account Expenses *</label>
+                            <label for="edit_account_expenses" class="form-label">Akun Pengeluaran *</label>
                             <select class="form-select" id="edit_account_expenses" name="account_expenses" required>
-                                <option value="">Pilih Kategori Expenses terlebih dahulu</option>
+                                <option value="">Pilih kategori pengeluaran terlebih dahulu</option>
                             </select>
                         </div>
                         <div class="mb-3">
@@ -332,8 +268,8 @@
                     const categorySelect = document.getElementById('category');
                     const editCategorySelect = document.getElementById('edit_category');
                     
-                    categorySelect.innerHTML = '<option value="">Pilih Kategori Expenses</option>';
-                    editCategorySelect.innerHTML = '<option value="">Pilih Kategori Expenses</option>';
+                    categorySelect.innerHTML = '<option value="">Pilih Kategori Pengeluaran</option>';
+                    editCategorySelect.innerHTML = '<option value="">Pilih Kategori Pengeluaran</option>';
                     
                     data.data.forEach(cat => {
                         const opt = `<option value="${cat.name}">${cat.name}</option>`;
@@ -357,7 +293,7 @@
             const accountSelect = document.getElementById(accountSelectId);
             
             // Clear existing options
-            accountSelect.innerHTML = '<option value="">Pilih Account Expenses</option>';
+            accountSelect.innerHTML = '<option value="">Pilih Akun Pengeluaran</option>';
             
             const selectedCategory = categorySelect.value;
             if (selectedCategory && accountExpensesOptions[selectedCategory]) {
@@ -370,47 +306,16 @@
             }
         }
 
-        // Add event listeners for category changes
-        document.getElementById('category').addEventListener('change', function() {
-            updateAccountExpenses('category', 'account_expenses');
-        });
-
+        // Add event listener for edit category changes
         document.getElementById('edit_category').addEventListener('change', function() {
             updateAccountExpenses('edit_category', 'edit_account_expenses');
         });
-
-        // Load commission data
-        async function loadCommissionData() {
-            try {
-                const month = document.getElementById('month_filter').value;
-                const year = document.getElementById('year_filter').value;
-                
-                let url = '/admin/billing/api/commission-stats';
-                if (month && year) {
-                    url += `?month=${encodeURIComponent(month)}&year=${encodeURIComponent(year)}`;
-                }
-                
-                const response = await fetch(url);
-                const result = await response.json();
-                
-                if (result.success) {
-                    const commissionTotal = result.data.totalCommissionExpenses || 0;
-                    document.getElementById('commissionTotal').textContent = 
-                        'Rp ' + commissionTotal.toLocaleString('id-ID');
-                }
-            } catch (error) {
-                console.error('Error loading commission data:', error);
-            }
-        }
-
-        // Load commission data on page load
-        loadCommissionData();
 
         // Export to CSV function
         function exportToCSV() {
             <% if (expenses && expenses.length > 0) { %>
             const expenses = <%- JSON.stringify(expenses) %>;
-            const csvHeaders = ['Tanggal', 'Kategori Expenses', 'Account Expenses', 'Jumlah', 'Metode Pembayaran', 'Catatan'];
+            const csvHeaders = ['Tanggal', 'Kategori Pengeluaran', 'Akun Pengeluaran', 'Jumlah', 'Metode Pembayaran', 'Catatan'];
             
             const csvRows = [csvHeaders.join(',')];
             

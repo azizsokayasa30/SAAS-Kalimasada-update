@@ -842,7 +842,21 @@ router.post('/restore', upload.single('backup_file'), async (req, res) => {
 
         // Restore database
         fs.copyFileSync(backupPath, dbPath);
-        
+
+        const { purgeDemoSeedData } = require('../utils/demoSeedData');
+        const sqlite3 = require('sqlite3').verbose();
+        const purgeDb = new sqlite3.Database(dbPath);
+        try {
+            const purged = await purgeDemoSeedData(purgeDb);
+            if ((purged.collectorsRemoved || 0) + (purged.odpsRemoved || 0) > 0) {
+                logger.info(
+                    `[restore] Demo seed guard: hapus ${purged.collectorsRemoved || 0} kolektor, ${purged.odpsRemoved || 0} ODP demo`
+                );
+            }
+        } finally {
+            purgeDb.close();
+        }
+
         logger.info(`Database restored from: ${req.file.filename}`);
         await logAdminActivity(req, 'database_restore', `Restore database: ${req.file.filename}`);
 

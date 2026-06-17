@@ -81,8 +81,6 @@ BEGIN
     UPDATE collector_assignments SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
 
--- Insert sample collectors
-INSERT OR IGNORE INTO collectors (name, phone, email, address, commission_rate) VALUES
-('Ahmad Suryadi', '081234567890', 'ahmad@example.com', 'Jl. Merdeka No. 123, Jakarta', 5.00),
-('Budi Santoso', '081234567891', 'budi@example.com', 'Jl. Sudirman No. 456, Jakarta', 5.00),
-('Citra Dewi', '081234567892', 'citra@example.com', 'Jl. Thamrin No. 789, Jakarta', 5.00);
+-- Data demo kolektor tidak disisipkan di migration (INSERT OR IGNORE membuat baris terhapus
+-- muncul lagi setiap migrasi dijalankan ulang). Untuk lingkungan dev saja:
+--   node scripts/setup-collectors-safe.js --seed

@@ -34,6 +34,10 @@
     "clean:onu-fallback:dry": "node scripts/delete-fallback-onu-devices.js --dry-run",
     "odp:purge-demo": "node scripts/purge-demo-odp-seed.js",
     "odp:purge-demo:dry": "node scripts/purge-demo-odp-seed.js --dry-run",
+    "collectors:purge-demo": "node scripts/purge-demo-collectors-seed.js",
+    "collectors:purge-demo:dry": "node scripts/purge-demo-collectors-seed.js --dry-run",
+    "purge:demo-seed": "node scripts/purge-demo-seed-data.js",
+    "purge:demo-seed:dry": "node scripts/purge-demo-seed-data.js --dry-run",
     "cleanup:field-photos": "node scripts/cleanup-field-completion-images.js",
     "cleanup:field-photos:aggressive": "node scripts/cleanup-field-completion-images.js --aggressive"
   },

@@ -451,6 +451,15 @@
                                                     <a href="/admin/trouble/detail/<%= report.id %>" class="btn btn-sm btn-primary" title="Lihat detail laporan gangguan" aria-label="Lihat laporan">
                                                         <i class="bi bi-eye"></i>
                                                     </a>
+                                                    <button type="button"
+                                                        class="btn btn-sm btn-warning btn-edit-assign"
+                                                        title="Edit penugasan teknisi"
+                                                        aria-label="Edit penugasan teknisi"
+                                                        data-report-id="<%= report.id %>"
+                                                        data-assigned-id="<%= assignedTechnicianId || '' %>"
+                                                        data-customer-name="<%= report.name %>">
+                                                        <i class="bi bi-pencil-square"></i>
+                                                    </button>
                                                 <% } %>
                                                 <a href="https://wa.me/<%= report.phone.replace(/^0/, '62') %>" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-success" title="Hubungi pelapor lewat WhatsApp" aria-label="WhatsApp pelapor">
                                                     <i class="bi bi-whatsapp"></i>
@@ -540,6 +549,43 @@
 </script>
 
         </main>
+    </div>
+</div>
+
+<!-- Edit Assign Teknisi Modal -->
+<div class="modal fade" id="editAssignModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Edit Penugasan Teknisi</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small mb-3">
+                    Tiket <strong id="editAssignTicketLabel">#</strong> — <span id="editAssignCustomerName"></span>
+                </p>
+                <form id="editAssignForm">
+                    <input type="hidden" id="editAssignReportId" value="">
+                    <div class="mb-3">
+                        <label class="form-label" for="editAssignTechnicianSelect">Teknisi</label>
+                        <select class="form-select" id="editAssignTechnicianSelect" name="assignedTechnicianId">
+                            <option value="">-- Belum ditugaskan --</option>
+                        </select>
+                        <div class="form-text">Pilih teknisi baru atau kosongkan untuk mencabut penugasan.</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="editAssignNotes">Catatan (opsional)</label>
+                        <textarea class="form-control" id="editAssignNotes" name="notes" rows="2" placeholder="Alasan perubahan penugasan..."></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+                <button type="button" class="btn btn-primary" id="editAssignSubmitBtn" onclick="submitEditAssign()">
+                    <i class="bi bi-check2-circle me-1"></i>Simpan
+                </button>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -677,22 +723,90 @@
             });
         }
         
-        // Load technicians
+        // Load technicians (buat tiket + edit assign)
+        const technicianOptions = [];
+        function appendTechnicianOptions(selectEl, selectedId) {
+            if (!selectEl) return;
+            const keepFirst = selectEl.options.length > 0 ? selectEl.options[0] : null;
+            selectEl.innerHTML = '';
+            if (keepFirst) selectEl.appendChild(keepFirst);
+            else {
+                const blank = document.createElement('option');
+                blank.value = '';
+                blank.textContent = '-- Belum ditugaskan --';
+                selectEl.appendChild(blank);
+            }
+            technicianOptions.forEach(t => {
+                const opt = document.createElement('option');
+                opt.value = t.id;
+                opt.textContent = t.name + ' (' + (t.role || 'technician') + ')';
+                if (selectedId && String(t.id) === String(selectedId)) opt.selected = true;
+                selectEl.appendChild(opt);
+            });
+        }
+
         const techSelect = document.getElementById('technicianSelect');
-        if (techSelect) {
-            fetch('/admin/trouble/technicians/list')
+        const editAssignTechSelect = document.getElementById('editAssignTechnicianSelect');
+        fetch('/admin/trouble/technicians/list')
             .then(res => res.json())
             .then(json => {
                 if (json.success) {
-                    json.technicians.forEach(t => {
-                        const opt = document.createElement('option');
-                        opt.value = t.id;
-                        opt.textContent = t.name + ' (' + t.role + ')';
-                        techSelect.appendChild(opt);
-                    });
+                    technicianOptions.push(...json.technicians);
+                    appendTechnicianOptions(techSelect, '');
+                    appendTechnicianOptions(editAssignTechSelect, '');
                 }
-            }).catch(e => console.error('Gagal load teknisi:', e));
-        }
+            })
+            .catch(e => console.error('Gagal load teknisi:', e));
+
+        window.openEditAssignModal = function(reportId, assignedId, customerName) {
+            document.getElementById('editAssignReportId').value = reportId;
+            document.getElementById('editAssignTicketLabel').textContent = '#' + reportId;
+            document.getElementById('editAssignCustomerName').textContent = customerName || '';
+            document.getElementById('editAssignNotes').value = '';
+            appendTechnicianOptions(editAssignTechSelect, assignedId || '');
+            const modalEl = document.getElementById('editAssignModal');
+            if (modalEl && window.bootstrap && window.bootstrap.Modal) {
+                new bootstrap.Modal(modalEl).show();
+            }
+        };
+
+        document.querySelectorAll('.btn-edit-assign').forEach(btn => {
+            btn.addEventListener('click', function() {
+                openEditAssignModal(
+                    this.dataset.reportId,
+                    this.dataset.assignedId || '',
+                    this.dataset.customerName || ''
+                );
+            });
+        });
+
+        window.submitEditAssign = async function() {
+            const reportId = document.getElementById('editAssignReportId').value;
+            const assignedTechnicianId = document.getElementById('editAssignTechnicianSelect').value;
+            const notes = document.getElementById('editAssignNotes').value.trim();
+            const btn = document.getElementById('editAssignSubmitBtn');
+            if (!reportId) return;
+            btn.disabled = true;
+            try {
+                const res = await fetch('/admin/trouble/assign/' + encodeURIComponent(reportId), {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ assignedTechnicianId, notes })
+                });
+                const result = await res.json();
+                if (result.success) {
+                    alert(result.message || 'Penugasan berhasil diperbarui');
+                    location.reload();
+                } else {
+                    alert(result.message || 'Gagal memperbarui penugasan');
+                }
+            } catch (e) {
+                console.error(e);
+                alert('Gagal memperbarui penugasan teknisi');
+            } finally {
+                btn.disabled = false;
+            }
+        };
 
         const isTechnicianView = window.location.pathname.includes('/technician/') || document.body.classList.contains('technician-view');
         if (isTechnicianView) {

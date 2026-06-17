@@ -5,6 +5,7 @@ const {
   getAllTroubleReports, 
   getTroubleReportById, 
   updateTroubleReportStatus,
+  updateTroubleReportAssignment,
   createTroubleReport,
   deleteTroubleReport,
   extractTechnicianCompletion
@@ -188,6 +189,52 @@ router.get('/technicians/list', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// PUT: Ubah penugasan teknisi pada tiket gangguan
+router.put('/assign/:id', async (req, res) => {
+  try {
+    const reportId = req.params.id;
+    const { assignedTechnicianId, notes } = req.body || {};
+
+    const updatedReport = await updateTroubleReportAssignment(
+      reportId,
+      assignedTechnicianId,
+      notes
+    );
+
+    if (!updatedReport) {
+      return res.status(404).json({
+        success: false,
+        message: 'Laporan gangguan tidak ditemukan'
+      });
+    }
+
+    const assignNum = parseInt(
+      updatedReport.assigned_technician_id ?? updatedReport.assignedTechnicianId,
+      10
+    );
+    if (Number.isFinite(assignNum) && assignNum > 0) {
+      try {
+        const fieldNotif = require('../config/technicianFieldNotifications');
+        await fieldNotif.notifyTroubleTicket(assignNum, updatedReport);
+      } catch (nfErr) {
+        console.error('Field notification trouble assign:', nfErr.message || nfErr);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: assignNum > 0 ? 'Penugasan teknisi berhasil diperbarui' : 'Penugasan teknisi dicabut',
+      report: updatedReport
+    });
+  } catch (error) {
+    console.error('Error updating trouble assignment:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Gagal memperbarui penugasan: ' + error.message
+    });
   }
 });
 

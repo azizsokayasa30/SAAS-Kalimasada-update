@@ -195,6 +195,10 @@
             box-shadow: 0 4px 16px rgba(46, 125, 50, 0.38);
         }
         .remittance-btn-cancel {
+            background: linear-gradient(160deg, #78909c 0%, #607d8b 45%, #546e7a 100%);
+            box-shadow: 0 4px 16px rgba(84, 110, 122, 0.35);
+        }
+        .remittance-btn-delete {
             background: linear-gradient(160deg, #ef5350 0%, #e53935 45%, #c62828 100%);
             box-shadow: 0 4px 16px rgba(229, 57, 53, 0.35);
         }
@@ -459,10 +463,17 @@
                                     <hr class="cc-split">
                                     <div class="collector-card-table">
                                         <div class="cc-row">
-                                            <span class="cc-label" title="Total jumlah (tagihan invoice − diskon), sama seperti kolom Jumlah di Riwayat Pembayaran. Sisa setoran ke kasir dihitung dari jumlah ini dikurangi komisi.">Lunas Kolektor</span>
+                                            <span class="cc-label" title="Pembayaran tunai yang dicatat kolektor (setoran ke kasir). Transfer bank tidak masuk sini.">Lunas Kolektor (tunai)</span>
                                             <span class="cc-mid is-empty">&nbsp;</span>
                                             <span class="cc-rp">Rp <%= (collector.total_lunas_gross || 0).toLocaleString('id-ID') %></span>
                                         </div>
+                                        <% if ((collector.total_lunas_transfer || 0) > 0) { %>
+                                        <div class="cc-row">
+                                            <span class="cc-label text-muted small" title="Pelanggan lunas via transfer bank — langsung ke kantor, bukan kewajiban setoran tunai kolektor.">Lunas via transfer</span>
+                                            <span class="cc-mid is-empty">&nbsp;</span>
+                                            <span class="cc-rp text-muted">Rp <%= (collector.total_lunas_transfer || 0).toLocaleString('id-ID') %></span>
+                                        </div>
+                                        <% } %>
                                         <div class="cc-row">
                                             <span class="cc-label">Sudah setor</span>
                                             <span class="cc-mid is-empty">&nbsp;</span>
@@ -471,7 +482,7 @@
                                         <div class="cc-row">
                                             <span class="cc-label">Komisi</span>
                                             <span class="cc-mid"><%= collector.commission_rate != null && collector.commission_rate !== undefined ? collector.commission_rate : 5 %>%</span>
-                                            <span class="cc-rp">Rp <%= (collector.total_commission || 0).toLocaleString('id-ID') %></span>
+                                            <span class="cc-rp">Rp <%= (collector.total_commission_cash != null ? collector.total_commission_cash : (collector.total_commission || 0)).toLocaleString('id-ID') %></span>
                                         </div>
                                         <div class="cc-row cc-row-highlight">
                                             <span class="cc-label">BELUM SETOR</span>
@@ -704,11 +715,16 @@
                                         </div>
                                     </div>
                                 </div>
-                                <div class="modal-footer flex-wrap gap-2 border-secondary">
-                                    <button type="button" class="remittance-btn remittance-btn-cancel" data-bs-dismiss="modal">Batal</button>
-                                    <button type="submit" class="remittance-btn remittance-btn-submit">
-                                        <i class="bi bi-check2-circle"></i>Simpan perubahan
+                                <div class="modal-footer flex-wrap gap-2 border-secondary justify-content-between">
+                                    <button type="button" class="remittance-btn remittance-btn-delete" id="btnDeleteRemittanceReceipt">
+                                        <i class="bi bi-trash"></i>Hapus
                                     </button>
+                                    <div class="d-flex flex-wrap gap-2 ms-auto">
+                                        <button type="button" class="remittance-btn remittance-btn-cancel" data-bs-dismiss="modal">Batal</button>
+                                        <button type="submit" class="remittance-btn remittance-btn-submit">
+                                            <i class="bi bi-check2-circle"></i>Simpan perubahan
+                                        </button>
+                                    </div>
                                 </div>
                             </form>
                         </div>
@@ -881,6 +897,32 @@
                 }
             } catch (error) {
                 alert('Terjadi kesalahan: ' + error.message);
+            }
+        });
+
+        document.getElementById('btnDeleteRemittanceReceipt').addEventListener('click', async function () {
+            var receiptId = document.getElementById('editReceiptId').value;
+            if (!receiptId) return;
+            if (!confirm('Hapus riwayat setoran ini? Setoran tunai akan dikembalikan ke status belum setor. Tindakan tidak dapat dibatalkan.')) {
+                return;
+            }
+            var btn = this;
+            btn.disabled = true;
+            try {
+                var response = await fetch('/admin/billing/api/collector-remittance/' + receiptId, {
+                    method: 'DELETE'
+                });
+                var result = await response.json();
+                if (result.success) {
+                    alert(result.message || 'Riwayat setoran berhasil dihapus.');
+                    location.reload();
+                } else {
+                    alert('Gagal: ' + (result.message || 'Tidak diketahui'));
+                }
+            } catch (error) {
+                alert('Terjadi kesalahan: ' + error.message);
+            } finally {
+                btn.disabled = false;
             }
         });
 

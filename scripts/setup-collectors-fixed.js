@@ -98,14 +98,15 @@ async function setupCollectorsFixed() {
             });
         });
         
-        if (existingCollectors === 0) {
-            console.log('➕ Inserting sample collectors...');
+        const seedDemo = process.argv.includes('--seed');
+        if (seedDemo && existingCollectors === 0) {
+            console.log('➕ Inserting sample collectors (--seed)...');
             const sampleCollectors = [
                 ['Ahmad Suryadi', '081234567890', 'ahmad@example.com', 'Jl. Merdeka No. 123, Jakarta', 5.00],
                 ['Budi Santoso', '081234567891', 'budi@example.com', 'Jl. Sudirman No. 456, Jakarta', 5.00],
                 ['Citra Dewi', '081234567892', 'citra@example.com', 'Jl. Thamrin No. 789, Jakarta', 5.00]
             ];
-            
+
             for (const collector of sampleCollectors) {
                 await new Promise((resolve, reject) => {
                     db.run(`
@@ -118,6 +119,8 @@ async function setupCollectorsFixed() {
                 });
             }
             console.log('✅ Sample collectors inserted');
+        } else if (!seedDemo) {
+            console.log('ℹ️  Tanpa data demo. Untuk sample kolektor: node scripts/setup-collectors-fixed.js --seed');
         } else {
             console.log(`✅ Collectors already exist (${existingCollectors} records)`);
         }

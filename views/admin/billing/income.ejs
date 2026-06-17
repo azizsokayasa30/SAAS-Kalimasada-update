@@ -12,8 +12,6 @@
     <!-- Admin Mobile Optimizations -->
     <link href="/css/admin-mobile.css" rel="stylesheet">
     <style>
-        .text-purple { color: #6f42c1 !important; }
-        .border-purple { border-left: 4px solid #6f42c1 !important; }
         .main-content { min-height: 100vh; }
     </style>
 
@@ -73,86 +71,25 @@
                     </div>
                 </div>
 
-                <!-- Summary Cards -->
-                <div class="row mb-4">
-                    <div class="col-md-3">
-                        <div class="card border-success">
-                            <div class="card-body">
-                                <div class="d-flex align-items-center">
-                                    <div class="me-3">
-                                        <i class="bi bi-graph-up-arrow text-success" style="font-size: 2rem;"></i>
-                                    </div>
-                                    <div>
-                                        <div class="h4 text-success">
-                                            Rp <%= (incomes && incomes.length > 0) ? incomes.reduce((sum, inc) => sum + (inc.amount || 0), 0).toLocaleString('id-ID') : '0' %>
-                                        </div>
-                                        <div class="text-muted">Total Pemasukan</div>
-                                        <small class="text-muted"><%= (incomes && incomes.length > 0) ? incomes.length : 0 %> transaksi</small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="card border-warning">
-                            <div class="card-body">
-                                <div class="d-flex align-items-center">
-                                    <div class="me-3">
-                                        <i class="bi bi-grid text-warning" style="font-size: 2rem;"></i>
-                                    </div>
-                                    <div>
-                                        <div class="h4 text-warning">
-                                            <%= (incomes && incomes.length > 0) ? [...new Set(incomes.map(inc => inc.category))].length : 0 %>
-                                        </div>
-                                        <div class="text-muted">Kategori Aktif</div>
-                                        <small class="text-muted">Berbagai jenis pemasukan</small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="card border-info">
-                            <div class="card-body">
-                                <div class="d-flex align-items-center">
-                                    <div class="me-3">
-                                        <i class="bi bi-calendar3 text-info" style="font-size: 2rem;"></i>
-                                    </div>
-                                    <div>
-                                        <div class="h4 text-info">
-                                            <%= (incomes && incomes.length > 0) ? Math.round(incomes.reduce((sum, inc) => sum + (inc.amount || 0), 0) / incomes.length) : 0 %>
-                                        </div>
-                                        <div class="text-muted">Rata-rata per Transaksi</div>
-                                        <small class="text-muted">Dalam Rupiah</small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="card border-purple">
-                            <div class="card-body">
-                                <div class="d-flex align-items-center">
-                                    <div class="me-3">
-                                        <i class="bi bi-circle text-purple" style="font-size: 2rem;"></i>
-                                    </div>
-                                    <div>
-                                        <div class="h4 text-purple">
-                                            Rp <%= (incomes && incomes.length > 0) ? incomes.reduce((sum, inc) => sum + (inc.amount || 0), 0).toLocaleString('id-ID') : '0' %>
-                                        </div>
-                                        <div class="text-muted">Total Pendapatan</div>
-                                        <small class="text-muted">Menambah saldo</small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                <%- include('../../partials/finance-category-summary', {
+                    categorySummary: typeof categorySummary !== 'undefined' ? categorySummary : null,
+                    summaryTitle: 'Ringkasan per Kategori Pemasukan',
+                    summaryVariant: 'income',
+                    amountClass: 'text-success',
+                    startDate: typeof startDate !== 'undefined' ? startDate : '',
+                    endDate: typeof endDate !== 'undefined' ? endDate : '',
+                    transactionBodyId: 'incomeTransactionBody',
+                    listTitleId: 'financeTransactionListTitle',
+                    listTitleDefault: 'Daftar Pemasukan'
+                }) %>
 
                 <!-- Income Table -->
                 <div class="card">
-                    <div class="card-header">
-                        <h5 class="card-title mb-0">Daftar Pemasukan</h5>
+                    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <h5 class="card-title mb-0" id="financeTransactionListTitle">Daftar Pemasukan</h5>
+                        <button type="button" class="btn btn-sm btn-outline-secondary d-none" id="financeCategoryFilterClear">
+                            <i class="bi bi-x-lg me-1"></i> Tampilkan Semua
+                        </button>
                     </div>
                     <div class="card-body">
                         <div class="table-responsive">
@@ -168,24 +105,40 @@
                                         <th>Aksi</th>
                                     </tr>
                                 </thead>
-                                <tbody>
+                                <tbody id="incomeTransactionBody">
                                     <% if (incomes && incomes.length > 0) { %>
-                                        <% incomes.forEach(function(income) { %>
-                                            <tr data-id="<%= income.id %>">
+                                        <% incomes.forEach(function(income) {
+                                            const isAuto = income.source_type === 'collector_remittance';
+                                        %>
+                                            <tr data-id="<%= income.id %>" data-auto="<%= isAuto ? '1' : '0' %>" data-category="<%= income.category %>">
                                                 <td><%= new Date(income.income_date).toLocaleDateString('id-ID') %></td>
-                                                <td><%= income.description %></td>
-                                                <td><span class="badge bg-info"><%= income.category %></span></td>
+                                                <td>
+                                                    <%= income.description %>
+                                                    <% if (isAuto) { %>
+                                                        <span class="badge bg-secondary ms-1" title="Tersinkron dari setoran kolektor / penerimaan kantor">Otomatis</span>
+                                                    <% } %>
+                                                </td>
+                                                <td><span class="badge bg-<%= income.category === 'Kantor' ? 'primary' : 'info' %>"><%= income.category %></span></td>
                                                 <td class="text-success">Rp <%= (income.amount || 0).toLocaleString('id-ID') %></td>
                                                 <td><%= income.payment_method || '-' %></td>
                                                 <td><%= income.notes || '-' %></td>
                                                 <td>
-                                                    <div class="admin-action-btns">
-                                                        <button type="button" class="btn btn-sm btn-primary" onclick="editIncome('<%= income.id %>')" title="Ubah catatan pemasukan" aria-label="Ubah pemasukan">Edit</button>
-                                                        <button type="button" class="btn btn-sm btn-danger" onclick="deleteIncome('<%= income.id %>')" title="Hapus catatan pemasukan" aria-label="Hapus pemasukan">Hapus</button>
-                                                    </div>
+                                                    <% if (isAuto) { %>
+                                                        <span class="text-muted small">Sinkron setoran</span>
+                                                    <% } else { %>
+                                                        <div class="admin-action-btns">
+                                                            <button type="button" class="btn btn-sm btn-primary" onclick="editIncome('<%= income.id %>')" title="Ubah catatan pemasukan" aria-label="Ubah pemasukan">Edit</button>
+                                                            <button type="button" class="btn btn-sm btn-danger" onclick="deleteIncome('<%= income.id %>')" title="Hapus catatan pemasukan" aria-label="Hapus pemasukan">Hapus</button>
+                                                        </div>
+                                                    <% } %>
                                                 </td>
                                             </tr>
                                         <% }); %>
+                                        <tr class="finance-filter-empty d-none">
+                                            <td colspan="7" class="text-center text-muted">
+                                                Tidak ada pemasukan untuk kategori ini
+                                            </td>
+                                        </tr>
                                     <% } else { %>
                                         <tr>
                                             <td colspan="7" class="text-center text-muted">

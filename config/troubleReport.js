@@ -217,6 +217,71 @@ async function updateTroubleReportStatus(id, status, notes, technicalData = {}, 
   });
 }
 
+// Ubah penugasan teknisi pada laporan gangguan
+async function updateTroubleReportAssignment(id, assignedTechnicianId, adminNote = '') {
+  const currentReport = await getTroubleReportById(id);
+  if (!currentReport) return null;
+
+  const raw = assignedTechnicianId;
+  const parsed =
+    raw != null && String(raw).trim() !== '' ? parseInt(String(raw), 10) : NaN;
+  const newAssignId = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  const oldAssignId =
+    currentReport.assigned_technician_id != null &&
+    String(currentReport.assigned_technician_id).trim() !== ''
+      ? parseInt(String(currentReport.assigned_technician_id), 10)
+      : null;
+
+  return new Promise((resolve, reject) => {
+    const db = getDB();
+    const now = getLocalTimestamp();
+    let updatedNotes = currentReport.notes || [];
+
+    const noteText = String(adminNote || '').trim();
+    if (noteText || oldAssignId !== newAssignId) {
+      const parts = [];
+      if (oldAssignId !== newAssignId) {
+        parts.push(
+          newAssignId
+            ? `Penugasan teknisi diubah ke ID ${newAssignId}`
+            : 'Penugasan teknisi dicabut'
+        );
+      }
+      if (noteText) parts.push(noteText);
+      updatedNotes.push({
+        timestamp: now,
+        content: parts.join(' — '),
+        status: currentReport.status,
+        notificationSent: false,
+        type: 'assignment_change'
+      });
+    }
+
+    const sql = `
+      UPDATE trouble_reports
+      SET assigned_technician_id = ?, notes = ?, updated_at = ?
+      WHERE id = ?
+    `;
+
+    db.run(sql, [newAssignId, JSON.stringify(updatedNotes), now, id], function (err) {
+      db.close();
+      if (err) {
+        logger.error(`Gagal mengubah penugasan teknisi: ${err.message}`);
+        return reject(err);
+      }
+
+      resolve({
+        ...currentReport,
+        assigned_technician_id: newAssignId,
+        assignedTechnicianId: newAssignId,
+        notes: updatedNotes,
+        updated_at: now,
+        previous_assigned_technician_id: oldAssignId
+      });
+    });
+  });
+}
+
 // Menghapus laporan gangguan
 async function deleteTroubleReport(id) {
   return new Promise((resolve, reject) => {
@@ -411,6 +476,7 @@ module.exports = {
   createTroubleReport,
   deleteTroubleReport,
   updateTroubleReportStatus,
+  updateTroubleReportAssignment,
   sendNotificationToTechnicians,
   sendStatusUpdateToCustomer,
   setSockInstance,

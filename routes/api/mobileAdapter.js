@@ -4227,24 +4227,45 @@ function collectorReceiptSettingsForMobile() {
     };
 }
 
-function sanitizeInvoiceForCollectorReceipt(inv) {
+function sanitizeInvoiceForCollectorReceipt(inv, paymentTotals) {
     if (!inv || typeof inv !== 'object') return null;
     const n = (v) => {
         const x = Number(v);
         return Number.isFinite(x) ? x : 0;
     };
     const s = (v) => (v == null ? '' : String(v));
+    const invoiceAmount = n(inv.amount);
+    const discount =
+        paymentTotals && Number.isFinite(Number(paymentTotals.discount_amount))
+            ? Math.max(0, n(paymentTotals.discount_amount))
+            : 0;
+    const amountPaid =
+        paymentTotals && Number.isFinite(Number(paymentTotals.amount_paid))
+            ? Math.max(0, n(paymentTotals.amount_paid))
+            : Math.max(0, invoiceAmount - discount);
+    const paymentDate =
+        paymentTotals && paymentTotals.payment_date
+            ? s(paymentTotals.payment_date)
+            : inv.payment_date != null
+              ? s(inv.payment_date)
+              : '';
+    const paymentMethod =
+        paymentTotals && paymentTotals.payment_method
+            ? s(paymentTotals.payment_method)
+            : s(inv.payment_method);
     return {
         id: n(inv.id),
         invoice_number: s(inv.invoice_number),
         status: s(inv.status),
-        amount: n(inv.amount),
+        amount: invoiceAmount,
+        discount_amount: discount,
+        amount_paid: amountPaid,
         base_amount: inv.base_amount != null && inv.base_amount !== '' ? n(inv.base_amount) : null,
         tax_rate: inv.tax_rate != null && inv.tax_rate !== '' ? n(inv.tax_rate) : null,
         created_at: s(inv.created_at),
         due_date: s(inv.due_date),
-        payment_date: inv.payment_date != null ? s(inv.payment_date) : '',
-        payment_method: s(inv.payment_method),
+        payment_date: paymentDate,
+        payment_method: paymentMethod,
         notes: s(inv.notes),
         package_name: s(inv.package_name),
         package_speed: s(inv.package_speed),
@@ -4320,11 +4341,12 @@ router.get('/collector/customers/:customerId/receipt', verifyToken, requireColle
         }
 
         const full = await resolveCollectorPaidReceiptInvoice(customerId, qInv);
+        const paymentTotals = await billingManager.getCollectorReceiptTotalsForInvoice(full.id);
 
         res.json({
             success: true,
             data: {
-                invoice: sanitizeInvoiceForCollectorReceipt(full),
+                invoice: sanitizeInvoiceForCollectorReceipt(full, paymentTotals),
                 settings: collectorReceiptSettingsForMobile()
             }
         });

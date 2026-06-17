@@ -160,6 +160,52 @@
             height: auto;
         }
 
+        #toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 99999;
+            display: flex;
+            flex-direction: column;
+            gap: 0.65rem;
+            max-width: min(420px, calc(100vw - 2rem));
+            pointer-events: none;
+        }
+
+        #toast-container .wa-toast {
+            pointer-events: auto;
+            min-width: 300px;
+            border: none;
+            border-radius: 10px;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+            color: #fff !important;
+            background-color: #22c55e !important;
+            opacity: 1 !important;
+        }
+
+        #toast-container .wa-toast .toast-header {
+            background: transparent !important;
+            color: #fff !important;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.25) !important;
+            font-weight: 600;
+        }
+
+        #toast-container .wa-toast .toast-body {
+            background: transparent !important;
+            color: #fff !important;
+            white-space: pre-line;
+        }
+
+        #toast-container .wa-toast .toast-header i,
+        #toast-container .wa-toast .toast-header strong {
+            color: #fff !important;
+        }
+
+        #toast-container .wa-toast.wa-toast--success { background-color: #22c55e !important; }
+        #toast-container .wa-toast.wa-toast--error { background-color: #dc3545 !important; }
+        #toast-container .wa-toast.wa-toast--warning { background-color: #f59e0b !important; }
+        #toast-container .wa-toast.wa-toast--info { background-color: #0ea5e9 !important; }
+
         .provider-row {
             border: 1px solid #e9ecef;
             border-radius: 12px;
@@ -1165,6 +1211,8 @@
         </div>
     </div>
 
+    <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
+
     <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
     <script src="/js/qrcode.min.js"></script>
     <script>
@@ -1839,29 +1887,70 @@
         }
     }
 
-    // Show alert function (using global function from footer)
+    function escapeToastText(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function showToast(type, title, message, delayMs) {
+        const hideMs = delayMs || 5000;
+        const toastId = 'toast-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+        const iconMap = {
+            success: 'bi bi-check-circle-fill',
+            error: 'bi bi-x-circle-fill',
+            warning: 'bi bi-exclamation-triangle-fill',
+            info: 'bi bi-info-circle-fill'
+        };
+        const safeType = ['success', 'error', 'warning', 'info'].includes(type) ? type : 'success';
+        const safeTitle = escapeToastText(title || 'Notifikasi');
+        const safeMsg = escapeToastText(message || '');
+
+        const toastHtml = `
+            <div id="${toastId}" class="toast wa-toast wa-toast--${safeType} show" role="alert" aria-live="assertive" aria-atomic="true" data-bs-autohide="true" data-bs-delay="${hideMs}">
+                <div class="toast-header">
+                    <i class="${iconMap[safeType]} me-2"></i>
+                    <strong class="me-auto">${safeTitle}</strong>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast" aria-label="Tutup"></button>
+                </div>
+                <div class="toast-body">${safeMsg}</div>
+            </div>
+        `;
+
+        const container = document.getElementById('toast-container');
+        if (!container) return;
+        container.insertAdjacentHTML('beforeend', toastHtml);
+        const toastEl = document.getElementById(toastId);
+        if (!toastEl || !window.bootstrap || !window.bootstrap.Toast) return;
+
+        const toast = new bootstrap.Toast(toastEl, { delay: hideMs });
+        toast.show();
+        toastEl.addEventListener('hidden.bs.toast', () => toastEl.remove());
+    }
+
     function showAlert(message, type) {
-        // Use global showAlert function from footer
-        if (typeof window.showAlert === 'function') {
-            window.showAlert(message, type);
-        } else {
-            // Fallback if global function not available
-            const alertDiv = document.createElement('div');
-            alertDiv.className = `alert alert-${type} alert-dismissible fade show`;
-            alertDiv.innerHTML = `
-                ${message}
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            `;
-            
-            document.querySelector('.main-content').insertBefore(alertDiv, document.querySelector('.main-content').firstChild);
-            
-            // Auto dismiss after 5 seconds
-            setTimeout(() => {
-                if (alertDiv.parentNode) {
-                    alertDiv.remove();
-                }
-            }, 5000);
-        }
+        const titleMap = {
+            success: 'Berhasil',
+            danger: 'Gagal',
+            warning: 'Perhatian',
+            info: 'Info'
+        };
+        const toastTypeMap = {
+            success: 'success',
+            danger: 'error',
+            warning: 'warning',
+            info: 'info'
+        };
+        const alertType = type || 'info';
+        const duration = alertType === 'success' ? 4500 : alertType === 'danger' ? 7000 : 5500;
+        showToast(
+            toastTypeMap[alertType] || 'info',
+            titleMap[alertType] || 'Notifikasi',
+            message,
+            duration
+        );
     }
     
     // Function to update template status display
@@ -2046,6 +2135,7 @@
     function resetWAGroupsToDefault() {
         document.getElementById('waGroupsEnabled').checked = true;
         document.getElementById('waGroupIds').value = '';
+        showAlert('Pengaturan group direset ke default (belum disimpan)', 'info');
     }
     </script>
 </body>

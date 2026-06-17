@@ -1423,7 +1423,8 @@ router.get('/collector-remittance/export.xlsx', getAppSettings, adminAuth, async
             { header: 'Belum lunas (jml)', key: 'blc', width: 14 },
             { header: 'Sudah lunas area (Rp)', key: 'tlrp', width: 20 },
             { header: 'Jml lunas', key: 'cl', width: 11 },
-            { header: 'Jumlah lunas kolektor (Rp)', key: 'tlg', width: 24 },
+            { header: 'Lunas kolektor tunai (Rp)', key: 'tlg', width: 24 },
+            { header: 'Lunas transfer (Rp)', key: 'tlt', width: 18 },
             { header: 'Sudah setor (Rp)', key: 'ss', width: 18 },
             { header: 'Komisi (Rp)', key: 'kom', width: 16 },
             { header: 'Belum setor (Rp)', key: 'pend', width: 18 }
@@ -1440,12 +1441,13 @@ router.get('/collector-remittance/export.xlsx', getAppSettings, adminAuth, async
                 tlrp: Number(c.total_lunas_area) || 0,
                 cl: Number(c.count_lunas_area) || 0,
                 tlg: Number(c.total_lunas_gross) || 0,
+                tlt: Number(c.total_lunas_transfer) || 0,
                 ss: Number(c.sudah_setor) || 0,
-                kom: Number(c.total_commission) || 0,
+                kom: Number(c.total_commission_cash != null ? c.total_commission_cash : c.total_commission) || 0,
                 pend: Number(c.pending_amount) || 0
             });
         });
-        ['tta', 'blrp', 'tlrp', 'tlg', 'ss', 'kom', 'pend'].forEach((k) => {
+        ['tta', 'blrp', 'tlrp', 'tlg', 'tlt', 'ss', 'kom', 'pend'].forEach((k) => {
             wsKol.getColumn(k).numFmt = '"Rp" #,##0';
         });
 
@@ -1520,7 +1522,8 @@ router.get('/collector-remittance/export.csv', getAppSettings, adminAuth, async 
                 'Belum_lunas_jml',
                 'Sudah_lunas_area_Rp',
                 'Jml_lunas',
-                'Lunas_kolektor_Rp',
+                'Lunas_kolektor_tunai_Rp',
+                'Lunas_transfer_Rp',
                 'Sudah_setor_Rp',
                 'Komisi_Rp',
                 'Belum_setor_Rp'
@@ -1537,8 +1540,9 @@ router.get('/collector-remittance/export.csv', getAppSettings, adminAuth, async 
                     Number(c.total_lunas_area) || 0,
                     Number(c.count_lunas_area) || 0,
                     Number(c.total_lunas_gross) || 0,
+                    Number(c.total_lunas_transfer) || 0,
                     Number(c.sudah_setor) || 0,
-                    Number(c.total_commission) || 0,
+                    Number(c.total_commission_cash != null ? c.total_commission_cash : c.total_commission) || 0,
                     Number(c.pending_amount) || 0
                 ]);
             });
@@ -1624,6 +1628,37 @@ router.put('/api/collector-remittance/:id', adminAuth, async (req, res) => {
         res.status(isBiz ? 400 : 500).json({
             success: false,
             message: isBiz ? msg : 'Gagal memperbarui riwayat: ' + msg
+        });
+    }
+});
+
+// API: Hapus riwayat setoran
+router.delete('/api/collector-remittance/:id', adminAuth, async (req, res) => {
+    try {
+        const receiptId = parseInt(String(req.params.id), 10);
+        if (!Number.isFinite(receiptId) || receiptId <= 0) {
+            return res.status(400).json({ success: false, message: 'ID riwayat tidak valid' });
+        }
+
+        const result = await billingManager.deleteCollectorRemittanceReceipt(receiptId);
+
+        res.json({
+            success: true,
+            message: 'Riwayat setoran berhasil dihapus',
+            data: result
+        });
+    } catch (error) {
+        console.error('Error deleting collector remittance receipt:', error);
+        const msg = error && error.message ? error.message : String(error);
+        const isBiz =
+            msg.includes('tidak ditemukan') ||
+            msg.includes('tidak valid') ||
+            msg.includes('Koreksi') ||
+            msg.includes('Alokasi') ||
+            msg.includes('Gagal menghapus');
+        res.status(isBiz ? 400 : 500).json({
+            success: false,
+            message: isBiz ? msg : 'Gagal menghapus riwayat: ' + msg
         });
     }
 });
@@ -1792,6 +1827,8 @@ router.get('/dashboard-legacy', getAppSettings, async (req, res) => {
 });
 
 // Laporan Keuangan
+const { normalizeFinancialReportForView } = require('../utils/financialReportForView');
+
 router.get('/financial-report', getAppSettings, async (req, res) => {
     try {
         const { start_date, end_date, type } = req.query;
@@ -1799,7 +1836,8 @@ router.get('/financial-report', getAppSettings, async (req, res) => {
         const startDate = start_date || period.startDate;
         const endDate = end_date || period.endDate;
         
-        const financialData = await billingManager.getFinancialReport(startDate, endDate, type);
+        const rawFinancialData = await billingManager.getFinancialReport(startDate, endDate, type);
+        const financialData = await normalizeFinancialReportForView(rawFinancialData, startDate, endDate);
         
         res.render('admin/billing/financial-report', {
             title: 'Laporan Keuangan',
@@ -1833,7 +1871,8 @@ router.get('/api/financial-report', async (req, res) => {
         const period = resolveMonthYearRange(req.query);
         const startDate = start_date || period.startDate;
         const endDate = end_date || period.endDate;
-        const financialData = await billingManager.getFinancialReport(startDate, endDate, type);
+        const rawFinancialData = await billingManager.getFinancialReport(startDate, endDate, type);
+        const financialData = await normalizeFinancialReportForView(rawFinancialData, startDate, endDate);
         res.json({ success: true, data: financialData });
     } catch (error) {
         logger.error('Error getting financial report data:', error);
@@ -2483,7 +2522,8 @@ router.get('/export/financial-report.xlsx', async (req, res) => {
         const period = resolveMonthYearRange(req.query);
         const startDate = start_date || period.startDate;
         const endDate = end_date || period.endDate;
-        const financialData = await billingManager.getFinancialReport(startDate, endDate, type);
+        const rawFinancialData = await billingManager.getFinancialReport(startDate, endDate, type);
+        const financialData = await normalizeFinancialReportForView(rawFinancialData, startDate, endDate);
         
         // Buat workbook Excel
         const workbook = new ExcelJS.Workbook();
@@ -8697,11 +8737,15 @@ router.post('/api/payments/:id/cancel', async (req, res) => {
             });
         }
         const result = await billingManager.cancelPaymentById(id);
+        let message = result.invoice_reverted_unpaid
+            ? 'Pembayaran dibatalkan. Tagihan kembali belum lunas.'
+            : 'Pembayaran dibatalkan.';
+        if ((result.remittance_receipts_removed || 0) > 0) {
+            message += ' Riwayat setoran transfer kantor ikut dihapus.';
+        }
         return res.json({
             success: true,
-            message: result.invoice_reverted_unpaid
-                ? 'Pembayaran dibatalkan. Tagihan kembali belum lunas.'
-                : 'Pembayaran dibatalkan.',
+            message,
             ...result
         });
     } catch (error) {
@@ -10665,14 +10709,35 @@ router.post('/api/finance-categories', async (req, res) => {
     try {
         const { type, name, subcategories } = req.body;
         if (!type || !name) return res.status(400).json({ success: false, message: 'Type dan Name wajib diisi' });
+
+        const trimmedName = String(name).trim();
+        if (!trimmedName) return res.status(400).json({ success: false, message: 'Nama kategori tidak boleh kosong' });
         
         const subCatStr = subcategories ? JSON.stringify(subcategories) : null;
         const db = new sqlite3.Database(path.join(__dirname, '../data/billing.db'));
-        db.run('INSERT INTO finance_categories (type, name, subcategories) VALUES (?, ?, ?)', [type, name, subCatStr], function(err) {
-            db.close();
-            if (err) return res.status(500).json({ success: false, message: err.message });
-            res.json({ success: true, data: { id: this.lastID, type, name, subcategories } });
-        });
+        db.get(
+            'SELECT id FROM finance_categories WHERE type = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1',
+            [type, trimmedName],
+            (dupErr, dupRow) => {
+                if (dupErr) {
+                    db.close();
+                    return res.status(500).json({ success: false, message: dupErr.message });
+                }
+                if (dupRow) {
+                    db.close();
+                    return res.status(400).json({ success: false, message: 'Kategori dengan nama serupa sudah ada' });
+                }
+                db.run(
+                    'INSERT INTO finance_categories (type, name, subcategories) VALUES (?, ?, ?)',
+                    [type, trimmedName, subCatStr],
+                    function(err) {
+                        db.close();
+                        if (err) return res.status(500).json({ success: false, message: err.message });
+                        res.json({ success: true, data: { id: this.lastID, type, name: trimmedName, subcategories } });
+                    }
+                );
+            }
+        );
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -10727,10 +10792,12 @@ router.get('/expenses', getAppSettings, async (req, res) => {
         const startDate = start_date || period.startDate;
         const endDate = end_date || period.endDate;
         const expenses = await billingManager.getExpenses(startDate, endDate);
+        const categorySummary = await billingManager.getFinanceCategorySummary('expense', startDate, endDate);
         
         res.render('admin/billing/expenses', {
             title: 'Manajemen Pengeluaran',
             expenses,
+            categorySummary,
             startDate,
             endDate,
             month: period.month,
@@ -10861,10 +10928,12 @@ router.get('/income', getAppSettings, async (req, res) => {
         const startDate = start_date || period.startDate;
         const endDate = end_date || period.endDate;
         const incomes = await billingManager.getIncomes(startDate, endDate);
+        const categorySummary = await billingManager.getFinanceCategorySummary('income', startDate, endDate);
         
         res.render('admin/billing/income', {
             title: 'Manajemen Pemasukan',
             incomes,
+            categorySummary,
             startDate,
             endDate,
             month: period.month,

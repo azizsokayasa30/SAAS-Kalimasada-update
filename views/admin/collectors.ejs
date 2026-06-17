@@ -5,185 +5,473 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Kelola Tim Kolektor - <%= appSettings.companyHeader %></title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
     <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
-    
     <link href="/css/theme.css" rel="stylesheet">
     <link href="/css/responsive-admin.css" rel="stylesheet">
     <link href="/css/admin-mobile.css" rel="stylesheet">
+    <%- include('../partials/theme-head') %>
     <style>
-        .main-content { min-height: 100vh; }
-        .page-header {
-            margin-bottom: 2rem;
+        .collectors-page {
+            --cp-surface: var(--panel-bg, #ffffff);
+            --cp-surface-2: var(--panel-accent, #f8fafc);
+            --cp-border: var(--border-color, #dde1e6);
+            --cp-text: var(--text-primary, #0f172a);
+            --cp-muted: var(--text-tertiary, #64748b);
+            font-family: 'Inter', system-ui, sans-serif;
+        }
+
+        .collectors-page.main-content {
+            background: transparent !important;
+            color: var(--cp-text) !important;
+            min-height: 100vh;
+            padding-bottom: 2rem;
+        }
+
+        .collectors-page .page-header {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+            margin: 1rem 0 1.25rem;
             padding-bottom: 1rem;
-            border-bottom: 1px solid #dee2e6;
+            border-bottom: 1px solid var(--cp-border);
         }
-        .table-container {
-            background: var(--panel-bg, #ffffff);
+        .collectors-page .page-header h1 {
+            font-size: 1.35rem;
+            font-weight: 700;
+            margin: 0;
+            color: var(--cp-text) !important;
+        }
+        .collectors-page .page-header p {
+            margin: 0.25rem 0 0;
+            font-size: 0.9rem;
+            color: var(--cp-muted) !important;
+        }
+
+        .collectors-page .summary-strip {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.75rem;
+            margin-bottom: 1.25rem;
+        }
+        @media (max-width: 767.98px) {
+            .collectors-page .summary-strip { grid-template-columns: 1fr; }
+        }
+        .collectors-page .summary-pill {
+            background: var(--cp-surface);
+            border: 1px solid var(--cp-border);
             border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            padding: 0;
+            padding: 0.85rem 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            color: var(--cp-text);
+        }
+        .collectors-page .summary-pill .icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            background: var(--cp-surface-2);
+            color: var(--cp-text);
+            border: 1px solid var(--cp-border);
+        }
+        .collectors-page .summary-pill .value {
+            font-size: 1.25rem;
+            font-weight: 700;
+            line-height: 1.1;
+            color: var(--cp-text) !important;
+        }
+        .collectors-page .summary-pill .label {
+            font-size: 0.75rem;
+            color: var(--cp-muted) !important;
+        }
+
+        .collectors-page .filter-bar {
+            background: var(--cp-surface);
+            border: 1px solid var(--cp-border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1.25rem;
+        }
+
+        .collectors-page .badge-solid {
+            background: #475569;
+            color: #ffffff !important;
+            font-weight: 600;
+            font-size: 0.8rem;
+            padding: 0.45rem 0.85rem;
+            border-radius: 6px;
+        }
+
+        .collectors-page .collector-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1rem;
+            align-items: stretch;
+        }
+
+        .collectors-page .collector-card {
+            background: var(--cp-surface) !important;
+            border: 1px solid var(--cp-border);
+            border-radius: 10px;
+            display: flex;
+            flex-direction: column;
+            min-height: 100%;
+            color: var(--cp-text) !important;
+        }
+        .collectors-page .collector-card.is-inactive { opacity: 0.88; }
+
+        .collectors-page .collector-card-body {
+            padding: 1rem 1rem 0.75rem;
+            flex: 1 1 auto;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .collectors-page .collector-top {
+            display: flex;
+            gap: 0.75rem;
+            align-items: flex-start;
+            margin-bottom: 0.85rem;
+        }
+
+        .collectors-page .collector-avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1rem;
+            color: #ffffff !important;
+            background: #64748b;
+            flex-shrink: 0;
+        }
+
+        .collectors-page .collector-meta { min-width: 0; flex: 1; }
+        .collectors-page .collector-name {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--cp-text) !important;
+            margin: 0 0 0.2rem;
+            line-height: 1.3;
+        }
+        .collectors-page .collector-contact {
+            font-size: 0.82rem;
+            color: var(--cp-muted) !important;
+            display: flex;
+            flex-direction: column;
+            gap: 0.12rem;
+        }
+        .collectors-page .collector-contact span {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            white-space: nowrap;
             overflow: hidden;
+            text-overflow: ellipsis;
+            color: var(--cp-muted) !important;
         }
-        .table {
-            margin-bottom: 0;
+        .collectors-page .collector-contact i {
+            color: var(--cp-muted) !important;
         }
-        .table th {
-            background-color: #f1f3f5;
+
+        .collectors-page .status-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.3rem 0.6rem;
+            border-radius: 6px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: #ffffff !important;
+        }
+        .collectors-page .status-chip.active { background: #16a34a; }
+        .collectors-page .status-chip.inactive { background: #64748b; }
+
+        .collectors-page .id-badge {
+            background: #334155;
+            color: #ffffff !important;
+            font-size: 0.72rem;
+            font-weight: 600;
+            padding: 0.28rem 0.55rem;
+            border-radius: 6px;
+        }
+
+        .collectors-page .section-label {
+            font-size: 0.7rem;
             font-weight: 600;
             text-transform: uppercase;
-            font-size: 0.75rem;
-            letter-spacing: 0.5px;
-            border-top: none;
-            padding: 12px 15px;
+            letter-spacing: 0.04em;
+            color: var(--cp-muted) !important;
+            margin-bottom: 0.4rem;
         }
-        .table td {
-            vertical-align: middle;
-            padding: 12px 15px;
-            font-size: 0.9rem;
+
+        .collectors-page .areas-wrap {
+            flex: 1 1 auto;
+            min-height: 3.5rem;
+            margin-bottom: 0;
         }
-        .status-badge {
-            padding: 4px 8px;
+        .collectors-page .areas-wrap .area-tag {
+            display: inline-block;
+            background: #475569;
+            color: #ffffff !important;
+            font-size: 0.72rem;
+            font-weight: 500;
+            padding: 0.22rem 0.5rem;
             border-radius: 4px;
-            font-size: 0.75rem;
-            font-weight: 600;
+            margin: 0 0.3rem 0.3rem 0;
         }
-        /* .area-badge style is handled globally in theme-system.css */
-        .stats-column {
-            min-width: 150px;
-        }
-        .stats-label {
-            display: block;
-            font-size: 0.7rem;
-            color: #6c757d;
-            margin-bottom: -2px;
-        }
-        .stats-value {
-            font-weight: 700;
-            font-size: 0.9rem;
-        }
-        .search-box {
-            max-width: 300px;
-        }
-        .btn-action {
-            padding: 4px 8px;
-            font-size: 0.85rem;
-        }
-        .itallics-text {
+        .collectors-page .areas-empty {
+            font-size: 0.82rem;
+            color: var(--cp-muted) !important;
             font-style: italic;
-            color: #adb5bd;
+        }
+
+        .collectors-page .collector-card-bottom {
+            margin-top: auto;
+            border-top: 1px solid var(--cp-border);
+            background: var(--cp-surface-2) !important;
+            padding: 0.85rem 1rem 1rem;
+        }
+
+        .collectors-page .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.5rem;
+            margin-bottom: 0.75rem;
+        }
+        .collectors-page .stat-box {
+            text-align: center;
+            background: var(--cp-surface) !important;
+            border: 1px solid var(--cp-border);
+            border-radius: 6px;
+            padding: 0.55rem 0.35rem;
+        }
+        .collectors-page .stat-box .num {
+            font-size: 0.88rem;
+            font-weight: 700;
+            color: var(--cp-text) !important;
+            line-height: 1.2;
+        }
+        .collectors-page .stat-box .lbl {
+            font-size: 0.65rem;
+            color: var(--cp-muted) !important;
+            margin-top: 0.15rem;
+        }
+
+        .collectors-page .collector-card-footer {
+            display: flex;
+            gap: 0.5rem;
+        }
+        .collectors-page .collector-card-footer .btn {
+            flex: 1;
+            border-radius: 6px;
+            font-size: 0.84rem;
+            font-weight: 600;
+            border: none;
+            color: #ffffff !important;
+        }
+        .collectors-page .btn-edit-solid { background: #2563eb !important; }
+        .collectors-page .btn-edit-solid:hover { background: #1d4ed8 !important; color: #ffffff !important; }
+        .collectors-page .btn-delete-solid { background: #dc2626 !important; }
+        .collectors-page .btn-delete-solid:hover { background: #b91c1c !important; color: #ffffff !important; }
+
+        .collectors-page .empty-state {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 3rem 1.5rem;
+            background: var(--cp-surface) !important;
+            border: 1px dashed var(--cp-border);
+            border-radius: 10px;
+            color: var(--cp-muted) !important;
+        }
+        .collectors-page .empty-state h5 {
+            color: var(--cp-text) !important;
+        }
+        .collectors-page .empty-state i {
+            font-size: 2.5rem;
+            color: var(--cp-muted);
+            display: block;
+            margin-bottom: 0.75rem;
+        }
+
+        html[data-theme='dark'] .collectors-page .input-group-text {
+            background: var(--cp-surface-2) !important;
+            border-color: var(--cp-border) !important;
+            color: var(--cp-muted) !important;
         }
     </style>
-
-    <%- include('../partials/theme-head') %>
 </head>
 <body>
     <div class="container-fluid">
         <div class="row">
             <%- include('../partials/billing-sidebar') %>
 
-            <main class="col-md-10 ms-sm-auto col-lg-10 px-md-4 main-content">
-                <div class="page-header d-flex justify-content-between align-items-center">
-                    <h1 class="h4 m-0">Kelola Tim Kolektor</h1>
-                    <button class="btn btn-primary" onclick="addCollector()">
-                        Tambah Kolektor
+            <main class="col-md-10 ms-sm-auto col-lg-10 px-md-4 main-content collectors-page">
+                <div class="page-header">
+                    <div>
+                        <h1>Kelola Tim Kolektor</h1>
+                        <p>Kelola profil, area tugas, dan performa setiap kolektor.</p>
+                    </div>
+                    <button class="btn btn-primary" type="button" onclick="addCollector()">
+                        <i class="bi bi-plus-lg me-1"></i> Tambah Kolektor
                     </button>
                 </div>
 
-                <div class="card mb-4 border-0 shadow-sm">
-                    <div class="card-body">
-                        <div class="row g-3 align-items-center">
-                            <div class="col-auto">
-                                <label for="searchInput" class="col-form-label">Cari:</label>
-                            </div>
-                            <div class="col-md-4">
-                                <input type="text" id="searchInput" class="form-control" placeholder="Nama atau telepon...">
-                            </div>
-                            <div class="col-auto ms-md-auto">
-                                <label for="statusFilter" class="col-form-label">Status:</label>
-                            </div>
-                            <div class="col-md-3">
-                                <select class="form-select" id="statusFilter">
-                                    <option value="all">Semua Status</option>
-                                    <option value="active">Aktif</option>
-                                    <option value="inactive">Nonaktif</option>
-                                </select>
-                            </div>
+                <% 
+                    const totalCollectors = collectors ? collectors.length : 0;
+                    const activeCount = collectors ? collectors.filter(c => (c.status || 'active') === 'active').length : 0;
+                    const inactiveCount = totalCollectors - activeCount;
+                %>
+
+                <div class="summary-strip">
+                    <div class="summary-pill">
+                        <div class="icon"><i class="bi bi-people"></i></div>
+                        <div>
+                            <div class="value" id="summaryTotal"><%= totalCollectors %></div>
+                            <div class="label">Total Kolektor</div>
+                        </div>
+                    </div>
+                    <div class="summary-pill">
+                        <div class="icon"><i class="bi bi-check-circle"></i></div>
+                        <div>
+                            <div class="value" id="summaryActive"><%= activeCount %></div>
+                            <div class="label">Aktif</div>
+                        </div>
+                    </div>
+                    <div class="summary-pill">
+                        <div class="icon"><i class="bi bi-pause-circle"></i></div>
+                        <div>
+                            <div class="value" id="summaryInactive"><%= inactiveCount %></div>
+                            <div class="label">Nonaktif</div>
                         </div>
                     </div>
                 </div>
 
-                <div class="table-container shadow-sm">
-                    <div class="table-responsive">
-                        <table class="table table-hover">
-                            <thead>
-                                <tr>
-                                    <th>Nama & Kontak</th>
-                                    <th>Area Tugas</th>
-                                    <th class="stats-column text-end">Statistik</th>
-                                    <th class="text-center">Status</th>
-                                    <th class="text-end">Aksi</th>
-                                </tr>
-                            </thead>
-                            <tbody id="collectorsTableBody">
-                                <% if (collectors && collectors.length > 0) { %>
-                                    <% collectors.forEach(function(collector) { %>
-                                        <tr class="collector-row" data-status="<%= collector.status || 'active' %>" data-name="<%= collector.name.toLowerCase() %>" data-phone="<%= collector.phone.toLowerCase() %>">
-                                            <td>
-                                                <div class="fw-bold"><%= collector.name %></div>
-                                                <div class="text-muted small"><%= collector.phone %></div>
-                                                <div class="text-muted extra-small" style="font-size: 0.75rem;"><%= collector.email || '-' %></div>
-                                            </td>
-                                            <td style="max-width: 300px;">
-                                                <div id="areas-<%= collector.id %>">
-                                                    <% if (collector.assigned_areas) { %>
-                                                        <% collector.assigned_areas.split(',').forEach(function(area) { %>
-                                                            <span class="area-badge"><%= area.trim() %></span>
-                                                        <% }); %>
-                                                    <% } else { %>
-                                                        <span class="itallics-text small">Belum ada area ditugaskan</span>
-                                                    <% } %>
-                                                </div>
-                                            </td>
-                                            <td class="text-end">
-                                                <div>
-                                                    <span class="stats-label">Pelanggan:</span>
-                                                    <span class="stats-value text-primary"><%= collector.total_payments || 0 %></span>
-                                                </div>
-                                                <div class="mt-1">
-                                                    <span class="stats-label">Total Komisi:</span>
-                                                    <span class="stats-value text-success">Rp <%= collector.total_commission ? collector.total_commission.toLocaleString('id-ID') : '0' %></span>
-                                                </div>
-                                                <div class="mt-1">
-                                                    <span class="stats-label">Rate:</span>
-                                                    <span class="stats-value text-dark"><%= collector.commission_rate !== null && collector.commission_rate !== undefined ? collector.commission_rate : 5 %>%</span>
-                                                </div>
-                                            </td>
-                                            <td class="text-center">
-                                                <% if (collector.status === 'active') { %>
-                                                    <span class="badge border border-success-subtle px-2 bg-success">Aktif</span>
-                                                <% } else { %>
-                                                    <span class="badge border border-danger-subtle px-2 bg-brown">Nonaktif</span>
-                                                <% } %>
-                                            </td>
-                                            <td class="text-end">
-                                                <div class="admin-action-btns">
-                                                    <button type="button" class="btn btn-sm btn-primary" onclick="editCollector('<%= collector.id %>')" title="Ubah data kolektor" aria-label="Ubah data kolektor">Edit</button>
-                                                    <button type="button" class="btn btn-sm btn-danger" onclick="deleteCollector('<%= collector.id %>')" title="Hapus kolektor dari tim" aria-label="Hapus kolektor dari tim">Hapus</button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    <% }); %>
-                                <% } else { %>
-                                    <tr>
-                                        <td colspan="5" class="text-center py-5 text-muted">
-                                            Belum ada data tim kolektor.
-                                        </td>
-                                    </tr>
-                                <% } %>
-                            </tbody>
-                        </table>
+                <div class="filter-bar">
+                    <div class="row g-3 align-items-center">
+                        <div class="col-md-5">
+                            <div class="input-group">
+                                <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
+                                <input type="text" id="searchInput" class="form-control border-start-0" placeholder="Cari nama atau telepon kolektor...">
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <select class="form-select" id="statusFilter">
+                                <option value="all">Semua status</option>
+                                <option value="active">Aktif saja</option>
+                                <option value="inactive">Nonaktif saja</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3 text-md-end">
+                            <span class="badge-solid" id="visibleCountBadge"><%= totalCollectors %> kolektor</span>
+                        </div>
                     </div>
+                </div>
+
+                <div class="collector-grid" id="collectorsGrid">
+                    <% if (collectors && collectors.length > 0) { %>
+                        <% collectors.forEach(function(collector) {
+                            const status = collector.status || 'active';
+                            const isActive = status === 'active';
+                            const initial = (collector.name || '?').charAt(0).toUpperCase();
+                            const commissionRate = collector.commission_rate !== null && collector.commission_rate !== undefined ? collector.commission_rate : 5;
+                        %>
+                            <article
+                                class="collector-card collector-row <%= isActive ? '' : 'is-inactive' %>"
+                                data-status="<%= status %>"
+                                data-name="<%= (collector.name || '').toLowerCase() %>"
+                                data-phone="<%= (collector.phone || '').toLowerCase() %>"
+                            >
+                                <div class="collector-card-body">
+                                    <div class="d-flex justify-content-between align-items-start mb-2">
+                                        <span class="status-chip <%= isActive ? 'active' : 'inactive' %>">
+                                            <%= isActive ? 'Aktif' : 'Nonaktif' %>
+                                        </span>
+                                        <span class="id-badge">#<%= collector.id %></span>
+                                    </div>
+
+                                    <div class="collector-top">
+                                        <div class="collector-avatar"><%= initial %></div>
+                                        <div class="collector-meta">
+                                            <h2 class="collector-name"><%= collector.name %></h2>
+                                            <div class="collector-contact">
+                                                <span><i class="bi bi-telephone"></i> <%= collector.phone %></span>
+                                                <% if (collector.email) { %>
+                                                    <span><i class="bi bi-envelope"></i> <%= collector.email %></span>
+                                                <% } %>
+                                                <% if (collector.address) { %>
+                                                    <span title="<%= collector.address %>"><i class="bi bi-geo-alt"></i> <%= collector.address %></span>
+                                                <% } %>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="section-label">Area tugas</div>
+                                    <div class="areas-wrap" id="areas-<%= collector.id %>">
+                                        <% if (collector.assigned_areas) { %>
+                                            <% collector.assigned_areas.split(',').forEach(function(area) { %>
+                                                <% if (area.trim()) { %>
+                                                    <span class="area-tag"><%= area.trim() %></span>
+                                                <% } %>
+                                            <% }); %>
+                                        <% } else { %>
+                                            <span class="areas-empty">Belum ada area ditugaskan</span>
+                                        <% } %>
+                                    </div>
+                                </div>
+
+                                <div class="collector-card-bottom">
+                                    <div class="stats-grid">
+                                        <div class="stat-box">
+                                            <div class="num"><%= collector.total_payments || 0 %></div>
+                                            <div class="lbl">Pembayaran</div>
+                                        </div>
+                                        <div class="stat-box">
+                                            <div class="num">Rp <%= (collector.total_commission || 0).toLocaleString('id-ID') %></div>
+                                            <div class="lbl">Komisi</div>
+                                        </div>
+                                        <div class="stat-box">
+                                            <div class="num"><%= commissionRate %>%</div>
+                                            <div class="lbl">Rate</div>
+                                        </div>
+                                    </div>
+                                    <div class="collector-card-footer">
+                                        <button type="button" class="btn btn-edit-solid" onclick="editCollector('<%= collector.id %>')" title="Ubah data kolektor">
+                                            <i class="bi bi-pencil-square me-1"></i> Edit
+                                        </button>
+                                        <button type="button" class="btn btn-delete-solid btn-delete-collector" data-id="<%= collector.id %>" data-name="<%= collector.name || '' %>" title="Hapus kolektor">
+                                            <i class="bi bi-trash me-1"></i> Hapus
+                                        </button>
+                                    </div>
+                                </div>
+                            </article>
+                        <% }); %>
+                    <% } else { %>
+                        <div class="empty-state" id="emptyStateDefault">
+                            <i class="bi bi-person-badge"></i>
+                            <h5 class="mb-2">Belum ada tim kolektor</h5>
+                            <p class="mb-3">Tambahkan kolektor pertama untuk mulai mengelola penagihan lapangan.</p>
+                            <button class="btn btn-primary rounded-pill px-4" type="button" onclick="addCollector()">
+                                <i class="bi bi-plus-lg me-1"></i> Tambah Kolektor
+                            </button>
+                        </div>
+                    <% } %>
+                </div>
+
+                <div class="empty-state d-none" id="emptyStateFilter">
+                    <i class="bi bi-search"></i>
+                    <h5 class="mb-2">Tidak ada kolektor yang cocok</h5>
+                    <p class="mb-0">Coba ubah kata kunci pencarian atau filter status.</p>
                 </div>
             </main>
         </div>
@@ -193,35 +481,62 @@
     <script>
         function addCollector() { window.location.href = '/admin/collectors/add'; }
         function editCollector(id) { window.location.href = `/admin/collectors/${id}/edit`; }
-        function deleteCollector(id) {
-            if (confirm('Hapus kolektor ini?')) {
-                fetch(`/admin/collectors/${id}`, { method: 'DELETE' })
+        function deleteCollector(id, name) {
+            const label = name ? `"${name}"` : 'kolektor ini';
+            if (!confirm(`Hapus ${label} dari tim? Tindakan ini tidak dapat dibatalkan.`)) return;
+            fetch(`/admin/collectors/${id}`, { method: 'DELETE' })
                 .then(r => r.json())
-                .then(data => { if(data.success) location.reload(); else alert(data.message); });
-            }
+                .then(data => {
+                    if (data.success) location.reload();
+                    else alert(data.message || 'Gagal menghapus kolektor');
+                })
+                .catch(() => alert('Gagal menghapus kolektor'));
         }
 
         document.addEventListener('DOMContentLoaded', () => {
             const searchInput = document.getElementById('searchInput');
             const statusFilter = document.getElementById('statusFilter');
+            const rows = document.querySelectorAll('.collector-row');
+            const visibleBadge = document.getElementById('visibleCountBadge');
+            const emptyFilter = document.getElementById('emptyStateFilter');
+            const grid = document.getElementById('collectorsGrid');
 
             const handleFilter = () => {
-                const term = searchInput.value.toLowerCase();
-                const status = statusFilter.value;
-                document.querySelectorAll('.collector-row').forEach(row => {
-                    const name = row.dataset.name;
-                    const phone = row.dataset.phone;
-                    const rowStatus = row.dataset.status;
-                    const matchesSearch = name.includes(term) || phone.includes(term);
+                const term = (searchInput?.value || '').toLowerCase().trim();
+                const status = statusFilter?.value || 'all';
+                let visible = 0;
+
+                rows.forEach(row => {
+                    const name = row.dataset.name || '';
+                    const phone = row.dataset.phone || '';
+                    const rowStatus = row.dataset.status || 'active';
+                    const matchesSearch = !term || name.includes(term) || phone.includes(term);
                     const matchesStatus = status === 'all' || rowStatus === status;
-                    row.style.display = matchesSearch && matchesStatus ? '' : 'none';
+                    const show = matchesSearch && matchesStatus;
+                    row.style.display = show ? '' : 'none';
+                    if (show) visible++;
                 });
+
+                if (visibleBadge) {
+                    visibleBadge.textContent = visible + ' kolektor';
+                }
+                if (emptyFilter && grid) {
+                    const hasCards = rows.length > 0;
+                    emptyFilter.classList.toggle('d-none', !hasCards || visible > 0);
+                    grid.classList.toggle('d-none', hasCards && visible === 0);
+                }
             };
 
             searchInput?.addEventListener('input', handleFilter);
             statusFilter?.addEventListener('change', handleFilter);
+            handleFilter();
+
+            document.querySelectorAll('.btn-delete-collector').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    deleteCollector(this.dataset.id, this.dataset.name || '');
+                });
+            });
         });
     </script>
 </body>
 </html>
-
