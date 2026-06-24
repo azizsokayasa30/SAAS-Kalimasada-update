@@ -17,7 +17,7 @@ NC='\033[0m'
 
 # Banner
 echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║     Billing CVLMEDIA - Setup Script untuk Server Baru   ║${NC}"
+echo -e "${GREEN}║     Billing Kalimasada - Setup Script untuk Server Baru   ║${NC}"
 echo -e "${GREEN}║              Ubuntu 22.04 LTS Ready                      ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
