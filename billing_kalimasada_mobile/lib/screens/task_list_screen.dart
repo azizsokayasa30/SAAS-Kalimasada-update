@@ -7,6 +7,21 @@ import 'new_task_screen.dart';
 import 'job_execution_screen.dart';
 import 'task_detail_screen.dart';
 
+const _taskMonthNames = [
+  'Januari',
+  'Februari',
+  'Maret',
+  'April',
+  'Mei',
+  'Juni',
+  'Juli',
+  'Agustus',
+  'September',
+  'Oktober',
+  'November',
+  'Desember',
+];
+
 class TaskListScreen extends StatefulWidget {
   final void Function(int index, {String? taskListFilter})? onNavigateToTab;
 
@@ -28,6 +43,8 @@ class _TaskListScreenState extends State<TaskListScreen> {
   String _searchQuery = '';
   late String _selectedType; // 'Semua', 'Tiket', 'PSB'
   String _selectedStatus = 'Semua'; // 'Semua', 'Aktif', 'Selesai'
+  late int _selectedMonth;
+  late int _selectedYear;
   final TextEditingController _searchController = TextEditingController();
 
   @override
@@ -39,10 +56,11 @@ class _TaskListScreenState extends State<TaskListScreen> {
     } else {
       _selectedType = 'Semua';
     }
+    final now = DateTime.now();
+    _selectedMonth = now.month;
+    _selectedYear = now.year;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final tasks = context.read<TaskProvider>();
-      tasks.fetchTasks();
-      tasks.fetchTaskHistory();
+      _fetchTasksForSelectedPeriod();
     });
   }
 
@@ -50,6 +68,34 @@ class _TaskListScreenState extends State<TaskListScreen> {
   void dispose() {
     _searchController.dispose();
     super.dispose();
+  }
+
+  Future<void> _fetchTasksForSelectedPeriod({bool refresh = false}) async {
+    final tasks = context.read<TaskProvider>();
+    await Future.wait([
+      tasks.fetchTasks(
+        refresh: refresh,
+        month: _selectedMonth,
+        year: _selectedYear,
+      ),
+      tasks.fetchTaskHistory(
+        refresh: refresh,
+        month: _selectedMonth,
+        year: _selectedYear,
+      ),
+    ]);
+  }
+
+  Future<void> _selectMonth(int? month) async {
+    if (month == null || month == _selectedMonth) return;
+    setState(() => _selectedMonth = month);
+    await _fetchTasksForSelectedPeriod(refresh: true);
+  }
+
+  Future<void> _selectYear(int? year) async {
+    if (year == null || year == _selectedYear) return;
+    setState(() => _selectedYear = year);
+    await _fetchTasksForSelectedPeriod(refresh: true);
   }
 
   @override
@@ -136,10 +182,12 @@ class _TaskListScreenState extends State<TaskListScreen> {
             return const Center(child: CircularProgressIndicator());
           }
 
-          final activeTasks = provider.tasks.where(_isTaskActive).toList();
-          final doneTasks = provider.historyTasks
-              .where(_isTaskCompleted)
-              .toList();
+          final activeTasks = _filterBySelectedPeriod(
+            provider.tasks.where(_isTaskActive).toList(),
+          );
+          final doneTasks = _filterBySelectedPeriod(
+            provider.historyTasks.where(_isTaskCompleted).toList(),
+          );
           final typedActiveCount = _filterBySelectedType(activeTasks).length;
           final typedDoneCount = _filterBySelectedType(doneTasks).length;
           var tasks = switch (_selectedStatus) {
@@ -170,10 +218,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
                 _selectedType = 'Semua';
                 _selectedStatus = 'Semua';
               });
-              await Future.wait([
-                provider.fetchTasks(refresh: true),
-                provider.fetchTaskHistory(refresh: true),
-              ]);
+              await _fetchTasksForSelectedPeriod(refresh: true);
             },
             child: SingleChildScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
@@ -233,6 +278,15 @@ class _TaskListScreenState extends State<TaskListScreen> {
                         const SizedBox(width: 10),
                         _buildStatusFilterPill('Selesai', typedDoneCount),
                       ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 10),
+
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: _buildPeriodFilter(
+                      provider.loading || provider.historyLoading,
                     ),
                   ),
 
@@ -316,6 +370,89 @@ class _TaskListScreenState extends State<TaskListScreen> {
     );
   }
 
+  Widget _buildPeriodFilter(bool loading) {
+    final currentYear = DateTime.now().year;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFDBEAFE)),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.calendar_month_rounded,
+            size: 18,
+            color: Color(0xFF2563EB),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            flex: 3,
+            child: _buildPeriodDropdown(
+              value: _selectedMonth,
+              items: [
+                const DropdownMenuItem<int>(
+                  value: 0,
+                  child: Text('Satu tahun'),
+                ),
+                for (var i = 0; i < _taskMonthNames.length; i++)
+                  DropdownMenuItem<int>(
+                    value: i + 1,
+                    child: Text(_taskMonthNames[i]),
+                  ),
+              ],
+              onChanged: loading ? null : _selectMonth,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: _buildPeriodDropdown(
+              value: _selectedYear,
+              items: [
+                for (
+                  var year = currentYear - 5;
+                  year <= currentYear + 1;
+                  year++
+                )
+                  DropdownMenuItem<int>(value: year, child: Text('$year')),
+              ],
+              onChanged: loading ? null : _selectYear,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPeriodDropdown({
+    required int value,
+    required List<DropdownMenuItem<int>> items,
+    required ValueChanged<int?>? onChanged,
+  }) {
+    return DropdownButtonHideUnderline(
+      child: DropdownButton<int>(
+        value: value,
+        isExpanded: true,
+        isDense: true,
+        borderRadius: BorderRadius.circular(14),
+        icon: const Icon(
+          Icons.expand_more_rounded,
+          size: 18,
+          color: Color(0xFF0F172A),
+        ),
+        style: const TextStyle(
+          color: Color(0xFF0F172A),
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
+        items: items,
+        onChanged: onChanged,
+      ),
+    );
+  }
+
   List<dynamic> _filterBySelectedType(List<dynamic> source) {
     if (_selectedType == 'Semua') return source;
     return source.where((t) {
@@ -324,6 +461,14 @@ class _TaskListScreenState extends State<TaskListScreen> {
       if (_selectedType == 'Tiket') return type == 'TR';
       if (_selectedType == 'PSB') return type == 'INSTALL';
       return true;
+    }).toList();
+  }
+
+  List<dynamic> _filterBySelectedPeriod(List<dynamic> source) {
+    return source.where((task) {
+      final date = _taskPeriodDate(task);
+      if (date == null || date.year != _selectedYear) return false;
+      return _selectedMonth == 0 || date.month == _selectedMonth;
     }).toList();
   }
 
@@ -358,6 +503,20 @@ class _TaskListScreenState extends State<TaskListScreen> {
     final createdAt = raw['created_at']?.toString() ?? '';
     if (createdAt.isNotEmpty) return createdAt;
     return raw['activity_at']?.toString() ?? '';
+  }
+
+  DateTime? _taskPeriodDate(dynamic raw) {
+    if (raw is! Map) return null;
+    var value = raw['activity_at']?.toString() ?? '';
+    if (value.isEmpty) value = raw['created_at']?.toString() ?? '';
+    if (value.isEmpty) return null;
+    try {
+      return DateTime.parse(
+        value.contains('T') ? value : value.replaceFirst(' ', 'T'),
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   Widget _buildStatusFilterPill(String label, int count) {

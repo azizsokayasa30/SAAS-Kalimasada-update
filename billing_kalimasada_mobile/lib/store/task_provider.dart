@@ -27,6 +27,8 @@ class TaskProvider extends ChangeNotifier {
   String? _error;
   List<dynamic> _tasks = [];
   List<dynamic> _historyTasks = [];
+  int? _tasksMonth;
+  int? _tasksYear;
 
   bool _weekPerfLoading = false;
   String? _weekPerfError;
@@ -50,17 +52,33 @@ class TaskProvider extends ChangeNotifier {
   bool get employeeMatched => _employeeMatched;
   int get tasksWeekMaxPerDay => _tasksWeekMaxPerDay;
 
-  Future<void> fetchTasks({bool refresh = false}) async {
+  String _tasksPath({
+    bool history = false,
+    bool refresh = false,
+    int? month,
+    int? year,
+  }) {
+    final params = <String>[];
+    if (history) params.add('history=1');
+    final m = month ?? _tasksMonth;
+    final y = year ?? _tasksYear;
+    if (m != null) params.add(m == 0 ? 'month=all' : 'month=$m');
+    if (y != null) params.add('year=$y');
+    if (refresh) params.add('_=${DateTime.now().millisecondsSinceEpoch}');
+    return '/api/mobile-adapter/tasks${params.isEmpty ? '' : '?${params.join('&')}'}';
+  }
+
+  Future<void> fetchTasks({bool refresh = false, int? month, int? year}) async {
     if (_loading && !refresh) return;
 
+    if (month != null) _tasksMonth = month;
+    if (year != null) _tasksYear = year;
     _loading = true;
     _error = null;
     if (refresh) notifyListeners();
 
     try {
-      final path = refresh
-          ? '/api/mobile-adapter/tasks?_=${DateTime.now().millisecondsSinceEpoch}'
-          : '/api/mobile-adapter/tasks';
+      final path = _tasksPath(refresh: refresh);
       final response = await ApiClient.get(path);
 
       if (response.statusCode == 200) {
@@ -85,16 +103,20 @@ class TaskProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> fetchTaskHistory({bool refresh = false}) async {
+  Future<void> fetchTaskHistory({
+    bool refresh = false,
+    int? month,
+    int? year,
+  }) async {
     if (_historyLoading && !refresh) return;
 
+    if (month != null) _tasksMonth = month;
+    if (year != null) _tasksYear = year;
     _historyLoading = true;
     if (refresh) notifyListeners();
 
     try {
-      final path = refresh
-          ? '/api/mobile-adapter/tasks?history=1&_=${DateTime.now().millisecondsSinceEpoch}'
-          : '/api/mobile-adapter/tasks?history=1';
+      final path = _tasksPath(history: true, refresh: refresh);
       final response = await ApiClient.get(path);
 
       if (response.statusCode == 200) {

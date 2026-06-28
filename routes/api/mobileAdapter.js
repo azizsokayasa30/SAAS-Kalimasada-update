@@ -3010,8 +3010,32 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
 
     const history = String(req.query.history || '') === '1';
     const includePppoePasswords = String(req.query.include_passwords || '') === '1';
+    const monthRaw = req.query.month;
+    const yearRaw = req.query.year;
+    let periodStart = null;
+    let periodEnd = null;
+    if (monthRaw != null || yearRaw != null) {
+        const year = parseInt(yearRaw || String(new Date().getFullYear()), 10);
+        const monthText = String(monthRaw || 'all').toLowerCase();
+        if (!Number.isFinite(year) || year < 2000 || year > 2100) {
+            return res.status(400).json({ success: false, message: 'Tahun filter tidak valid' });
+        }
+        if (monthText === 'all' || monthText === '0') {
+            periodStart = `${year}-01-01`;
+            periodEnd = `${year + 1}-01-01`;
+        } else {
+            const month = parseInt(monthText, 10);
+            if (!Number.isFinite(month) || month < 1 || month > 12) {
+                return res.status(400).json({ success: false, message: 'Bulan filter tidak valid' });
+            }
+            periodStart = `${year}-${String(month).padStart(2, '0')}-01`;
+            const nextYear = month === 12 ? year + 1 : year;
+            const nextMonth = month === 12 ? 1 : month + 1;
+            periodEnd = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
+        }
+    }
 
-    const installWhere = isAdmin
+    let installWhere = isAdmin
         ? history
             ? `LOWER(ij.status) IN ('completed','cancelled')`
             : `LOWER(ij.status) NOT IN ('completed','cancelled')`
@@ -3019,6 +3043,11 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
             ? `(ij.assigned_technician_id = ? OR CAST(ij.assigned_technician_id AS TEXT) = ?) AND LOWER(ij.status) IN ('completed','cancelled')`
             : `${sqlInstallationJobAccessibleByTech('ij')} AND LOWER(ij.status) NOT IN ('completed','cancelled')`;
     const installParams = isAdmin ? [] : [techId, String(techId)];
+    if (periodStart && periodEnd) {
+        installWhere += ` AND date(COALESCE(ij.updated_at, ij.created_at, '1970-01-01')) >= date(?)
+            AND date(COALESCE(ij.updated_at, ij.created_at, '1970-01-01')) < date(?)`;
+        installParams.push(periodStart, periodEnd);
+    }
 
     const installSql = `
         SELECT ij.*, p.name AS package_name,
@@ -3041,7 +3070,7 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
         LIMIT 200
     `;
 
-    const troubleWhere = isAdmin
+    let troubleWhere = isAdmin
         ? history
             ? `LOWER(status) IN ('closed','resolved')`
             : `LOWER(status) NOT IN ('closed','resolved')`
@@ -3055,6 +3084,11 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
             )
             AND LOWER(status) NOT IN ('closed','resolved')`;
     const troubleParams = isAdmin ? [] : [techId, String(techId)];
+    if (periodStart && periodEnd) {
+        troubleWhere += ` AND date(COALESCE(updated_at, created_at, '1970-01-01')) >= date(?)
+            AND date(COALESCE(updated_at, created_at, '1970-01-01')) < date(?)`;
+        troubleParams.push(periodStart, periodEnd);
+    }
 
     db.all(installSql, installParams, (err1, installRows) => {
         if (err1) {
