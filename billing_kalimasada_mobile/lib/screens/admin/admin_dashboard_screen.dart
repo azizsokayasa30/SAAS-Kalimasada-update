@@ -369,19 +369,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     return _currentTraffic();
   }
 
-  ({num rx, num tx}) _networkTrafficFrom(Map<String, dynamic>? status) {
-    final routersRaw = status?['routers'];
-    if (routersRaw is! List) return (rx: 0, tx: 0);
-    num rx = 0;
-    num tx = 0;
-    for (final item in routersRaw) {
-      if (item is! Map) continue;
-      rx += _numAt(Map<String, dynamic>.from(item), 'rx_mbps');
-      tx += _numAt(Map<String, dynamic>.from(item), 'tx_mbps');
-    }
-    return (rx: rx, tx: tx);
-  }
-
   ({num rx, num tx}) _trafficFromMainInterface() {
     final rxMbps = _numAt(_interfaceTraffic, 'rx_mbps');
     final txMbps = _numAt(_interfaceTraffic, 'tx_mbps');
@@ -395,10 +382,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   ({num rx, num tx}) _currentTraffic() {
     final interfaceTraffic = _trafficFromMainInterface();
-    if (interfaceTraffic.rx > 0 || interfaceTraffic.tx > 0) {
-      return interfaceTraffic;
-    }
-    return _networkTrafficFrom(_networkStatus);
+    return interfaceTraffic;
   }
 
   void _rememberTraffic(({num rx, num tx}) traffic) {
