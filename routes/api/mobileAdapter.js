@@ -1201,13 +1201,14 @@ router.post('/customers', verifyToken, allowFieldOps, async (req, res) => {
     }
 });
 
-router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
+router.get('/customers', verifyToken, allowFieldOps, async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
     const offset = (page - 1) * limit;
     const search = (req.query.search && String(req.query.search).trim()) || '';
     const status = (req.query.status && String(req.query.status).trim()) || '';
     const adminFilter = (req.query.admin_filter && String(req.query.admin_filter).trim().toLowerCase()) || '';
+    const connectionFilter = (req.query.connection && String(req.query.connection).trim().toLowerCase()) || '';
     const area = (req.query.area && String(req.query.area).trim()) || '';
     const now = new Date();
     const filterYear = Math.max(2000, parseInt(req.query.year, 10) || now.getFullYear());
@@ -1219,6 +1220,32 @@ router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
 
     const params = [];
     let where = '1=1';
+    let activePppoeLoginSet = new Set();
+    try {
+        const { getActivePppoeLoginNamesSet } = require('../../config/mikrotik');
+        activePppoeLoginSet = await getActivePppoeLoginNamesSet();
+    } catch (e) {
+        logger.warn('[mobile-adapter] customers PPPoE active set:', e.message || e);
+    }
+    const activePppoeLogins = Array.from(activePppoeLoginSet || [])
+        .map((name) => String(name || '').trim().toLowerCase())
+        .filter(Boolean);
+    activePppoeLoginSet = new Set(activePppoeLogins);
+    const customerLoginExpr = "LOWER(TRIM(COALESCE(NULLIF(c.pppoe_username, ''), NULLIF(c.username, ''), '')))";
+    const addConnectionFilter = () => {
+        if (connectionFilter === 'online') {
+            if (activePppoeLogins.length === 0) {
+                where += ' AND 1=0';
+                return;
+            }
+            where += ` AND ${customerLoginExpr} IN (${activePppoeLogins.map(() => '?').join(',')})`;
+            params.push(...activePppoeLogins);
+        } else if (connectionFilter === 'offline') {
+            if (activePppoeLogins.length === 0) return;
+            where += ` AND (${customerLoginExpr} = '' OR ${customerLoginExpr} NOT IN (${activePppoeLogins.map(() => '?').join(',')}))`;
+            params.push(...activePppoeLogins);
+        }
+    };
     if (hasTenantContext()) {
         where += ' AND c.tenant_id = ?';
         params.push(getTenantId());
@@ -1272,6 +1299,9 @@ router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
         } else if (adminFilter === 'isolir') {
             where += " AND LOWER(COALESCE(c.status, '')) IN ('suspended', 'isolir') AND date(COALESCE(c.join_date, c.created_at, '1970-01-01')) < date(?)";
             params.push(periodEnd);
+        } else if (adminFilter === 'inactive' || adminFilter === 'nonaktif') {
+            where += " AND LOWER(COALESCE(c.status, '')) IN ('inactive', 'nonaktif') AND date(COALESCE(c.join_date, c.created_at, '1970-01-01')) < date(?)";
+            params.push(periodEnd);
         } else if (adminFilter === 'unpaid') {
             addInvoiceFilter("COALESCE(i.created_at, i.due_date, '1970-01-01')", 'unpaid');
         } else if (adminFilter === 'paid') {
@@ -1321,6 +1351,10 @@ router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
         params.push(area);
     }
 
+    const connectionSummaryWhere = where;
+    const connectionSummaryBaseParams = params.slice();
+    addConnectionFilter();
+
     const summaryParams = params.slice();
     const summarySql = `
         SELECT COUNT(DISTINCT c.id) AS total_count,
@@ -1335,9 +1369,29 @@ router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
         LEFT JOIN areas ar ON c.area_id = ar.id
         WHERE ${where}
     `;
+    const connectionSummarySql = activePppoeLogins.length > 0
+        ? `
+            SELECT COUNT(DISTINCT c.id) AS total_count,
+                   SUM(CASE WHEN ${customerLoginExpr} IN (${activePppoeLogins.map(() => '?').join(',')})
+                            THEN 1 ELSE 0 END) AS online_count
+            FROM customers c
+            LEFT JOIN areas ar ON c.area_id = ar.id
+            WHERE ${connectionSummaryWhere}
+        `
+        : `
+            SELECT COUNT(DISTINCT c.id) AS total_count,
+                   0 AS online_count
+            FROM customers c
+            LEFT JOIN areas ar ON c.area_id = ar.id
+            WHERE ${connectionSummaryWhere}
+        `;
+    const connectionSummaryParams = activePppoeLogins.length > 0
+        ? [...activePppoeLogins, ...connectionSummaryBaseParams]
+        : connectionSummaryBaseParams;
 
     const sql = `
         SELECT c.id, c.customer_id, c.name, c.phone, c.email, c.status, c.address,
+               c.username,
                c.area_id, c.latitude, c.longitude, c.pppoe_username,
                COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, '') AS area,
                ar.nama_area AS nama_area,
@@ -1388,7 +1442,13 @@ router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
             return res.status(500).json({ success: false, message: 'Gagal memuat ringkasan pelanggan' });
         }
 
-        db.all(sql, params, (err, rows) => {
+        db.get(connectionSummarySql, connectionSummaryParams, (connectionSummaryErr, connectionSummaryRow) => {
+            if (connectionSummaryErr) {
+                logger.error('[mobile-adapter] customers connection summary:', connectionSummaryErr);
+                return res.status(500).json({ success: false, message: 'Gagal memuat ringkasan koneksi pelanggan' });
+            }
+
+            db.all(sql, params, (err, rows) => {
             if (err) {
                 logger.error('[mobile-adapter] customers:', err);
                 return res.status(500).json({ success: false, message: 'Gagal memuat pelanggan' });
@@ -1400,13 +1460,17 @@ router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
                 }
                 const list = (enriched || []).map((r) => {
                     const safe = sqliteJsonSafeRow(r);
+                    const login = String(safe.pppoe_username || safe.username || '').trim().toLowerCase();
                     return {
                         ...safe,
                         area: resolveCustomerAreaLabel(safe),
+                        pppoe_active: login ? activePppoeLoginSet.has(login) : false,
                         ip_address: safe.pppoe_username ? 'PPPoE' : 'DHCP/Dynamic'
                     };
                 });
                 const totalCount = summaryRow ? parseInt(summaryRow.total_count, 10) || 0 : 0;
+                const connectionTotal = connectionSummaryRow ? parseInt(connectionSummaryRow.total_count, 10) || 0 : 0;
+                const connectionOnline = connectionSummaryRow ? parseInt(connectionSummaryRow.online_count, 10) || 0 : 0;
                 res.json({
                     success: true,
                     data: list,
@@ -1419,9 +1483,15 @@ router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
                     summary: {
                         total_count: totalCount,
                         total_amount: summaryRow ? Number(summaryRow.total_amount) || 0 : 0
+                    },
+                    connection_summary: {
+                        total: connectionTotal,
+                        online: connectionOnline,
+                        offline: Math.max(0, connectionTotal - connectionOnline)
                     }
                 });
             });
+        });
         });
     });
 });
@@ -2878,6 +2948,9 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
              WHERE LOWER(COALESCE(cu.status, '')) IN ('suspended', 'isolir')
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS isolir_customers,
             (SELECT COUNT(*) FROM customers cu
+             WHERE LOWER(COALESCE(cu.status, '')) IN ('inactive', 'nonaktif')
+               AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS inactive_customers,
+            (SELECT COUNT(*) FROM customers cu
              WHERE LOWER(COALESCE(cu.status, '')) IN ('inactive', 'register')
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS isolir_cuti_customers,
             (SELECT COUNT(*) FROM customers cu
@@ -2951,6 +3024,7 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
         start, end, // new_customers: hanya bulan terpilih
         start, end, // new_customer_amount
         end, // isolir_customers
+        end, // inactive_customers
         end, // isolir_cuti_customers
         end, // stopped_customers
     ];
@@ -2976,6 +3050,7 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
                     new_this_month: n(row.new_customers),
                     new_this_month_amount: n(row.new_customer_amount),
                     isolir_transactions: n(row.isolir_customers),
+                    inactive_customers: n(row.inactive_customers),
                     isolir_cuti: n(row.isolir_cuti_customers),
                     stopped: n(row.stopped_customers)
                 },

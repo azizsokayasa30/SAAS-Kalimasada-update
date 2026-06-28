@@ -31,12 +31,12 @@ class _CustomerListScreenState extends State<CustomerListScreen>
   final TextEditingController _searchController = TextEditingController();
   String _areaFilter = '';
   String? _statusFilter;
+  String? _connectionFilter;
 
   // Clean white customer list theme.
   final Color _bgBackground = const Color(0xFFFFFFFF);
   final Color _bgSurfaceContainerLowest = const Color(0xFFFFFFFF);
   final Color _bgSurfaceContainer = const Color(0xFFF8FAFC);
-  final Color _bgSurfaceContainerHigh = const Color(0xFFF1F5F9);
 
   final Color _primaryColor = const Color(0xFF2563EB);
   final Color _primaryContainerColor = const Color(0xFF2563EB);
@@ -79,6 +79,7 @@ class _CustomerListScreenState extends State<CustomerListScreen>
         refresh: true,
         status: _statusFilter,
         adminFilter: _effectiveAdminFilter,
+        connectionFilter: _connectionFilter,
         area: _areaFilter,
         month: widget.filterMonth,
         year: widget.filterYear,
@@ -109,6 +110,7 @@ class _CustomerListScreenState extends State<CustomerListScreen>
       search: _searchController.text,
       status: _statusFilter,
       adminFilter: _effectiveAdminFilter,
+      connectionFilter: _connectionFilter,
       area: _areaFilter,
       month: widget.filterMonth,
       year: widget.filterYear,
@@ -121,6 +123,7 @@ class _CustomerListScreenState extends State<CustomerListScreen>
       search: _searchController.text,
       status: _statusFilter,
       adminFilter: _effectiveAdminFilter,
+      connectionFilter: _connectionFilter,
       area: _areaFilter,
       month: widget.filterMonth,
       year: widget.filterYear,
@@ -135,6 +138,7 @@ class _CustomerListScreenState extends State<CustomerListScreen>
       search: _searchController.text,
       status: _statusFilter,
       adminFilter: _effectiveAdminFilter,
+      connectionFilter: _connectionFilter,
       area: area,
       month: widget.filterMonth,
       year: widget.filterYear,
@@ -147,17 +151,18 @@ class _CustomerListScreenState extends State<CustomerListScreen>
     return widget.adminFilter;
   }
 
-  void _applyStatusFilter(String status) {
-    if (_statusFilter == status) return;
-    setState(() => _statusFilter = status);
+  void _applyConnectionFilter(String filter) {
+    final nextFilter = _connectionFilter == filter ? null : filter;
+    setState(() => _connectionFilter = nextFilter);
     if (_scrollController.hasClients) {
       _scrollController.jumpTo(0);
     }
     context.read<CustomerProvider>().fetchCustomers(
       refresh: true,
       search: _searchController.text,
-      status: status,
+      status: _statusFilter,
       adminFilter: _effectiveAdminFilter,
+      connectionFilter: _connectionFilter,
       area: _areaFilter,
       month: widget.filterMonth,
       year: widget.filterYear,
@@ -425,7 +430,7 @@ class _CustomerListScreenState extends State<CustomerListScreen>
       ),
       body: Consumer2<CustomerProvider, TaskProvider>(
         builder: (context, provider, taskProvider, child) {
-          final stats = provider.stats;
+          final connectionStats = provider.connectionStats;
           final openTroubleCustomerIds = <int>{};
           for (final rawTask in taskProvider.tasks) {
             final task = rawTask is Map
@@ -447,44 +452,32 @@ class _CustomerListScreenState extends State<CustomerListScreen>
 
           return Column(
             children: [
-              // Status Summary
+              // Connection Summary
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 10, 20, 8),
                 child: Row(
                   children: [
                     Expanded(
                       child: _buildStatusSummary(
-                        'Aktif',
-                        '${stats['active'] ?? 0}',
+                        'Online',
+                        '${connectionStats['online'] ?? 0}',
                         _primaryColor,
                         const Color(0xFFE8F8EF),
                         const Color(0xFF10B981).withValues(alpha: 0.22),
-                        selected: _statusFilter == 'active',
-                        onTap: () => _applyStatusFilter('active'),
+                        selected: _connectionFilter == 'online',
+                        onTap: () => _applyConnectionFilter('online'),
                       ),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: _buildStatusSummary(
-                        'Nonaktif',
-                        '${stats['isolated'] ?? 0}',
+                        'Offline',
+                        '${connectionStats['offline'] ?? 0}',
                         _errorColor,
                         const Color(0xFFFFDAD6), // error-container
                         _errorColor.withValues(alpha: 0.2),
-                        selected: _statusFilter == 'isolated',
-                        onTap: () => _applyStatusFilter('isolated'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _buildStatusSummary(
-                        'Isolir',
-                        '${stats['suspended'] ?? 0}',
-                        _secondaryColor,
-                        _bgSurfaceContainerHigh,
-                        _outlineVariant,
-                        selected: _statusFilter == 'suspended',
-                        onTap: () => _applyStatusFilter('suspended'),
+                        selected: _connectionFilter == 'offline',
+                        onTap: () => _applyConnectionFilter('offline'),
                       ),
                     ),
                   ],
@@ -504,6 +497,7 @@ class _CustomerListScreenState extends State<CustomerListScreen>
                       search: _searchController.text,
                       status: _statusFilter,
                       adminFilter: _effectiveAdminFilter,
+                      connectionFilter: _connectionFilter,
                       area: _areaFilter,
                       month: widget.filterMonth,
                       year: widget.filterYear,
@@ -610,6 +604,12 @@ class _CustomerListScreenState extends State<CustomerListScreen>
           statusColor = _secondaryColor;
           statusLabel = 'Isolir';
           statusIcon = Icons.block;
+        } else if (rawStatus == 'inactive' ||
+            rawStatus == 'nonaktif' ||
+            rawStatus == 'register') {
+          statusColor = _secondaryColor;
+          statusLabel = 'Nonaktif';
+          statusIcon = Icons.person_off;
         } else if (showAsGangguan) {
           statusColor = _errorColor;
           statusLabel = 'Gangguan';

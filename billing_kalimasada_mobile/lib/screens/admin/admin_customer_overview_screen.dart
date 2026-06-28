@@ -138,6 +138,7 @@ class _AdminCustomerOverviewScreenState
         'active_amount': 0,
         'new_this_month': 0,
         'new_this_month_amount': 0,
+        'inactive_customers': isolated,
         'isolir_transactions': suspended,
         'isolir_cuti': isolated,
         'stopped': 0,
@@ -541,6 +542,20 @@ class _AdminCustomerOverviewScreenState
                                 '${_intAt('customers', 'isolir_transactions')}',
                             onTap: () =>
                                 _openCustomers('Pelanggan Isolir', 'isolir'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _SmallStatusTile(
+                            label: 'Nonaktif',
+                            value:
+                                '${_intAt('customers', 'inactive_customers')}',
+                            icon: Icons.person_off_rounded,
+                            iconColor: _customerOrange,
+                            onTap: () => _openCustomers(
+                              'Pelanggan Nonaktif',
+                              'inactive',
+                            ),
                           ),
                         ),
                       ],
@@ -1127,11 +1142,15 @@ class _TotalWavePainter extends CustomPainter {
 class _SmallStatusTile extends StatelessWidget {
   final String label;
   final String value;
+  final IconData icon;
+  final Color iconColor;
   final VoidCallback? onTap;
 
   const _SmallStatusTile({
     required this.label,
     required this.value,
+    this.icon = Icons.block,
+    this.iconColor = const Color(0xFFE84C4F),
     this.onTap,
   });
 
@@ -1162,14 +1181,10 @@ class _SmallStatusTile extends StatelessWidget {
                   width: 38,
                   height: 38,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFE84C4F).withValues(alpha: 0.11),
+                    color: iconColor.withValues(alpha: 0.11),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: const Icon(
-                    Icons.block,
-                    color: Color(0xFFE84C4F),
-                    size: 27,
-                  ),
+                  child: Icon(icon, color: iconColor, size: 27),
                 ),
                 const SizedBox(width: 7),
                 Text(

@@ -7,6 +7,7 @@ class CustomerProvider extends ChangeNotifier {
   String? _error;
   List<dynamic> _customers = [];
   Map<String, dynamic> _stats = {};
+  Map<String, dynamic> _connectionStats = {};
   List<String> _areaOptions = [];
   int? _listTotalCount;
   num? _listTotalAmount;
@@ -20,6 +21,7 @@ class CustomerProvider extends ChangeNotifier {
   String? get error => _error;
   List<dynamic> get customers => _customers;
   Map<String, dynamic> get stats => _stats;
+  Map<String, dynamic> get connectionStats => _connectionStats;
   List<String> get areaOptions => _areaOptions;
   int? get listTotalCount => _listTotalCount;
   num? get listTotalAmount => _listTotalAmount;
@@ -30,6 +32,7 @@ class CustomerProvider extends ChangeNotifier {
     String search = '',
     String? status,
     String? adminFilter,
+    String? connectionFilter,
     String area = '',
     int? month,
     int? year,
@@ -63,6 +66,10 @@ class CustomerProvider extends ChangeNotifier {
       if (adminFilter != null && adminFilter.isNotEmpty) {
         url += '&admin_filter=${Uri.encodeQueryComponent(adminFilter)}';
       }
+      if (connectionFilter != null && connectionFilter.isNotEmpty) {
+        url +=
+            '&connection=${Uri.encodeQueryComponent(connectionFilter.trim())}';
+      }
       if (area.trim().isNotEmpty) {
         url += '&area=${Uri.encodeQueryComponent(area.trim())}';
       }
@@ -92,6 +99,14 @@ class CustomerProvider extends ChangeNotifier {
           if (summary is Map) {
             _listTotalCount = _intFrom(summary['total_count']);
             _listTotalAmount = _numFrom(summary['total_amount']);
+          }
+          final connectionSummary = data['connection_summary'];
+          if (connectionSummary is Map) {
+            _connectionStats = {
+              'online': _intFrom(connectionSummary['online']) ?? 0,
+              'offline': _intFrom(connectionSummary['offline']) ?? 0,
+              'total': _intFrom(connectionSummary['total']) ?? 0,
+            };
           }
           final pagination = data['pagination'];
           if (pagination is Map) {
