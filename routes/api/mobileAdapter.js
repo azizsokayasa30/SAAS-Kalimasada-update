@@ -522,6 +522,7 @@ db.run('ALTER TABLE trouble_reports ADD COLUMN customer_id INTEGER', (err) => {
 });
 
 const installJobAlterSql = [
+    'ALTER TABLE installation_jobs ADD COLUMN customer_id INTEGER',
     'ALTER TABLE installation_jobs ADD COLUMN work_started_at DATETIME',
     'ALTER TABLE installation_jobs ADD COLUMN work_duration_seconds INTEGER',
     'ALTER TABLE installation_jobs ADD COLUMN tech_completion_latitude REAL',
@@ -1764,8 +1765,18 @@ router.post('/customers/resolve-areas', verifyToken, allowFieldOps, (req, res) =
 /** Daftar nama area (teknisi / field ops) — untuk label pencarian tag pelanggan. */
 router.get('/areas/names', verifyToken, allowFieldOps, (req, res) => {
     db.all(
-        `SELECT id, nama_area FROM areas
+        `SELECT MIN(id) AS id, nama_area
+         FROM (
+             SELECT id, TRIM(nama_area) AS nama_area
+             FROM areas
+             WHERE nama_area IS NOT NULL AND TRIM(nama_area) != ''
+             UNION ALL
+             SELECT NULL AS id, TRIM(area) AS nama_area
+             FROM customers
+             WHERE area IS NOT NULL AND TRIM(area) != ''
+         )
          WHERE nama_area IS NOT NULL AND TRIM(nama_area) != ''
+         GROUP BY LOWER(nama_area)
          ORDER BY nama_area ASC`,
         [],
         (err, rows) => {

@@ -64,7 +64,7 @@ class TaskProvider extends ChangeNotifier {
       final response = await ApiClient.get(path);
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final data = ApiClient.decodeJsonObject(response, debugLabel: 'tasks');
         if (ApiClient.jsonSuccess(data['success'])) {
           final raw = data['data'];
           _tasks = raw is List ? raw : <dynamic>[];
@@ -74,6 +74,9 @@ class TaskProvider extends ChangeNotifier {
       } else {
         _error = 'Gagal memuat data tugas';
       }
+    } on FormatException {
+      _error =
+          'Respons server tugas tidak valid. Pastikan backend sudah diperbarui.';
     } catch (e) {
       _error = 'Koneksi bermasalah: ${e.toString()}';
     } finally {
@@ -95,7 +98,10 @@ class TaskProvider extends ChangeNotifier {
       final response = await ApiClient.get(path);
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final data = ApiClient.decodeJsonObject(
+          response,
+          debugLabel: 'tasks/history',
+        );
         if (ApiClient.jsonSuccess(data['success'])) {
           final raw = data['data'];
           _historyTasks = raw is List ? raw : <dynamic>[];

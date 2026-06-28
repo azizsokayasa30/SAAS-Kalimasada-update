@@ -25,7 +25,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   static const _primaryDark = Color(0xFF1D4ED8);
   static const _primarySoft = Color(0xFFEAF2FF);
   static const _bg = Color(0xFFF6F7FA);
+  static const _trafficRouterName = 'Dell-R630-SKYNET';
   static const _trafficInterface = 'sfp-sfpplus1';
+  static const _trafficInterfaceLabel = 'sfp+1';
 
   final _moneyCompact = NumberFormat.compactCurrency(
     locale: 'id_ID',
@@ -88,10 +90,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         _fetchNetworkStatus(<String>[]),
         _fetchMainInterfaceTraffic(<String>[]),
       ]);
+      final interfaceTraffic =
+          await _fetchMainInterfaceTraffic(<String>[], status: results[0]) ??
+          results[1];
       if (!mounted || results.every((item) => item == null)) return;
       setState(() {
         if (results[0] != null) _networkStatus = results[0];
-        if (results[1] != null) _interfaceTraffic = results[1];
+        if (interfaceTraffic != null) _interfaceTraffic = interfaceTraffic;
         _rememberTraffic(_currentTraffic());
       });
     } finally {
@@ -118,13 +123,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       _fetchMainInterfaceTraffic(errors),
       _fetchAppInfo(errors),
     ]);
+    final interfaceTraffic =
+        await _fetchMainInterfaceTraffic(errors, status: results[2]) ??
+        results[3];
 
     if (!mounted) return;
     setState(() {
       _dashboardStats = results[0];
       _adminOverview = results[1];
       _networkStatus = results[2];
-      _interfaceTraffic = results[3];
+      _interfaceTraffic = interfaceTraffic;
       if (results[4] != null) {
         final tenant = results[4]?['tenant_name']?.toString().trim();
         if (tenant != null && tenant.isNotEmpty) _tenantName = tenant;
@@ -234,11 +242,34 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   Future<Map<String, dynamic>?> _fetchMainInterfaceTraffic(
-    List<String> errors,
-  ) async {
+    List<String> errors, {
+    Map<String, dynamic>? status,
+  }) async {
     try {
+      final interfaceParam = Uri.encodeComponent(_trafficInterface);
+      final routerId = _mainRouterId(status ?? _networkStatus);
+      if (routerId != null) {
+        final response = await ApiClient.get(
+          '/api/dashboard/interface-traffic?router_id=$routerId&interface=$interfaceParam',
+        );
+        if (response.statusCode == 200) {
+          final body = ApiClient.decodeJsonObject(
+            response,
+            debugLabel: 'dashboard/interface-traffic',
+          );
+          final data = body['data'];
+          if (ApiClient.jsonSuccess(body['success']) && data is Map) {
+            return {
+              'interface': data['interface'] ?? _trafficInterface,
+              'rx_mbps': _numAt(Map<String, dynamic>.from(data), 'rxMbps'),
+              'tx_mbps': _numAt(Map<String, dynamic>.from(data), 'txMbps'),
+            };
+          }
+        }
+      }
+
       final response = await ApiClient.get(
-        '/api/dashboard/traffic?interface=$_trafficInterface',
+        '/api/dashboard/traffic?interface=$interfaceParam',
       );
       if (response.statusCode != 200) {
         errors.add(
@@ -260,6 +291,26 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       errors.add('Traffic interface utama backend tidak dapat dihubungi.');
     }
     return null;
+  }
+
+  String? _mainRouterId(Map<String, dynamic>? status) {
+    final routersRaw = status?['routers'];
+    if (routersRaw is! List || routersRaw.isEmpty) return null;
+    final first = routersRaw.cast<dynamic>().firstWhere((item) {
+      if (item is! Map) return false;
+      final name = [
+        item['name'],
+        item['nas_identifier'],
+        item['router_name'],
+      ].map((value) => value?.toString().toLowerCase() ?? '');
+      return name.any(
+        (value) => value.contains(_trafficRouterName.toLowerCase()),
+      );
+    }, orElse: () => routersRaw.first);
+    if (first is! Map) return null;
+    final id = first['id'] ?? first['router_id'];
+    final value = id?.toString().trim();
+    return value == null || value.isEmpty ? null : value;
   }
 
   Future<Map<String, dynamic>?> _fetchAppInfo(List<String> errors) async {
@@ -303,9 +354,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   String _formatTraffic(num value) {
     if (value <= 0) return '-';
-    if (value >= 1000) {
-      return '${(value / 1000).toStringAsFixed(2)} Gbps';
-    }
     return '${value.toStringAsFixed(2)} Mbps';
   }
 
@@ -327,6 +375,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   ({num rx, num tx}) _trafficFromMainInterface() {
+    final rxMbps = _numAt(_interfaceTraffic, 'rx_mbps');
+    final txMbps = _numAt(_interfaceTraffic, 'tx_mbps');
+    if (rxMbps > 0 || txMbps > 0) return (rx: rxMbps, tx: txMbps);
+
     final rxBits = _numAt(_interfaceTraffic, 'rx');
     final txBits = _numAt(_interfaceTraffic, 'tx');
     if (rxBits <= 0 && txBits <= 0) return (rx: 0, tx: 0);
@@ -388,6 +440,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     return Uri.parse(
       ApiClient.apiOrigin,
     ).replace(path: '/public/img/$logo').toString();
+  }
+
+  String _trafficInterfaceName() {
+    final interface = _interfaceTraffic?['interface']?.toString().trim();
+    if (interface == _trafficInterface) return _trafficInterfaceLabel;
+    if (interface != null && interface.isNotEmpty) return interface;
+    return _trafficInterfaceLabel;
   }
 
   @override
@@ -648,7 +707,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
               child: _TrafficCard(
                 title: _nasName(),
-                interfaceName: _trafficInterface,
+                interfaceName: _trafficInterfaceName(),
                 isPingSafe: _isNasPingSafe(),
                 upstream: _formatTraffic(traffic.tx),
                 downstream: _formatTraffic(traffic.rx),

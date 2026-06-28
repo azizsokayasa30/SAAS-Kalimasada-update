@@ -73,7 +73,9 @@ class _CustomerListScreenState extends State<CustomerListScreen>
     _scrollController.addListener(_onScrollNearEnd);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      context.read<CustomerProvider>().fetchCustomers(
+      final provider = context.read<CustomerProvider>();
+      provider.fetchAreaOptions();
+      provider.fetchCustomers(
         refresh: true,
         status: _statusFilter,
         adminFilter: _effectiveAdminFilter,
@@ -81,7 +83,7 @@ class _CustomerListScreenState extends State<CustomerListScreen>
         month: widget.filterMonth,
         year: widget.filterYear,
       );
-      context.read<CustomerProvider>().fetchDashboardStats();
+      provider.fetchDashboardStats();
     });
   }
 
@@ -162,8 +164,9 @@ class _CustomerListScreenState extends State<CustomerListScreen>
     );
   }
 
-  List<String> _areaOptionsFrom(List<dynamic> customers) {
-    final areas = <String>{};
+  List<String> _areaOptionsFrom(CustomerProvider provider) {
+    final areas = <String>{...provider.areaOptions};
+    final customers = provider.customers;
     for (final raw in customers) {
       if (raw is! Map) continue;
       final area = _customerArea(raw);
@@ -182,7 +185,7 @@ class _CustomerListScreenState extends State<CustomerListScreen>
   }
 
   Widget _locationFilterMenu(CustomerProvider provider) {
-    final areas = _areaOptionsFrom(provider.customers);
+    final areas = _areaOptionsFrom(provider);
     final hasFilter = _areaFilter.isNotEmpty;
 
     return Padding(

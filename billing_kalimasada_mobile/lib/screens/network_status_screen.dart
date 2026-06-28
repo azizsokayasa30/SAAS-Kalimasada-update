@@ -17,6 +17,7 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
   static const Color _outline = Color(0xFFCBC3D5);
   static const Color _text = Color(0xFF0B1C30);
   static const Color _subtleText = Color(0xFF494453);
+  static const _trafficRouterName = 'Dell-R630-SKYNET';
   static const _trafficInterface = 'sfp-sfpplus1';
 
   Timer? _timer;
@@ -96,6 +97,12 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
   }
 
   ({double rx, double tx}) _trafficFromMainInterface() {
+    final rxMbps = _numAt(_interfaceTraffic, 'rx_mbps');
+    final txMbps = _numAt(_interfaceTraffic, 'tx_mbps');
+    if (rxMbps > 0 || txMbps > 0) {
+      return (rx: rxMbps.toDouble(), tx: txMbps.toDouble());
+    }
+
     final rxBits = _numAt(_interfaceTraffic, 'rx');
     final txBits = _numAt(_interfaceTraffic, 'tx');
     if (rxBits <= 0 && txBits <= 0) return (rx: 0, tx: 0);
@@ -124,10 +131,51 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
     return _trafficFromRouter(router);
   }
 
-  Future<Map<String, dynamic>?> _fetchMainInterfaceTraffic() async {
+  String? _mainRouterId(List<Map<String, dynamic>> routers) {
+    if (routers.isEmpty) return null;
+    final router = routers.firstWhere((item) {
+      final names = [
+        item['name'],
+        item['nas_identifier'],
+        item['router_name'],
+      ].map((value) => value?.toString().toLowerCase() ?? '');
+      return names.any(
+        (value) => value.contains(_trafficRouterName.toLowerCase()),
+      );
+    }, orElse: () => routers.first);
+    final id = router['id'] ?? router['router_id'];
+    final value = id?.toString().trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  Future<Map<String, dynamic>?> _fetchMainInterfaceTraffic({
+    List<Map<String, dynamic>> routers = const [],
+  }) async {
     try {
+      final interfaceParam = Uri.encodeComponent(_trafficInterface);
+      final routerId = _mainRouterId(routers);
+      if (routerId != null) {
+        final response = await ApiClient.get(
+          '/api/dashboard/interface-traffic?router_id=$routerId&interface=$interfaceParam',
+        );
+        if (response.statusCode == 200) {
+          final body = ApiClient.decodeJsonObject(
+            response,
+            debugLabel: 'dashboard/interface-traffic',
+          );
+          final data = body['data'];
+          if (ApiClient.jsonSuccess(body['success']) && data is Map) {
+            return {
+              'interface': data['interface'] ?? _trafficInterface,
+              'rx_mbps': _numAt(Map<String, dynamic>.from(data), 'rxMbps'),
+              'tx_mbps': _numAt(Map<String, dynamic>.from(data), 'txMbps'),
+            };
+          }
+        }
+      }
+
       final response = await ApiClient.get(
-        '/api/dashboard/traffic?interface=$_trafficInterface',
+        '/api/dashboard/traffic?interface=$interfaceParam',
       );
       if (response.statusCode != 200) return null;
       final body = ApiClient.decodeJsonObject(
@@ -158,7 +206,6 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         if (data['success'] == true) {
-          final interfaceTraffic = await _fetchMainInterfaceTraffic();
           final summary = (data['summary'] is Map)
               ? Map<String, dynamic>.from(data['summary'] as Map)
               : <String, dynamic>{};
@@ -169,6 +216,9 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
                     .map((e) => Map<String, dynamic>.from(e))
                     .toList()
               : <Map<String, dynamic>>[];
+          final interfaceTraffic = await _fetchMainInterfaceTraffic(
+            routers: routers,
+          );
           if (!mounted) return;
           if (interfaceTraffic != null) _interfaceTraffic = interfaceTraffic;
           for (var i = 0; i < routers.length; i++) {

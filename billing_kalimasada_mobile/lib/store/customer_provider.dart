@@ -7,6 +7,7 @@ class CustomerProvider extends ChangeNotifier {
   String? _error;
   List<dynamic> _customers = [];
   Map<String, dynamic> _stats = {};
+  List<String> _areaOptions = [];
   int? _listTotalCount;
   num? _listTotalAmount;
   bool _hasMore = true;
@@ -19,6 +20,7 @@ class CustomerProvider extends ChangeNotifier {
   String? get error => _error;
   List<dynamic> get customers => _customers;
   Map<String, dynamic> get stats => _stats;
+  List<String> get areaOptions => _areaOptions;
   int? get listTotalCount => _listTotalCount;
   num? get listTotalAmount => _listTotalAmount;
   bool get hasMore => _hasMore;
@@ -116,6 +118,29 @@ class CustomerProvider extends ChangeNotifier {
         _loading = false;
         notifyListeners();
       }
+    }
+  }
+
+  Future<void> fetchAreaOptions() async {
+    try {
+      final response = await ApiClient.get('/api/mobile-adapter/areas/names');
+      if (response.statusCode != 200) return;
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      if (!ApiClient.jsonSuccess(data['success'])) return;
+      final raw = data['data'];
+      if (raw is! List) return;
+
+      final areas = <String>{};
+      for (final item in raw) {
+        if (item is! Map) continue;
+        final area = item['nama_area']?.toString().trim() ?? '';
+        if (area.isNotEmpty) areas.add(area);
+      }
+      _areaOptions = areas.toList()
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      notifyListeners();
+    } catch (e) {
+      // Abaikan agar daftar pelanggan tetap bisa dibuka meski endpoint area belum tersedia.
     }
   }
 
