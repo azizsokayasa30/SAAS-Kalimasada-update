@@ -1318,6 +1318,21 @@ router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
         params.push(area);
     }
 
+    const summaryParams = params.slice();
+    const summarySql = `
+        SELECT COUNT(DISTINCT c.id) AS total_count,
+               COALESCE(SUM(
+                   CASE WHEN p.price IS NOT NULL
+                        THEN ROUND(p.price * (1.0 + COALESCE(p.tax_rate, 0) / 100.0))
+                        ELSE 0
+                   END
+               ), 0) AS total_amount
+        FROM customers c
+        LEFT JOIN packages p ON c.package_id = p.id
+        LEFT JOIN areas ar ON c.area_id = ar.id
+        WHERE ${where}
+    `;
+
     const sql = `
         SELECT c.id, c.customer_id, c.name, c.phone, c.email, c.status, c.address,
                c.area_id, c.latitude, c.longitude, c.pppoe_username,
@@ -1364,25 +1379,46 @@ router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
     `;
     params.push(limit, offset);
 
-    db.all(sql, params, (err, rows) => {
-        if (err) {
-            logger.error('[mobile-adapter] customers:', err);
-            return res.status(500).json({ success: false, message: 'Gagal memuat pelanggan' });
+    db.get(summarySql, summaryParams, (summaryErr, summaryRow) => {
+        if (summaryErr) {
+            logger.error('[mobile-adapter] customers summary:', summaryErr);
+            return res.status(500).json({ success: false, message: 'Gagal memuat ringkasan pelanggan' });
         }
-        attachAreaNamesFromMaster(rows || [], (areaErr, enriched) => {
-            if (areaErr) {
-                logger.error('[mobile-adapter] customers area:', areaErr);
-                return res.status(500).json({ success: false, message: areaErr.message });
+
+        db.all(sql, params, (err, rows) => {
+            if (err) {
+                logger.error('[mobile-adapter] customers:', err);
+                return res.status(500).json({ success: false, message: 'Gagal memuat pelanggan' });
             }
-            const list = (enriched || []).map((r) => {
-                const safe = sqliteJsonSafeRow(r);
-                return {
-                    ...safe,
-                    area: resolveCustomerAreaLabel(safe),
-                    ip_address: safe.pppoe_username ? 'PPPoE' : 'DHCP/Dynamic'
-                };
+            attachAreaNamesFromMaster(rows || [], (areaErr, enriched) => {
+                if (areaErr) {
+                    logger.error('[mobile-adapter] customers area:', areaErr);
+                    return res.status(500).json({ success: false, message: areaErr.message });
+                }
+                const list = (enriched || []).map((r) => {
+                    const safe = sqliteJsonSafeRow(r);
+                    return {
+                        ...safe,
+                        area: resolveCustomerAreaLabel(safe),
+                        ip_address: safe.pppoe_username ? 'PPPoE' : 'DHCP/Dynamic'
+                    };
+                });
+                const totalCount = summaryRow ? parseInt(summaryRow.total_count, 10) || 0 : 0;
+                res.json({
+                    success: true,
+                    data: list,
+                    pagination: {
+                        page,
+                        limit,
+                        total: totalCount,
+                        hasMore: offset + list.length < totalCount
+                    },
+                    summary: {
+                        total_count: totalCount,
+                        total_amount: summaryRow ? Number(summaryRow.total_amount) || 0 : 0
+                    }
+                });
             });
-            res.json({ success: true, data: list });
         });
     });
 });

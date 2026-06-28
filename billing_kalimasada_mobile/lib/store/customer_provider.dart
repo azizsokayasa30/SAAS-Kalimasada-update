@@ -7,6 +7,8 @@ class CustomerProvider extends ChangeNotifier {
   String? _error;
   List<dynamic> _customers = [];
   Map<String, dynamic> _stats = {};
+  int? _listTotalCount;
+  num? _listTotalAmount;
   bool _hasMore = true;
   int _page = 1;
 
@@ -17,6 +19,8 @@ class CustomerProvider extends ChangeNotifier {
   String? get error => _error;
   List<dynamic> get customers => _customers;
   Map<String, dynamic> get stats => _stats;
+  int? get listTotalCount => _listTotalCount;
+  num? get listTotalAmount => _listTotalAmount;
   bool get hasMore => _hasMore;
 
   Future<void> fetchCustomers({
@@ -36,6 +40,8 @@ class CustomerProvider extends ChangeNotifier {
       _customersFetchGen++;
       _page = 1;
       _customers = [];
+      _listTotalCount = null;
+      _listTotalAmount = null;
       _hasMore = true;
     }
 
@@ -79,10 +85,21 @@ class CustomerProvider extends ChangeNotifier {
           final newCustomers = raw is List
               ? List<dynamic>.from(raw)
               : <dynamic>[];
-          if (newCustomers.length < 20) {
-            _hasMore = false;
-          }
           _customers.addAll(newCustomers);
+          final summary = data['summary'];
+          if (summary is Map) {
+            _listTotalCount = _intFrom(summary['total_count']);
+            _listTotalAmount = _numFrom(summary['total_amount']);
+          }
+          final pagination = data['pagination'];
+          if (pagination is Map) {
+            final hasMoreRaw = pagination['hasMore'];
+            _hasMore = hasMoreRaw is bool
+                ? hasMoreRaw
+                : _customers.length < (_intFrom(pagination['total']) ?? 0);
+          } else {
+            _hasMore = newCustomers.length >= 20;
+          }
           _page++;
         } else {
           _error = data['message']?.toString();
@@ -100,6 +117,17 @@ class CustomerProvider extends ChangeNotifier {
         notifyListeners();
       }
     }
+  }
+
+  int? _intFrom(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.round();
+    return int.tryParse(value?.toString() ?? '');
+  }
+
+  num? _numFrom(dynamic value) {
+    if (value is num) return value;
+    return num.tryParse(value?.toString() ?? '');
   }
 
   /// Jangan set `_loading` di sini — dipakai untuk pagination `fetchCustomers`; memakai flag yang sama bikin refresh/macet.

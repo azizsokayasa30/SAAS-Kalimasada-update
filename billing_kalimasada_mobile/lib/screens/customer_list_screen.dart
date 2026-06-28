@@ -755,11 +755,12 @@ class _CustomerListScreenState extends State<CustomerListScreen>
   }
 
   Widget _buildBottomTotalCard(CustomerProvider provider) {
-    final totalAmount = provider.customers.fold<num>(
+    final loadedAmount = provider.customers.fold<num>(
       0,
       (sum, customer) => sum + _customerPackageAmount(customer),
     );
-    final count = provider.customers.length;
+    final totalAmount = provider.listTotalAmount ?? loadedAmount;
+    final count = provider.listTotalCount ?? provider.customers.length;
 
     return Container(
       margin: const EdgeInsets.fromLTRB(20, 8, 20, 10),

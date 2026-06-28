@@ -8,6 +8,10 @@ import '../customer_list_screen.dart';
 const _customerTextStrong = Color(0xFF1E293B);
 const _customerTextMuted = Color(0xFF64748B);
 const _customerTextAccent = Color(0xFF2563EB);
+const _customerBlue = Color(0xFF1F7BFF);
+const _customerSoftBlue = Color(0xFF2E9DEB);
+const _customerGreen = Color(0xFF16A34A);
+const _customerOrange = Color(0xFFFF7A1A);
 
 class AdminCustomerOverviewScreen extends StatefulWidget {
   const AdminCustomerOverviewScreen({super.key});
@@ -20,9 +24,7 @@ class AdminCustomerOverviewScreen extends StatefulWidget {
 class _AdminCustomerOverviewScreenState
     extends State<AdminCustomerOverviewScreen> {
   static const _navy = Color(0xFF2563EB);
-  static const _bg = Colors.white;
   static const _blue = Color(0xFF2E9DEB);
-  static const _orange = Color(0xFFFF8A3D);
   static const _green = Color(0xFF62E642);
   static const _red = Color(0xFFE84C4F);
   static const _yellow = Color(0xFFE9B21B);
@@ -174,6 +176,14 @@ class _AdminCustomerOverviewScreenState
     return _monthNames[_month - 1];
   }
 
+  String get _greeting {
+    final hour = DateTime.now().hour;
+    if (hour < 11) return 'Selamat pagi';
+    if (hour < 15) return 'Selamat siang';
+    if (hour < 18) return 'Selamat sore';
+    return 'Selamat malam';
+  }
+
   Future<void> _selectMonth(int? month) async {
     if (month == null || month == _month) return;
     setState(() => _month = month);
@@ -238,27 +248,50 @@ class _AdminCustomerOverviewScreenState
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: AppBar(
-        backgroundColor: _navy,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: const Text(
-          'Pelanggan',
-          style: TextStyle(fontWeight: FontWeight.w800, fontSize: 22),
-        ),
-        centerTitle: true,
-        actions: [
-          TextButton.icon(
-            onPressed: () {},
-            icon: const Icon(Icons.info, color: Colors.orangeAccent),
-            label: const Text('Info', style: TextStyle(color: Colors.white)),
+  Widget _periodDropdown({
+    required int value,
+    required List<DropdownMenuItem<int>> items,
+    required ValueChanged<int?>? onChanged,
+  }) {
+    return _periodPill(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.calendar_month_rounded,
+            color: _customerBlue,
+            size: 16,
+          ),
+          const SizedBox(width: 7),
+          DropdownButtonHideUnderline(
+            child: DropdownButton<int>(
+              value: value,
+              dropdownColor: Colors.white,
+              borderRadius: BorderRadius.circular(18),
+              icon: const Icon(
+                Icons.expand_more,
+                color: _customerTextStrong,
+                size: 18,
+              ),
+              style: const TextStyle(
+                color: _customerTextStrong,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+              items: items,
+              onChanged: onChanged,
+            ),
           ),
         ],
       ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF7FBFF),
       body: RefreshIndicator(
         onRefresh: _load,
         color: _navy,
@@ -287,19 +320,20 @@ class _AdminCustomerOverviewScreenState
 
   Widget _overviewBody() {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(10, 12, 10, 110),
+      padding: const EdgeInsets.only(bottom: 110),
       children: [
+        _CustomerHeader(greeting: _greeting),
         Container(
           margin: const EdgeInsets.only(bottom: 16),
+          padding: const EdgeInsets.fromLTRB(10, 0, 10, 0),
           decoration: const BoxDecoration(
-            color: Colors.white,
             borderRadius: BorderRadius.all(Radius.circular(18)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(10, 16, 10, 8),
+                padding: const EdgeInsets.fromLTRB(8, 16, 4, 8),
                 child: Row(
                   children: [
                     const Expanded(
@@ -308,76 +342,43 @@ class _AdminCustomerOverviewScreenState
                         style: TextStyle(
                           color: _customerTextMuted,
                           fontSize: 14,
-                          fontWeight: FontWeight.w800,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        _periodPill(
-                          child: DropdownButtonHideUnderline(
-                            child: DropdownButton<int>(
-                              value: _month,
-                              dropdownColor: Colors.white,
-                              borderRadius: BorderRadius.circular(18),
-                              icon: const Icon(
-                                Icons.expand_more,
-                                color: _customerTextStrong,
-                                size: 18,
-                              ),
-                              style: const TextStyle(
-                                color: _customerTextStrong,
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                              ),
-                              items: [
-                                const DropdownMenuItem(
-                                  value: 0,
-                                  child: Text('Satu tahun'),
-                                ),
-                                for (var i = 0; i < _monthNames.length; i++)
-                                  DropdownMenuItem(
-                                    value: i + 1,
-                                    child: Text(_monthNames[i]),
-                                  ),
-                              ],
-                              onChanged: _loading ? null : _selectMonth,
+                        _periodDropdown(
+                          value: _month,
+                          items: [
+                            const DropdownMenuItem(
+                              value: 0,
+                              child: Text('Satu tahun'),
                             ),
-                          ),
+                            for (var i = 0; i < _monthNames.length; i++)
+                              DropdownMenuItem(
+                                value: i + 1,
+                                child: Text(_monthNames[i]),
+                              ),
+                          ],
+                          onChanged: _loading ? null : _selectMonth,
                         ),
                         const SizedBox(width: 8),
-                        _periodPill(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          child: DropdownButtonHideUnderline(
-                            child: DropdownButton<int>(
-                              value: _year,
-                              dropdownColor: Colors.white,
-                              borderRadius: BorderRadius.circular(18),
-                              icon: const Icon(
-                                Icons.expand_more,
-                                color: _customerTextStrong,
-                                size: 18,
+                        _periodDropdown(
+                          value: _year,
+                          items: [
+                            for (
+                              var year = DateTime.now().year - 5;
+                              year <= DateTime.now().year + 1;
+                              year++
+                            )
+                              DropdownMenuItem(
+                                value: year,
+                                child: Text('$year'),
                               ),
-                              style: const TextStyle(
-                                color: _customerTextStrong,
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                              ),
-                              items: [
-                                for (
-                                  var year = DateTime.now().year - 5;
-                                  year <= DateTime.now().year + 1;
-                                  year++
-                                )
-                                  DropdownMenuItem(
-                                    value: year,
-                                    child: Text('$year'),
-                                  ),
-                              ],
-                              onChanged: _loading ? null : _selectYear,
-                            ),
-                          ),
+                          ],
+                          onChanged: _loading ? null : _selectYear,
                         ),
                       ],
                     ),
@@ -389,6 +390,10 @@ class _AdminCustomerOverviewScreenState
                 child: _TotalCustomerCard(
                   value: '${_intAt('customers', 'total')}',
                   amount: _rupiahAt('customers', 'total_amount'),
+                  progress: _intAt('customers', 'total') == 0
+                      ? 0
+                      : _intAt('customers', 'active') /
+                            _intAt('customers', 'total'),
                   onTap: _openAllCustomers,
                 ),
               ),
@@ -404,7 +409,7 @@ class _AdminCustomerOverviewScreenState
                             value: '${_intAt('customers', 'active')}',
                             amount: _rupiahAt('customers', 'active_amount'),
                             icon: Icons.verified_user_outlined,
-                            iconColor: _orange,
+                            iconColor: _customerGreen,
                             onTap: () =>
                                 _openCustomers('Pelanggan Aktif', 'active'),
                           ),
@@ -435,8 +440,8 @@ class _AdminCustomerOverviewScreenState
                             label: 'Belum Bayar',
                             value: '${_intAt('invoices', 'unpaid_count')}',
                             amount: _rupiahAt('invoices', 'unpaid_amount'),
-                            icon: Icons.receipt_long,
-                            iconColor: Colors.grey,
+                            icon: Icons.receipt_long_rounded,
+                            iconColor: _customerOrange,
                             onTap: () => _openCustomers(
                               'Belum Bayar $_monthName $_year',
                               'unpaid',
@@ -459,15 +464,40 @@ class _AdminCustomerOverviewScreenState
                       ],
                     ),
                     const SizedBox(height: 12),
-                    Center(
-                      child: Text(
-                        'Transaksi Bayar Bulan $_monthName $_year',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: _customerTextAccent,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w900,
-                        ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 22,
+                            height: 22,
+                            decoration: BoxDecoration(
+                              color: _customerBlue.withValues(alpha: 0.10),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(
+                              Icons.query_stats_rounded,
+                              color: _customerBlue,
+                              size: 15,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Transaksi Bayar Bulan $_monthName $_year',
+                              style: const TextStyle(
+                                color: _customerTextAccent,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          const Icon(
+                            Icons.auto_awesome_rounded,
+                            color: _customerBlue,
+                            size: 15,
+                          ),
+                        ],
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -478,8 +508,8 @@ class _AdminCustomerOverviewScreenState
                             label: 'Transaksi Cash',
                             value: '${_intAt('transactions', 'cash_count')}',
                             amount: _rupiahAt('transactions', 'cash_amount'),
-                            icon: Icons.payments,
-                            iconColor: Colors.green,
+                            icon: Icons.payments_rounded,
+                            iconColor: _customerGreen,
                             onTap: () => _openCustomers(
                               'Transaksi Cash $_monthName $_year',
                               'cash',
@@ -491,8 +521,8 @@ class _AdminCustomerOverviewScreenState
                             label: 'Transaksi Online',
                             value: '${_intAt('transactions', 'online_count')}',
                             amount: _rupiahAt('transactions', 'online_amount'),
-                            icon: Icons.account_balance_wallet,
-                            iconColor: Colors.orange,
+                            icon: Icons.account_balance_wallet_rounded,
+                            iconColor: _customerOrange,
                             onTap: () => _openCustomers(
                               'Transaksi Online $_monthName $_year',
                               'online',
@@ -528,7 +558,7 @@ class _AdminCustomerOverviewScreenState
                       ),
                       child: const Text(
                         'TAMBAH PELANGGAN',
-                        style: TextStyle(fontWeight: FontWeight.w800),
+                        style: TextStyle(fontWeight: FontWeight.w600),
                       ),
                     ),
                   ],
@@ -537,53 +567,154 @@ class _AdminCustomerOverviewScreenState
             ],
           ),
         ),
-        Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(18),
-          ),
-          padding: const EdgeInsets.all(10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              const Text(
-                'Keterlambatan Bulan ini',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: _customerTextMuted,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w900,
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(18),
+            ),
+            padding: const EdgeInsets.all(10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const Text(
+                  'Keterlambatan Bulan ini',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: _customerTextMuted,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: _LateTile(
-                      color: _yellow,
-                      value: '${_intAt('late', 'overdue_count')}',
-                      label: 'Pemb. Telat',
-                      icon: Icons.event_busy,
-                      onTap: () =>
-                          _openCustomers('Pembayaran Telat', 'overdue'),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _LateTile(
+                        color: _yellow,
+                        value: '${_intAt('late', 'overdue_count')}',
+                        label: 'Pemb. Telat',
+                        icon: Icons.event_busy,
+                        onTap: () =>
+                            _openCustomers('Pembayaran Telat', 'overdue'),
+                      ),
                     ),
-                  ),
-                  Expanded(
-                    child: _LateTile(
-                      color: _red,
-                      value: '${_intAt('late', 'arrears_count')}',
-                      label: 'Nunggak',
-                      icon: Icons.warning_amber_rounded,
-                      onTap: () =>
-                          _openCustomers('Pelanggan Nunggak', 'arrears'),
+                    Expanded(
+                      child: _LateTile(
+                        color: _red,
+                        value: '${_intAt('late', 'arrears_count')}',
+                        label: 'Nunggak',
+                        icon: Icons.warning_amber_rounded,
+                        onTap: () =>
+                            _openCustomers('Pelanggan Nunggak', 'arrears'),
+                      ),
                     ),
-                  ),
-                ],
-              ),
-            ],
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ],
+    );
+  }
+}
+
+class _CustomerHeader extends StatelessWidget {
+  final String greeting;
+
+  const _CustomerHeader({required this.greeting});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.fromLTRB(
+        18,
+        MediaQuery.paddingOf(context).top + 12,
+        12,
+        16,
+      ),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Color(0xFF238BFF), Color(0xFF1268F3)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      greeting,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(width: 5),
+                    const Icon(
+                      Icons.waving_hand_rounded,
+                      color: Color(0xFFFFD166),
+                      size: 16,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                const Text(
+                  'Pelanggan',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            height: 34,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.92),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircleAvatar(
+                  radius: 10,
+                  backgroundColor: Color(0xFFFFA11B),
+                  child: Icon(
+                    Icons.info_outline_rounded,
+                    color: Colors.white,
+                    size: 14,
+                  ),
+                ),
+                SizedBox(width: 7),
+                Text(
+                  'Info',
+                  style: TextStyle(
+                    color: _customerTextStrong,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -611,9 +742,9 @@ class _MetricTile extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(18),
       child: Container(
-        height: 130,
+        height: 86,
         margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-        padding: const EdgeInsets.all(10),
+        padding: const EdgeInsets.fromLTRB(12, 11, 10, 8),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(18),
@@ -626,67 +757,68 @@ class _MetricTile extends StatelessWidget {
             ),
           ],
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        clipBehavior: Clip.antiAlias,
+        child: Stack(
           children: [
-            const SizedBox(height: 2),
-            SizedBox(
-              height: 32,
-              child: Center(
-                child: Text(
-                  label,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: _customerTextMuted,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
+            Positioned(
+              left: -8,
+              right: -8,
+              bottom: -12,
+              height: 48,
+              child: CustomPaint(painter: _SoftWavePainter(color: iconColor)),
             ),
-            const SizedBox(height: 4),
             Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  width: 40,
-                  height: 40,
+                  width: 42,
+                  height: 42,
                   decoration: BoxDecoration(
                     color: iconColor.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(12),
+                    shape: BoxShape.circle,
                   ),
-                  child: Icon(icon, color: iconColor, size: 25),
+                  child: Icon(icon, color: iconColor, size: 24),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 12),
                 Expanded(
-                  child: Text(
-                    value,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: _customerTextStrong,
-                      fontSize: 27,
-                      fontWeight: FontWeight.w600,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: _customerSoftBlue,
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        value,
+                        style: const TextStyle(
+                          color: _customerTextStrong,
+                          fontSize: 23,
+                          height: 1,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        amount,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: _customerSoftBlue,
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
-            ),
-            const Spacer(),
-            SizedBox(
-              height: 18,
-              child: Text(
-                amount,
-                textAlign: TextAlign.left,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: _customerTextStrong,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
             ),
           ],
         ),
@@ -698,11 +830,14 @@ class _MetricTile extends StatelessWidget {
 class _TotalCustomerCard extends StatelessWidget {
   final String value;
   final String amount;
+  final double progress;
   final VoidCallback onTap;
+  static const _totalBlue = _customerSoftBlue;
 
   const _TotalCustomerCard({
     required this.value,
     required this.amount,
+    required this.progress,
     required this.onTap,
   });
 
@@ -713,7 +848,8 @@ class _TotalCustomerCard extends StatelessWidget {
       borderRadius: BorderRadius.circular(18),
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+        height: 146,
+        padding: const EdgeInsets.fromLTRB(18, 16, 14, 12),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(18),
@@ -726,60 +862,266 @@ class _TotalCustomerCard extends StatelessWidget {
             ),
           ],
         ),
-        child: Row(
+        clipBehavior: Clip.antiAlias,
+        child: Stack(
           children: [
-            Container(
-              width: 50,
-              height: 50,
-              decoration: BoxDecoration(
-                color: const Color(0xFF2E9DEB).withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: const Icon(
-                Icons.groups_rounded,
-                color: Color(0xFF2E9DEB),
-                size: 30,
-              ),
+            Positioned(
+              left: -32,
+              right: -10,
+              bottom: -18,
+              height: 86,
+              child: CustomPaint(painter: const _TotalWavePainter()),
             ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              height: 94,
+              child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Total Pelanggan',
-                    style: TextStyle(
-                      color: _customerTextMuted,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w900,
+                  Container(
+                    width: 54,
+                    height: 54,
+                    decoration: BoxDecoration(
+                      color: _totalBlue.withValues(alpha: 0.10),
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: _totalBlue.withValues(alpha: 0.16),
+                          blurRadius: 16,
+                          offset: const Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.groups_rounded,
+                      color: _totalBlue,
+                      size: 30,
                     ),
                   ),
-                  Text(
-                    value,
-                    style: const TextStyle(
-                      color: _customerTextStrong,
-                      fontSize: 32,
-                      fontWeight: FontWeight.w600,
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Total Pelanggan',
+                            style: TextStyle(
+                              color: _customerTextMuted,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            value,
+                            style: const TextStyle(
+                              color: _customerTextStrong,
+                              fontSize: 34,
+                              height: 1,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'valuasi omset',
+                            style: TextStyle(
+                              color: _customerTextMuted,
+                              fontSize: 12,
+                              height: 1,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            amount,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.left,
+                            style: const TextStyle(
+                              color: _totalBlue,
+                              fontSize: 15,
+                              height: 1,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                  Text(
-                    amount,
-                    textAlign: TextAlign.left,
-                    style: const TextStyle(
-                      color: _customerTextStrong,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2, right: 12),
+                    child: _ProgressRing(
+                      progress: progress.clamp(0, 1),
+                      color: _totalBlue,
                     ),
                   ),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: _customerTextMuted),
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: Container(
+                height: 30,
+                padding: const EdgeInsets.fromLTRB(12, 0, 8, 0),
+                decoration: BoxDecoration(
+                  color: _totalBlue.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Lihat Detail',
+                      style: TextStyle(
+                        color: _totalBlue,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    SizedBox(width: 3),
+                    Icon(
+                      Icons.chevron_right_rounded,
+                      color: _totalBlue,
+                      size: 18,
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
+}
+
+class _ProgressRing extends StatelessWidget {
+  final double progress;
+  final Color color;
+
+  const _ProgressRing({required this.progress, this.color = _customerBlue});
+
+  @override
+  Widget build(BuildContext context) {
+    final percent = (progress * 100).round();
+    return SizedBox(
+      width: 62,
+      height: 62,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          SizedBox(
+            width: 60,
+            height: 60,
+            child: CircularProgressIndicator(
+              value: progress,
+              strokeWidth: 7,
+              strokeCap: StrokeCap.round,
+              backgroundColor: const Color(0xFFEAF2FF),
+              color: color,
+            ),
+          ),
+          Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                '$percent%',
+                style: const TextStyle(
+                  color: _customerTextStrong,
+                  fontSize: 11,
+                  height: 1,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 2),
+              const Text(
+                'aktif',
+                style: TextStyle(
+                  color: _customerTextMuted,
+                  fontSize: 7,
+                  height: 1,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SoftWavePainter extends CustomPainter {
+  final Color color;
+
+  const _SoftWavePainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color.withValues(alpha: 0.09)
+      ..style = PaintingStyle.fill;
+    final path = Path()
+      ..moveTo(0, size.height * 0.34)
+      ..quadraticBezierTo(
+        size.width * 0.28,
+        size.height * 0.04,
+        size.width * 0.55,
+        size.height * 0.36,
+      )
+      ..quadraticBezierTo(
+        size.width * 0.78,
+        size.height * 0.62,
+        size.width,
+        size.height * 0.20,
+      )
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _SoftWavePainter oldDelegate) {
+    return oldDelegate.color != color;
+  }
+}
+
+class _TotalWavePainter extends CustomPainter {
+  const _TotalWavePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = _customerSoftBlue.withValues(alpha: 0.08)
+      ..style = PaintingStyle.fill;
+    final path = Path()
+      ..moveTo(0, size.height * 0.28)
+      ..quadraticBezierTo(
+        size.width * 0.22,
+        size.height * 0.00,
+        size.width * 0.48,
+        size.height * 0.40,
+      )
+      ..quadraticBezierTo(
+        size.width * 0.70,
+        size.height * 0.72,
+        size.width,
+        size.height * 0.24,
+      )
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _TotalWavePainter oldDelegate) => false;
 }
 
 class _SmallStatusTile extends StatelessWidget {
@@ -809,7 +1151,7 @@ class _SmallStatusTile extends StatelessWidget {
               style: const TextStyle(
                 color: _customerTextMuted,
                 fontSize: 14,
-                fontWeight: FontWeight.w800,
+                fontWeight: FontWeight.w600,
               ),
             ),
             const SizedBox(height: 4),
@@ -900,7 +1242,7 @@ class _LateTile extends StatelessWidget {
                   style: const TextStyle(
                     color: _customerTextStrong,
                     fontSize: 14,
-                    fontWeight: FontWeight.w800,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
