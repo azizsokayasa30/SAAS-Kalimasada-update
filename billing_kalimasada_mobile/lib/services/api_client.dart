@@ -54,7 +54,10 @@ class ApiClient {
   }
 
   /// Decode JSON object dari respons HTTP. Menghindari [FormatException] mentah jika server mengembalikan HTML/teks.
-  static Map<String, dynamic> decodeJsonObject(http.Response response, {String? debugLabel}) {
+  static Map<String, dynamic> decodeJsonObject(
+    http.Response response, {
+    String? debugLabel,
+  }) {
     final bytes = response.bodyBytes;
     if (bytes.isEmpty) {
       throw FormatException(
@@ -66,7 +69,9 @@ class ApiClient {
       raw = raw.substring(1);
     }
     if (raw.isEmpty) {
-      throw FormatException('${debugLabel ?? 'API'}: body hanya BOM/spasi (HTTP ${response.statusCode})');
+      throw FormatException(
+        '${debugLabel ?? 'API'}: body hanya BOM/spasi (HTTP ${response.statusCode})',
+      );
     }
     final first = raw.codeUnitAt(0);
     if (first != 0x7B && first != 0x5B) {
@@ -79,23 +84,32 @@ class ApiClient {
       final decoded = jsonDecode(raw);
       if (decoded is Map<String, dynamic>) return decoded;
       if (decoded is Map) return Map<String, dynamic>.from(decoded);
-      throw FormatException('${debugLabel ?? 'API'}: JSON harus object, dapat ${decoded.runtimeType}');
+      throw FormatException(
+        '${debugLabel ?? 'API'}: JSON harus object, dapat ${decoded.runtimeType}',
+      );
     } on FormatException catch (e) {
       final head = raw.length > 160 ? '${raw.substring(0, 160)}…' : raw;
-      throw FormatException('${debugLabel ?? 'API'}: ${e.message} — cuplikan: $head');
+      throw FormatException(
+        '${debugLabel ?? 'API'}: ${e.message} — cuplikan: $head',
+      );
     }
   }
 
   static Future<http.Response> get(String endpoint) async {
     final headers = await _getHeaders();
     final uri = _uri(endpoint);
-    final response = await http.get(uri, headers: headers).timeout(requestTimeout);
+    final response = await http
+        .get(uri, headers: headers)
+        .timeout(requestTimeout);
     print('GET $uri → ${response.statusCode}');
     return response;
   }
 
   /// Unduh file biner (mis. PDF resi) dengan token auth yang sama.
-  static Future<http.Response> download(String endpoint, {String accept = 'application/pdf'}) async {
+  static Future<http.Response> download(
+    String endpoint, {
+    String accept = 'application/pdf',
+  }) async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token');
     final uri = _uri(endpoint);
@@ -112,14 +126,13 @@ class ApiClient {
     return response;
   }
 
-  static Future<http.Response> post(String endpoint, Map<String, dynamic> body) async {
+  static Future<http.Response> post(
+    String endpoint,
+    Map<String, dynamic> body,
+  ) async {
     final headers = await _getHeaders();
     return http
-        .post(
-          _uri(endpoint),
-          headers: headers,
-          body: jsonEncode(body),
-        )
+        .post(_uri(endpoint), headers: headers, body: jsonEncode(body))
         .timeout(requestTimeout);
   }
 
@@ -143,25 +156,30 @@ class ApiClient {
     return http.Response.fromStream(streamed).timeout(requestTimeout);
   }
 
-  static Future<http.Response> put(String endpoint, Map<String, dynamic> body) async {
+  static Future<http.Response> put(
+    String endpoint,
+    Map<String, dynamic> body,
+  ) async {
     final headers = await _getHeaders();
     return http
-        .put(
-          _uri(endpoint),
-          headers: headers,
-          body: jsonEncode(body),
-        )
+        .put(_uri(endpoint), headers: headers, body: jsonEncode(body))
         .timeout(requestTimeout);
   }
 
-  static Future<http.Response> patch(String endpoint, Map<String, dynamic> body) async {
+  static Future<http.Response> patch(
+    String endpoint,
+    Map<String, dynamic> body,
+  ) async {
     final headers = await _getHeaders();
     return http
-        .patch(
-          _uri(endpoint),
-          headers: headers,
-          body: jsonEncode(body),
-        )
+        .patch(_uri(endpoint), headers: headers, body: jsonEncode(body))
+        .timeout(requestTimeout);
+  }
+
+  static Future<http.Response> delete(String endpoint) async {
+    final headers = await _getHeaders();
+    return http
+        .delete(_uri(endpoint), headers: headers)
         .timeout(requestTimeout);
   }
 }

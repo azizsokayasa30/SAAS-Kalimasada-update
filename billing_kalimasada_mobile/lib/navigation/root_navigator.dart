@@ -15,14 +15,17 @@ import '../screens/collector/collector_profile_tab.dart';
 import '../store/collector_provider.dart';
 import '../store/collector_notification_provider.dart';
 import '../screens/collector/collector_notifications_screen.dart';
-import '../screens/attendance_screen.dart';
 import '../screens/customer_list_screen.dart';
 import '../screens/collector/collector_customers_screen.dart';
 import '../utils/collector_debug_log.dart';
 
 import '../screens/technician_profile_screen.dart';
 import '../screens/task_list_screen.dart';
+import '../screens/network_menu_screen.dart';
 import '../screens/network_map_screen.dart';
+import '../screens/admin/admin_dashboard_screen.dart';
+import '../screens/admin/admin_customer_overview_screen.dart';
+import '../screens/admin/admin_more_screen.dart';
 import '../widgets/app_update_dialog.dart';
 
 class RootNavigator extends StatefulWidget {
@@ -32,7 +35,8 @@ class RootNavigator extends StatefulWidget {
   State<RootNavigator> createState() => _RootNavigatorState();
 }
 
-class _RootNavigatorState extends State<RootNavigator> with WidgetsBindingObserver {
+class _RootNavigatorState extends State<RootNavigator>
+    with WidgetsBindingObserver {
   bool _updateCheckDone = false;
 
   @override
@@ -97,6 +101,7 @@ class _TechnicianTabs extends StatefulWidget {
 
 class _TechnicianTabsState extends State<_TechnicianTabs> {
   int _currentIndex = 0;
+
   /// Dipakai saat buka tab Tugas (mis. filter Tiket dari dashboard); `null` = Semua.
   String? _taskListInitialFilter;
   NotificationProvider? _notificationProvider;
@@ -193,7 +198,7 @@ class _TechnicianTabsState extends State<_TechnicianTabs> {
               offset: Offset(0, -10),
               blurRadius: 20,
               spreadRadius: -5,
-            )
+            ),
           ],
           borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
         ),
@@ -218,9 +223,9 @@ class _TechnicianTabsState extends State<_TechnicianTabs> {
 
   Widget _buildNavItem(int index, IconData icon, String label) {
     final isSelected = _currentIndex == index;
-    final activeColor = const Color(0xFF5A53AB);
-    final inactiveColor = const Color(0xFF594E97);
-    
+    final activeColor = const Color(0xFF2563EB);
+    final inactiveColor = const Color(0xFF64748B);
+
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () => _navigateToTab(index),
@@ -236,7 +241,9 @@ class _TechnicianTabsState extends State<_TechnicianTabs> {
                 height: 4,
                 decoration: BoxDecoration(
                   color: activeColor,
-                  borderRadius: const BorderRadius.vertical(bottom: Radius.circular(4)),
+                  borderRadius: const BorderRadius.vertical(
+                    bottom: Radius.circular(4),
+                  ),
                 ),
               ),
             ),
@@ -247,7 +254,9 @@ class _TechnicianTabsState extends State<_TechnicianTabs> {
                 width: 48,
                 height: 32,
                 decoration: BoxDecoration(
-                  color: isSelected ? const Color(0xFFE4DFFF).withValues(alpha: 0.4) : Colors.transparent,
+                  color: isSelected
+                      ? const Color(0xFFDBEAFE).withValues(alpha: 0.7)
+                      : Colors.transparent,
                   borderRadius: BorderRadius.circular(16),
                 ),
                 child: Icon(
@@ -311,7 +320,8 @@ class _CollectorTabsState extends State<_CollectorTabs> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _syncAll();
-      final n = _collectorNotif ?? context.read<CollectorNotificationProvider>();
+      final n =
+          _collectorNotif ?? context.read<CollectorNotificationProvider>();
       n.ensurePolling();
       n.fetchNotifications(silent: true);
     });
@@ -326,7 +336,7 @@ class _CollectorTabsState extends State<_CollectorTabs> {
   void _goCustomersTab([String status = '']) {
     collectorDbg(
       'Nav: dashboard → Pelanggan filter="$status" '
-      '(stamp ${_customersSyncStamp}→${_customersSyncStamp + 1})',
+      '(stamp $_customersSyncStamp→${_customersSyncStamp + 1})',
     );
     setState(() {
       _currentIndex = 1;
@@ -375,7 +385,10 @@ class _CollectorTabsState extends State<_CollectorTabs> {
     return Theme(
       data: ThemeData.light(useMaterial3: true).copyWith(
         scaffoldBackgroundColor: bg,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF001F3F), brightness: Brightness.light),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF001F3F),
+          brightness: Brightness.light,
+        ),
       ),
       child: Scaffold(
         backgroundColor: bg,
@@ -389,7 +402,10 @@ class _CollectorTabsState extends State<_CollectorTabs> {
                 surfaceTintColor: Colors.transparent,
                 title: Text(
                   titles[_currentIndex],
-                  style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 18,
+                  ),
                 ),
                 leading: IconButton(
                   icon: const Icon(Icons.menu),
@@ -403,10 +419,14 @@ class _CollectorTabsState extends State<_CollectorTabs> {
                     tooltip: 'Notifikasi',
                     iconSize: 32,
                     padding: const EdgeInsets.all(10),
-                    constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                    constraints: const BoxConstraints(
+                      minWidth: 48,
+                      minHeight: 48,
+                    ),
                     onPressed: () async {
                       final nav = Navigator.of(context);
-                      final notifProv = context.read<CollectorNotificationProvider>();
+                      final notifProv = context
+                          .read<CollectorNotificationProvider>();
                       await nav.push<void>(
                         MaterialPageRoute<void>(
                           builder: (_) => const CollectorNotificationsScreen(),
@@ -436,7 +456,10 @@ class _CollectorTabsState extends State<_CollectorTabs> {
                     ),
                   ),
                 ],
-                bottom: const PreferredSize(preferredSize: Size.fromHeight(1), child: Divider(height: 1)),
+                bottom: const PreferredSize(
+                  preferredSize: Size.fromHeight(1),
+                  child: Divider(height: 1),
+                ),
               ),
         body: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -449,7 +472,13 @@ class _CollectorTabsState extends State<_CollectorTabs> {
           decoration: BoxDecoration(
             color: Colors.white,
             border: Border(top: BorderSide(color: Colors.grey.shade200)),
-            boxShadow: const [BoxShadow(color: Color(0x0D000000), blurRadius: 10, offset: Offset(0, -2))],
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x0D000000),
+                blurRadius: 10,
+                offset: Offset(0, -2),
+              ),
+            ],
           ),
           child: SafeArea(
             child: Padding(
@@ -484,7 +513,9 @@ class _CollectorTabsState extends State<_CollectorTabs> {
             count++;
             final m = Map<String, dynamic>.from(raw);
             final p = m['package_price'];
-            final n = p is num ? p.round() : int.tryParse(p?.toString() ?? '') ?? 0;
+            final n = p is num
+                ? p.round()
+                : int.tryParse(p?.toString() ?? '') ?? 0;
             total += n;
           }
         }
@@ -497,16 +528,15 @@ class _CollectorTabsState extends State<_CollectorTabs> {
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [
-                  Color(0xFFB8DAFF),
-                  Color(0xFFA8E6CF),
-                ],
+                colors: [Color(0xFFB8DAFF), Color(0xFFA8E6CF)],
               ),
-              border: Border(
-                top: BorderSide(color: Color(0x4D1565C0)),
-              ),
+              border: Border(top: BorderSide(color: Color(0x4D1565C0))),
               boxShadow: [
-                BoxShadow(color: Color(0x14000000), blurRadius: 8, offset: Offset(0, -2)),
+                BoxShadow(
+                  color: Color(0x14000000),
+                  blurRadius: 8,
+                  offset: Offset(0, -2),
+                ),
               ],
             ),
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
@@ -542,7 +572,10 @@ class _CollectorTabsState extends State<_CollectorTabs> {
                   ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 160),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
                         color: const Color(0xFFE3F2FD),
                         borderRadius: BorderRadius.circular(20),
@@ -551,7 +584,11 @@ class _CollectorTabsState extends State<_CollectorTabs> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.filter_alt, size: 14, color: Color(0xFF1565C0)),
+                          const Icon(
+                            Icons.filter_alt,
+                            size: 14,
+                            color: Color(0xFF1565C0),
+                          ),
                           const SizedBox(width: 4),
                           Flexible(
                             child: Text(
@@ -623,41 +660,150 @@ class _AdminTabs extends StatefulWidget {
 
 class _AdminTabsState extends State<_AdminTabs> {
   int _currentIndex = 0;
+  String? _taskListInitialFilter;
 
-  final List<Widget> _screens = [
-    const Scaffold(
-      backgroundColor: AppColors.background,
-      body: Center(
-        child: Text('Admin Dashboard', style: TextStyle(color: AppColors.text)),
-      ),
-    ),
-    const AttendanceScreen(),
-  ];
+  void _navigateToTab(int index, {String? taskListFilter}) {
+    setState(() {
+      _currentIndex = index;
+      if (index == 2) {
+        _taskListInitialFilter = taskListFilter;
+      } else {
+        _taskListInitialFilter = null;
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    final screens = [
+      AdminDashboardScreen(onNavigateToTab: _navigateToTab),
+      const AdminCustomerOverviewScreen(),
+      TaskListScreen(
+        key: ValueKey('admin_tasks_${_taskListInitialFilter ?? 'all'}'),
+        onNavigateToTab: _navigateToTab,
+        initialTaskTypeFilter: _taskListInitialFilter,
+      ),
+      const NetworkMenuScreen(),
+      const AdminMoreScreen(),
+    ];
+
     return Scaffold(
-      body: _screens[_currentIndex],
-      bottomNavigationBar: BottomNavigationBar(
-        backgroundColor: AppColors.surface,
-        selectedItemColor: AppColors.primary,
-        unselectedItemColor: AppColors.textSecondary,
-        currentIndex: _currentIndex,
-        onTap: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.admin_panel_settings),
-            label: 'Admin',
+      body: screens[_currentIndex],
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: const Border(top: BorderSide(color: Color(0xFFE7ECF5))),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x140F172A),
+              offset: Offset(0, -8),
+              blurRadius: 22,
+              spreadRadius: -10,
+            ),
+          ],
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+        ),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _buildAdminNavItem(
+                  0,
+                  Icons.home_rounded,
+                  'Beranda',
+                  const Color(0xFF2563EB),
+                ),
+                _buildAdminNavItem(
+                  1,
+                  Icons.groups_rounded,
+                  'Pelanggan',
+                  const Color(0xFF14B8A6),
+                ),
+                _buildAdminNavItem(
+                  2,
+                  Icons.confirmation_number_rounded,
+                  'Tugas',
+                  const Color(0xFF2563EB),
+                ),
+                _buildAdminNavItem(
+                  3,
+                  Icons.router_rounded,
+                  'Jaringan',
+                  const Color(0xFF8B5CF6),
+                ),
+                _buildAdminNavItem(
+                  4,
+                  Icons.menu_rounded,
+                  'Lainnya',
+                  const Color(0xFF64748B),
+                ),
+              ],
+            ),
           ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.fingerprint),
-            label: 'Absensi',
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAdminNavItem(
+    int index,
+    IconData icon,
+    String label,
+    Color color,
+  ) {
+    final isSelected = _currentIndex == index;
+    const inactiveColor = Color(0xFF64748B);
+
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () => _navigateToTab(index),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          decoration: BoxDecoration(
+            color: isSelected
+                ? color.withValues(alpha: 0.14)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(18),
           ),
-        ],
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 38,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? color.withValues(alpha: 0.12)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(
+                  icon,
+                  size: 23,
+                  color: isSelected ? color : inactiveColor,
+                ),
+              ),
+              const SizedBox(height: 3),
+              AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 180),
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                  color: isSelected ? color : inactiveColor,
+                ),
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

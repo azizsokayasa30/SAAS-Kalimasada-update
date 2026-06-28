@@ -6,6 +6,7 @@ const express = require('express');
 const router = express.Router();
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const sqlite3 = require('sqlite3').verbose();
 const { verifyToken, normalizePhone } = require('./auth');
 const logger = require('../../config/logger');
@@ -15,6 +16,97 @@ require('../../config/collectorFieldNotifications');
 
 const dbPath = path.join(__dirname, '../../data/billing.db');
 const db = new sqlite3.Database(dbPath);
+
+function dbAllP(sql, params = []) {
+    return new Promise((resolve, reject) => {
+        db.all(sql, params, (err, rows) => {
+            if (err) reject(err);
+            else resolve(rows || []);
+        });
+    });
+}
+
+function dbGetP(sql, params = []) {
+    return new Promise((resolve, reject) => {
+        db.get(sql, params, (err, row) => {
+            if (err) reject(err);
+            else resolve(row);
+        });
+    });
+}
+
+function dbRunP(sql, params = []) {
+    return new Promise((resolve, reject) => {
+        db.run(sql, params, function onRun(err) {
+            if (err) reject(err);
+            else resolve({ lastID: this.lastID, changes: this.changes });
+        });
+    });
+}
+
+function ensureWarehouseTables() {
+    const tableDdl = [
+        `CREATE TABLE IF NOT EXISTS warehouse_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            unit TEXT DEFAULT '',
+            low_stock_threshold INTEGER NOT NULL DEFAULT 5,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at DATETIME DEFAULT (datetime('now','localtime')),
+            updated_at DATETIME DEFAULT (datetime('now','localtime'))
+        )`,
+        `CREATE TABLE IF NOT EXISTS warehouse_inbound_batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id INTEGER NOT NULL,
+            quantity INTEGER NOT NULL,
+            reference TEXT,
+            notes TEXT,
+            created_at DATETIME DEFAULT (datetime('now','localtime'))
+        )`,
+        `CREATE TABLE IF NOT EXISTS warehouse_units (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id INTEGER NOT NULL,
+            inbound_batch_id INTEGER NOT NULL,
+            public_code TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'in_stock' CHECK(status IN ('in_stock','out')),
+            outbound_at DATETIME,
+            outbound_recipient TEXT,
+            outbound_notes TEXT,
+            outbound_employee_id INTEGER,
+            created_at DATETIME DEFAULT (datetime('now','localtime'))
+        )`
+    ];
+    const indexDdl = [
+        'CREATE INDEX IF NOT EXISTS idx_wh_units_code ON warehouse_units(public_code)',
+        'CREATE INDEX IF NOT EXISTS idx_wh_units_item_status ON warehouse_units(item_id, status)',
+        'CREATE INDEX IF NOT EXISTS idx_wh_units_batch ON warehouse_units(inbound_batch_id)',
+        'CREATE INDEX IF NOT EXISTS idx_wh_batches_item ON warehouse_inbound_batches(item_id)',
+        'CREATE INDEX IF NOT EXISTS idx_wh_batches_created ON warehouse_inbound_batches(created_at)'
+    ];
+    db.serialize(() => {
+        for (const sql of tableDdl) {
+            db.run(sql, (err) => {
+                if (err) logger.warn('[mobile-adapter] warehouse table:', err.message);
+            });
+        }
+        db.run('ALTER TABLE warehouse_units ADD COLUMN outbound_recipient TEXT', (err) => {
+            if (err && !/duplicate column/i.test(String(err.message))) {
+                logger.warn('[mobile-adapter] warehouse outbound_recipient:', err.message);
+            }
+        });
+        db.run('ALTER TABLE warehouse_units ADD COLUMN outbound_employee_id INTEGER', (err) => {
+            if (err && !/duplicate column/i.test(String(err.message))) {
+                logger.warn('[mobile-adapter] warehouse outbound_employee_id:', err.message);
+            }
+        });
+        for (const sql of indexDdl) {
+            db.run(sql, (err) => {
+                if (err) logger.warn('[mobile-adapter] warehouse index:', err.message);
+            });
+        }
+    });
+}
+ensureWarehouseTables();
 
 /** Tabel tugas teknisi (PSB + gangguan) — DB fresh sering belum punya karena hanya ada di script terpisah. */
 function ensureFieldOpsTables() {
@@ -115,7 +207,8 @@ function withTimeout(promise, ms, label) {
 
 const CableNetworkUtils = require('../../utils/cableNetworkUtils');
 const billingManager = require('../../config/billing');
-const { getTenantId, hasTenantContext } = require('../../config/platform/tenantContext');
+const { getTenant, getTenantId, hasTenantContext } = require('../../config/platform/tenantContext');
+const tenantStore = require('../../config/platform/tenantStore');
 const { submitCollectorPayment, collectorPaymentMulter } = require('../../utils/collectorPaymentSubmit');
 
 db.run('ALTER TABLE customers ADD COLUMN customer_id TEXT', (err) => {
@@ -180,6 +273,11 @@ function mapTagSearchCustomerRow(r) {
     const safe = sqliteJsonSafeRow(r || {});
     return {
         id: safe.id,
+        package_id:
+            safe.package_id != null && safe.package_id !== '' && !Number.isNaN(Number(safe.package_id))
+                ? Number(safe.package_id)
+                : null,
+        package_name: safe.package_name || '',
         customer_id:
             safe.customer_id != null && String(safe.customer_id).trim() !== ''
                 ? String(safe.customer_id)
@@ -549,6 +647,36 @@ router.get('/health', (req, res) => {
     res.json({ success: true, service: 'mobile-adapter', time: new Date().toISOString() });
 });
 
+router.get('/app-info', verifyToken, allowFieldOps, async (req, res) => {
+    try {
+        const ctxTenant = getTenant();
+        const tenant = ctxTenant || await tenantStore.getTenantById(getTenantId());
+        const tenantName = tenant?.subdomain || tenant?.slug || 'default';
+        res.json({
+            success: true,
+            data: {
+                tenant_name: tenantName,
+                tenant_display_name: tenant?.name || tenantName,
+                logo_filename: getSetting('logo_filename', 'logo.png'),
+                company_slogan: getSetting('company_slogan', ''),
+                server_time: getLocalTimestamp()
+            }
+        });
+    } catch (err) {
+        logger.warn('[mobile-adapter] app-info:', err.message || err);
+        res.json({
+            success: true,
+            data: {
+                tenant_name: 'default',
+                tenant_display_name: 'Default Tenant',
+                logo_filename: getSetting('logo_filename', 'logo.png'),
+                company_slogan: getSetting('company_slogan', ''),
+                server_time: getLocalTimestamp()
+            }
+        });
+    }
+});
+
 /**
  * Pembaruan aplikasi Flutter (tanpa JWT): manifest dari file atau settings.json.
  * File: public/mobile-app/manifest.json (lihat manifest.example.json).
@@ -635,6 +763,62 @@ function requireTechnician(req, res, next) {
     }
     next();
 }
+
+function requireAdmin(req, res, next) {
+    const role = req.user && req.user.role;
+    if (role !== 'admin') {
+        return res.status(403).json({ success: false, message: 'Hanya admin' });
+    }
+    next();
+}
+
+function mobileFinancePeriod(query = {}) {
+    const now = new Date();
+    const year = Math.max(2000, parseInt(query.year, 10) || now.getFullYear());
+    const allYear = String(query.month || '').toLowerCase() === 'all';
+    const month = allYear ? 'all' : Math.min(12, Math.max(1, parseInt(query.month, 10) || (now.getMonth() + 1)));
+    const periodStart = query.start_date || (allYear ? `${year}-01-01` : `${year}-${String(month).padStart(2, '0')}-01`);
+    const lastDay = allYear ? new Date(year, 12, 0) : new Date(year, month, 0);
+    const endDate =
+        query.end_date ||
+        `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}-${String(
+            lastDay.getDate()
+        ).padStart(2, '0')}`;
+    return { month, year, startDate: periodStart, endDate };
+}
+
+function mobileFinanceNumber(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+}
+
+function mobileFinanceCategories(type) {
+    return new Promise((resolve, reject) => {
+        const params = [];
+        let sql = 'SELECT id, type, name, subcategories FROM finance_categories';
+        if (type) {
+            sql += ' WHERE type = ?';
+            params.push(type);
+        }
+        sql += ' ORDER BY name ASC';
+        db.all(sql, params, (err, rows) => {
+            if (err) return reject(err);
+            resolve(
+                (rows || []).map((row) => {
+                    let subcategories = [];
+                    try {
+                        subcategories = row.subcategories ? JSON.parse(row.subcategories) : [];
+                    } catch (_) {
+                        subcategories = [];
+                    }
+                    return { ...sqliteJsonSafeRow(row), subcategories };
+                })
+            );
+        });
+    });
+}
+
+const MOBILE_FINANCE_PAYMENT_METHODS = ['Cash', 'Transfer Bank', 'E-Wallet', 'Kartu Kredit'];
 
 function phoneVariantsForEmployeeLookup(rawPhone) {
     const norm = normalizePhone(rawPhone || '');
@@ -825,18 +1009,210 @@ function sqlTroubleTicketCustomerMatch(cu, tr) {
     )`;
 }
 
+function normalizeMobileCustomerPhone(phone) {
+    if (!phone) return '';
+    let p = String(phone).trim().replace(/\D/g, '');
+    if (p.startsWith('0')) p = `62${p.slice(1)}`;
+    if (p && !p.startsWith('62')) p = `62${p}`;
+    return p;
+}
+
+function generateMobileCustomerUsername(name, phone) {
+    const cleanName = String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const phoneDigits = String(phone || '').slice(-4);
+    const base = cleanName || 'pelanggan';
+    return `${base}${phoneDigits || Date.now().toString().slice(-4)}`;
+}
+
 const {
     saveCompletionPhotoFromBase64: decodeAndSaveCompletionPhoto,
     saveStickerPhotoFromBase64: decodeAndSaveStickerPhoto
 } = require('../../utils/fieldCompletionStorage');
 
 // --- Customers (pagination) ---
+router.get(['/customers/form-options', '/customers/form-option', '/customers/options'], verifyToken, allowFieldOps, async (req, res) => {
+    try {
+        const [packages, odps, areas, profilesResult] = await Promise.all([
+            billingManager.getPackages(),
+            new Promise((resolve, reject) => {
+                db.all(
+                    `SELECT id, name, code, capacity, used_ports, parent_odp_id
+                     FROM odps
+                     ORDER BY name`,
+                    [],
+                    (err, rows) => (err ? reject(err) : resolve(rows || []))
+                );
+            }),
+            new Promise((resolve, reject) => {
+                db.all(
+                    `SELECT id, nama_area, kode_area
+                     FROM areas
+                     WHERE nama_area IS NOT NULL AND TRIM(nama_area) != ''
+                     ORDER BY nama_area ASC`,
+                    [],
+                    (err, rows) => (err ? reject(err) : resolve(rows || []))
+                );
+            }),
+            (async () => {
+                try {
+                    const { getPPPoEProfiles } = require('../../config/mikrotik');
+                    const result = await getPPPoEProfiles();
+                    return result && result.success ? (result.data || []) : [];
+                } catch (_) {
+                    return [];
+                }
+            })()
+        ]);
+
+        const profiles = Array.isArray(profilesResult)
+            ? profilesResult.map((p) => (typeof p === 'string' ? { name: p } : { name: p.name || p.profile || 'default' }))
+            : [];
+        if (!profiles.some((p) => p.name === 'default')) {
+            profiles.unshift({ name: 'default' });
+        }
+
+        res.json({
+            success: true,
+            data: {
+                packages: (packages || []).map((p) => ({
+                    id: p.id,
+                    name: p.name,
+                    speed: p.speed || '',
+                    price: p.price || 0,
+                    pppoe_profile: p.pppoe_profile || ''
+                })),
+                odps: (odps || []).map((o) => ({
+                    id: o.id,
+                    name: o.name,
+                    code: o.code,
+                    capacity: o.capacity || 0,
+                    used_ports: o.used_ports || 0,
+                    parent_odp_id: o.parent_odp_id || null
+                })),
+                areas: (areas || []).map((a) => ({
+                    id: a.id,
+                    nama_area: a.nama_area,
+                    kode_area: a.kode_area || ''
+                })),
+                pppoe_profiles: profiles
+            }
+        });
+    } catch (error) {
+        logger.error('[mobile-adapter] customers/form-options:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal memuat opsi form pelanggan' });
+    }
+});
+
+router.post('/customers', verifyToken, allowFieldOps, async (req, res) => {
+    try {
+        const body = req.body || {};
+        const name = String(body.name || '').trim();
+        const phone = normalizeMobileCustomerPhone(body.phone);
+        const packageId = parseInt(body.package_id, 10);
+        const areaId = parseInt(body.area_id, 10);
+
+        if (!name || !phone || !Number.isFinite(packageId) || packageId <= 0 || !Number.isFinite(areaId) || areaId <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Nama, nomor telepon, area, dan paket wajib diisi'
+            });
+        }
+
+        const username = String(body.username || '').trim() || generateMobileCustomerUsername(name, phone);
+        const customerData = {
+            username,
+            name,
+            phone,
+            email: body.email ? String(body.email).trim() : null,
+            address: body.address ? String(body.address).trim() : null,
+            area_id: areaId,
+            package_id: packageId,
+            odp_id: body.odp_id ? parseInt(body.odp_id, 10) : null,
+            pppoe_username: body.pppoe_username ? String(body.pppoe_username).trim() : null,
+            pppoe_profile: body.pppoe_profile ? String(body.pppoe_profile).trim() : null,
+            auto_suspension: body.auto_suspension !== undefined ? parseInt(body.auto_suspension, 10) : 1,
+            billing_day: body.billing_day ? parseInt(body.billing_day, 10) : 15,
+            latitude: body.latitude !== undefined && body.latitude !== '' ? parseFloat(body.latitude) : undefined,
+            longitude: body.longitude !== undefined && body.longitude !== '' ? parseFloat(body.longitude) : undefined,
+            static_ip: body.static_ip ? String(body.static_ip).trim() : null,
+            assigned_ip: body.assigned_ip ? String(body.assigned_ip).trim() : null,
+            mac_address: body.mac_address ? String(body.mac_address).trim() : null
+        };
+
+        if (!customerData.pppoe_profile && customerData.package_id) {
+            try {
+                const pkg = await billingManager.getPackageById(customerData.package_id);
+                if (pkg && pkg.pppoe_profile) customerData.pppoe_profile = pkg.pppoe_profile;
+            } catch (_) {}
+        }
+
+        const newCustomer = await billingManager.createCustomer(customerData);
+
+        const createNow = String(body.create_pppoe_now || body.create_pppoe_user || '').toLowerCase() === 'true';
+        if (createNow) {
+            try {
+                const { addPPPoESecret } = require('../../config/mikrotik');
+                const pppUser = customerData.pppoe_username || username;
+                const pppProfile = customerData.pppoe_profile || 'default';
+                const pppPass =
+                    body.pppoe_password && String(body.pppoe_password).trim().length >= 6
+                        ? String(body.pppoe_password).trim()
+                        : pppUser;
+                await addPPPoESecret(pppUser, pppPass, pppProfile, '');
+            } catch (mkErr) {
+                logger.warn('[mobile-adapter] create PPPoE secret failed:', mkErr.message || mkErr);
+            }
+        }
+
+        res.json({
+            success: true,
+            message: 'Pelanggan berhasil ditambahkan',
+            data: newCustomer,
+            customer: newCustomer,
+            prefill_installation:
+                body.save_mode === 'save_and_create_task'
+                    ? {
+                          customer_id: newCustomer.id,
+                          customer_name: newCustomer.name || name,
+                          customer_phone: newCustomer.phone || phone,
+                          customer_address:
+                              newCustomer.address != null && newCustomer.address !== ''
+                                  ? newCustomer.address
+                                  : customerData.address || '',
+                          package_id: packageId,
+                          pppoe_username: customerData.pppoe_username || '',
+                          pppoe_password: body.pppoe_password || ''
+                      }
+                    : null,
+            redirect_to_task:
+                body.save_mode === 'save_and_create_task'
+                    ? '/admin/installations/create?prefill_customer=1'
+                    : null
+        });
+    } catch (error) {
+        logger.error('[mobile-adapter] customers add:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Gagal menambah pelanggan'
+        });
+    }
+});
+
 router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
     const offset = (page - 1) * limit;
     const search = (req.query.search && String(req.query.search).trim()) || '';
     const status = (req.query.status && String(req.query.status).trim()) || '';
+    const adminFilter = (req.query.admin_filter && String(req.query.admin_filter).trim().toLowerCase()) || '';
+    const area = (req.query.area && String(req.query.area).trim()) || '';
+    const now = new Date();
+    const filterYear = Math.max(2000, parseInt(req.query.year, 10) || now.getFullYear());
+    const allYear = String(req.query.month || '').toLowerCase() === 'all' || String(req.query.month || '') === '0';
+    const filterMonth = allYear ? 0 : Math.min(12, Math.max(1, parseInt(req.query.month, 10) || (now.getMonth() + 1)));
+    const periodStart = allYear ? `${filterYear}-01-01` : `${filterYear}-${String(filterMonth).padStart(2, '0')}-01`;
+    const periodEndDate = allYear ? new Date(filterYear + 1, 0, 1) : new Date(filterYear, filterMonth, 1);
+    const periodEnd = `${periodEndDate.getFullYear()}-${String(periodEndDate.getMonth() + 1).padStart(2, '0')}-01`;
 
     const params = [];
     let where = '1=1';
@@ -844,8 +1220,73 @@ router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
         where += ' AND c.tenant_id = ?';
         params.push(getTenantId());
     }
-    if (status) {
-        const role = req.user && req.user.role;
+    const role = req.user && req.user.role;
+    const addInvoiceFilter = (dateExpr, invoiceStatus) => {
+        where += ` AND EXISTS (
+            SELECT 1 FROM invoices i
+            WHERE i.customer_id = c.id
+              AND date(${dateExpr}) >= date(?)
+              AND date(${dateExpr}) < date(?)
+              AND LOWER(COALESCE(i.status, '')) = ?
+              AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)
+        )`;
+        params.push(periodStart, periodEnd, invoiceStatus);
+    };
+    const addPaymentFilter = (online) => {
+        const methodFilter = online
+            ? `(
+                LOWER(TRIM(COALESCE(p.payment_method, ''))) LIKE '%transfer%'
+                OR LOWER(TRIM(COALESCE(p.payment_method, ''))) LIKE '%online%'
+                OR LOWER(TRIM(COALESCE(p.payment_method, ''))) LIKE '%qris%'
+                OR LOWER(TRIM(COALESCE(p.payment_method, ''))) LIKE '%gateway%'
+              )`
+            : `LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%transfer%'
+              AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%online%'
+              AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%qris%'
+              AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%gateway%'`;
+        where += ` AND EXISTS (
+            SELECT 1 FROM payments p
+            INNER JOIN invoices i ON i.id = p.invoice_id
+            WHERE i.customer_id = c.id
+              AND date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
+              AND date(COALESCE(p.payment_date, '1970-01-01')) < date(?)
+              AND ${methodFilter}
+              AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)
+        )`;
+        params.push(periodStart, periodEnd);
+    };
+
+    if (adminFilter && role === 'admin') {
+        if (adminFilter === 'all') {
+            where += " AND date(COALESCE(c.join_date, c.created_at, '1970-01-01')) < date(?)";
+            params.push(periodEnd);
+        } else if (adminFilter === 'active') {
+            where += " AND LOWER(COALESCE(c.status, '')) IN ('active', 'aktif') AND date(COALESCE(c.join_date, c.created_at, '1970-01-01')) < date(?)";
+            params.push(periodEnd);
+        } else if (adminFilter === 'new') {
+            where += " AND date(COALESCE(c.join_date, c.created_at, '1970-01-01')) >= date(?) AND date(COALESCE(c.join_date, c.created_at, '1970-01-01')) < date(?)";
+            params.push(periodStart, periodEnd);
+        } else if (adminFilter === 'isolir') {
+            where += " AND LOWER(COALESCE(c.status, '')) IN ('suspended', 'isolir') AND date(COALESCE(c.join_date, c.created_at, '1970-01-01')) < date(?)";
+            params.push(periodEnd);
+        } else if (adminFilter === 'unpaid') {
+            addInvoiceFilter("COALESCE(i.created_at, i.due_date, '1970-01-01')", 'unpaid');
+        } else if (adminFilter === 'paid') {
+            addInvoiceFilter("COALESCE(i.payment_date, i.created_at, '1970-01-01')", 'paid');
+        } else if (adminFilter === 'cash') {
+            addPaymentFilter(false);
+        } else if (adminFilter === 'online') {
+            addPaymentFilter(true);
+        } else if (adminFilter === 'overdue' || adminFilter === 'arrears') {
+            where += ` AND EXISTS (
+                SELECT 1 FROM invoices i
+                WHERE i.customer_id = c.id
+                  AND LOWER(COALESCE(i.status, '')) = 'unpaid'
+                  AND date(i.due_date) < date('now', 'localtime')
+                  AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)
+            )`;
+        }
+    } else if (status) {
         const techId = role === 'technician' ? parseTechnicianId(req) : null;
         const isGangguanFilter = status.toLowerCase() === 'isolated';
         if (isGangguanFilter && role === 'technician' && techId) {
@@ -872,13 +1313,48 @@ router.get('/customers', verifyToken, allowFieldOps, (req, res) => {
         const like = `%${search.replace(/%/g, '')}%`;
         params.push(like, like, like, like, like);
     }
+    if (area) {
+        where += " AND LOWER(COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, '')) = LOWER(?)";
+        params.push(area);
+    }
 
     const sql = `
         SELECT c.id, c.customer_id, c.name, c.phone, c.email, c.status, c.address,
                c.area_id, c.latitude, c.longitude, c.pppoe_username,
                COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, '') AS area,
                ar.nama_area AS nama_area,
-               p.name AS profile
+               p.name AS profile,
+               p.name AS package_name,
+               COALESCE(p.price, 0) AS package_price,
+               COALESCE(p.tax_rate, 0) AS package_tax_rate,
+               CASE WHEN p.price IS NOT NULL
+                    THEN ROUND(p.price * (1.0 + COALESCE(p.tax_rate, 0) / 100.0))
+                    ELSE 0
+               END AS package_amount,
+               (SELECT COUNT(*) FROM invoices i
+                WHERE i.customer_id = c.id
+                  AND date(COALESCE(i.created_at, i.due_date, '1970-01-01')) >= date('${periodStart}')
+                  AND date(COALESCE(i.created_at, i.due_date, '1970-01-01')) < date('${periodEnd}')
+                  AND LOWER(COALESCE(i.status, '')) = 'unpaid'
+                  AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)) AS invoice_unpaid_count,
+               (SELECT COALESCE(SUM(i.amount), 0) FROM invoices i
+                WHERE i.customer_id = c.id
+                  AND date(COALESCE(i.created_at, i.due_date, '1970-01-01')) >= date('${periodStart}')
+                  AND date(COALESCE(i.created_at, i.due_date, '1970-01-01')) < date('${periodEnd}')
+                  AND LOWER(COALESCE(i.status, '')) = 'unpaid'
+                  AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)) AS invoice_unpaid_amount,
+               (SELECT COUNT(*) FROM invoices i
+                WHERE i.customer_id = c.id
+                  AND date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) >= date('${periodStart}')
+                  AND date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) < date('${periodEnd}')
+                  AND LOWER(COALESCE(i.status, '')) = 'paid'
+                  AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)) AS invoice_paid_count,
+               (SELECT COALESCE(SUM(i.amount), 0) FROM invoices i
+                WHERE i.customer_id = c.id
+                  AND date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) >= date('${periodStart}')
+                  AND date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) < date('${periodEnd}')
+                  AND LOWER(COALESCE(i.status, '')) = 'paid'
+                  AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)) AS invoice_paid_amount
         FROM customers c
         LEFT JOIN packages p ON c.package_id = p.id
         LEFT JOIN areas ar ON c.area_id = ar.id
@@ -1045,6 +1521,131 @@ router.get('/customers/:customerId/ppp-session', verifyToken, requireTechnician,
     }
 });
 
+router.get('/customers/:customerId/payment-history', verifyToken, allowFieldOps, async (req, res) => {
+    const customerId = parseInt(String(req.params.customerId), 10);
+    if (!Number.isFinite(customerId) || customerId <= 0) {
+        return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
+    }
+    try {
+        const rows = await new Promise((resolve, reject) => {
+            db.all(
+                `SELECT i.id, i.invoice_number, i.status, i.amount, i.created_at,
+                        i.due_date, i.payment_date, i.payment_method, p.name as package_name
+                 FROM invoices i
+                 LEFT JOIN packages p ON i.package_id = p.id
+                 WHERE i.customer_id = ?
+                 ORDER BY date(COALESCE(i.payment_date, i.due_date, i.created_at, '1970-01-01')) DESC
+                 LIMIT 24`,
+                [customerId],
+                (err, result) => (err ? reject(err) : resolve(result || []))
+            );
+        });
+        res.json({ success: true, data: rows });
+    } catch (error) {
+        logger.error('[mobile-adapter] customers/payment-history', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal memuat riwayat pembayaran' });
+    }
+});
+
+router.post('/customers/:customerId/status', verifyToken, allowFieldOps, async (req, res) => {
+    if (!req.user || String(req.user.role) !== 'admin') {
+        return res.status(403).json({ success: false, message: 'Hanya admin' });
+    }
+    const customerId = parseInt(String(req.params.customerId), 10);
+    if (!Number.isFinite(customerId) || customerId <= 0) {
+        return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
+    }
+    const status = String((req.body || {}).status || '').trim().toLowerCase();
+    if (!['active', 'isolated', 'suspended'].includes(status)) {
+        return res.status(400).json({ success: false, message: 'Status tidak valid' });
+    }
+    try {
+        const customer = await billingManager.getCustomerById(customerId);
+        if (!customer) {
+            return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+        }
+
+        if (status === 'suspended') {
+            const serviceSuspension = require('../../config/serviceSuspension');
+            await serviceSuspension.suspendCustomerService(customer, 'Isolir manual dari aplikasi mobile admin');
+        } else if (status === 'active') {
+            if (String(customer.status || '').toLowerCase() === 'suspended') {
+                const serviceSuspension = require('../../config/serviceSuspension');
+                await serviceSuspension.restoreCustomerService(customer, 'Aktifkan manual dari aplikasi mobile admin');
+            } else {
+                await billingManager.setCustomerStatusById(customerId, 'active', { skipRadiusSync: true });
+            }
+        } else {
+            await billingManager.setCustomerStatusById(customerId, 'isolated', { skipRadiusSync: true });
+        }
+
+        res.json({ success: true, data: { id: customerId, status } });
+    } catch (error) {
+        logger.error('[mobile-adapter] customers/status', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal memperbarui status pelanggan' });
+    }
+});
+
+router.patch('/customers/:customerId/contact', verifyToken, allowFieldOps, async (req, res) => {
+    if (!req.user || String(req.user.role) !== 'admin') {
+        return res.status(403).json({ success: false, message: 'Hanya admin' });
+    }
+    const customerId = parseInt(String(req.params.customerId), 10);
+    if (!Number.isFinite(customerId) || customerId <= 0) {
+        return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
+    }
+    const body = req.body || {};
+    const name = String(body.name || '').trim();
+    const phone = normalizeMobileCustomerPhone(body.phone);
+    const email = body.email == null ? '' : String(body.email).trim();
+    const address = body.address == null ? '' : String(body.address).trim();
+    if (!name || !phone) {
+        return res.status(400).json({ success: false, message: 'Nama dan nomor HP wajib diisi' });
+    }
+    try {
+        await billingManager.updateCustomerById(customerId, { name, phone, email, address });
+        res.json({ success: true, data: { id: customerId, name, phone, email, address } });
+    } catch (error) {
+        logger.error('[mobile-adapter] customers/contact', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal menyimpan info kontak' });
+    }
+});
+
+router.patch('/customers/:customerId/package', verifyToken, allowFieldOps, async (req, res) => {
+    if (!req.user || String(req.user.role) !== 'admin') {
+        return res.status(403).json({ success: false, message: 'Hanya admin' });
+    }
+    const customerId = parseInt(String(req.params.customerId), 10);
+    const packageId = parseInt(String((req.body || {}).package_id), 10);
+    if (!Number.isFinite(customerId) || customerId <= 0) {
+        return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
+    }
+    if (!Number.isFinite(packageId) || packageId <= 0) {
+        return res.status(400).json({ success: false, message: 'Paket tidak valid' });
+    }
+    try {
+        const pkg = await billingManager.getPackageById(packageId);
+        if (!pkg) {
+            return res.status(404).json({ success: false, message: 'Paket tidak ditemukan' });
+        }
+        await billingManager.updateCustomerById(customerId, {
+            package_id: packageId,
+            pppoe_profile: pkg.pppoe_profile || undefined
+        });
+        res.json({
+            success: true,
+            data: {
+                id: customerId,
+                package_id: packageId,
+                package_name: pkg.name || ''
+            }
+        });
+    } catch (error) {
+        logger.error('[mobile-adapter] customers/package', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal menyimpan paket pelanggan' });
+    }
+});
+
 router.get('/customers/search', verifyToken, allowFieldOps, (req, res) => {
     const q = (req.query.q && String(req.query.q).trim()) || '';
     if (q.length < 1) {
@@ -1060,10 +1661,12 @@ router.get('/customers/search', verifyToken, allowFieldOps, (req, res) => {
     }
     db.all(
         `SELECT c.id, c.customer_id, c.name, c.phone, c.email, c.status, c.address, c.area_id,
+                c.package_id, p.name AS package_name,
                 COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, ar.kode_area, '') AS area,
                 ar.nama_area AS nama_area
          FROM customers c
          LEFT JOIN areas ar ON c.area_id = ar.id
+         LEFT JOIN packages p ON c.package_id = p.id
          WHERE ${searchWhere}
          ORDER BY c.name
          LIMIT 30`,
@@ -1452,6 +2055,217 @@ function sendAttendanceStatusPayload(res, empRow, row, today) {
         }
     });
 }
+
+router.get('/admin/attendance/today', verifyToken, requireAdmin, (req, res) => {
+    const today = jakartaAttendanceTodayYmd();
+    const query = `
+        SELECT
+            e.id,
+            e.nama_lengkap,
+            e.nik,
+            a.status AS attendance_status,
+            a.check_in,
+            a.check_out
+        FROM employees e
+        LEFT JOIN employee_attendance a
+            ON a.employee_id = e.id
+            AND a.date = ?
+        WHERE e.status IS NULL OR LOWER(TRIM(e.status)) = 'aktif'
+        ORDER BY e.nama_lengkap ASC
+    `;
+
+    db.all(query, [today], (err, rows) => {
+        if (err) {
+            logger.error('[mobile-adapter] admin/attendance/today', err);
+            return res.status(500).json({ success: false, message: err.message });
+        }
+
+        const employees = (Array.isArray(rows) ? rows : []).map((row) => {
+            const checkIn = row.check_in || null;
+            const checkOut = row.check_out || null;
+            const rawStatus = String(row.attendance_status || '').trim().toLowerCase();
+            const isPresent = Boolean(checkIn) || rawStatus === 'hadir';
+            return {
+                id: row.id,
+                name: row.nama_lengkap || 'Tanpa nama',
+                nik: row.nik || null,
+                status: isPresent ? 'masuk' : 'alpa',
+                check_in: checkIn,
+                check_out: checkOut
+            };
+        });
+
+        const totalEmployees = employees.length;
+        const present = employees.filter((item) => item.status === 'masuk').length;
+
+        return res.json({
+            success: true,
+            data: {
+                date: today,
+                summary: {
+                    total_employees: totalEmployees,
+                    present,
+                    absent: Math.max(0, totalEmployees - present)
+                },
+                employees
+            }
+        });
+    });
+});
+
+router.get('/admin/finance/overview', verifyToken, requireAdmin, async (req, res) => {
+    try {
+        const period = mobileFinancePeriod(req.query);
+        const paymentFilters = {
+            month: String(period.month),
+            year: String(period.year),
+            from: period.startDate,
+            to: period.endDate,
+            collector_id: req.query.collector_id || '',
+            q: req.query.q || '',
+            limit: req.query.limit || 80
+        };
+
+        const [
+            payments,
+            paymentSummary,
+            collectorsPending,
+            collectorReport,
+            remittances,
+            incomes,
+            expenses,
+            financialData,
+            incomeCategories,
+            expenseCategories
+        ] = await Promise.all([
+            billingManager.getAllPaymentsHistory(paymentFilters),
+            billingManager.getAllPaymentsHistorySummary(paymentFilters),
+            billingManager.getCollectorsWithPendingAmounts(period.month, period.year),
+            billingManager.getCollectorReportsAreaRowsAndSummary(period.month, period.year, null),
+            billingManager.getCollectorRemittanceReceipts(40),
+            billingManager.getIncomes(period.startDate, period.endDate),
+            billingManager.getExpenses(period.startDate, period.endDate),
+            billingManager.getFinancialReport(period.startDate, period.endDate, req.query.type || 'all'),
+            mobileFinanceCategories('income'),
+            mobileFinanceCategories('expense')
+        ]);
+
+        const reportById = new Map((collectorReport.rows || []).map((row) => [row.id, row]));
+        const collectors = (collectorsPending || []).map((collector) => ({
+            ...collector,
+            ...(reportById.get(collector.id) || {})
+        }));
+        const totalIncomeManual = (incomes || []).reduce((sum, item) => sum + mobileFinanceNumber(item.amount), 0);
+        const totalExpenseManual = (expenses || []).reduce((sum, item) => sum + mobileFinanceNumber(item.amount), 0);
+
+        res.json({
+            success: true,
+            data: {
+                period,
+                payments: {
+                    summary: paymentSummary || {},
+                    items: payments || []
+                },
+                remittance: {
+                    summary: collectorReport.summary || {},
+                    collectors,
+                    receipts: remittances || []
+                },
+                income: {
+                    total: totalIncomeManual,
+                    items: incomes || []
+                },
+                expenses: {
+                    total: totalExpenseManual,
+                    items: expenses || []
+                },
+                financial_report: {
+                    summary: (financialData && financialData.summary) || {},
+                    transactions: Array.isArray(financialData && financialData.transactions)
+                        ? financialData.transactions.slice(0, 120)
+                        : [],
+                    profit_loss: (financialData && financialData.profitLossData) || null
+                },
+                options: {
+                    payment_methods: MOBILE_FINANCE_PAYMENT_METHODS,
+                    income_categories: incomeCategories || [],
+                    expense_categories: expenseCategories || []
+                }
+            }
+        });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/finance/overview:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal memuat menu keuangan' });
+    }
+});
+
+router.post('/admin/finance/remittance', verifyToken, requireAdmin, async (req, res) => {
+    try {
+        const { collector_id, amount, remittance_amount, payment_method, notes, remittance_date } = req.body || {};
+        const result = await billingManager.recordCollectorRemittance({
+            collector_id,
+            amount: parseFloat(amount != null ? amount : remittance_amount),
+            payment_method,
+            notes: notes || '',
+            remittance_date: remittance_date || new Date().toISOString()
+        });
+        res.json({ success: true, message: 'Setoran berhasil diterima', data: result });
+    } catch (error) {
+        const msg = error && error.message ? error.message : String(error);
+        logger.error('[mobile-adapter] admin/finance/remittance:', error);
+        const isBusinessError =
+            msg.includes('melebihi') ||
+            msg.includes('Tidak ada sisa') ||
+            msg.includes('tidak valid') ||
+            msg.includes('Alokasi');
+        res.status(isBusinessError ? 400 : 500).json({
+            success: false,
+            message: isBusinessError ? msg : 'Gagal menerima setoran'
+        });
+    }
+});
+
+router.post('/admin/finance/income', verifyToken, requireAdmin, async (req, res) => {
+    try {
+        const { description, amount, category, income_date, payment_method, notes } = req.body || {};
+        if (!description || !amount || !category || !income_date) {
+            return res.status(400).json({ success: false, message: 'Semua field wajib diisi' });
+        }
+        const income = await billingManager.addIncome({
+            description,
+            amount: parseFloat(amount),
+            category,
+            income_date,
+            payment_method: payment_method || '',
+            notes: notes || ''
+        });
+        res.json({ success: true, message: 'Pemasukan berhasil ditambahkan', data: income });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/finance/income:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal menambah pemasukan' });
+    }
+});
+
+router.post('/admin/finance/expenses', verifyToken, requireAdmin, async (req, res) => {
+    try {
+        const { amount, category, account_expenses, expense_date, payment_method, notes } = req.body || {};
+        if (!amount || !category || !expense_date) {
+            return res.status(400).json({ success: false, message: 'Semua field wajib diisi' });
+        }
+        const expense = await billingManager.addExpense({
+            amount: parseFloat(amount),
+            category,
+            account_expenses: account_expenses || null,
+            expense_date,
+            payment_method: payment_method || '',
+            notes: notes || ''
+        });
+        res.json({ success: true, message: 'Pengeluaran berhasil ditambahkan', data: expense });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/finance/expenses:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal menambah pengeluaran' });
+    }
+});
 
 router.get('/attendance/status', verifyToken, requireTechnician, (req, res) => {
     const variants = phoneVariantsForEmployeeLookup(req.user.phone || req.user.username || '');
@@ -1958,6 +2772,185 @@ router.get('/dashboard', verifyToken, allowFieldOps, (req, res) => {
     });
 });
 
+router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) => {
+    if (!req.user || String(req.user.role) !== 'admin') {
+        return res.status(403).json({ success: false, message: 'Hanya admin' });
+    }
+
+    const now = new Date();
+    const year = Math.max(2000, parseInt(req.query.year, 10) || now.getFullYear());
+    const allYear = String(req.query.month || '').toLowerCase() === 'all' || String(req.query.month || '') === '0';
+    const month = allYear ? 0 : Math.min(12, Math.max(1, parseInt(req.query.month, 10) || (now.getMonth() + 1)));
+    const start = allYear ? `${year}-01-01` : `${year}-${String(month).padStart(2, '0')}-01`;
+    const nextDate = allYear ? new Date(year + 1, 0, 1) : new Date(year, month, 1);
+    const end = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}-01`;
+    const monthNames = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+
+    const sql = `
+        SELECT
+            (SELECT COUNT(*) FROM customers cu
+             WHERE date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS total_customers,
+            (SELECT COALESCE(SUM(
+                CASE WHEN p.price IS NOT NULL
+                    THEN ROUND(p.price * (1.0 + COALESCE(p.tax_rate, 11.00) / 100.0))
+                    ELSE 0
+                END
+            ), 0)
+             FROM customers cu
+             LEFT JOIN packages p ON p.id = cu.package_id
+             WHERE date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS total_customer_amount,
+            (SELECT COUNT(*) FROM customers cu
+             WHERE LOWER(COALESCE(cu.status, '')) IN ('active', 'aktif')
+               AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS active_customers,
+            (SELECT COALESCE(SUM(
+                CASE WHEN p.price IS NOT NULL
+                    THEN ROUND(p.price * (1.0 + COALESCE(p.tax_rate, 11.00) / 100.0))
+                    ELSE 0
+                END
+            ), 0)
+             FROM customers cu
+             LEFT JOIN packages p ON p.id = cu.package_id
+             WHERE LOWER(COALESCE(cu.status, '')) IN ('active', 'aktif')
+               AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS active_customer_amount,
+            (SELECT COUNT(*) FROM customers
+             WHERE date(COALESCE(join_date, created_at, '1970-01-01')) >= date(?)
+               AND date(COALESCE(join_date, created_at, '1970-01-01')) < date(?)) AS new_customers,
+            (SELECT COALESCE(SUM(
+                CASE WHEN p.price IS NOT NULL
+                    THEN ROUND(p.price * (1.0 + COALESCE(p.tax_rate, 11.00) / 100.0))
+                    ELSE 0
+                END
+            ), 0)
+             FROM customers cu
+             LEFT JOIN packages p ON p.id = cu.package_id
+             WHERE date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) >= date(?)
+               AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS new_customer_amount,
+            (SELECT COUNT(*) FROM customers cu
+             WHERE LOWER(COALESCE(cu.status, '')) IN ('suspended', 'isolir')
+               AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS isolir_customers,
+            (SELECT COUNT(*) FROM customers cu
+             WHERE LOWER(COALESCE(cu.status, '')) IN ('inactive', 'register')
+               AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS isolir_cuti_customers,
+            (SELECT COUNT(*) FROM customers cu
+             WHERE LOWER(COALESCE(cu.status, '')) IN ('berhenti', 'stopped', 'terminated', 'cancelled')
+               AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS stopped_customers,
+
+            (SELECT COUNT(*) FROM invoices i
+             WHERE date(COALESCE(i.created_at, i.due_date, '1970-01-01')) >= date(?)
+               AND date(COALESCE(i.created_at, i.due_date, '1970-01-01')) < date(?)
+               AND i.status = 'unpaid'
+               AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)) AS unpaid_invoices,
+            (SELECT COALESCE(SUM(i.amount), 0) FROM invoices i
+             WHERE date(COALESCE(i.created_at, i.due_date, '1970-01-01')) >= date(?)
+               AND date(COALESCE(i.created_at, i.due_date, '1970-01-01')) < date(?)
+               AND i.status = 'unpaid'
+               AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)) AS unpaid_amount,
+            (SELECT COUNT(*) FROM invoices i
+             WHERE date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) >= date(?)
+               AND date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) < date(?)
+               AND i.status = 'paid'
+               AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)) AS paid_invoices,
+            (SELECT COALESCE(SUM(i.amount), 0) FROM invoices i
+             WHERE date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) >= date(?)
+               AND date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) < date(?)
+               AND i.status = 'paid'
+               AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)) AS paid_amount,
+
+            (SELECT COUNT(*) FROM payments p
+             WHERE date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
+               AND date(COALESCE(p.payment_date, '1970-01-01')) < date(?)
+               AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%transfer%'
+               AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%online%'
+               AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%qris%'
+               AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%gateway%') AS cash_transactions,
+            (SELECT COALESCE(SUM(p.amount), 0) FROM payments p
+             WHERE date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
+               AND date(COALESCE(p.payment_date, '1970-01-01')) < date(?)
+               AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%transfer%'
+               AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%online%'
+               AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%qris%'
+               AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%gateway%') AS cash_amount,
+            (SELECT COUNT(*) FROM payments p
+             WHERE date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
+               AND date(COALESCE(p.payment_date, '1970-01-01')) < date(?)
+               AND (
+                    LOWER(TRIM(COALESCE(p.payment_method, ''))) LIKE '%transfer%'
+                 OR LOWER(TRIM(COALESCE(p.payment_method, ''))) LIKE '%online%'
+                 OR LOWER(TRIM(COALESCE(p.payment_method, ''))) LIKE '%qris%'
+                 OR LOWER(TRIM(COALESCE(p.payment_method, ''))) LIKE '%gateway%'
+               )) AS online_transactions,
+            (SELECT COALESCE(SUM(p.amount), 0) FROM payments p
+             WHERE date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
+               AND date(COALESCE(p.payment_date, '1970-01-01')) < date(?)
+               AND (
+                    LOWER(TRIM(COALESCE(p.payment_method, ''))) LIKE '%transfer%'
+                 OR LOWER(TRIM(COALESCE(p.payment_method, ''))) LIKE '%online%'
+                 OR LOWER(TRIM(COALESCE(p.payment_method, ''))) LIKE '%qris%'
+                 OR LOWER(TRIM(COALESCE(p.payment_method, ''))) LIKE '%gateway%'
+               )) AS online_amount,
+
+            (SELECT COUNT(*) FROM invoices i
+             WHERE i.status = 'unpaid' AND date(i.due_date) < date('now', 'localtime')) AS overdue_invoices,
+            (SELECT COUNT(DISTINCT i.customer_id) FROM invoices i
+             WHERE i.status = 'unpaid' AND date(i.due_date) < date('now', 'localtime')) AS arrears_customers
+    `;
+    const params = [
+        end, // total_customers: semua pelanggan sebelum bulan berikutnya
+        end, // total_customer_amount
+        end, // active_customers
+        end, // active_customer_amount
+        start, end, // new_customers: hanya bulan terpilih
+        start, end, // new_customer_amount
+        end, // isolir_customers
+        end, // isolir_cuti_customers
+        end, // stopped_customers
+    ];
+    for (let i = 0; i < 8; i++) params.push(start, end);
+
+    db.get(sql, params, (err, row) => {
+        if (err) {
+            logger.error('[mobile-adapter] admin/customers/overview:', err);
+            return res.status(500).json({ success: false, message: err.message });
+        }
+        const n = (v) => Number(v) || 0;
+        const unpaidCount = n(row.unpaid_invoices);
+        return res.json({
+            success: true,
+            data: {
+                period: { month, year, month_name: allYear ? 'Satu tahun' : monthNames[month - 1] },
+                notice: `Ada ${unpaidCount} Pelanggan belum bayar bulan ${monthNames[month - 1]} ${year}`,
+                customers: {
+                    total: n(row.total_customers),
+                    total_amount: n(row.total_customer_amount),
+                    active: n(row.active_customers),
+                    active_amount: n(row.active_customer_amount),
+                    new_this_month: n(row.new_customers),
+                    new_this_month_amount: n(row.new_customer_amount),
+                    isolir_transactions: n(row.isolir_customers),
+                    isolir_cuti: n(row.isolir_cuti_customers),
+                    stopped: n(row.stopped_customers)
+                },
+                invoices: {
+                    unpaid_count: unpaidCount,
+                    unpaid_amount: n(row.unpaid_amount),
+                    paid_count: n(row.paid_invoices),
+                    paid_amount: n(row.paid_amount)
+                },
+                transactions: {
+                    cash_count: n(row.cash_transactions),
+                    cash_amount: n(row.cash_amount),
+                    online_count: n(row.online_transactions),
+                    online_amount: n(row.online_amount)
+                },
+                late: {
+                    overdue_count: n(row.overdue_invoices),
+                    arrears_count: n(row.arrears_customers)
+                }
+            }
+        });
+    });
+});
+
 // --- Tasks: instalasi + tiket gangguan untuk teknisi login ---
 // ?history=1 → hanya tugas selesai (untuk riwayat profil). Tanpa param → hanya tugas aktif.
 router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
@@ -2067,6 +3060,7 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
                         priority: mapInstallPriority(row.priority),
                         description: row.notes || row.package_name || '',
                         sector: 'PSB',
+                        created_at: row.created_at || '',
                         activity_at: activityAt,
                         work_started_at: ws,
                         pppoe_username: pppUser || null,
@@ -2094,6 +3088,7 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
                         priority: mapInstallPriority(row.priority),
                         description: row.description || '',
                         sector: 'TIKET',
+                        created_at: row.created_at || '',
                         activity_at: activityAt,
                         work_started_at: ws
                     });
@@ -2103,6 +3098,286 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
             }
         );
     });
+});
+
+router.get('/tasks/form-options', verifyToken, allowFieldOps, (req, res) => {
+    const sql = `
+        SELECT
+            t.id,
+            t.name AS technician_name,
+            t.phone,
+            t.role,
+            t.area_coverage,
+            COALESCE(e.nama_lengkap, t.name) AS employee_name
+        FROM technicians t
+        LEFT JOIN employees e
+          ON REPLACE(REPLACE(REPLACE(TRIM(IFNULL(e.no_hp, '')), ' ', ''), '-', ''), '+', '') =
+             REPLACE(REPLACE(REPLACE(TRIM(IFNULL(t.phone, '')), ' ', ''), '-', ''), '+', '')
+        WHERE IFNULL(t.is_active, 1) = 1
+          AND LOWER(IFNULL(t.role, 'technician')) IN ('technician', 'field_officer', 'admin')
+        ORDER BY employee_name COLLATE NOCASE ASC, t.name COLLATE NOCASE ASC
+    `;
+    db.all(sql, [], (err, rows) => {
+        if (err) {
+            logger.error('[mobile-adapter] tasks/form-options:', err);
+            return res.status(500).json({ success: false, message: 'Gagal memuat teknisi' });
+        }
+        res.json({
+            success: true,
+            data: {
+                technicians: (rows || []).map((row) => ({
+                    id: row.id,
+                    name: row.employee_name || row.technician_name || `Teknisi #${row.id}`,
+                    phone: row.phone || '',
+                    role: row.role || 'technician',
+                    area_coverage: row.area_coverage || ''
+                }))
+            }
+        });
+    });
+});
+
+router.post('/tasks/installations', verifyToken, allowFieldOps, async (req, res) => {
+    try {
+        const body = req.body || {};
+        const customerId = parseInt(body.customer_id, 10);
+        const packageId = parseInt(body.package_id, 10);
+        const technicianId = parseInt(body.assigned_technician_id, 10);
+        const manualCustomerName = String(body.customer_name || '').trim();
+        const priority = String(body.priority || 'normal').trim() || 'normal';
+        const notes = String(body.notes || '').trim();
+        const equipmentNeeded = String(body.equipment_needed || '').trim();
+        const requestedDate = String(body.installation_date || '').trim();
+        const requestedTime = String(body.installation_time || '').trim();
+        const localTs = getLocalTimestamp();
+        const installationDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedDate)
+            ? requestedDate
+            : localTs.slice(0, 10);
+        const installationTime = /^\d{2}:\d{2}/.test(requestedTime)
+            ? requestedTime.slice(0, 5)
+            : localTs.slice(11, 16);
+
+        if ((!Number.isFinite(customerId) || customerId <= 0) && !manualCustomerName) {
+            return res.status(400).json({ success: false, message: 'Nama pelanggan wajib diisi' });
+        }
+        let customer = null;
+        if (Number.isFinite(customerId) && customerId > 0) {
+            customer = await new Promise((resolve, reject) => {
+                db.get(
+                    'SELECT id, name, phone, address, latitude, longitude, package_id FROM customers WHERE id = ?',
+                    [customerId],
+                    (err, row) => (err ? reject(err) : resolve(row))
+                );
+            });
+            if (!customer) {
+                return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+            }
+        }
+        const resolvedPackageId =
+            Number.isFinite(packageId) && packageId > 0
+                ? packageId
+                : customer && Number.isFinite(Number(customer.package_id)) && Number(customer.package_id) > 0
+                    ? Number(customer.package_id)
+                    : null;
+        const customerName = customer ? customer.name : manualCustomerName;
+        const customerPhone = customer ? customer.phone : (body.customer_phone ? String(body.customer_phone).trim() : null);
+        const customerAddress = customer
+            ? customer.address
+            : (body.customer_address ? String(body.customer_address).trim() : null);
+
+        let technician = null;
+        const hasAssignedTechnician = Number.isFinite(technicianId) && technicianId > 0;
+        if (hasAssignedTechnician) {
+            technician = await new Promise((resolve, reject) => {
+                db.get(
+                    'SELECT id, name, phone, role FROM technicians WHERE id = ? AND IFNULL(is_active, 1) = 1',
+                    [technicianId],
+                    (err, row) => (err ? reject(err) : resolve(row))
+                );
+            });
+            if (!technician) {
+                return res.status(404).json({ success: false, message: 'Teknisi tidak ditemukan atau tidak aktif' });
+            }
+        }
+
+        const ymd = localTs.slice(0, 10).replace(/-/g, '');
+        const psbPrefix = `PSB-${ymd}`;
+        const lastJobNumber = await new Promise((resolve, reject) => {
+            db.get(
+                'SELECT job_number FROM installation_jobs WHERE job_number LIKE ? ORDER BY job_number DESC LIMIT 1',
+                [`${psbPrefix}%`],
+                (err, row) => (err ? reject(err) : resolve(row ? row.job_number : null))
+            );
+        });
+        let jobCounter = 1;
+        if (lastJobNumber && String(lastJobNumber).startsWith(psbPrefix)) {
+            const lastCounter = parseInt(String(lastJobNumber).slice(psbPrefix.length), 10);
+            if (Number.isFinite(lastCounter) && lastCounter >= 0) jobCounter = lastCounter + 1;
+        }
+        const jobNumber = `${psbPrefix}${String(jobCounter).padStart(3, '0')}`;
+        const assignedAt = hasAssignedTechnician ? getLocalTimestamp() : null;
+        const initialStatus = hasAssignedTechnician ? 'assigned' : 'scheduled';
+
+        const jobId = await new Promise((resolve, reject) => {
+            db.run(
+                `INSERT INTO installation_jobs (
+                    job_number, customer_name, customer_phone, customer_address, customer_id,
+                    package_id, installation_date, installation_time, assigned_technician_id,
+                    status, priority, notes, equipment_needed, estimated_duration,
+                    customer_latitude, customer_longitude, created_by_admin_id, assigned_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    jobNumber,
+                    customerName,
+                    customerPhone,
+                    customerAddress,
+                    customer ? customer.id : null,
+                    resolvedPackageId,
+                    installationDate,
+                    installationTime,
+                    hasAssignedTechnician ? technicianId : null,
+                    initialStatus,
+                    priority,
+                    notes || null,
+                    equipmentNeeded || null,
+                    parseInt(body.estimated_duration, 10) || 120,
+                    customer ? customer.latitude || null : null,
+                    customer ? customer.longitude || null : null,
+                    req.user && req.user.id ? req.user.id : null,
+                    assignedAt
+                ],
+                function (err) {
+                    if (err) reject(err);
+                    else resolve(this.lastID);
+                }
+            );
+        });
+
+        db.run(
+            `INSERT INTO installation_job_status_history (
+                job_id, old_status, new_status, changed_by_type, changed_by_id, notes
+            ) VALUES (?, NULL, ?, 'admin', ?, ?)`,
+            [
+                jobId,
+                initialStatus,
+                (req.user && req.user.id) || 0,
+                `Job instalasi dibuat dari mobile: ${jobNumber}`
+            ],
+            (histErr) => {
+                if (histErr) logger.warn('[mobile-adapter] task history create:', histErr.message);
+            }
+        );
+
+        try {
+            const fieldNotif = require('../../config/technicianFieldNotifications');
+            const notifPayload = {
+                id: jobId,
+                job_number: jobNumber,
+                customer_name: customerName
+            };
+            if (hasAssignedTechnician) {
+                await fieldNotif.notifyInstallationJob(technicianId, notifPayload);
+            } else {
+                const techRows = await new Promise((resolve, reject) => {
+                    db.all(
+                        `SELECT id FROM technicians
+                         WHERE is_active = 1
+                           AND LOWER(IFNULL(role, 'technician')) = 'technician'`,
+                        [],
+                        (err, rows) => (err ? reject(err) : resolve(rows || []))
+                    );
+                });
+                for (const tr of techRows) {
+                    const tid = parseInt(tr.id, 10);
+                    if (Number.isFinite(tid) && tid > 0) {
+                        await fieldNotif.notifyInstallationJob(tid, notifPayload);
+                    }
+                }
+            }
+        } catch (nfErr) {
+            logger.warn('[mobile-adapter] task field notification:', nfErr.message || nfErr);
+        }
+
+        res.json({
+            success: true,
+            message: 'Tugas pemasangan baru berhasil disimpan',
+            data: { id: jobId, job_number: jobNumber }
+        });
+    } catch (error) {
+        logger.error('[mobile-adapter] create installation task:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal menyimpan tugas' });
+    }
+});
+
+router.post('/tasks/trouble', verifyToken, allowFieldOps, async (req, res) => {
+    try {
+        const body = req.body || {};
+        const name = String(body.name || '').trim();
+        const phone = normalizePhone(String(body.phone || '').trim());
+        const location = String(body.location || '').trim();
+        const category = String(body.category || '').trim();
+        const description = String(body.description || '').trim();
+        const priority = String(body.priority || 'Normal').trim() || 'Normal';
+        const assignedRaw = body.assignedTechnicianId || body.assigned_technician_id;
+        const assignedTechnicianId = parseInt(String(assignedRaw || ''), 10);
+        const customerRaw = body.customerId || body.customer_id;
+        const customerId = parseInt(String(customerRaw || ''), 10);
+
+        if (!name || !phone || !location || !category) {
+            return res.status(400).json({
+                success: false,
+                message: 'Nama pelapor, nomor telepon, lokasi, dan kategori wajib diisi'
+            });
+        }
+
+        const { createTroubleReport } = require('../../config/troubleReport');
+        const report = await createTroubleReport({
+            name,
+            phone,
+            location,
+            category,
+            description,
+            assignedTechnicianId:
+                Number.isFinite(assignedTechnicianId) && assignedTechnicianId > 0 ? assignedTechnicianId : null,
+            priority,
+            customerId: Number.isFinite(customerId) && customerId > 0 ? customerId : null
+        });
+
+        try {
+            const fieldNotif = require('../../config/technicianFieldNotifications');
+            if (Number.isFinite(assignedTechnicianId) && assignedTechnicianId > 0) {
+                await fieldNotif.notifyTroubleTicket(assignedTechnicianId, report);
+            } else {
+                const techRows = await new Promise((resolve, reject) => {
+                    db.all(
+                        `SELECT id FROM technicians
+                         WHERE is_active = 1
+                           AND LOWER(IFNULL(role, 'technician')) = 'technician'`,
+                        [],
+                        (err, rows) => (err ? reject(err) : resolve(rows || []))
+                    );
+                });
+                for (const tr of techRows) {
+                    const tid = parseInt(tr.id, 10);
+                    if (Number.isFinite(tid) && tid > 0) {
+                        await fieldNotif.notifyTroubleTicket(tid, report);
+                    }
+                }
+            }
+        } catch (nfErr) {
+            logger.warn('[mobile-adapter] trouble field notification:', nfErr.message || nfErr);
+        }
+
+        res.json({
+            success: true,
+            message: 'Tiket gangguan berhasil dibuat',
+            data: report,
+            report
+        });
+    } catch (error) {
+        logger.error('[mobile-adapter] create trouble task:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal membuat tiket gangguan' });
+    }
 });
 
 /** Zona waktu untuk rentang "minggu ini" (Sen–Min) di kartu performa teknisi. */
@@ -4479,6 +5754,469 @@ router.get('/collector/customers/:customerId/receipt/pdf', verifyToken, requireC
     } catch (error) {
         logger.error('[mobile-adapter] collector/customers/.../receipt/pdf', error);
         res.status(error.status || 500).json({ success: false, message: error.message || 'Gagal membuat PDF' });
+    }
+});
+
+function normalizeWarehouseScan(raw) {
+    return String(raw ?? '')
+        .trim()
+        .replace(/^\uFEFF/, '');
+}
+
+function genWarehousePublicCode() {
+    return `WH${crypto.randomBytes(8).toString('hex').toUpperCase()}`;
+}
+
+function parseEmployeeScanForWarehouseMobile(raw) {
+    const trimmed = normalizeWarehouseScan(raw);
+    if (!trimmed) return null;
+    const upper = trimmed.toUpperCase();
+    if (upper.startsWith('EMP')) return { kind: 'code', value: upper };
+    try {
+        const j = JSON.parse(trimmed);
+        if (j && j.type === 'employee') {
+            if (j.id != null) return { kind: 'id', value: parseInt(j.id, 10) };
+            if (j.public_code) return { kind: 'code', value: String(j.public_code).trim().toUpperCase() };
+        }
+    } catch (_) {
+        // Bukan JSON, lanjut validasi sebagai kode biasa.
+    }
+    return null;
+}
+
+async function resolveWarehouseEmployee(reqBody) {
+    const employeeIdRaw = reqBody.employee_id ?? reqBody.employeeId;
+    if (employeeIdRaw != null && String(employeeIdRaw).trim() !== '') {
+        const employeeId = parseInt(employeeIdRaw, 10);
+        if (!Number.isInteger(employeeId)) {
+            return { error: { status: 400, message: 'ID karyawan tidak valid.' } };
+        }
+        const row = await dbGetP(
+            `SELECT id, nama_lengkap, nik, jabatan, public_code, status FROM employees WHERE id = ?`,
+            [employeeId]
+        );
+        if (!row) return { error: { status: 404, message: 'Karyawan tidak ditemukan.' } };
+        if (row.status !== 'aktif') return { error: { status: 400, message: 'Karyawan tidak aktif.' } };
+        return { employee: row };
+    }
+
+    const parsed = parseEmployeeScanForWarehouseMobile(reqBody.employee_code ?? reqBody.employee_qr ?? reqBody.employeeQr ?? '');
+    if (!parsed) return { employee: null };
+    const row =
+        parsed.kind === 'id'
+            ? await dbGetP(
+                  `SELECT id, nama_lengkap, nik, jabatan, public_code, status FROM employees WHERE id = ?`,
+                  [parsed.value]
+              )
+            : await dbGetP(
+                  `SELECT id, nama_lengkap, nik, jabatan, public_code, status FROM employees WHERE UPPER(TRIM(public_code)) = ?`,
+                  [parsed.value]
+              );
+    if (!row) return { error: { status: 404, message: parsed.kind === 'id' ? 'Karyawan tidak ditemukan.' : 'Kode karyawan tidak dikenali.' } };
+    if (row.status !== 'aktif') return { error: { status: 400, message: 'Karyawan tidak aktif.' } };
+    return { employee: row };
+}
+
+router.get('/admin/warehouse/items', verifyToken, requireAdmin, async (req, res) => {
+    try {
+        const activeOnly = req.query.all !== '1';
+        const rows = await dbAllP(
+            activeOnly
+                ? `SELECT * FROM warehouse_items WHERE is_active = 1 ORDER BY name COLLATE NOCASE`
+                : `SELECT * FROM warehouse_items ORDER BY is_active DESC, name COLLATE NOCASE`
+        );
+        res.json({ success: true, items: rows });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/warehouse/items:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal memuat barang' });
+    }
+});
+
+router.post('/admin/warehouse/items', verifyToken, requireAdmin, async (req, res) => {
+    const name = String(req.body.name ?? '').trim();
+    if (!name) return res.status(400).json({ success: false, message: 'Nama barang wajib diisi' });
+    const unit = String(req.body.unit ?? '').trim();
+    const low = Math.max(0, parseInt(req.body.low_stock_threshold, 10) || 5);
+    try {
+        const r = await dbRunP(
+            `INSERT INTO warehouse_items (name, unit, low_stock_threshold, is_active) VALUES (?,?,?,1)`,
+            [name, unit, low]
+        );
+        res.json({ success: true, id: r.lastID });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/warehouse/items post:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal menyimpan barang' });
+    }
+});
+
+router.put('/admin/warehouse/items/:id', verifyToken, requireAdmin, async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const name = String(req.body.name ?? '').trim();
+    if (!Number.isInteger(id)) return res.status(400).json({ success: false, message: 'ID tidak valid' });
+    if (!name) return res.status(400).json({ success: false, message: 'Nama barang wajib diisi' });
+    const unit = String(req.body.unit ?? '').trim();
+    const low = Math.max(0, parseInt(req.body.low_stock_threshold, 10) || 0);
+    const isActive = req.body.is_active === false || req.body.is_active === 0 ? 0 : 1;
+    try {
+        await dbRunP(
+            `UPDATE warehouse_items SET name = ?, unit = ?, low_stock_threshold = ?, is_active = ?, updated_at = ? WHERE id = ?`,
+            [name, unit, low, isActive, getLocalTimestamp(), id]
+        );
+        res.json({ success: true });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/warehouse/items put:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal mengubah barang' });
+    }
+});
+
+router.delete('/admin/warehouse/items/:id', verifyToken, requireAdmin, async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ success: false, message: 'ID tidak valid' });
+    try {
+        const used = await dbGetP(`SELECT COUNT(*) AS c FROM warehouse_units WHERE item_id = ?`, [id]);
+        if (Number(used?.c) > 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Barang sudah punya riwayat unit/stok. Nonaktifkan saja, jangan hapus.'
+            });
+        }
+        await dbRunP(`DELETE FROM warehouse_items WHERE id = ?`, [id]);
+        res.json({ success: true });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/warehouse/items delete:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal menghapus barang' });
+    }
+});
+
+router.post('/admin/warehouse/inbound', verifyToken, requireAdmin, async (req, res) => {
+    const itemId = parseInt(req.body.item_id, 10);
+    const quantity = parseInt(req.body.quantity, 10);
+    if (!Number.isInteger(itemId) || !Number.isInteger(quantity) || quantity < 1 || quantity > 5000) {
+        return res.status(400).json({ success: false, message: 'item_id dan quantity (1-5000) wajib valid' });
+    }
+    const reference = String(req.body.reference ?? '').trim().slice(0, 200);
+    const notes = String(req.body.notes ?? '').trim().slice(0, 500);
+    try {
+        const now = getLocalTimestamp();
+        const item = await dbGetP(`SELECT id FROM warehouse_items WHERE id = ? AND is_active = 1`, [itemId]);
+        if (!item) return res.status(400).json({ success: false, message: 'Master barang tidak ditemukan atau nonaktif' });
+        const { lastID: batchId } = await dbRunP(
+            `INSERT INTO warehouse_inbound_batches (item_id, quantity, reference, notes, created_at) VALUES (?,?,?,?,?)`,
+            [itemId, quantity, reference, notes, now]
+        );
+        const units = [];
+        for (let i = 0; i < quantity; i++) {
+            let inserted = false;
+            for (let attempt = 0; attempt < 8 && !inserted; attempt++) {
+                try {
+                    const code = genWarehousePublicCode();
+                    const r = await dbRunP(
+                        `INSERT INTO warehouse_units (item_id, inbound_batch_id, public_code, status, created_at) VALUES (?,?,?, 'in_stock', ?)`,
+                        [itemId, batchId, code, now]
+                    );
+                    units.push({ id: r.lastID, public_code: code });
+                    inserted = true;
+                } catch (err) {
+                    if (!String(err.message).includes('UNIQUE')) throw err;
+                }
+            }
+            if (!inserted) throw new Error('Gagal menghasilkan kode unik');
+        }
+        res.json({ success: true, batch_id: batchId, units, print_url: `/admin/warehouse/cetak-qr/${batchId}` });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/warehouse/inbound:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal menyimpan barang masuk' });
+    }
+});
+
+router.get('/admin/warehouse/inbound-history', verifyToken, requireAdmin, async (req, res) => {
+    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 100));
+    try {
+        const rows = await dbAllP(
+            `SELECT b.id, b.item_id, b.quantity, b.reference, b.notes, b.created_at,
+                    i.name AS item_name, i.unit,
+                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.inbound_batch_id = b.id AND u.status = 'out') AS units_out,
+                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.inbound_batch_id = b.id AND u.status = 'in_stock') AS units_in_stock
+             FROM warehouse_inbound_batches b
+             JOIN warehouse_items i ON i.id = b.item_id
+             ORDER BY b.created_at DESC, b.id DESC
+             LIMIT ?`,
+            [limit]
+        );
+        res.json({ success: true, rows });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/warehouse/inbound-history:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal memuat riwayat masuk' });
+    }
+});
+
+router.put('/admin/warehouse/inbound-batches/:id', verifyToken, requireAdmin, async (req, res) => {
+    const batchId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(batchId)) return res.status(400).json({ success: false, message: 'ID batch tidak valid' });
+    const reference = String(req.body.reference ?? '').trim().slice(0, 200);
+    const notes = String(req.body.notes ?? '').trim().slice(0, 500);
+    try {
+        const batch = await dbGetP(`SELECT * FROM warehouse_inbound_batches WHERE id = ?`, [batchId]);
+        if (!batch) return res.status(404).json({ success: false, message: 'Batch tidak ditemukan' });
+        const outRow = await dbGetP(`SELECT COUNT(*) AS c FROM warehouse_units WHERE inbound_batch_id = ? AND status = 'out'`, [batchId]);
+        const unitsOut = Number(outRow?.c) || 0;
+        if (unitsOut > 0) {
+            await dbRunP(`UPDATE warehouse_inbound_batches SET reference = ?, notes = ? WHERE id = ?`, [reference, notes, batchId]);
+            return res.json({
+                success: true,
+                partial: true,
+                message: 'Hanya referensi & catatan yang diubah (batch sudah ada unit yang keluar).'
+            });
+        }
+        const itemId = req.body.item_id != null && req.body.item_id !== '' ? parseInt(req.body.item_id, 10) : batch.item_id;
+        const quantity = req.body.quantity != null && req.body.quantity !== '' ? parseInt(req.body.quantity, 10) : batch.quantity;
+        if (!Number.isInteger(itemId) || !Number.isInteger(quantity) || quantity < 1 || quantity > 5000) {
+            return res.status(400).json({ success: false, message: 'Barang dan jumlah (1-5000) harus valid' });
+        }
+        const itemOk = await dbGetP(`SELECT id FROM warehouse_items WHERE id = ? AND is_active = 1`, [itemId]);
+        if (!itemOk) return res.status(400).json({ success: false, message: 'Master barang tidak ditemukan atau nonaktif' });
+        const oldQ = Number(batch.quantity) || 0;
+        if (quantity < oldQ) {
+            const toRemove = oldQ - quantity;
+            const victims = await dbAllP(
+                `SELECT id FROM warehouse_units WHERE inbound_batch_id = ? AND status = 'in_stock' ORDER BY id DESC LIMIT ?`,
+                [batchId, toRemove]
+            );
+            if (victims.length < toRemove) {
+                return res.status(400).json({ success: false, message: 'Tidak bisa mengurangi qty melebihi unit yang masih di gudang.' });
+            }
+            for (const v of victims) await dbRunP(`DELETE FROM warehouse_units WHERE id = ?`, [v.id]);
+        } else if (quantity > oldQ) {
+            const add = quantity - oldQ;
+            const now = getLocalTimestamp();
+            for (let i = 0; i < add; i++) {
+                let inserted = false;
+                for (let attempt = 0; attempt < 8 && !inserted; attempt++) {
+                    try {
+                        await dbRunP(
+                            `INSERT INTO warehouse_units (item_id, inbound_batch_id, public_code, status, created_at) VALUES (?,?,?, 'in_stock', ?)`,
+                            [itemId, batchId, genWarehousePublicCode(), now]
+                        );
+                        inserted = true;
+                    } catch (err) {
+                        if (!String(err.message).includes('UNIQUE')) throw err;
+                    }
+                }
+                if (!inserted) throw new Error('Gagal menghasilkan kode unik');
+            }
+        }
+        await dbRunP(
+            `UPDATE warehouse_inbound_batches SET item_id = ?, quantity = ?, reference = ?, notes = ? WHERE id = ?`,
+            [itemId, quantity, reference, notes, batchId]
+        );
+        await dbRunP(`UPDATE warehouse_units SET item_id = ? WHERE inbound_batch_id = ?`, [itemId, batchId]);
+        res.json({ success: true });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/warehouse/inbound-batches put:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal mengubah batch' });
+    }
+});
+
+router.delete('/admin/warehouse/inbound-batches/:id', verifyToken, requireAdmin, async (req, res) => {
+    const batchId = parseInt(req.params.id, 10);
+    if (!Number.isInteger(batchId)) return res.status(400).json({ success: false, message: 'ID batch tidak valid' });
+    try {
+        const batch = await dbGetP(`SELECT id FROM warehouse_inbound_batches WHERE id = ?`, [batchId]);
+        if (!batch) return res.status(404).json({ success: false, message: 'Batch tidak ditemukan' });
+        const outRow = await dbGetP(`SELECT COUNT(*) AS c FROM warehouse_units WHERE inbound_batch_id = ? AND status = 'out'`, [batchId]);
+        if (Number(outRow?.c) > 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Tidak bisa menghapus: sudah ada unit dari batch ini yang keluar (sudah di-scan keluar).'
+            });
+        }
+        await dbRunP(`DELETE FROM warehouse_units WHERE inbound_batch_id = ?`, [batchId]);
+        await dbRunP(`DELETE FROM warehouse_inbound_batches WHERE id = ?`, [batchId]);
+        res.json({ success: true });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/warehouse/inbound-batches delete:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal menghapus batch' });
+    }
+});
+
+router.get('/admin/warehouse/employees', verifyToken, requireAdmin, async (_req, res) => {
+    try {
+        const rows = await dbAllP(
+            `SELECT id, nama_lengkap, nik, jabatan, public_code, status
+             FROM employees
+             WHERE status = 'aktif'
+             ORDER BY nama_lengkap COLLATE NOCASE`
+        );
+        res.json({ success: true, employees: rows });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/warehouse/employees:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal memuat karyawan' });
+    }
+});
+
+router.get('/admin/warehouse/employee-lookup', verifyToken, requireAdmin, async (req, res) => {
+    try {
+        const parsed = parseEmployeeScanForWarehouseMobile(req.query.code ?? req.query.qr ?? '');
+        if (!parsed) return res.status(400).json({ success: false, message: 'Kode QR karyawan tidak valid.' });
+        const row =
+            parsed.kind === 'id'
+                ? await dbGetP(`SELECT id, nama_lengkap, nik, jabatan, public_code, status FROM employees WHERE id = ?`, [parsed.value])
+                : await dbGetP(
+                      `SELECT id, nama_lengkap, nik, jabatan, public_code, status FROM employees WHERE UPPER(TRIM(public_code)) = ?`,
+                      [parsed.value]
+                  );
+        if (!row) return res.status(404).json({ success: false, message: 'Karyawan tidak ditemukan.' });
+        if (row.status !== 'aktif') return res.status(400).json({ success: false, message: 'Karyawan tidak aktif.' });
+        res.json({ success: true, employee: row });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/warehouse/employee-lookup:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal membaca QR karyawan' });
+    }
+});
+
+router.post('/admin/warehouse/outbound-scan', verifyToken, requireAdmin, async (req, res) => {
+    const code = normalizeWarehouseScan(req.body.code ?? req.body.qr ?? '').toUpperCase();
+    if (!code) return res.status(400).json({ success: false, message: 'Kode QR / barcode kosong' });
+    if (code.startsWith('EMP')) {
+        return res.status(400).json({ success: false, message: 'Ini kode karyawan. Scan di kolom karyawan terlebih dahulu.' });
+    }
+    const outboundNotes = String(req.body.notes ?? '').trim().slice(0, 500);
+    try {
+        const empResult = await resolveWarehouseEmployee(req.body || {});
+        if (empResult.error) {
+            return res.status(empResult.error.status).json({ success: false, message: empResult.error.message });
+        }
+        let recipient = String(req.body.recipient ?? req.body.penerima ?? '').trim().slice(0, 200);
+        let outboundEmployeeId = null;
+        if (empResult.employee) {
+            outboundEmployeeId = empResult.employee.id;
+            recipient = empResult.employee.nama_lengkap;
+        }
+        if (!recipient) {
+            return res.status(400).json({ success: false, message: 'Scan QR karyawan atau isi nama penerima terlebih dahulu.' });
+        }
+        const row = await dbGetP(
+            `SELECT u.id, u.public_code, u.status, u.item_id, i.name AS item_name
+             FROM warehouse_units u
+             JOIN warehouse_items i ON i.id = u.item_id
+             WHERE UPPER(TRIM(u.public_code)) = ?`,
+            [code]
+        );
+        if (!row) return res.status(404).json({ success: false, message: 'Kode tidak dikenali. Pastikan QR unit benar.' });
+        if (row.status !== 'in_stock') {
+            return res.status(400).json({ success: false, message: `Unit sudah pernah keluar (${row.public_code}).` });
+        }
+        await dbRunP(
+            `UPDATE warehouse_units SET status = 'out', outbound_at = ?, outbound_recipient = ?, outbound_notes = ?, outbound_employee_id = ? WHERE id = ?`,
+            [getLocalTimestamp(), recipient, outboundNotes, outboundEmployeeId, row.id]
+        );
+        res.json({
+            success: true,
+            unit: {
+                public_code: row.public_code,
+                item_name: row.item_name,
+                recipient,
+                employee_id: outboundEmployeeId
+            }
+        });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/warehouse/outbound-scan:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal memproses barang keluar' });
+    }
+});
+
+router.get('/admin/warehouse/outbound-history', verifyToken, requireAdmin, async (req, res) => {
+    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 100));
+    try {
+        const rows = await dbAllP(
+            `SELECT u.id, u.public_code, u.outbound_at, u.outbound_recipient, u.outbound_notes,
+                    u.outbound_employee_id, i.name AS item_name,
+                    e.nama_lengkap AS employee_name, e.nik AS employee_nik, e.jabatan AS employee_jabatan
+             FROM warehouse_units u
+             JOIN warehouse_items i ON i.id = u.item_id
+             LEFT JOIN employees e ON e.id = u.outbound_employee_id
+             WHERE u.status = 'out' AND u.outbound_at IS NOT NULL
+             ORDER BY u.outbound_at DESC, u.id DESC
+             LIMIT ?`,
+            [limit]
+        );
+        res.json({ success: true, rows });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/warehouse/outbound-history:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal memuat riwayat keluar' });
+    }
+});
+
+router.get('/admin/warehouse/report-summary', verifyToken, requireAdmin, async (_req, res) => {
+    try {
+        const items = await dbAllP(
+            `SELECT i.id, i.name, i.unit, i.low_stock_threshold,
+                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.item_id = i.id AND u.status = 'in_stock') AS stock_in,
+                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.item_id = i.id AND u.status = 'out') AS stock_out
+             FROM warehouse_items i
+             WHERE i.is_active = 1
+             ORDER BY i.name COLLATE NOCASE`
+        );
+        const lowStock = items.filter((r) => Number(r.stock_in) <= Number(r.low_stock_threshold));
+        const inboundTotal = await dbGetP(`SELECT COUNT(*) AS c FROM warehouse_inbound_batches`, []);
+        const unitsTotal = await dbGetP(`SELECT COUNT(*) AS c FROM warehouse_units`, []);
+        res.json({
+            success: true,
+            items,
+            lowStock,
+            totals: {
+                inbound_batches: inboundTotal?.c || 0,
+                units: unitsTotal?.c || 0
+            }
+        });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/warehouse/report-summary:', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal memuat laporan gudang' });
+    }
+});
+
+router.get('/admin/warehouse/export/laporan.xlsx', verifyToken, requireAdmin, async (_req, res) => {
+    try {
+        const ExcelJS = require('exceljs');
+        const items = await dbAllP(
+            `SELECT i.id, i.name, i.unit, i.low_stock_threshold,
+                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.item_id = i.id AND u.status = 'in_stock') AS stock_in,
+                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.item_id = i.id AND u.status = 'out') AS stock_out
+             FROM warehouse_items i
+             WHERE i.is_active = 1
+             ORDER BY i.name COLLATE NOCASE`
+        );
+        const workbook = new ExcelJS.Workbook();
+        const ws = workbook.addWorksheet('Stok');
+        ws.columns = [
+            { header: 'Nama Barang', key: 'name', width: 36 },
+            { header: 'Satuan', key: 'unit', width: 12 },
+            { header: 'Stok (unit masuk)', key: 'in', width: 18 },
+            { header: 'Sudah keluar', key: 'out', width: 14 },
+            { header: 'Batas stok tipis', key: 'low', width: 18 },
+            { header: 'Status', key: 'st', width: 16 }
+        ];
+        ws.getRow(1).font = { bold: true };
+        for (const row of items) {
+            const stockIn = Number(row.stock_in) || 0;
+            const low = Number(row.low_stock_threshold) || 0;
+            ws.addRow({
+                name: row.name,
+                unit: row.unit || '-',
+                in: stockIn,
+                out: Number(row.stock_out) || 0,
+                low,
+                st: stockIn <= low ? 'STOK TIPIS' : 'OK'
+            });
+        }
+        const fname = `laporan-gudang-${new Date().toISOString().split('T')[0]}.xlsx`;
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/warehouse/export:', error);
+        res.status(500).json({ success: false, message: error.message || 'Export gagal' });
     }
 });
 
