@@ -28,12 +28,15 @@ class AppUpdateInfo {
   final String source;
   final bool forceUpdate;
 
-  String get versionLabel => buildNumber > 0 ? '$version+$buildNumber' : version;
+  String get versionLabel =>
+      buildNumber > 0 ? '$version+$buildNumber' : version;
 }
 
 /// Cek & unduh update APK (server billing → GitHub).
 class AppUpdateService {
-  static const MethodChannel _installChannel = MethodChannel('com.kalimasada.mobile/app_install');
+  static const MethodChannel _installChannel = MethodChannel(
+    'com.kalimasada.mobile/app_install',
+  );
 
   static const String _githubRepoOwner = 'azizsokayasa30';
   static const String _githubRepoName = 'billing-kalimasada';
@@ -55,7 +58,9 @@ class AppUpdateService {
   static int compareVersionLike(String a, String b) {
     List<int> parseParts(String v) {
       final cleaned = v.replaceFirst(RegExp(r'^[vV]'), '');
-      final nums = RegExp(r'\d+').allMatches(cleaned).map((m) => int.parse(m.group(0)!)).toList();
+      final nums = RegExp(
+        r'\d+',
+      ).allMatches(cleaned).map((m) => int.parse(m.group(0)!)).toList();
       if (nums.isEmpty) return [0];
       return nums;
     }
@@ -71,14 +76,22 @@ class AppUpdateService {
     return 0;
   }
 
-  static bool isNewerThanInstalled(AppUpdateInfo remote, String currentVersion, int currentBuild) {
+  static bool isNewerThanInstalled(
+    AppUpdateInfo remote,
+    String currentVersion,
+    int currentBuild,
+  ) {
     final vCmp = compareVersionLike(remote.version, currentVersion);
     if (vCmp > 0) return true;
     if (vCmp < 0) return false;
     if (remote.buildNumber > 0 && currentBuild > 0) {
       return remote.buildNumber > currentBuild;
     }
-    return compareVersionLike(remote.versionLabel, '$currentVersion+$currentBuild') > 0;
+    return compareVersionLike(
+          remote.versionLabel,
+          '$currentVersion+$currentBuild',
+        ) >
+        0;
   }
 
   static String? _absoluteApkUrl(String raw) {
@@ -102,7 +115,10 @@ class AppUpdateService {
     final notes = (m['release_notes'] ?? '').toString().trim();
     final apkAbs = _absoluteApkUrl(rawApk);
     if (apkAbs == null) return null;
-    final force = m['force_update'] == true || m['force_update'] == 1 || m['force_update'] == '1';
+    final force =
+        m['force_update'] == true ||
+        m['force_update'] == 1 ||
+        m['force_update'] == '1';
     return AppUpdateInfo(
       version: v,
       buildNumber: buildNum,
@@ -115,10 +131,15 @@ class AppUpdateService {
 
   static Future<AppUpdateInfo?> _tryManifestFromBillingServer() async {
     try {
-      final uri = Uri.parse('${ApiClient.apiOrigin}/api/mobile-adapter/app-update/manifest');
-      final res = await http.get(uri, headers: const {'Accept': 'application/json'}).timeout(
-            const Duration(seconds: 25),
-          );
+      final uri = Uri.parse(
+        '${ApiClient.apiOrigin}/api/mobile-adapter/app-update/manifest',
+      );
+      final res = await http
+          .get(
+            uri,
+            headers: {'Accept': 'application/json', ...ApiClient.tenantHeaders},
+          )
+          .timeout(const Duration(seconds: 25));
       if (res.statusCode != 200) return null;
       final data = jsonDecode(res.body) as Map<String, dynamic>;
       if (!ApiClient.jsonSuccess(data['success'])) return null;
@@ -144,13 +165,14 @@ class AppUpdateService {
     return null;
   }
 
-  static Future<Map<String, dynamic>?> _fetchFirstGithubReleaseWithFallback() async {
+  static Future<Map<String, dynamic>?>
+  _fetchFirstGithubReleaseWithFallback() async {
     final latestUri = Uri.parse(
       'https://api.github.com/repos/$_githubRepoOwner/$_githubRepoName/releases/latest',
     );
-    final latestRes = await http.get(latestUri, headers: _githubHeaders).timeout(
-          const Duration(seconds: 25),
-        );
+    final latestRes = await http
+        .get(latestUri, headers: _githubHeaders)
+        .timeout(const Duration(seconds: 25));
     if (latestRes.statusCode == 200) {
       final decoded = jsonDecode(latestRes.body);
       if (decoded is Map<String, dynamic>) return decoded;
@@ -162,14 +184,17 @@ class AppUpdateService {
     final listUri = Uri.parse(
       'https://api.github.com/repos/$_githubRepoOwner/$_githubRepoName/releases?per_page=10',
     );
-    final listRes = await http.get(listUri, headers: _githubHeaders).timeout(const Duration(seconds: 25));
+    final listRes = await http
+        .get(listUri, headers: _githubHeaders)
+        .timeout(const Duration(seconds: 25));
     if (listRes.statusCode != 200) return null;
     final decoded = jsonDecode(listRes.body);
     if (decoded is! List || decoded.isEmpty) return null;
     for (final raw in decoded) {
       if (raw is! Map) continue;
       final m = Map<String, dynamic>.from(raw);
-      if (_apkUrlFromReleaseAssets(m) != null || (m['tag_name']?.toString().trim().isNotEmpty ?? false)) {
+      if (_apkUrlFromReleaseAssets(m) != null ||
+          (m['tag_name']?.toString().trim().isNotEmpty ?? false)) {
         return m;
       }
     }
@@ -226,7 +251,8 @@ class AppUpdateService {
 
     final client = http.Client();
     final dir = await getTemporaryDirectory();
-    final filePath = '${dir.path}/kalimasada-update-${DateTime.now().millisecondsSinceEpoch}.apk';
+    final filePath =
+        '${dir.path}/kalimasada-update-${DateTime.now().millisecondsSinceEpoch}.apk';
     final file = File(filePath);
     try {
       final request = http.Request('GET', Uri.parse(apkUrl));
@@ -260,14 +286,20 @@ class AppUpdateService {
   /// Intent instal sistem via FileProvider (OpenFilex sering gagal di Android 7+).
   static Future<void> _launchApkInstaller(String filePath) async {
     try {
-      final allowed = await _installChannel.invokeMethod<bool>('canRequestPackageInstalls');
+      final allowed = await _installChannel.invokeMethod<bool>(
+        'canRequestPackageInstalls',
+      );
       if (allowed == false) {
-        await _installChannel.invokeMethod<void>('openInstallUnknownAppsSettings');
+        await _installChannel.invokeMethod<void>(
+          'openInstallUnknownAppsSettings',
+        );
         throw Exception(
           'Izinkan instal dari sumber tidak dikenal untuk aplikasi ini, lalu coba lagi.',
         );
       }
-      await _installChannel.invokeMethod<void>('installApk', {'filePath': filePath});
+      await _installChannel.invokeMethod<void>('installApk', {
+        'filePath': filePath,
+      });
     } on PlatformException catch (e) {
       throw Exception(e.message ?? 'Gagal membuka installer');
     }

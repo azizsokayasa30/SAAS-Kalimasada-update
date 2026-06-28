@@ -378,17 +378,21 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
     }
   }
 
-  static const _primaryContainer = Color(0xFF1B0C6B);
-  static const _textOnSurface = Color(0xFF19163F);
-  static const _textVariant = Color(0xFF474551);
-  static const _surfaceLow = Color(0xFFF6F1FF);
+  static const _primary = Color(0xFF2563EB);
+  static const _success = Color(0xFF16A34A);
+  static const _bg = Colors.white;
+  static const _surface = Color(0xFFF8FAFC);
+  static const _border = Color(0xFFE2E8F0);
+  static const _text = Color(0xFF1E293B);
+  static const _muted = Color(0xFF64748B);
+  static const _danger = Color(0xFFE84C4F);
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFCF8FF),
+      backgroundColor: _bg,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF2563EB),
+        backgroundColor: _primary,
         foregroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
@@ -406,20 +410,25 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
         ),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(color: Colors.white24, height: 1),
+          child: Container(color: _primary, height: 1),
         ),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
         children: [
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: _surfaceLow,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: const Color(0xFFC8C4D3).withValues(alpha: 0.3),
-              ),
+              color: _surface,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: _border),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  blurRadius: 16,
+                  offset: const Offset(0, 8),
+                ),
+              ],
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -430,9 +439,7 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
                       _hasNewVersion
                           ? Icons.new_releases_rounded
                           : Icons.info_outline,
-                      color: _hasNewVersion
-                          ? const Color(0xFFB3261E)
-                          : _primaryContainer,
+                      color: _hasNewVersion ? _danger : _primary,
                     ),
                     const SizedBox(width: 10),
                     Expanded(
@@ -441,7 +448,7 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
-                          color: _textOnSurface,
+                          color: _text,
                         ),
                       ),
                     ),
@@ -462,10 +469,8 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: const Color(0xFFC8C4D3).withValues(alpha: 0.3),
-              ),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: _border),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -475,7 +480,7 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
                   style: TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 15,
-                    color: _textOnSurface,
+                    color: _text,
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -483,7 +488,7 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
                   _latestReleaseNotes,
                   style: const TextStyle(
                     fontSize: 14,
-                    color: _textVariant,
+                    color: _muted,
                     height: 1.35,
                   ),
                 ),
@@ -496,12 +501,18 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
               _downloadProgress != null
                   ? 'Progress unduhan: ${(_downloadProgress! * 100).toStringAsFixed(0)}%'
                   : 'Menyiapkan unduhan...',
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+              style: const TextStyle(
+                color: _text,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
             ),
             const SizedBox(height: 8),
             LinearProgressIndicator(
               minHeight: 8,
               value: _downloadProgress,
+              color: _primary,
+              backgroundColor: _border,
               borderRadius: BorderRadius.circular(99),
             ),
           ],
@@ -523,7 +534,10 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
             label: Text(_checkingUpdate ? 'Memeriksa...' : 'Periksa update'),
             style: FilledButton.styleFrom(
               minimumSize: const Size(double.infinity, 48),
-              backgroundColor: _primaryContainer,
+              backgroundColor: _success,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: _success.withValues(alpha: 0.65),
+              disabledForegroundColor: Colors.white,
             ),
           ),
           const SizedBox(height: 12),
@@ -552,7 +566,8 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
           const SizedBox(height: 20),
           Text(
             'Prioritas: manifest di server billing (API), jika tidak dikonfigurasi dipakai rilis terbaru GitHub.',
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 12, color: _muted),
           ),
         ],
       ),
@@ -569,16 +584,13 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
             k,
             style: const TextStyle(
               fontSize: 13,
-              color: _textVariant,
+              color: _muted,
               fontWeight: FontWeight.w600,
             ),
           ),
         ),
         Expanded(
-          child: Text(
-            v,
-            style: const TextStyle(fontSize: 13, color: _textOnSurface),
-          ),
+          child: Text(v, style: const TextStyle(fontSize: 13, color: _text)),
         ),
       ],
     );

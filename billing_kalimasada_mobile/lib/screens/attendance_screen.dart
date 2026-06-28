@@ -9,7 +9,6 @@ import '../services/api_client.dart';
 import '../store/auth_provider.dart';
 import '../store/notification_provider.dart';
 import 'attendance_qr_scan_screen.dart';
-import 'settings_screen.dart';
 
 /// State mutable untuk bottom sheet izin/cuti (bukan `State` widget).
 class _LeaveSheetModel {
@@ -55,15 +54,16 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   /// Izin/cuti yang sudah diproses admin (30 hari), dari API `leave-requests/recent`.
   List<Map<String, dynamic>> _recentLeaves = [];
 
-  // Stitch Design System Colors
-  static const Color bgColor = Color(0xFFFCF8FF);
+  // Admin-style blue palette.
+  static const Color bgColor = Colors.white;
   static const Color surfaceColor = Colors.white;
-  static const Color primaryDark = Color(0xFF070038);
-  static const Color textMain = Color(0xFF19163F);
-  static const Color textSecondary = Color(0xFF474551);
-  static const Color borderColor = Color(0xFFE4DFFF);
-  static const Color mutedPurple = Color(0xFFEAE5FF);
-  static const Color iconColor = Color(0xFF5A53AB);
+  static const Color surfaceSoft = Color(0xFFF8FAFC);
+  static const Color primaryDark = Color(0xFF111827);
+  static const Color textMain = Color(0xFF1E293B);
+  static const Color textSecondary = Color(0xFF64748B);
+  static const Color borderColor = Color(0xFFE2E8F0);
+  static const Color mutedBlue = Color(0xFFDBEAFE);
+  static const Color iconColor = Color(0xFF3B82F6);
 
   @override
   void initState() {
@@ -908,30 +908,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         backgroundColor: const Color(0xFF2563EB),
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 16.0),
-            child: GestureDetector(
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const SettingsScreen(),
-                  ),
-                );
-              },
-              child: CircleAvatar(
-                backgroundColor: Colors.white,
-                radius: 16,
-                child: const Icon(
-                  Icons.person,
-                  color: Color(0xFF2563EB),
-                  size: 20,
-                ),
-              ),
-            ),
-          ),
-        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: primaryDark))
@@ -945,15 +921,15 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
               color: primaryDark,
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(20.0),
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     // Timer Section
                     Container(
-                      padding: const EdgeInsets.symmetric(vertical: 32),
+                      padding: const EdgeInsets.symmetric(vertical: 22),
                       decoration: BoxDecoration(
-                        color: surfaceColor,
+                        color: surfaceSoft,
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(color: borderColor),
                       ),
@@ -968,24 +944,24 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                               color: textSecondary,
                             ),
                           ),
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 4),
                           Text(
                             _formatTime(_currentTime),
                             style: const TextStyle(
-                              fontSize: 40,
+                              fontSize: 34,
                               fontWeight: FontWeight.w800,
                               color: primaryDark,
                               fontFamily: 'Inter',
                             ),
                           ),
-                          const SizedBox(height: 16),
+                          const SizedBox(height: 12),
                           Container(
                             padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 6,
+                              horizontal: 14,
+                              vertical: 5,
                             ),
                             decoration: BoxDecoration(
-                              color: mutedPurple,
+                              color: mutedBlue,
                               borderRadius: BorderRadius.circular(20),
                               border: Border.all(color: borderColor),
                             ),
@@ -1015,13 +991,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                         ],
                       ),
                     ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 16),
 
                     if (_attendanceNotice != null &&
                         _attendanceNotice!.trim().isNotEmpty) ...[
                       Container(
-                        margin: const EdgeInsets.only(bottom: 16),
-                        padding: const EdgeInsets.all(14),
+                        margin: const EdgeInsets.only(bottom: 12),
+                        padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
                           color: const Color(0xFFFFF4E5),
                           borderRadius: BorderRadius.circular(12),
@@ -1058,7 +1034,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                     if (_status == 'awaiting') ...[
                       if (!_employeeMatched)
                         Padding(
-                          padding: const EdgeInsets.only(bottom: 16),
+                          padding: const EdgeInsets.only(bottom: 12),
                           child: Text(
                             'Nomor HP login tidak cocok dengan data karyawan. Hubungi admin agar absensi tercatat di database.',
                             style: TextStyle(
@@ -1069,7 +1045,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                           ),
                         ),
                       Container(
-                        padding: const EdgeInsets.all(24),
+                        padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
                           color: surfaceColor,
                           borderRadius: BorderRadius.circular(16),
@@ -1107,7 +1083,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                                 color: textSecondary.withValues(alpha: 0.9),
                               ),
                             ),
-                            const SizedBox(height: 20),
+                            const SizedBox(height: 14),
                             Row(
                               children: [
                                 Expanded(
@@ -1117,7 +1093,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                                     label: 'Selfie',
                                   ),
                                 ),
-                                const SizedBox(width: 12),
+                                const SizedBox(width: 8),
                                 Expanded(
                                   child: _buildAbsenModeTile(
                                     mode: 'qr',
@@ -1125,14 +1101,14 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                                     label: 'Scan QR',
                                   ),
                                 ),
-                                const SizedBox(width: 12),
+                                const SizedBox(width: 8),
                                 Expanded(child: _buildGpsLockedTile()),
                               ],
                             ),
                           ],
                         ),
                       ),
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 16),
                     ],
 
                     // Action Area Buttons
@@ -1147,9 +1123,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.green.shade600,
                               disabledBackgroundColor: borderColor,
-                              padding: const EdgeInsets.symmetric(vertical: 20),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
+                                borderRadius: BorderRadius.circular(14),
                               ),
                               elevation: 0,
                             ),
@@ -1171,7 +1147,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                                         'Masuk',
                                         style: TextStyle(
                                           color: Colors.white,
-                                          fontSize: 16,
+                                          fontSize: 15,
                                           fontWeight: FontWeight.w600,
                                         ),
                                       ),
@@ -1179,7 +1155,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                                   ),
                           ),
                         ),
-                        const SizedBox(width: 16),
+                        const SizedBox(width: 10),
                         Expanded(
                           child: ElevatedButton(
                             onPressed:
@@ -1189,9 +1165,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.red.shade600,
                               disabledBackgroundColor: borderColor,
-                              padding: const EdgeInsets.symmetric(vertical: 20),
+                              padding: const EdgeInsets.symmetric(vertical: 14),
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
+                                borderRadius: BorderRadius.circular(14),
                               ),
                               elevation: 0,
                             ),
@@ -1213,7 +1189,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                                         'Pulang',
                                         style: TextStyle(
                                           color: Colors.white,
-                                          fontSize: 16,
+                                          fontSize: 15,
                                           fontWeight: FontWeight.w600,
                                         ),
                                       ),
@@ -1223,7 +1199,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 12),
                     OutlinedButton.icon(
                       onPressed: () => _showLeaveRequestForm(context),
                       icon: const Icon(Icons.event_busy, color: primaryDark),
@@ -1231,22 +1207,22 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                         'Ajukan Izin/Cuti',
                         style: TextStyle(
                           color: primaryDark,
-                          fontSize: 16,
+                          fontSize: 14,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: primaryDark, width: 1.5),
-                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
+                          borderRadius: BorderRadius.circular(14),
                         ),
                       ),
                     ),
                     if (_recentLeaves.isNotEmpty) ...[
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 12),
                       Container(
-                        padding: const EdgeInsets.all(20),
+                        padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
                           color: surfaceColor,
                           borderRadius: BorderRadius.circular(16),
@@ -1284,13 +1260,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                                 color: textSecondary.withValues(alpha: 0.9),
                               ),
                             ),
-                            const SizedBox(height: 12),
+                            const SizedBox(height: 10),
                             ..._recentLeaves.map(_buildLeaveHistoryTile),
                           ],
                         ),
                       ),
                     ],
-                    const SizedBox(height: 32),
+                    const SizedBox(height: 22),
 
                     if (isAdmin)
                       _buildAdminAttendanceMonitor()
@@ -1298,12 +1274,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                       const Text(
                         'Log terkini',
                         style: TextStyle(
-                          fontSize: 22,
+                          fontSize: 19,
                           fontWeight: FontWeight.bold,
                           color: primaryDark,
                         ),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 10),
                       if (_sessionLogs.isNotEmpty) ...[
                         const Text(
                           'Log sesi (perangkat)',
@@ -1313,10 +1289,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             color: textMain,
                           ),
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 6),
                         Container(
                           width: double.infinity,
-                          padding: const EdgeInsets.all(12),
+                          padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
                             color: const Color(0xFFF5F5F7),
                             borderRadius: BorderRadius.circular(12),
@@ -1344,7 +1320,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                                 .toList(),
                           ),
                         ),
-                        const SizedBox(height: 20),
+                        const SizedBox(height: 14),
                       ],
                       if (_attendanceData == null)
                         const Text(
@@ -1459,22 +1435,22 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           setState(() => _checkInMode = mode);
           _log('Mode absen: $mode');
         },
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
           decoration: BoxDecoration(
-            color: selected ? mutedPurple : surfaceColor,
-            borderRadius: BorderRadius.circular(14),
+            color: selected ? mutedBlue : surfaceColor,
+            borderRadius: BorderRadius.circular(12),
             border: Border.all(
               color: selected ? iconColor : borderColor,
-              width: selected ? 2 : 1,
+              width: selected ? 1.5 : 1,
             ),
           ),
           child: Column(
             children: [
-              Icon(icon, color: selected ? iconColor : textSecondary, size: 28),
-              const SizedBox(height: 8),
+              Icon(icon, color: selected ? iconColor : textSecondary, size: 24),
+              const SizedBox(height: 6),
               Text(
                 label,
                 textAlign: TextAlign.center,
@@ -1497,16 +1473,16 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       child: Opacity(
         opacity: 0.45,
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
           decoration: BoxDecoration(
             color: const Color(0xFFEEEEEE),
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(12),
             border: Border.all(color: borderColor),
           ),
           child: Column(
             children: [
-              Icon(Icons.location_on_outlined, color: textSecondary, size: 28),
-              const SizedBox(height: 8),
+              Icon(Icons.location_on_outlined, color: textSecondary, size: 24),
+              const SizedBox(height: 6),
               Text(
                 'GPS',
                 textAlign: TextAlign.center,
@@ -1521,7 +1497,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 'wajib',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 9,
+                  fontSize: 8,
                   color: textSecondary.withValues(alpha: 0.7),
                 ),
               ),
@@ -1562,7 +1538,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
               child: Text(
                 'Monitor absensi karyawan',
                 style: TextStyle(
-                  fontSize: 22,
+                  fontSize: 19,
                   fontWeight: FontWeight.bold,
                   color: primaryDark,
                 ),
@@ -1579,16 +1555,16 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
               ),
           ],
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 4),
         Text(
           'Data absen seluruh karyawan hari ini',
           style: TextStyle(
-            fontSize: 13,
+            fontSize: 12,
             height: 1.35,
             color: textSecondary.withValues(alpha: 0.9),
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 10),
         Row(
           children: [
             Expanded(
@@ -1598,7 +1574,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 color: primaryDark,
               ),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             Expanded(
               child: _buildAdminAttendanceStatCard(
                 label: 'Masuk',
@@ -1606,7 +1582,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 color: Colors.green.shade700,
               ),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             Expanded(
               child: _buildAdminAttendanceStatCard(
                 label: 'Alpa',
@@ -1616,7 +1592,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             ),
           ],
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         if (_adminAttendanceError != null)
           Container(
             width: double.infinity,
@@ -1675,10 +1651,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     required Color color,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
       decoration: BoxDecoration(
-        color: surfaceColor,
-        borderRadius: BorderRadius.circular(14),
+        color: surfaceSoft,
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: borderColor),
       ),
       child: Column(
@@ -1688,11 +1664,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             value.toString(),
             style: TextStyle(
               fontSize: 24,
+              height: 1.0,
               fontWeight: FontWeight.w800,
               color: color,
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 3),
           Text(
             label,
             maxLines: 2,
@@ -1715,12 +1692,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     final isPresent = status == 'masuk';
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       child: Row(
         children: [
           Container(
-            width: 42,
-            height: 42,
+            width: 36,
+            height: 36,
             decoration: BoxDecoration(
               color: isPresent
                   ? Colors.green.withValues(alpha: 0.12)
@@ -1730,10 +1707,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             child: Icon(
               isPresent ? Icons.check_circle_outline : Icons.cancel_outlined,
               color: isPresent ? Colors.green.shade700 : Colors.red.shade700,
-              size: 22,
+              size: 20,
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1743,12 +1720,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    fontSize: 15,
+                    fontSize: 14,
                     fontWeight: FontWeight.w700,
                     color: primaryDark,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 2),
                 Text(
                   isPresent ? 'Masuk' : 'Alpa',
                   style: TextStyle(
@@ -1762,7 +1739,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
               ],
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
@@ -1788,19 +1765,19 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
   Widget _buildLogItem(String title, String time, IconData icon) {
     return Padding(
-      padding: const EdgeInsets.all(20.0),
+      padding: const EdgeInsets.all(14),
       child: Row(
         children: [
           Container(
-            width: 48,
-            height: 48,
+            width: 40,
+            height: 40,
             decoration: const BoxDecoration(
-              color: mutedPurple,
+              color: mutedBlue,
               shape: BoxShape.circle,
             ),
-            child: Icon(icon, color: textMain, size: 24),
+            child: Icon(icon, color: primaryDark, size: 21),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1809,14 +1786,14 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                   title,
                   style: const TextStyle(
                     fontWeight: FontWeight.w700,
-                    fontSize: 16,
+                    fontSize: 14,
                     color: primaryDark,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 2),
                 Text(
                   time,
-                  style: const TextStyle(color: textSecondary, fontSize: 14),
+                  style: const TextStyle(color: textSecondary, fontSize: 12),
                 ),
               ],
             ),
@@ -1824,7 +1801,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             decoration: BoxDecoration(
-              color: const Color(0xFFF0EBFF),
+              color: mutedBlue,
               borderRadius: BorderRadius.circular(6),
             ),
             child: const Text(

@@ -26,12 +26,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   static const _primarySoft = Color(0xFFEAF2FF);
   static const _bg = Color(0xFFF6F7FA);
   static const _trafficRouterName = 'Dell-R630-SKYNET';
-  static const _defaultTrafficInterface = 'ether1-ISP';
+  static const _defaultTrafficInterface = 'sfp-sfpplus1';
+  static const _trafficInterfaceLabel = 'sfp+1';
 
-  final _moneyCompact = NumberFormat.compactCurrency(
+  final _moneyFull = NumberFormat.currency(
     locale: 'id_ID',
     symbol: 'Rp ',
-    decimalDigits: 1,
+    decimalDigits: 0,
   );
   final _countFormat = NumberFormat.decimalPattern('id_ID');
 
@@ -45,7 +46,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   Map<String, dynamic>? _adminOverview;
   Map<String, dynamic>? _networkStatus;
   Map<String, dynamic>? _interfaceTraffic;
-  String _trafficInterface = _defaultTrafficInterface;
+  final String _trafficInterface = _defaultTrafficInterface;
   Timer? _networkTimer;
   Timer? _clockTimer;
   bool _networkRequestInFlight = false;
@@ -332,10 +333,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     if (tenant != null && tenant.isNotEmpty) _tenantName = tenant;
     final logo = info['logo_filename']?.toString().trim();
     if (logo != null && logo.isNotEmpty) _logoFilename = logo;
-    final mainInterface = info['main_interface']?.toString().trim();
-    if (mainInterface != null && mainInterface.isNotEmpty) {
-      _trafficInterface = mainInterface;
-    }
   }
 
   num _numAt(Map<String, dynamic>? map, String key) {
@@ -352,7 +349,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   String _formatMoney(dynamic value) {
     final amount = value is num ? value : num.tryParse('${value ?? ''}') ?? 0;
-    return amount <= 0 ? 'Rp 0' : _moneyCompact.format(amount);
+    return _moneyFull.format(amount.round());
   }
 
   String _formatCount(dynamic value) {
@@ -436,8 +433,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   String _trafficInterfaceName() {
     final interface = _interfaceTraffic?['interface']?.toString().trim();
-    if (interface != null && interface.isNotEmpty) return interface;
-    return _trafficInterface;
+    final activeInterface = interface != null && interface.isNotEmpty
+        ? interface
+        : _trafficInterface;
+    if (activeInterface == _defaultTrafficInterface) {
+      return _trafficInterfaceLabel;
+    }
+    return activeInterface;
   }
 
   @override
@@ -460,6 +462,23 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final networkSummary = _mapAt(_networkStatus, 'summary');
     final traffic = _networkTraffic();
     final notice = _adminOverview?['notice']?.toString();
+    final paidAmount = _numAt(invoices, 'paid_amount');
+    final unpaidAmount = _numAt(invoices, 'unpaid_amount');
+    final incomeTotal = paidAmount + unpaidAmount;
+    final incomeProgress = incomeTotal <= 0
+        ? 0.0
+        : (paidAmount / incomeTotal).clamp(0.0, 1.0).toDouble();
+    final incomeProgressLabel = '${(incomeProgress * 100).toStringAsFixed(0)}%';
+    final activeCustomers = _numAt(_dashboardStats, 'active_customers');
+    final totalCustomersFromStats = _numAt(_dashboardStats, 'total_customers');
+    final totalCustomers = totalCustomersFromStats > 0
+        ? totalCustomersFromStats
+        : _numAt(customers, 'total');
+    final customerProgress = totalCustomers <= 0
+        ? 0.0
+        : (activeCustomers / totalCustomers).clamp(0.0, 1.0).toDouble();
+    final customerProgressLabel =
+        '${(customerProgress * 100).toStringAsFixed(0)}%';
 
     return Scaffold(
       backgroundColor: _bg,
@@ -481,6 +500,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   colors: [_primary, _primaryDark],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.vertical(
+                  bottom: Radius.circular(24),
                 ),
               ),
               child: Row(
@@ -593,8 +615,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 children: [
                   Expanded(
                     child: _MetricCard(
-                      title: 'PENDAPATAN BULAN',
+                      title: 'PEMASUKAN',
                       value: _formatMoney(invoices?['paid_amount']),
+                      progressValue: incomeProgress,
+                      progressLabel: incomeProgressLabel,
+                      progressCaption:
+                          'Total tagihan ${_formatMoney(incomeTotal)}',
                       gradientColors: const [
                         Color(0xFF0EA5E9),
                         Color(0xFF2563EB),
@@ -606,8 +632,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     child: _MetricCard(
                       title: 'PELANGGAN AKTIF',
                       value: _formatCount(_dashboardStats?['active_customers']),
-                      growth:
-                          'Total ${_formatCount(_dashboardStats?['total_customers'] ?? customers?['total'])}',
+                      progressValue: customerProgress,
+                      progressLabel: customerProgressLabel,
+                      progressCaption:
+                          'Total pelanggan ${_formatCount(totalCustomers)}',
                       gradientColors: const [
                         Color(0xFF10B981),
                         Color(0xFF14B8A6),
@@ -816,21 +844,26 @@ class _DashboardNotice extends StatelessWidget {
 class _MetricCard extends StatelessWidget {
   final String title;
   final String value;
-  final String? growth;
+  final double? progressValue;
+  final String? progressLabel;
+  final String? progressCaption;
   final List<Color> gradientColors;
 
   const _MetricCard({
     required this.title,
     required this.value,
     required this.gradientColors,
-    this.growth,
+    this.progressValue,
+    this.progressLabel,
+    this.progressCaption,
   });
 
   @override
   Widget build(BuildContext context) {
+    final hasProgress = progressValue != null && progressLabel != null;
     return Container(
-      height: 122,
-      padding: const EdgeInsets.all(16),
+      height: hasProgress ? 146 : 122,
+      padding: EdgeInsets.all(hasProgress ? 14 : 16),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: gradientColors,
@@ -861,34 +894,60 @@ class _MetricCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.w900,
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              maxLines: 1,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 22,
+                fontWeight: FontWeight.w900,
+              ),
             ),
           ),
-          const Spacer(),
-          if (growth != null)
+          if (hasProgress) ...[
+            const SizedBox(height: 8),
             Row(
               children: [
-                const Icon(
-                  Icons.trending_up_rounded,
-                  color: Colors.white,
-                  size: 17,
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(999),
+                    child: LinearProgressIndicator(
+                      value: progressValue!.clamp(0.0, 1.0),
+                      minHeight: 7,
+                      color: Colors.white,
+                      backgroundColor: Colors.white.withValues(alpha: 0.25),
+                    ),
+                  ),
                 ),
-                const SizedBox(width: 4),
+                const SizedBox(width: 8),
                 Text(
-                  growth!,
+                  progressLabel!,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 13,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
                   ),
                 ),
               ],
             ),
+            if (progressCaption != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                progressCaption!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.86),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ],
+          const Spacer(),
         ],
       ),
     );

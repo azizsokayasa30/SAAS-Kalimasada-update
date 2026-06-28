@@ -7,22 +7,60 @@ class ApiClient {
   /// Batas waktu request agar UI tidak menggantung jika server tidak terjangkau dari HP.
   static const Duration requestTimeout = Duration(seconds: 45);
 
+  static const List<String> _baseUrlEnvKeys = [
+    'API_URL',
+    'BILLING_API_URL',
+    'API_BASE_URL',
+  ];
+
+  static const List<String> _tenantEnvKeys = [
+    'API_TENANT',
+    'BILLING_TENANT',
+    'KALIMASADA_TENANT',
+    'TENANT',
+  ];
+
   /// Prioritas: API_URL → BILLING_API_URL → API_BASE_URL (tanpa slash akhir).
   /// Contoh: `http://192.168.1.10:3000` atau `https://billing.domain.com`
-  static String get _baseUrl {
-    String? fromEnv;
-    for (final key in ['API_URL', 'BILLING_API_URL', 'API_BASE_URL']) {
+  static String? get _configuredBaseUrl {
+    for (final key in _baseUrlEnvKeys) {
       final v = dotenv.env[key]?.trim();
       if (v != null && v.isNotEmpty) {
-        fromEnv = v;
-        break;
+        return v;
       }
     }
-    String base = fromEnv ?? 'http://192.168.0.200:2002';
+    return null;
+  }
+
+  static String get _baseUrl {
+    String base = _configuredBaseUrl ?? 'http://192.168.0.200:2002';
+    final parsed = Uri.tryParse(base);
+    if (parsed != null && parsed.hasScheme && parsed.host.isNotEmpty) {
+      base = parsed.replace(path: '', query: '', fragment: '').toString();
+    }
     while (base.endsWith('/')) {
       base = base.substring(0, base.length - 1);
     }
     return base;
+  }
+
+  /// Tenant dipakai saat debug lewat IP/LAN, karena server tidak bisa membaca subdomain.
+  static String? get apiTenant {
+    for (final key in _tenantEnvKeys) {
+      final v = dotenv.env[key]?.trim();
+      if (v != null && v.isNotEmpty) {
+        return v;
+      }
+    }
+    final configured = _configuredBaseUrl;
+    if (configured == null) return null;
+    return Uri.tryParse(configured)?.queryParameters['tenant']?.trim();
+  }
+
+  static Map<String, String> get tenantHeaders {
+    final tenant = apiTenant;
+    if (tenant == null || tenant.isEmpty) return const {};
+    return {'X-Tenant': tenant};
   }
 
   /// Origin API (tanpa path), mis. untuk `Image.network` logo `/public/img/...`.
@@ -49,6 +87,7 @@ class ApiClient {
     return {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
+      ...tenantHeaders,
       if (token != null) 'Authorization': 'Bearer $token',
     };
   }
@@ -118,6 +157,7 @@ class ApiClient {
           uri,
           headers: {
             'Accept': accept,
+            ...tenantHeaders,
             if (token != null) 'Authorization': 'Bearer $token',
           },
         )
@@ -147,6 +187,7 @@ class ApiClient {
     final uri = _uri(endpoint);
     final req = http.MultipartRequest('POST', uri);
     req.headers['Accept'] = 'application/json';
+    req.headers.addAll(tenantHeaders);
     if (token != null && token.isNotEmpty) {
       req.headers['Authorization'] = 'Bearer $token';
     }
