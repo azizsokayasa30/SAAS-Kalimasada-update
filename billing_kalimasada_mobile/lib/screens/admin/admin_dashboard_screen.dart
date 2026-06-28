@@ -26,8 +26,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   static const _primarySoft = Color(0xFFEAF2FF);
   static const _bg = Color(0xFFF6F7FA);
   static const _trafficRouterName = 'Dell-R630-SKYNET';
-  static const _trafficInterface = 'sfp-sfpplus1';
-  static const _trafficInterfaceLabel = 'sfp+1';
+  static const _defaultTrafficInterface = 'ether1-ISP';
 
   final _moneyCompact = NumberFormat.compactCurrency(
     locale: 'id_ID',
@@ -46,6 +45,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   Map<String, dynamic>? _adminOverview;
   Map<String, dynamic>? _networkStatus;
   Map<String, dynamic>? _interfaceTraffic;
+  String _trafficInterface = _defaultTrafficInterface;
   Timer? _networkTimer;
   Timer? _clockTimer;
   bool _networkRequestInFlight = false;
@@ -116,12 +116,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     });
 
     final errors = <String>[];
+    final appInfo = await _fetchAppInfo(errors);
+    _applyAppInfo(appInfo);
+
     final results = await Future.wait<Map<String, dynamic>?>([
       _fetchDashboardStats(errors),
       _fetchAdminOverview(errors),
       _fetchNetworkStatus(errors),
       _fetchMainInterfaceTraffic(errors),
-      _fetchAppInfo(errors),
     ]);
     final interfaceTraffic =
         await _fetchMainInterfaceTraffic(errors, status: results[2]) ??
@@ -133,12 +135,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       _adminOverview = results[1];
       _networkStatus = results[2];
       _interfaceTraffic = interfaceTraffic;
-      if (results[4] != null) {
-        final tenant = results[4]?['tenant_name']?.toString().trim();
-        if (tenant != null && tenant.isNotEmpty) _tenantName = tenant;
-        final logo = results[4]?['logo_filename']?.toString().trim();
-        if (logo != null && logo.isNotEmpty) _logoFilename = logo;
-      }
       _rememberTraffic(_currentTraffic());
       _error = results.every((item) => item == null) && errors.isNotEmpty
           ? errors.first
@@ -330,6 +326,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     return null;
   }
 
+  void _applyAppInfo(Map<String, dynamic>? info) {
+    if (info == null) return;
+    final tenant = info['tenant_name']?.toString().trim();
+    if (tenant != null && tenant.isNotEmpty) _tenantName = tenant;
+    final logo = info['logo_filename']?.toString().trim();
+    if (logo != null && logo.isNotEmpty) _logoFilename = logo;
+    final mainInterface = info['main_interface']?.toString().trim();
+    if (mainInterface != null && mainInterface.isNotEmpty) {
+      _trafficInterface = mainInterface;
+    }
+  }
+
   num _numAt(Map<String, dynamic>? map, String key) {
     final value = map?[key];
     if (value is num) return value;
@@ -444,9 +452,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   String _trafficInterfaceName() {
     final interface = _interfaceTraffic?['interface']?.toString().trim();
-    if (interface == _trafficInterface) return _trafficInterfaceLabel;
     if (interface != null && interface.isNotEmpty) return interface;
-    return _trafficInterfaceLabel;
+    return _trafficInterface;
   }
 
   @override

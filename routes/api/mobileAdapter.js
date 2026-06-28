@@ -660,6 +660,7 @@ router.get('/app-info', verifyToken, allowFieldOps, async (req, res) => {
                 tenant_display_name: tenant?.name || tenantName,
                 logo_filename: getSetting('logo_filename', 'logo.png'),
                 company_slogan: getSetting('company_slogan', ''),
+                main_interface: getSetting('main_interface', 'ether1-ISP'),
                 server_time: getLocalTimestamp()
             }
         });
@@ -672,6 +673,7 @@ router.get('/app-info', verifyToken, allowFieldOps, async (req, res) => {
                 tenant_display_name: 'Default Tenant',
                 logo_filename: getSetting('logo_filename', 'logo.png'),
                 company_slogan: getSetting('company_slogan', ''),
+                main_interface: getSetting('main_interface', 'ether1-ISP'),
                 server_time: getLocalTimestamp()
             }
         });

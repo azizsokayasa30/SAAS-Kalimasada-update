@@ -372,23 +372,12 @@ class _TaskListScreenState extends State<TaskListScreen> {
 
   Widget _buildPeriodFilter(bool loading) {
     final currentYear = DateTime.now().year;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFDBEAFE)),
-      ),
-      child: Row(
-        children: [
-          const Icon(
-            Icons.calendar_month_rounded,
-            size: 18,
-            color: Color(0xFF2563EB),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            flex: 3,
+    return Row(
+      children: [
+        Expanded(
+          flex: 3,
+          child: _buildPeriodPill(
+            icon: Icons.calendar_month_rounded,
             child: _buildPeriodDropdown(
               value: _selectedMonth,
               items: [
@@ -405,9 +394,12 @@ class _TaskListScreenState extends State<TaskListScreen> {
               onChanged: loading ? null : _selectMonth,
             ),
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            flex: 2,
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          flex: 2,
+          child: _buildPeriodPill(
+            icon: Icons.event_rounded,
             child: _buildPeriodDropdown(
               value: _selectedYear,
               items: [
@@ -421,6 +413,32 @@ class _TaskListScreenState extends State<TaskListScreen> {
               onChanged: loading ? null : _selectYear,
             ),
           ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPeriodPill({required IconData icon, required Widget child}) {
+    return Container(
+      height: 42,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: const Color(0xFFBFDBFE)),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF2563EB).withValues(alpha: 0.06),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 17, color: const Color(0xFF2563EB)),
+          const SizedBox(width: 8),
+          Expanded(child: child),
         ],
       ),
     );
@@ -436,6 +454,9 @@ class _TaskListScreenState extends State<TaskListScreen> {
         value: value,
         isExpanded: true,
         isDense: true,
+        dropdownColor: Colors.white,
+        focusColor: Colors.transparent,
+        menuMaxHeight: 320,
         borderRadius: BorderRadius.circular(14),
         icon: const Icon(
           Icons.expand_more_rounded,
