@@ -338,8 +338,6 @@ class _TaskListScreenState extends State<TaskListScreen> {
       'selesai',
       'cancelled',
       'canceled',
-      'in_progress',
-      'mulai',
     }.contains(status);
   }
 

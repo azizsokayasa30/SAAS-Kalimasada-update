@@ -3009,6 +3009,7 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
     }
 
     const history = String(req.query.history || '') === '1';
+    const includePppoePasswords = String(req.query.include_passwords || '') === '1';
 
     const installWhere = isAdmin
         ? history
@@ -3072,7 +3073,9 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
                     return res.status(500).json({ success: false, message: 'Gagal memuat tiket' });
                 }
 
-                const { resolvePppoeCleartextFromRadiusOnly } = require('../../utils/pppoePasswordPolicy');
+                const { resolvePppoeCleartextFromRadiusOnly } = includePppoePasswords
+                    ? require('../../utils/pppoePasswordPolicy')
+                    : { resolvePppoeCleartextFromRadiusOnly: null };
 
                 const tasks = [];
                 for (const row of installRows || []) {
@@ -3084,7 +3087,7 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
                     const pppUser =
                         (row.cust_pppoe_username && String(row.cust_pppoe_username).trim()) || '';
                     let pppPass = null;
-                    if (pppUser) {
+                    if (includePppoePasswords && pppUser) {
                         try {
                             pppPass = await resolvePppoeCleartextFromRadiusOnly(pppUser);
                         } catch (radErr) {
