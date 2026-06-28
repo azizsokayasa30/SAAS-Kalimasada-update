@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../store/task_provider.dart';
 import '../store/auth_provider.dart';
+import 'add_trouble_ticket_screen.dart';
 import 'new_task_screen.dart';
 import 'job_execution_screen.dart';
 import 'task_detail_screen.dart';
@@ -26,6 +27,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
   bool _isSearching = false;
   String _searchQuery = '';
   late String _selectedType; // 'Semua', 'Tiket', 'PSB'
+  String _selectedStatus = 'Semua'; // 'Semua', 'Aktif', 'Selesai'
   final TextEditingController _searchController = TextEditingController();
 
   @override
@@ -38,7 +40,9 @@ class _TaskListScreenState extends State<TaskListScreen> {
       _selectedType = 'Semua';
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<TaskProvider>().fetchTasks();
+      final tasks = context.read<TaskProvider>();
+      tasks.fetchTasks();
+      tasks.fetchTaskHistory();
     });
   }
 
@@ -51,25 +55,27 @@ class _TaskListScreenState extends State<TaskListScreen> {
   @override
   Widget build(BuildContext context) {
     final isTechnician = context.watch<AuthProvider>().role == 'technician';
-    const bgBackground = Color(0xFFFCF8FF);
-    const textOnSurface = Color(0xFF19163F);
-    const textOnSurfaceVariant = Color(0xFF474551);
+    const primaryBlue = Color(0xFF2563EB);
+    const bgBackground = Color(0xFFF6F9FF);
+    const textOnSurface = Color(0xFF0F172A);
+    const textOnSurfaceVariant = Color(0xFF475569);
 
     return Scaffold(
       backgroundColor: bgBackground,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: primaryBlue,
+        foregroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
         title: _isSearching
             ? TextField(
                 controller: _searchController,
                 autofocus: true,
-                style: const TextStyle(color: Color(0xFF19163F), fontSize: 16),
-                cursorColor: Color(0xFF1B0C6B),
+                style: const TextStyle(color: Colors.white, fontSize: 16),
+                cursorColor: Colors.white,
                 decoration: const InputDecoration(
                   hintText: 'Cari tugas, pelanggan...',
-                  hintStyle: TextStyle(color: Color(0xFF787582), fontSize: 14),
+                  hintStyle: TextStyle(color: Color(0xFFEAF2FF), fontSize: 14),
                   border: InputBorder.none,
                 ),
                 onChanged: (value) {
@@ -79,16 +85,16 @@ class _TaskListScreenState extends State<TaskListScreen> {
                 },
               )
             : const Text(
-                'Tugas Saya',
+                'Tugas',
                 style: TextStyle(
-                  color: Color(0xFF1B0C6B),
+                  color: Colors.white,
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
                 ),
               ),
         centerTitle: !_isSearching,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Color(0xFF787582)),
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () {
             if (_isSearching) {
               setState(() {
@@ -108,22 +114,18 @@ class _TaskListScreenState extends State<TaskListScreen> {
         actions: [
           if (!_isSearching)
             IconButton(
-              icon: const Icon(Icons.search, color: Color(0xFF787582)),
+              icon: const Icon(Icons.search, color: Colors.white),
               onPressed: () {
                 setState(() {
                   _isSearching = true;
                 });
               },
             ),
-          IconButton(
-            icon: const Icon(Icons.filter_list, color: Color(0xFF787582)),
-            onPressed: () {},
-          ),
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
           child: Container(
-            color: const Color(0xFFC8C4D3).withValues(alpha: 0.5),
+            color: Colors.white.withValues(alpha: 0.14),
             height: 1,
           ),
         ),
@@ -134,16 +136,20 @@ class _TaskListScreenState extends State<TaskListScreen> {
             return const Center(child: CircularProgressIndicator());
           }
 
-          var tasks = provider.tasks;
+          final activeTasks = provider.tasks.where(_isTaskActive).toList();
+          final doneTasks = provider.historyTasks
+              .where(_isTaskCompleted)
+              .toList();
+          final typedActiveCount = _filterBySelectedType(activeTasks).length;
+          final typedDoneCount = _filterBySelectedType(doneTasks).length;
+          var tasks = switch (_selectedStatus) {
+            'Aktif' => activeTasks,
+            'Selesai' => doneTasks,
+            _ => [...activeTasks, ...doneTasks],
+          };
 
-          if (_selectedType != 'Semua') {
-            tasks = tasks.where((t) {
-              final type = t['type']?.toString().toUpperCase() ?? '';
-              if (_selectedType == 'Tiket') return type == 'TR';
-              if (_selectedType == 'PSB') return type == 'INSTALL';
-              return true;
-            }).toList();
-          }
+          tasks = _filterBySelectedType(tasks);
+          tasks.sort((a, b) => _taskCreatedAt(b).compareTo(_taskCreatedAt(a)));
 
           // Removed status filtering to synchronize with web dashboard which shows all tasks
 
@@ -159,7 +165,16 @@ class _TaskListScreenState extends State<TaskListScreen> {
           }
 
           return RefreshIndicator(
-            onRefresh: () => provider.fetchTasks(refresh: true),
+            onRefresh: () async {
+              setState(() {
+                _selectedType = 'Semua';
+                _selectedStatus = 'Semua';
+              });
+              await Future.wait([
+                provider.fetchTasks(refresh: true),
+                provider.fetchTaskHistory(refresh: true),
+              ]);
+            },
             child: SingleChildScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
               child: Column(
@@ -167,84 +182,56 @@ class _TaskListScreenState extends State<TaskListScreen> {
                 children: [
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        const Text(
-                          'Daftar Tugas',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: textOnSurface,
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Daftar Tugas',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: textOnSurface,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                switch (_selectedStatus) {
+                                  'Aktif' =>
+                                    '${tasks.length} tugas aktif belum dikerjakan.',
+                                  'Selesai' =>
+                                    '${tasks.length} tugas sudah selesai dikerjakan.',
+                                  _ =>
+                                    '${tasks.length} tugas aktif dan selesai.',
+                                },
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  color: textOnSurfaceVariant,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '${tasks.length} active work orders assigned to you.',
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: textOnSurfaceVariant,
-                          ),
-                        ),
+                        const SizedBox(width: 10),
+                        _buildCompactTypeFilterPill('PSB'),
+                        const SizedBox(width: 6),
+                        _buildCompactTypeFilterPill('Tiket'),
                       ],
                     ),
                   ),
 
-                  // Filters
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
+                  const SizedBox(height: 8),
+
+                  Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Row(
                       children: [
-                        _buildFilterButton(
-                          icon: Icons.tune,
-                          label: 'FILTERS',
-                          bgColor: const Color(0xFFEAE5FF),
-                          textColor: textOnSurface,
-                        ),
-                        const SizedBox(width: 12),
-
-                        PopupMenuButton<String>(
-                          color: Colors.white,
-                          surfaceTintColor: Colors.white,
-                          onSelected: (String result) {
-                            setState(() {
-                              _selectedType = result;
-                            });
-                          },
-                          itemBuilder: (BuildContext context) =>
-                              <PopupMenuEntry<String>>[
-                                const PopupMenuItem<String>(
-                                  value: 'Semua',
-                                  child: Text(
-                                    'Semua',
-                                    style: TextStyle(color: Colors.black),
-                                  ),
-                                ),
-                                const PopupMenuItem<String>(
-                                  value: 'Tiket',
-                                  child: Text(
-                                    'Tiket',
-                                    style: TextStyle(color: Colors.black),
-                                  ),
-                                ),
-                                const PopupMenuItem<String>(
-                                  value: 'PSB',
-                                  child: Text(
-                                    'PSB',
-                                    style: TextStyle(color: Colors.black),
-                                  ),
-                                ),
-                              ],
-                          child: _buildFilterButton(
-                            label: _selectedType == 'Semua'
-                                ? 'TIKET/PSB'
-                                : _selectedType.toUpperCase(),
-                            suffixIcon: Icons.arrow_drop_down,
-                            bgColor: Colors.white,
-                            textColor: textOnSurfaceVariant,
-                          ),
-                        ),
+                        _buildStatusFilterPill('Aktif', typedActiveCount),
+                        const SizedBox(width: 10),
+                        _buildStatusFilterPill('Selesai', typedDoneCount),
                       ],
                     ),
                   ),
@@ -262,7 +249,14 @@ class _TaskListScreenState extends State<TaskListScreen> {
                     const Center(
                       child: Padding(
                         padding: EdgeInsets.all(20.0),
-                        child: Text('Tidak ada tugas tersedia.'),
+                        child: Text(
+                          'Tidak ada tugas tersedia.',
+                          style: TextStyle(
+                            color: textOnSurfaceVariant,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
                       ),
                     )
                   else
@@ -275,7 +269,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
                       ),
                     ),
 
-                  const SizedBox(height: 64),
+                  SizedBox(height: isTechnician ? 24 : 12),
                 ],
               ),
             ),
@@ -283,67 +277,208 @@ class _TaskListScreenState extends State<TaskListScreen> {
         },
       ),
 
-      floatingActionButton: isTechnician
-          ? null
-          : FloatingActionButton(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const NewTaskScreen(),
-                  ),
-                );
-              },
-              backgroundColor: const Color(0xFF070038),
-              foregroundColor: Colors.white,
-              child: const Icon(Icons.add),
-            ),
+      bottomNavigationBar: isTechnician ? null : _buildTaskActionBar(),
     );
   }
 
-  Widget _buildFilterButton({
-    IconData? icon,
-    required String label,
-    IconData? suffixIcon,
-    required Color bgColor,
-    required Color textColor,
-  }) {
-    return Container(
-      height: 34,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: const Color(0xFF787582).withValues(alpha: 0.5),
+  Widget _buildCompactTypeFilterPill(String label) {
+    final selected = _selectedType == label;
+    const primaryBlue = Color(0xFF2563EB);
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: () {
+        setState(() {
+          _selectedType = selected ? 'Semua' : label;
+        });
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        height: 32,
+        constraints: const BoxConstraints(minWidth: 62),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? primaryBlue : Colors.white,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? primaryBlue : const Color(0xFFBFDBFE),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: selected ? Colors.white : primaryBlue,
+          ),
         ),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (icon != null) ...[
-            Icon(icon, size: 16, color: textColor),
-            const SizedBox(width: 6),
-          ],
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              color: textColor,
-              letterSpacing: 0.3,
+    );
+  }
+
+  List<dynamic> _filterBySelectedType(List<dynamic> source) {
+    if (_selectedType == 'Semua') return source;
+    return source.where((t) {
+      if (t is! Map) return false;
+      final type = t['type']?.toString().toUpperCase() ?? '';
+      if (_selectedType == 'Tiket') return type == 'TR';
+      if (_selectedType == 'PSB') return type == 'INSTALL';
+      return true;
+    }).toList();
+  }
+
+  bool _isTaskActive(dynamic raw) {
+    if (raw is! Map) return false;
+    final status = raw['status']?.toString().toLowerCase().trim() ?? '';
+    return !{
+      'closed',
+      'completed',
+      'resolved',
+      'done',
+      'selesai',
+      'cancelled',
+      'canceled',
+      'in_progress',
+      'mulai',
+    }.contains(status);
+  }
+
+  bool _isTaskCompleted(dynamic raw) {
+    if (raw is! Map) return false;
+    final status = raw['status']?.toString().toLowerCase().trim() ?? '';
+    return {
+      'closed',
+      'completed',
+      'resolved',
+      'done',
+      'selesai',
+    }.contains(status);
+  }
+
+  String _taskCreatedAt(dynamic raw) {
+    if (raw is! Map) return '';
+    final createdAt = raw['created_at']?.toString() ?? '';
+    if (createdAt.isNotEmpty) return createdAt;
+    return raw['activity_at']?.toString() ?? '';
+  }
+
+  Widget _buildStatusFilterPill(String label, int count) {
+    final selected = _selectedStatus == label;
+    const primaryBlue = Color(0xFF2563EB);
+    final color = label == 'Selesai' ? const Color(0xFF16A34A) : primaryBlue;
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () => setState(() => _selectedStatus = label),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          height: 38,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: selected ? color : Colors.white,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: selected ? color : const Color(0xFFBFDBFE),
             ),
           ),
-          if (suffixIcon != null) ...[
-            const SizedBox(width: 6),
-            Icon(suffixIcon, size: 16, color: textColor),
-          ],
-        ],
+          child: Text(
+            '$label ($count)',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: selected ? Colors.white : color,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ),
       ),
     );
+  }
+
+  Widget _buildTaskActionBar() {
+    const primaryBlue = Color(0xFF2563EB);
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: const Border(top: BorderSide(color: Color(0xFFE2E8F0))),
+        boxShadow: [
+          BoxShadow(
+            color: primaryBlue.withValues(alpha: 0.10),
+            blurRadius: 18,
+            offset: const Offset(0, -8),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          child: Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _openAddPsb,
+                  icon: const Icon(Icons.person_add_alt_1_rounded, size: 18),
+                  label: const Text('Tambah PSB'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: primaryBlue,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _openAddTicket,
+                  icon: const Icon(Icons.confirmation_number_rounded, size: 18),
+                  label: const Text('Tambah tiket'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: primaryBlue,
+                    side: const BorderSide(color: primaryBlue, width: 1.2),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openAddPsb() async {
+    final provider = context.read<TaskProvider>();
+    final created = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (context) => const NewTaskScreen()),
+    );
+    if (mounted && created == true) {
+      provider.fetchTasks(refresh: true);
+      provider.fetchTaskHistory(refresh: true);
+    }
+  }
+
+  Future<void> _openAddTicket() async {
+    final created = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (context) => const AddTroubleTicketScreen()),
+    );
+    if (mounted && created == true) {
+      final provider = context.read<TaskProvider>();
+      provider.fetchTasks(refresh: true);
+      provider.fetchTaskHistory(refresh: true);
+    }
   }
 
   Widget _buildTaskCard(Map<String, dynamic> task) {
+    final isCompleted = _isTaskCompleted(task);
     final rawPriority = task['priority']?.toString().toUpperCase() ?? '';
     final priorityLabel = switch (rawPriority) {
       'HIGH' || 'CRITICAL' => 'URGENT',
@@ -364,15 +499,15 @@ class _TaskListScreenState extends State<TaskListScreen> {
         priorityIcon = Icons.error;
         break;
       case 'MEDIUM':
-        priorityColor = const Color(0xFF423A91);
-        priorityBgColor = const Color(0xFFE4DFFF);
+        priorityColor = const Color(0xFF1D4ED8);
+        priorityBgColor = const Color(0xFFDBEAFE);
         priorityIcon = Icons.info;
         break;
       case 'LOW':
       case 'NORMAL':
       default:
-        priorityColor = const Color(0xFF474551);
-        priorityBgColor = const Color(0xFFEAE5FF); // surface-variant
+        priorityColor = const Color(0xFF475569);
+        priorityBgColor = const Color(0xFFEFF6FF); // surface-variant
         priorityIcon = Icons.check_circle;
         break;
     }
@@ -391,8 +526,8 @@ class _TaskListScreenState extends State<TaskListScreen> {
       typeColor = const Color(0xFF146C2E); // Green
       typeBgColor = const Color(0xFFC4EECE);
     } else {
-      typeColor = const Color(0xFF474551);
-      typeBgColor = const Color(0xFFF0EBFF);
+      typeColor = const Color(0xFF2563EB);
+      typeBgColor = const Color(0xFFEFF6FF);
     }
 
     return Container(
@@ -433,7 +568,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
                                 style: TextStyle(
                                   fontSize: 10,
                                   fontWeight: FontWeight.w700,
-                                  color: Color(0xFF474551),
+                                  color: Color(0xFF475569),
                                 ),
                               ),
                               const SizedBox(width: 6),
@@ -496,7 +631,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
                         style: const TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
-                          color: Color(0xFF19163F),
+                          color: Color(0xFF0F172A),
                           height: 1.25,
                         ),
                       ),
@@ -507,7 +642,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
                           const Icon(
                             Icons.apartment,
                             size: 14,
-                            color: Color(0xFF787582),
+                            color: Color(0xFF64748B),
                           ),
                           const SizedBox(width: 8),
                           Expanded(
@@ -522,14 +657,14 @@ class _TaskListScreenState extends State<TaskListScreen> {
                                   style: const TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
-                                    color: Color(0xFF19163F),
+                                    color: Color(0xFF0F172A),
                                   ),
                                 ),
                                 Text(
                                   'ID: ${task['id']?.toString() ?? '-'}',
                                   style: const TextStyle(
                                     fontSize: 12,
-                                    color: Color(0xFF474551),
+                                    color: Color(0xFF475569),
                                   ),
                                 ),
                               ],
@@ -544,7 +679,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
                           const Icon(
                             Icons.location_on,
                             size: 14,
-                            color: Color(0xFF787582),
+                            color: Color(0xFF64748B),
                           ),
                           const SizedBox(width: 8),
                           Expanded(
@@ -555,7 +690,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
                                 fontSize: 12,
-                                color: Color(0xFF474551),
+                                color: Color(0xFF475569),
                                 height: 1.3,
                               ),
                             ),
@@ -570,7 +705,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
                             const Icon(
                               Icons.phone,
                               size: 14,
-                              color: Color(0xFF787582),
+                              color: Color(0xFF64748B),
                             ),
                             const SizedBox(width: 8),
                             Expanded(
@@ -580,7 +715,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
                                   fontSize: 12,
-                                  color: Color(0xFF474551),
+                                  color: Color(0xFF475569),
                                 ),
                               ),
                             ),
@@ -588,37 +723,68 @@ class _TaskListScreenState extends State<TaskListScreen> {
                         ),
                       ],
                       const SizedBox(height: 8),
-                      const Divider(height: 1, color: Color(0xFFE4DFFF)),
+                      const Divider(height: 1, color: Color(0xFFDBEAFE)),
                       const SizedBox(height: 6),
 
                       // Action buttons based on priority
-                      if (task['priority'] == 'HIGH')
+                      if (isCompleted)
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton(
+                            onPressed: () async {
+                              final provider = context.read<TaskProvider>();
+                              await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) =>
+                                      TaskDetailScreen(task: task),
+                                ),
+                              );
+                              if (mounted) {
+                                provider.fetchTasks(refresh: true);
+                                provider.fetchTaskHistory(refresh: true);
+                              }
+                            },
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFF0F172A),
+                              side: const BorderSide(color: Color(0xFF93C5FD)),
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              minimumSize: const Size(0, 40),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                            child: const Text(
+                              'LIHAT',
+                              style: TextStyle(
+                                color: Color(0xFF0F172A),
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        )
+                      else if (task['priority'] == 'HIGH')
                         SizedBox(
                           width: double.infinity,
                           child: ElevatedButton.icon(
-                            onPressed: () {
+                            onPressed: () async {
+                              final provider = context.read<TaskProvider>();
                               final id = task['id']?.toString();
                               final type = task['type']?.toString();
                               if (id != null && type != null) {
-                                context.read<TaskProvider>().updateTaskStatus(
-                                  id,
-                                  type,
-                                  'mulai',
-                                );
+                                provider.updateTaskStatus(id, type, 'mulai');
                               }
-                              Navigator.push(
+                              await Navigator.push(
                                 context,
                                 MaterialPageRoute(
                                   builder: (context) =>
                                       JobExecutionScreen(task: task),
                                 ),
-                              ).then((_) {
-                                if (context.mounted) {
-                                  context.read<TaskProvider>().fetchTasks(
-                                    refresh: true,
-                                  );
-                                }
-                              });
+                              );
+                              if (mounted) {
+                                provider.fetchTasks(refresh: true);
+                              }
                             },
                             icon: const Icon(
                               Icons.play_arrow,
@@ -634,7 +800,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
                               ),
                             ),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF070038),
+                              backgroundColor: const Color(0xFF2563EB),
                               padding: const EdgeInsets.symmetric(vertical: 10),
                               minimumSize: const Size(0, 40),
                               shape: RoundedRectangleBorder(
@@ -650,8 +816,9 @@ class _TaskListScreenState extends State<TaskListScreen> {
                               child: OutlinedButton(
                                 onPressed: () {},
                                 style: OutlinedButton.styleFrom(
+                                  foregroundColor: const Color(0xFF0F172A),
                                   side: const BorderSide(
-                                    color: Color(0xFF787582),
+                                    color: Color(0xFF93C5FD),
                                   ),
                                   padding: const EdgeInsets.symmetric(
                                     vertical: 10,
@@ -662,9 +829,9 @@ class _TaskListScreenState extends State<TaskListScreen> {
                                   ),
                                 ),
                                 child: const Text(
-                                  'Details',
+                                  'Detail',
                                   style: TextStyle(
-                                    color: Color(0xFF19163F),
+                                    color: Color(0xFF0F172A),
                                     fontWeight: FontWeight.w600,
                                     fontSize: 13,
                                   ),
@@ -674,27 +841,27 @@ class _TaskListScreenState extends State<TaskListScreen> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: ElevatedButton.icon(
-                                onPressed: () {
+                                onPressed: () async {
+                                  final provider = context.read<TaskProvider>();
                                   final id = task['id']?.toString();
                                   final type = task['type']?.toString();
                                   if (id != null && type != null) {
-                                    context
-                                        .read<TaskProvider>()
-                                        .updateTaskStatus(id, type, 'mulai');
+                                    provider.updateTaskStatus(
+                                      id,
+                                      type,
+                                      'mulai',
+                                    );
                                   }
-                                  Navigator.push(
+                                  await Navigator.push(
                                     context,
                                     MaterialPageRoute(
                                       builder: (context) =>
                                           JobExecutionScreen(task: task),
                                     ),
-                                  ).then((_) {
-                                    if (context.mounted) {
-                                      context.read<TaskProvider>().fetchTasks(
-                                        refresh: true,
-                                      );
-                                    }
-                                  });
+                                  );
+                                  if (mounted) {
+                                    provider.fetchTasks(refresh: true);
+                                  }
                                 },
                                 icon: const Icon(
                                   Icons.play_arrow,
@@ -710,7 +877,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
                                   ),
                                 ),
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: const Color(0xFF070038),
+                                  backgroundColor: const Color(0xFF2563EB),
                                   padding: const EdgeInsets.symmetric(
                                     vertical: 10,
                                   ),
@@ -727,23 +894,22 @@ class _TaskListScreenState extends State<TaskListScreen> {
                         SizedBox(
                           width: double.infinity,
                           child: OutlinedButton(
-                            onPressed: () {
-                              Navigator.push(
+                            onPressed: () async {
+                              final provider = context.read<TaskProvider>();
+                              await Navigator.push(
                                 context,
                                 MaterialPageRoute(
                                   builder: (context) =>
                                       TaskDetailScreen(task: task),
                                 ),
-                              ).then((_) {
-                                if (context.mounted) {
-                                  context.read<TaskProvider>().fetchTasks(
-                                    refresh: true,
-                                  );
-                                }
-                              });
+                              );
+                              if (mounted) {
+                                provider.fetchTasks(refresh: true);
+                              }
                             },
                             style: OutlinedButton.styleFrom(
-                              side: const BorderSide(color: Color(0xFF787582)),
+                              foregroundColor: const Color(0xFF0F172A),
+                              side: const BorderSide(color: Color(0xFF93C5FD)),
                               padding: const EdgeInsets.symmetric(vertical: 10),
                               minimumSize: const Size(0, 40),
                               shape: RoundedRectangleBorder(
@@ -753,7 +919,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
                             child: const Text(
                               'LIHAT',
                               style: TextStyle(
-                                color: Color(0xFF19163F),
+                                color: Color(0xFF0F172A),
                                 fontWeight: FontWeight.w600,
                                 fontSize: 13,
                               ),

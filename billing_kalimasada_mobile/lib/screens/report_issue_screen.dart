@@ -23,17 +23,18 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
     return Scaffold(
       backgroundColor: bgBackground,
       appBar: AppBar(
-        backgroundColor: bgBackground,
+        backgroundColor: const Color(0xFF2563EB),
+        foregroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: textOnSurface),
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
           'Report Issue',
           style: TextStyle(
-            color: textOnSurface,
+            color: Colors.white,
             fontSize: 22,
             fontWeight: FontWeight.bold,
           ),
@@ -41,7 +42,7 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
         centerTitle: true,
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(color: const Color(0xFFC8C4D3), height: 1),
+          child: Container(color: Colors.white24, height: 1),
         ),
       ),
       body: SingleChildScrollView(
@@ -52,7 +53,11 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
             // Issue Category
             const Text(
               'Issue Category',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: textOnSurface),
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: textOnSurface,
+              ),
             ),
             const SizedBox(height: 8),
             Container(
@@ -67,12 +72,27 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
                   value: _selectedCategory,
                   hint: const Text('Select a category...'),
                   isExpanded: true,
-                  icon: const Icon(Icons.expand_more, color: textOnSurfaceVariant),
+                  icon: const Icon(
+                    Icons.expand_more,
+                    color: textOnSurfaceVariant,
+                  ),
                   items: const [
-                    DropdownMenuItem(value: 'hardware', child: Text('Hardware Failure')),
-                    DropdownMenuItem(value: 'refusal', child: Text('Customer Refusal')),
-                    DropdownMenuItem(value: 'access', child: Text('Access Denied')),
-                    DropdownMenuItem(value: 'wiring', child: Text('Wiring Problem')),
+                    DropdownMenuItem(
+                      value: 'hardware',
+                      child: Text('Hardware Failure'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'refusal',
+                      child: Text('Customer Refusal'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'access',
+                      child: Text('Access Denied'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'wiring',
+                      child: Text('Wiring Problem'),
+                    ),
                     DropdownMenuItem(value: 'other', child: Text('Other')),
                   ],
                   onChanged: (value) {
@@ -88,7 +108,11 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
             // Description
             const Text(
               'Description',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: textOnSurface),
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: textOnSurface,
+              ),
             ),
             const SizedBox(height: 8),
             TextField(
@@ -120,11 +144,19 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
               children: const [
                 Text(
                   'Attach Evidence',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: textOnSurface),
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: textOnSurface,
+                  ),
                 ),
                 Text(
                   'UP TO 3 PHOTOS',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: textOnSurfaceVariant),
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: textOnSurfaceVariant,
+                  ),
                 ),
               ],
             ),
@@ -140,14 +172,28 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
                         decoration: BoxDecoration(
                           color: const Color(0xFFE4DFFF), // surface-variant
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFF787582), style: BorderStyle.solid), // dashed ideally
+                          border: Border.all(
+                            color: const Color(0xFF787582),
+                            style: BorderStyle.solid,
+                          ), // dashed ideally
                         ),
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: const [
-                            Icon(Icons.add_a_photo, size: 32, color: textOnSurfaceVariant),
+                            Icon(
+                              Icons.add_a_photo,
+                              size: 32,
+                              color: textOnSurfaceVariant,
+                            ),
                             SizedBox(height: 8),
-                            Text('ADD', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: textOnSurfaceVariant)),
+                            Text(
+                              'ADD',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                                color: textOnSurfaceVariant,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -165,7 +211,11 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
                         border: Border.all(color: const Color(0xFFC8C4D3)),
                       ),
                       child: const Center(
-                        child: Icon(Icons.image, size: 32, color: textOnSurfaceVariant),
+                        child: Icon(
+                          Icons.image,
+                          size: 32,
+                          color: textOnSurfaceVariant,
+                        ),
                       ),
                     ),
                   ),
@@ -181,7 +231,11 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
                         border: Border.all(color: const Color(0xFFC8C4D3)),
                       ),
                       child: const Center(
-                        child: Icon(Icons.image, size: 32, color: textOnSurfaceVariant),
+                        child: Icon(
+                          Icons.image,
+                          size: 32,
+                          color: textOnSurfaceVariant,
+                        ),
                       ),
                     ),
                   ),
@@ -193,7 +247,11 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
             // Urgency Level
             const Text(
               'Urgency Level',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: textOnSurface),
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: textOnSurface,
+              ),
             ),
             const SizedBox(height: 8),
             Container(
@@ -211,20 +269,38 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
                       child: Container(
                         height: 48,
                         decoration: BoxDecoration(
-                          color: !_isCritical ? Colors.white : Colors.transparent,
+                          color: !_isCritical
+                              ? Colors.white
+                              : Colors.transparent,
                           borderRadius: BorderRadius.circular(4),
-                          boxShadow: !_isCritical ? [const BoxShadow(color: Colors.black12, blurRadius: 2)] : null,
-                          border: !_isCritical ? Border.all(color: const Color(0xFFC8C4D3)) : null,
+                          boxShadow: !_isCritical
+                              ? [
+                                  const BoxShadow(
+                                    color: Colors.black12,
+                                    blurRadius: 2,
+                                  ),
+                                ]
+                              : null,
+                          border: !_isCritical
+                              ? Border.all(color: const Color(0xFFC8C4D3))
+                              : null,
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(Icons.info, color: !_isCritical ? primaryColor : textOnSurfaceVariant),
+                            Icon(
+                              Icons.info,
+                              color: !_isCritical
+                                  ? primaryColor
+                                  : textOnSurfaceVariant,
+                            ),
                             const SizedBox(width: 8),
                             Text(
                               'Normal',
                               style: TextStyle(
-                                color: !_isCritical ? primaryColor : textOnSurfaceVariant,
+                                color: !_isCritical
+                                    ? primaryColor
+                                    : textOnSurfaceVariant,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -239,20 +315,38 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
                       child: Container(
                         height: 48,
                         decoration: BoxDecoration(
-                          color: _isCritical ? Colors.white : Colors.transparent,
+                          color: _isCritical
+                              ? Colors.white
+                              : Colors.transparent,
                           borderRadius: BorderRadius.circular(4),
-                          boxShadow: _isCritical ? [const BoxShadow(color: Colors.black12, blurRadius: 2)] : null,
-                          border: _isCritical ? Border.all(color: const Color(0xFFC8C4D3)) : null,
+                          boxShadow: _isCritical
+                              ? [
+                                  const BoxShadow(
+                                    color: Colors.black12,
+                                    blurRadius: 2,
+                                  ),
+                                ]
+                              : null,
+                          border: _isCritical
+                              ? Border.all(color: const Color(0xFFC8C4D3))
+                              : null,
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(Icons.warning, color: _isCritical ? const Color(0xFFBA1A1A) : textOnSurfaceVariant),
+                            Icon(
+                              Icons.warning,
+                              color: _isCritical
+                                  ? const Color(0xFFBA1A1A)
+                                  : textOnSurfaceVariant,
+                            ),
                             const SizedBox(width: 8),
                             Text(
                               'High (Critical)',
                               style: TextStyle(
-                                color: _isCritical ? const Color(0xFFBA1A1A) : textOnSurfaceVariant,
+                                color: _isCritical
+                                    ? const Color(0xFFBA1A1A)
+                                    : textOnSurfaceVariant,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
@@ -271,22 +365,41 @@ class _ReportIssueScreenState extends State<ReportIssueScreen> {
             ElevatedButton.icon(
               onPressed: () {},
               icon: const Icon(Icons.send, color: Colors.white),
-              label: const Text('Escalate to Back Office', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              label: const Text(
+                'Escalate to Back Office',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: primaryColor,
                 minimumSize: const Size(double.infinity, 56),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
             ),
             const SizedBox(height: 16),
             OutlinedButton.icon(
               onPressed: () {},
-              icon: const Icon(Icons.save, color: Color(0xFF7E4990)), // secondary
-              label: const Text('Save as Draft', style: TextStyle(color: Color(0xFF7E4990), fontWeight: FontWeight.bold)),
+              icon: const Icon(
+                Icons.save,
+                color: Color(0xFF7E4990),
+              ), // secondary
+              label: const Text(
+                'Save as Draft',
+                style: TextStyle(
+                  color: Color(0xFF7E4990),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
               style: OutlinedButton.styleFrom(
                 side: const BorderSide(color: Color(0xFF7E4990), width: 2),
                 minimumSize: const Size(double.infinity, 56),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
             ),
             const SizedBox(height: 24),

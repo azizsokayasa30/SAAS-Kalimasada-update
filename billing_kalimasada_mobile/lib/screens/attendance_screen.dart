@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../services/api_client.dart';
+import '../store/auth_provider.dart';
 import '../store/notification_provider.dart';
 import 'attendance_qr_scan_screen.dart';
 import 'settings_screen.dart';
@@ -46,6 +47,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   String? _checkInMode;
   bool _employeeMatched = true;
   final List<String> _sessionLogs = [];
+  bool _adminAttendanceLoading = false;
+  String? _adminAttendanceError;
+  Map<String, dynamic>? _adminAttendanceSummary;
+  List<Map<String, dynamic>> _adminAttendanceEmployees = [];
+
   /// Izin/cuti yang sudah diproses admin (30 hari), dari API `leave-requests/recent`.
   List<Map<String, dynamic>> _recentLeaves = [];
 
@@ -65,6 +71,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     _fetchStatus();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      if (context.read<AuthProvider>().role == 'admin') {
+        _fetchAdminAttendanceToday();
+      }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       try {
         context.read<NotificationProvider>().fetchNotifications(silent: true);
       } catch (_) {}
@@ -78,6 +90,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     });
     _statusRefreshTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       _fetchStatus(silent: true, keepLoading: false);
+      if (mounted && context.read<AuthProvider>().role == 'admin') {
+        _fetchAdminAttendanceToday(silent: true);
+      }
     });
   }
 
@@ -117,13 +132,15 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         ? Map<String, dynamic>.from(detailsRaw)
         : null;
     if (details == null) {
-      return (baseMessage == null || baseMessage.isEmpty) ? fallback : baseMessage;
+      return (baseMessage == null || baseMessage.isEmpty)
+          ? fallback
+          : baseMessage;
     }
 
     final branchName =
         details['branch_name']?.toString().trim().isNotEmpty == true
-            ? details['branch_name'].toString().trim()
-            : 'branch';
+        ? details['branch_name'].toString().trim()
+        : 'branch';
     final distance = _toDouble(details['distance_m']);
     final radius = _toDouble(details['radius_m']);
     final needCloser = _toDouble(details['need_closer_m']);
@@ -136,7 +153,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       return 'Gagal absen: Anda di luar radius $branchName.\nJarak Anda $distanceText m (maksimal $radiusText m).$needText';
     }
 
-    return (baseMessage == null || baseMessage.isEmpty) ? fallback : baseMessage;
+    return (baseMessage == null || baseMessage.isEmpty)
+        ? fallback
+        : baseMessage;
   }
 
   Future<void> _fetchStatus({
@@ -148,7 +167,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     }
     try {
       final res = await ApiClient.get('/api/mobile-adapter/attendance/status');
-      final leaveRes = await ApiClient.get('/api/mobile-adapter/leave-requests/recent');
+      final leaveRes = await ApiClient.get(
+        '/api/mobile-adapter/leave-requests/recent',
+      );
       if (leaveRes.statusCode == 200) {
         try {
           final leaveJson = jsonDecode(leaveRes.body) as Map<String, dynamic>;
@@ -169,7 +190,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           _employeeMatched = response['employee_matched'] != false;
           final data = response['data'];
           final responseNotice = response['attendance_notice']?.toString();
-          final autoCheckOut = response['auto_check_out_applied'] == true ||
+          final autoCheckOut =
+              response['auto_check_out_applied'] == true ||
               (data is Map && data['auto_check_out'] == true);
           if (data == null) {
             _status = 'awaiting';
@@ -239,6 +261,61 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     if (text.isNotEmpty) return text;
     if (minutes > 0) return 'Anda terlambat $minutes menit';
     return null;
+  }
+
+  int _toInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  Future<void> _fetchAdminAttendanceToday({bool silent = false}) async {
+    if (mounted && !silent) {
+      setState(() {
+        _adminAttendanceLoading = true;
+        _adminAttendanceError = null;
+      });
+    }
+
+    try {
+      final res = await ApiClient.get(
+        '/api/mobile-adapter/admin/attendance/today',
+      );
+      final body = ApiClient.decodeJsonObject(
+        res,
+        debugLabel: 'admin/attendance/today',
+      );
+      if (res.statusCode == 200 && body['success'] == true) {
+        final data = body['data'];
+        final summary = data is Map ? data['summary'] : null;
+        final employees = data is Map ? data['employees'] : null;
+        if (!mounted) return;
+        setState(() {
+          _adminAttendanceSummary = summary is Map
+              ? Map<String, dynamic>.from(summary)
+              : <String, dynamic>{};
+          _adminAttendanceEmployees = employees is List
+              ? employees
+                    .whereType<Map>()
+                    .map((item) => Map<String, dynamic>.from(item))
+                    .toList()
+              : <Map<String, dynamic>>[];
+          _adminAttendanceError = null;
+        });
+      } else {
+        final message =
+            body['message']?.toString() ?? 'Monitor absensi tidak tersedia';
+        if (!mounted) return;
+        setState(() => _adminAttendanceError = message);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _adminAttendanceError = 'Gagal memuat monitor: $e');
+    } finally {
+      if (mounted && !silent) {
+        setState(() => _adminAttendanceLoading = false);
+      }
+    }
   }
 
   Future<Position?> _determinePosition() async {
@@ -372,7 +449,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
       final res = await ApiClient.post('/api/mobile-adapter/attendance', body);
       _log('HTTP ${res.statusCode}');
-      final preview = res.body.length > 220 ? '${res.body.substring(0, 220)}…' : res.body;
+      final preview = res.body.length > 220
+          ? '${res.body.substring(0, 220)}…'
+          : res.body;
       _log('Body: $preview');
 
       if (res.statusCode == 200) {
@@ -424,7 +503,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         _log('Error HTTP ${res.statusCode}');
         String errorMessage = 'Server ${res.statusCode}';
         try {
-          final err = ApiClient.decodeJsonObject(res, debugLabel: 'absensi-error');
+          final err = ApiClient.decodeJsonObject(
+            res,
+            debugLabel: 'absensi-error',
+          );
           errorMessage = _buildAttendanceErrorMessage(
             err,
             fallback: errorMessage,
@@ -432,10 +514,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         } catch (_) {}
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(errorMessage),
-              backgroundColor: Colors.red,
-            ),
+            SnackBar(content: Text(errorMessage), backgroundColor: Colors.red),
           );
         }
       }
@@ -513,7 +592,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                   durationController.text.trim().isEmpty) {
                 messenger.showSnackBar(
                   const SnackBar(
-                    content: Text('Lengkapi jenis, tanggal mulai, jumlah hari, dan alasan.'),
+                    content: Text(
+                      'Lengkapi jenis, tanggal mulai, jumlah hari, dan alasan.',
+                    ),
                     backgroundColor: Colors.red,
                   ),
                 );
@@ -531,12 +612,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
               final endDate = model.startDate!.add(Duration(days: days - 1));
               setModalState(() => model.submitting = true);
               try {
-                final res = await ApiClient.post('/api/mobile-adapter/leave-request', {
-                  'request_type': model.requestType,
-                  'start_date': apiDateFmt.format(model.startDate!),
-                  'end_date': apiDateFmt.format(endDate),
-                  'reason': reason,
-                });
+                final res =
+                    await ApiClient.post('/api/mobile-adapter/leave-request', {
+                      'request_type': model.requestType,
+                      'start_date': apiDateFmt.format(model.startDate!),
+                      'end_date': apiDateFmt.format(endDate),
+                      'reason': reason,
+                    });
                 if (res.statusCode != 200) {
                   messenger.showSnackBar(
                     SnackBar(
@@ -548,7 +630,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 }
                 final Map<String, dynamic> json;
                 try {
-                  json = ApiClient.decodeJsonObject(res, debugLabel: 'izin-cuti');
+                  json = ApiClient.decodeJsonObject(
+                    res,
+                    debugLabel: 'izin-cuti',
+                  );
                 } on FormatException catch (e) {
                   messenger.showSnackBar(
                     SnackBar(
@@ -576,7 +661,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 } else {
                   messenger.showSnackBar(
                     SnackBar(
-                      content: Text(json['message']?.toString() ?? 'Gagal mengirim'),
+                      content: Text(
+                        json['message']?.toString() ?? 'Gagal mengirim',
+                      ),
                       backgroundColor: Colors.red,
                     ),
                   );
@@ -620,17 +707,29 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                     Text(
                       'Permintaan masuk ke admin untuk disetujui atau ditolak.',
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 12, color: textSecondary.withValues(alpha: 0.9)),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: textSecondary.withValues(alpha: 0.9),
+                      ),
                     ),
                     const SizedBox(height: 20),
-                    const Text('Jenis', style: TextStyle(color: textSecondary, fontSize: 13)),
+                    const Text(
+                      'Jenis',
+                      style: TextStyle(color: textSecondary, fontSize: 13),
+                    ),
                     const SizedBox(height: 8),
                     IgnorePointer(
                       ignoring: model.submitting,
                       child: SegmentedButton<String>(
                         segments: const [
-                          ButtonSegment<String>(value: 'izin', label: Text('Izin')),
-                          ButtonSegment<String>(value: 'cuti', label: Text('Cuti')),
+                          ButtonSegment<String>(
+                            value: 'izin',
+                            label: Text('Izin'),
+                          ),
+                          ButtonSegment<String>(
+                            value: 'cuti',
+                            label: Text('Cuti'),
+                          ),
                         ],
                         selected: {model.requestType},
                         onSelectionChanged: (Set<String> sel) {
@@ -648,11 +747,19 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                       decoration: InputDecoration(
                         labelText: 'Tanggal mulai',
                         labelStyle: const TextStyle(color: textSecondary),
-                        prefixIcon: const Icon(Icons.calendar_today, color: iconColor),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        prefixIcon: const Icon(
+                          Icons.calendar_today,
+                          color: iconColor,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: const BorderSide(color: primaryDark, width: 2),
+                          borderSide: const BorderSide(
+                            color: primaryDark,
+                            width: 2,
+                          ),
                         ),
                       ),
                       onTap: model.submitting
@@ -661,13 +768,19 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                               final d = await showDatePicker(
                                 context: sheetContext,
                                 initialDate: model.startDate ?? DateTime.now(),
-                                firstDate: DateTime.now().subtract(const Duration(days: 1)),
-                                lastDate: DateTime.now().add(const Duration(days: 365)),
+                                firstDate: DateTime.now().subtract(
+                                  const Duration(days: 1),
+                                ),
+                                lastDate: DateTime.now().add(
+                                  const Duration(days: 365),
+                                ),
                               );
                               if (d != null) {
                                 setModalState(() {
                                   model.startDate = d;
-                                  model.dateDisplay.text = sheetDateFmt.format(d);
+                                  model.dateDisplay.text = sheetDateFmt.format(
+                                    d,
+                                  );
                                 });
                               }
                             },
@@ -681,11 +794,19 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                       decoration: InputDecoration(
                         labelText: 'Jumlah hari (termasuk hari mulai)',
                         labelStyle: const TextStyle(color: textSecondary),
-                        prefixIcon: const Icon(Icons.access_time, color: iconColor),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        prefixIcon: const Icon(
+                          Icons.access_time,
+                          color: iconColor,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: const BorderSide(color: primaryDark, width: 2),
+                          borderSide: const BorderSide(
+                            color: primaryDark,
+                            width: 2,
+                          ),
                         ),
                       ),
                     ),
@@ -703,10 +824,15 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                           padding: EdgeInsets.only(bottom: 48.0),
                           child: Icon(Icons.edit_document, color: iconColor),
                         ),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: const BorderSide(color: primaryDark, width: 2),
+                          borderSide: const BorderSide(
+                            color: primaryDark,
+                            width: 2,
+                          ),
                         ),
                       ),
                     ),
@@ -756,6 +882,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isAdmin = context.watch<AuthProvider>().role == 'admin';
     final statusText = _status == 'awaiting'
         ? 'Belum masuk'
         : _status == 'checked_in'
@@ -774,13 +901,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           style: TextStyle(
             fontWeight: FontWeight.bold,
             fontSize: 20,
-            color: primaryDark,
+            color: Colors.white,
           ),
         ),
         centerTitle: false,
-        backgroundColor: bgColor,
+        backgroundColor: const Color(0xFF2563EB),
         elevation: 0,
-        iconTheme: const IconThemeData(color: primaryDark),
+        iconTheme: const IconThemeData(color: Colors.white),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 16.0),
@@ -794,9 +921,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 );
               },
               child: CircleAvatar(
-                backgroundColor: mutedPurple,
+                backgroundColor: Colors.white,
                 radius: 16,
-                child: const Icon(Icons.person, color: textSecondary, size: 20),
+                child: const Icon(
+                  Icons.person,
+                  color: Color(0xFF2563EB),
+                  size: 20,
+                ),
               ),
             ),
           ),
@@ -805,7 +936,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: primaryDark))
           : RefreshIndicator(
-              onRefresh: () => _fetchStatus(silent: false, keepLoading: false),
+              onRefresh: () async {
+                await _fetchStatus(silent: false, keepLoading: false);
+                if (isAdmin) {
+                  await _fetchAdminAttendanceToday();
+                }
+              },
               color: primaryDark,
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
@@ -1004,7 +1140,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                       children: [
                         Expanded(
                           child: ElevatedButton(
-                            onPressed: (_status == 'awaiting' && !_isActionLoading)
+                            onPressed:
+                                (_status == 'awaiting' && !_isActionLoading)
                                 ? () => _performAction('check_in')
                                 : null,
                             style: ElevatedButton.styleFrom(
@@ -1020,7 +1157,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                                 ? const SizedBox(
                                     width: 24,
                                     height: 24,
-                                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                      strokeWidth: 2,
+                                    ),
                                   )
                                 : const Row(
                                     mainAxisAlignment: MainAxisAlignment.center,
@@ -1029,7 +1169,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                                       SizedBox(width: 8),
                                       Text(
                                         'Masuk',
-                                        style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w600,
+                                        ),
                                       ),
                                     ],
                                   ),
@@ -1038,7 +1182,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                         const SizedBox(width: 16),
                         Expanded(
                           child: ElevatedButton(
-                            onPressed: (_status == 'checked_in' && !_isActionLoading)
+                            onPressed:
+                                (_status == 'checked_in' && !_isActionLoading)
                                 ? () => _performAction('check_out')
                                 : null,
                             style: ElevatedButton.styleFrom(
@@ -1054,7 +1199,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                                 ? const SizedBox(
                                     width: 24,
                                     height: 24,
-                                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                                    child: CircularProgressIndicator(
+                                      color: Colors.white,
+                                      strokeWidth: 2,
+                                    ),
                                   )
                                 : const Row(
                                     mainAxisAlignment: MainAxisAlignment.center,
@@ -1063,7 +1211,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                                       SizedBox(width: 8),
                                       Text(
                                         'Pulang',
-                                        style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w600,
+                                        ),
                                       ),
                                     ],
                                   ),
@@ -1105,7 +1257,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                           children: [
                             Row(
                               children: [
-                                Icon(Icons.event_note, color: iconColor, size: 22),
+                                Icon(
+                                  Icons.event_note,
+                                  color: iconColor,
+                                  size: 22,
+                                ),
                                 const SizedBox(width: 8),
                                 const Expanded(
                                   child: Text(
@@ -1136,87 +1292,96 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                     ],
                     const SizedBox(height: 32),
 
-                    // Logs
-                    const Text(
-                      'Log terkini',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: primaryDark,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    if (_sessionLogs.isNotEmpty) ...[
+                    if (isAdmin)
+                      _buildAdminAttendanceMonitor()
+                    else ...[
                       const Text(
-                        'Log sesi (perangkat)',
+                        'Log terkini',
                         style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: textMain,
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: primaryDark,
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF5F5F7),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: borderColor),
+                      const SizedBox(height: 16),
+                      if (_sessionLogs.isNotEmpty) ...[
+                        const Text(
+                          'Log sesi (perangkat)',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: textMain,
+                          ),
                         ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: _sessionLogs
-                              .map(
-                                (line) => Padding(
-                                  padding: const EdgeInsets.symmetric(vertical: 2),
-                                  child: Text(
-                                    line,
-                                    style: const TextStyle(
-                                      fontSize: 11,
-                                      fontFamily: 'monospace',
-                                      height: 1.25,
-                                      color: textSecondary,
+                        const SizedBox(height: 8),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF5F5F7),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: borderColor),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: _sessionLogs
+                                .map(
+                                  (line) => Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 2,
+                                    ),
+                                    child: Text(
+                                      line,
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        fontFamily: 'monospace',
+                                        height: 1.25,
+                                        color: textSecondary,
+                                      ),
                                     ),
                                   ),
+                                )
+                                .toList(),
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                      ],
+                      if (_attendanceData == null)
+                        const Text(
+                          'Belum ada log absensi server hari ini.',
+                          style: TextStyle(color: textSecondary),
+                        )
+                      else
+                        Container(
+                          decoration: BoxDecoration(
+                            color: surfaceColor,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: borderColor),
+                          ),
+                          child: Column(
+                            children: [
+                              if (_attendanceData!['check_out'] != null)
+                                _buildLogItem(
+                                  'Pulang (server)',
+                                  _formatShortTime(
+                                    _attendanceData!['check_out'],
+                                  ),
+                                  Icons.logout,
                                 ),
-                              )
-                              .toList(),
+                              if (_attendanceData!['check_out'] != null)
+                                const Divider(height: 1, color: borderColor),
+                              if (_attendanceData!['check_in'] != null)
+                                _buildLogItem(
+                                  'Masuk (server)',
+                                  _formatShortTime(
+                                    _attendanceData!['check_in'],
+                                  ),
+                                  Icons.login,
+                                ),
+                            ],
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 20),
                     ],
-                    if (_attendanceData == null)
-                      const Text(
-                        'Belum ada log absensi server hari ini.',
-                        style: TextStyle(color: textSecondary),
-                      )
-                    else
-                      Container(
-                        decoration: BoxDecoration(
-                          color: surfaceColor,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: borderColor),
-                        ),
-                        child: Column(
-                          children: [
-                            if (_attendanceData!['check_out'] != null)
-                              _buildLogItem(
-                                'Pulang (server)',
-                                _formatShortTime(_attendanceData!['check_out']),
-                                Icons.logout,
-                              ),
-                            if (_attendanceData!['check_out'] != null)
-                              const Divider(height: 1, color: borderColor),
-                            if (_attendanceData!['check_in'] != null)
-                              _buildLogItem(
-                                'Masuk (server)',
-                                _formatShortTime(_attendanceData!['check_in']),
-                                Icons.login,
-                              ),
-                          ],
-                        ),
-                      ),
                   ],
                 ),
               ),
@@ -1238,7 +1403,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         children: [
           Icon(
             approved ? Icons.check_circle_outline : Icons.cancel_outlined,
-            color: approved ? Colors.green.shade700 : Colors.deepOrange.shade800,
+            color: approved
+                ? Colors.green.shade700
+                : Colors.deepOrange.shade800,
             size: 22,
           ),
           const SizedBox(width: 10),
@@ -1251,7 +1418,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                   style: TextStyle(
                     fontWeight: FontWeight.w700,
                     fontSize: 13,
-                    color: approved ? Colors.green.shade800 : Colors.deepOrange.shade900,
+                    color: approved
+                        ? Colors.green.shade800
+                        : Colors.deepOrange.shade900,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -1324,8 +1493,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
   Widget _buildGpsLockedTile() {
     return Tooltip(
-      message:
-          'GPS tidak dipilih terpisah — lokasi selalu dikirim saat masuk.',
+      message: 'GPS tidak dipilih terpisah — lokasi selalu dikirim saat masuk.',
       child: Opacity(
         opacity: 0.45,
         child: Container(
@@ -1360,6 +1528,260 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  String _formatAdminAttendanceTime(dynamic value) {
+    final raw = value?.toString().trim() ?? '';
+    if (raw.isEmpty) return '-';
+
+    try {
+      final normalized = raw.contains('T') ? raw : raw.replaceFirst(' ', 'T');
+      final dt = DateTime.parse(normalized).toLocal();
+      return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      final match = RegExp(r'(\d{2}):(\d{2})').firstMatch(raw);
+      if (match != null) return '${match.group(1)}:${match.group(2)}';
+      return raw;
+    }
+  }
+
+  Widget _buildAdminAttendanceMonitor() {
+    final summary = _adminAttendanceSummary ?? const <String, dynamic>{};
+    final total = _toInt(summary['total_employees']);
+    final present = _toInt(summary['present']);
+    final absent = _toInt(summary['absent']);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                'Monitor absensi karyawan',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: primaryDark,
+                ),
+              ),
+            ),
+            if (_adminAttendanceLoading)
+              const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: primaryDark,
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Data absen seluruh karyawan hari ini',
+          style: TextStyle(
+            fontSize: 13,
+            height: 1.35,
+            color: textSecondary.withValues(alpha: 0.9),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: _buildAdminAttendanceStatCard(
+                label: 'Total karyawan',
+                value: total,
+                color: primaryDark,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _buildAdminAttendanceStatCard(
+                label: 'Masuk',
+                value: present,
+                color: Colors.green.shade700,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _buildAdminAttendanceStatCard(
+                label: 'Alpa',
+                value: absent,
+                color: Colors.red.shade700,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        if (_adminAttendanceError != null)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFEBEE),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFFFCDD2)),
+            ),
+            child: Text(
+              _adminAttendanceError!,
+              style: TextStyle(
+                color: Colors.red.shade800,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          )
+        else
+          Container(
+            decoration: BoxDecoration(
+              color: surfaceColor,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: borderColor),
+            ),
+            child: _adminAttendanceEmployees.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.all(18),
+                    child: Text(
+                      'Belum ada data karyawan aktif.',
+                      style: TextStyle(color: textSecondary),
+                    ),
+                  )
+                : Column(
+                    children: [
+                      for (var i = 0; i < _adminAttendanceEmployees.length; i++)
+                        Column(
+                          children: [
+                            _buildAdminAttendanceEmployeeRow(
+                              _adminAttendanceEmployees[i],
+                            ),
+                            if (i != _adminAttendanceEmployees.length - 1)
+                              const Divider(height: 1, color: borderColor),
+                          ],
+                        ),
+                    ],
+                  ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildAdminAttendanceStatCard({
+    required String label,
+    required int value,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
+      decoration: BoxDecoration(
+        color: surfaceColor,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: borderColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            value.toString(),
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: color,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 11,
+              height: 1.2,
+              fontWeight: FontWeight.w600,
+              color: textSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAdminAttendanceEmployeeRow(Map<String, dynamic> employee) {
+    final name = (employee['name'] ?? 'Tanpa nama').toString();
+    final status = (employee['status'] ?? 'alpa').toString().toLowerCase();
+    final isPresent = status == 'masuk';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: isPresent
+                  ? Colors.green.withValues(alpha: 0.12)
+                  : Colors.red.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              isPresent ? Icons.check_circle_outline : Icons.cancel_outlined,
+              color: isPresent ? Colors.green.shade700 : Colors.red.shade700,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: primaryDark,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  isPresent ? 'Masuk' : 'Alpa',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: isPresent
+                        ? Colors.green.shade700
+                        : Colors.red.shade700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                'Masuk  ${_formatAdminAttendanceTime(employee['check_in'])}',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: textMain,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Keluar ${_formatAdminAttendanceTime(employee['check_out'])}',
+                style: const TextStyle(fontSize: 12, color: textSecondary),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

@@ -37,7 +37,8 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
 
   bool get _isInstall => (_task['type']?.toString() ?? '') == 'INSTALL';
 
-  DateTime? _parseWorkStart() => parseTaskWorkStarted(_task['work_started_at']?.toString());
+  DateTime? _parseWorkStart() =>
+      parseTaskWorkStarted(_task['work_started_at']?.toString());
 
   @override
   void initState() {
@@ -90,9 +91,9 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Kamera: ${e.toString()}')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Kamera: ${e.toString()}')));
       }
     }
   }
@@ -122,7 +123,9 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
       final enabled = await Geolocator.isLocationServiceEnabled();
       if (!enabled) {
         messenger.showSnackBar(
-          const SnackBar(content: Text('Aktifkan layanan lokasi di perangkat.')),
+          const SnackBar(
+            content: Text('Aktifkan layanan lokasi di perangkat.'),
+          ),
         );
         return;
       }
@@ -130,9 +133,12 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
       if (perm == LocationPermission.denied) {
         perm = await Geolocator.requestPermission();
       }
-      if (perm != LocationPermission.whileInUse && perm != LocationPermission.always) {
+      if (perm != LocationPermission.whileInUse &&
+          perm != LocationPermission.always) {
         messenger.showSnackBar(
-          const SnackBar(content: Text('Izin lokasi diperlukan untuk tag koordinat.')),
+          const SnackBar(
+            content: Text('Izin lokasi diperlukan untuk tag koordinat.'),
+          ),
         );
         return;
       }
@@ -143,11 +149,17 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
         _tagLng = pos.longitude;
       });
       messenger.showSnackBar(
-        SnackBar(content: Text('Lokasi: ${_tagLat!.toStringAsFixed(6)}, ${_tagLng!.toStringAsFixed(6)}')),
+        SnackBar(
+          content: Text(
+            'Lokasi: ${_tagLat!.toStringAsFixed(6)}, ${_tagLng!.toStringAsFixed(6)}',
+          ),
+        ),
       );
     } catch (e) {
       if (mounted) {
-        messenger.showSnackBar(SnackBar(content: Text('Gagal ambil lokasi: $e')));
+        messenger.showSnackBar(
+          SnackBar(content: Text('Gagal ambil lokasi: $e')),
+        );
       }
     }
   }
@@ -162,11 +174,17 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
     final digits = raw.replaceAll(RegExp(r'\D'), '');
     if (digits.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Nomor WhatsApp bantuan belum diatur (admin: contact_whatsapp / .env SUPPORT_WHATSAPP).')),
+        const SnackBar(
+          content: Text(
+            'Nomor WhatsApp bantuan belum diatur (admin: contact_whatsapp / .env SUPPORT_WHATSAPP).',
+          ),
+        ),
       );
       return;
     }
-    final wa = digits.startsWith('62') ? digits : '62${digits.startsWith('0') ? digits.substring(1) : digits}';
+    final wa = digits.startsWith('62')
+        ? digits
+        : '62${digits.startsWith('0') ? digits.substring(1) : digits}';
     final tipe = _task['type']?.toString() ?? '';
     final tid = _task['id']?.toString() ?? '';
     final text = Uri.encodeComponent('Minta bantuan — tugas $tipe #$tid');
@@ -184,16 +202,18 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
     final desc = _deskripsiCtrl.text.trim();
     if (desc.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Isi deskripsi penyelesaian terlebih dahulu.')),
+        const SnackBar(
+          content: Text('Isi deskripsi penyelesaian terlebih dahulu.'),
+        ),
       );
       return;
     }
     final id = _task['id']?.toString();
     final type = _task['type']?.toString();
     if (id == null || type == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Data tugas tidak valid')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Data tugas tidak valid')));
       return;
     }
 
@@ -203,22 +223,30 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
     double? cableM;
     String? stickerB64;
     if (_isInstall) {
-      cableM = double.tryParse(_cableMeterCtrl.text.trim().replaceAll(',', '.'));
+      cableM = double.tryParse(
+        _cableMeterCtrl.text.trim().replaceAll(',', '.'),
+      );
       if (cableM == null || cableM < 0 || cableM.isNaN) {
         messenger.showSnackBar(
-          const SnackBar(content: Text('Isi panjang kabel (meter) dengan angka valid.')),
+          const SnackBar(
+            content: Text('Isi panjang kabel (meter) dengan angka valid.'),
+          ),
         );
         return;
       }
       if (_fotoStickerOnt == null) {
         messenger.showSnackBar(
-          const SnackBar(content: Text('Ambil foto stiker belakang ONT dari kamera.')),
+          const SnackBar(
+            content: Text('Ambil foto stiker belakang ONT dari kamera.'),
+          ),
         );
         return;
       }
       if (_tagLat == null || _tagLng == null) {
         messenger.showSnackBar(
-          const SnackBar(content: Text('Tag lokasi wajib — ketuk Ambil lokasi GPS.')),
+          const SnackBar(
+            content: Text('Tag lokasi wajib — ketuk Ambil lokasi GPS.'),
+          ),
         );
         return;
       }
@@ -226,7 +254,9 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
         final bytes = await _fotoStickerOnt!.readAsBytes();
         stickerB64 = 'data:image/jpeg;base64,${base64Encode(bytes)}';
       } catch (e) {
-        messenger.showSnackBar(SnackBar(content: Text('Gagal membaca foto stiker: $e')));
+        messenger.showSnackBar(
+          SnackBar(content: Text('Gagal membaca foto stiker: $e')),
+        );
         return;
       }
     }
@@ -261,7 +291,8 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
           if (perm == LocationPermission.denied) {
             perm = await Geolocator.requestPermission();
           }
-          if (perm == LocationPermission.whileInUse || perm == LocationPermission.always) {
+          if (perm == LocationPermission.whileInUse ||
+              perm == LocationPermission.always) {
             final pos = await Geolocator.getCurrentPosition();
             latOut = pos.latitude;
             lngOut = pos.longitude;
@@ -287,7 +318,11 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
 
     if (err == null) {
       messenger.showSnackBar(
-        const SnackBar(content: Text('Tugas diselesaikan. Notifikasi WA dikirim ke pelanggan.')),
+        const SnackBar(
+          content: Text(
+            'Tugas diselesaikan. Notifikasi WA dikirim ke pelanggan.',
+          ),
+        ),
       );
       // Satu level pop: daftar tugas atau detail. Bila dari detail, pemanggil mem-pop detail.
       Navigator.of(context).pop(true);
@@ -322,17 +357,18 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
     return Scaffold(
       backgroundColor: bgBackground,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: const Color(0xFF2563EB),
+        foregroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Color(0xFF070038)),
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
           'Penyelesaian #${_task['id']}',
           style: const TextStyle(
-            color: Color(0xFF1B0C6B),
+            color: Colors.white,
             fontSize: 20,
             fontWeight: FontWeight.bold,
           ),
@@ -340,7 +376,7 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
         centerTitle: true,
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(color: outline.withValues(alpha: 0.5), height: 1),
+          child: Container(color: Colors.white24, height: 1),
         ),
       ),
       body: SingleChildScrollView(
@@ -414,15 +450,25 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
                   const SizedBox(height: 12),
                   const Divider(color: outline),
                   const SizedBox(height: 12),
-                  _buildSummaryItem(Icons.business, 'PELANGGAN', _task['customer']?.toString() ?? '-'),
+                  _buildSummaryItem(
+                    Icons.business,
+                    'PELANGGAN',
+                    _task['customer']?.toString() ?? '-',
+                  ),
                   const SizedBox(height: 12),
                   _buildSummaryItem(
                     Icons.build,
                     'LAYANAN',
-                    _task['type'] == 'TR' ? 'Perbaikan / gangguan' : 'Pemasangan baru',
+                    _task['type'] == 'TR'
+                        ? 'Perbaikan / gangguan'
+                        : 'Pemasangan baru',
                   ),
                   const SizedBox(height: 12),
-                  _buildSummaryItem(Icons.location_on, 'ALAMAT', _task['address']?.toString() ?? '-'),
+                  _buildSummaryItem(
+                    Icons.location_on,
+                    'ALAMAT',
+                    _task['address']?.toString() ?? '-',
+                  ),
                   if (_isInstall) ...[
                     const SizedBox(height: 12),
                     _buildPppoeUsernameSummaryRow(context),
@@ -476,12 +522,20 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
                     _lightInputTheme(
                       child: TextField(
                         controller: _cableMeterCtrl,
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        style: const TextStyle(color: Color(0xFF19163F), fontSize: 16),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        style: const TextStyle(
+                          color: Color(0xFF19163F),
+                          fontSize: 16,
+                        ),
                         cursorColor: const Color(0xFF15803D),
                         decoration: InputDecoration(
                           hintText: 'Contoh: 45 atau 12.5',
-                          hintStyle: TextStyle(color: Colors.grey.shade600, fontSize: 15),
+                          hintStyle: TextStyle(
+                            color: Colors.grey.shade600,
+                            fontSize: 15,
+                          ),
                           filled: true,
                           fillColor: const Color(0xFFF9FAFB),
                           border: OutlineInputBorder(
@@ -494,7 +548,10 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
                           ),
                           focusedBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(10),
-                            borderSide: const BorderSide(color: Color(0xFF15803D), width: 1.5),
+                            borderSide: const BorderSide(
+                              color: Color(0xFF15803D),
+                              width: 1.5,
+                            ),
                           ),
                         ),
                       ),
@@ -511,13 +568,25 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
                     const SizedBox(height: 8),
                     OutlinedButton.icon(
                       onPressed: _completing ? null : _ambilFotoStickerOnt,
-                      icon: const Icon(Icons.camera_alt_outlined, color: Color(0xFF15803D)),
-                      label: Text(_fotoStickerOnt == null ? 'Ambil dari kamera' : 'Ganti foto stiker'),
+                      icon: const Icon(
+                        Icons.camera_alt_outlined,
+                        color: Color(0xFF15803D),
+                      ),
+                      label: Text(
+                        _fotoStickerOnt == null
+                            ? 'Ambil dari kamera'
+                            : 'Ganti foto stiker',
+                      ),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: const Color(0xFF166534),
                         side: const BorderSide(color: Color(0xFF86EFAC)),
-                        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 14,
+                          horizontal: 16,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
                       ),
                     ),
                     if (_fotoStickerOnt != null) ...[
@@ -544,13 +613,21 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
                     const SizedBox(height: 8),
                     OutlinedButton.icon(
                       onPressed: _completing ? null : _ambilLokasiWajib,
-                      icon: const Icon(Icons.my_location, color: Color(0xFF1D4ED8)),
+                      icon: const Icon(
+                        Icons.my_location,
+                        color: Color(0xFF1D4ED8),
+                      ),
                       label: const Text('Ambil lokasi GPS'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: const Color(0xFF1E3A8A),
                         side: const BorderSide(color: Color(0xFF93C5FD)),
-                        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 14,
+                          horizontal: 16,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
                       ),
                     ),
                     if (_tagLat != null && _tagLng != null)
@@ -558,7 +635,10 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(
                           'Koordinat: ${_tagLat!.toStringAsFixed(6)}, ${_tagLng!.toStringAsFixed(6)}',
-                          style: TextStyle(fontSize: 13, color: Colors.grey.shade800),
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey.shade800,
+                          ),
                         ),
                       ),
                     const SizedBox(height: 20),
@@ -578,10 +658,20 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
                       cursorColor: const Color(0xFF15803D),
                       decoration: InputDecoration(
                         labelText: 'Deskripsi penyelesaian',
-                        hintText: 'Contoh: kabel diganti, sinyal stabil, tes browsing OK…',
-                        labelStyle: const TextStyle(color: Color(0xFF474551), fontWeight: FontWeight.w500),
-                        floatingLabelStyle: const TextStyle(color: Color(0xFF15803D), fontWeight: FontWeight.w600),
-                        hintStyle: TextStyle(color: Colors.grey.shade600, fontSize: 15),
+                        hintText:
+                            'Contoh: kabel diganti, sinyal stabil, tes browsing OK…',
+                        labelStyle: const TextStyle(
+                          color: Color(0xFF474551),
+                          fontWeight: FontWeight.w500,
+                        ),
+                        floatingLabelStyle: const TextStyle(
+                          color: Color(0xFF15803D),
+                          fontWeight: FontWeight.w600,
+                        ),
+                        hintStyle: TextStyle(
+                          color: Colors.grey.shade600,
+                          fontSize: 15,
+                        ),
                         alignLabelWithHint: true,
                         filled: true,
                         fillColor: const Color(0xFFF9FAFB),
@@ -595,14 +685,19 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(color: Color(0xFF15803D), width: 1.5),
+                          borderSide: const BorderSide(
+                            color: Color(0xFF15803D),
+                            width: 1.5,
+                          ),
                         ),
                       ),
                     ),
                   ),
                   const SizedBox(height: 20),
                   Text(
-                    _isInstall ? 'Foto dokumentasi (opsional)' : 'Foto dokumentasi',
+                    _isInstall
+                        ? 'Foto dokumentasi (opsional)'
+                        : 'Foto dokumentasi',
                     style: const TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
@@ -612,13 +707,23 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
                     onPressed: _completing ? null : _ambilFotoKamera,
-                    icon: const Icon(Icons.photo_camera_outlined, color: Color(0xFF15803D)),
-                    label: Text(_foto == null ? 'Ambil dari kamera' : 'Ganti foto'),
+                    icon: const Icon(
+                      Icons.photo_camera_outlined,
+                      color: Color(0xFF15803D),
+                    ),
+                    label: Text(
+                      _foto == null ? 'Ambil dari kamera' : 'Ganti foto',
+                    ),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: const Color(0xFF166534),
                       side: const BorderSide(color: Color(0xFF86EFAC)),
-                      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 14,
+                        horizontal: 16,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
                     ),
                   ),
                   if (_foto != null) ...[
@@ -645,7 +750,9 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
                 disabledBackgroundColor: hijauSelesai.withValues(alpha: 0.5),
                 disabledForegroundColor: Colors.white70,
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
                 elevation: 0,
               ),
               child: Text(
@@ -673,7 +780,9 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
               style: TextButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 backgroundColor: const Color(0xFFCCFBF1).withValues(alpha: 0.6),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             ),
             const SizedBox(height: 48),
@@ -705,10 +814,7 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
               const SizedBox(height: 2),
               Text(
                 value,
-                style: const TextStyle(
-                  fontSize: 16,
-                  color: Color(0xFF19163F),
-                ),
+                style: const TextStyle(fontSize: 16, color: Color(0xFF19163F)),
               ),
             ],
           ),
@@ -721,9 +827,9 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
     final t = text.trim();
     if (t.isEmpty) return;
     Clipboard.setData(ClipboardData(text: t));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$label disalin')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('$label disalin')));
   }
 
   Widget _buildPppoeUsernameSummaryRow(BuildContext context) {
@@ -757,7 +863,9 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
                       display,
                       style: TextStyle(
                         fontSize: 16,
-                        fontWeight: user.isEmpty ? FontWeight.w500 : FontWeight.w600,
+                        fontWeight: user.isEmpty
+                            ? FontWeight.w500
+                            : FontWeight.w600,
                         color: const Color(0xFF19163F),
                       ),
                     ),
@@ -766,8 +874,13 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
                     IconButton(
                       tooltip: 'Salin username',
                       visualDensity: VisualDensity.compact,
-                      onPressed: () => _copyPsbField(context, user, 'Username PPPoE'),
-                      icon: const Icon(Icons.copy_outlined, size: 20, color: Color(0xFF474551)),
+                      onPressed: () =>
+                          _copyPsbField(context, user, 'Username PPPoE'),
+                      icon: const Icon(
+                        Icons.copy_outlined,
+                        size: 20,
+                        color: Color(0xFF474551),
+                      ),
                     ),
                 ],
               ),
@@ -810,9 +923,13 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
                       display,
                       style: TextStyle(
                         fontSize: pass.isEmpty ? 13 : 16,
-                        fontWeight: pass.isEmpty ? FontWeight.w400 : FontWeight.w600,
+                        fontWeight: pass.isEmpty
+                            ? FontWeight.w400
+                            : FontWeight.w600,
                         height: pass.isEmpty ? 1.35 : null,
-                        color: pass.isEmpty ? const Color(0xFF5C5A68) : const Color(0xFF19163F),
+                        color: pass.isEmpty
+                            ? const Color(0xFF5C5A68)
+                            : const Color(0xFF19163F),
                       ),
                     ),
                   ),
@@ -820,8 +937,13 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
                     IconButton(
                       tooltip: 'Salin password',
                       visualDensity: VisualDensity.compact,
-                      onPressed: () => _copyPsbField(context, pass, 'Password PPPoE'),
-                      icon: const Icon(Icons.copy_outlined, size: 20, color: Color(0xFF474551)),
+                      onPressed: () =>
+                          _copyPsbField(context, pass, 'Password PPPoE'),
+                      icon: const Icon(
+                        Icons.copy_outlined,
+                        size: 20,
+                        color: Color(0xFF474551),
+                      ),
                     ),
                 ],
               ),

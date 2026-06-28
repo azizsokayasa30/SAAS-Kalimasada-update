@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -21,6 +22,17 @@ class CustomerDetailScreen extends StatefulWidget {
 class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   late Map<String, dynamic> customer;
   Map<String, dynamic>? _pppSession;
+  List<Map<String, dynamic>> _paymentHistory = [];
+  List<Map<String, dynamic>> _packageOptions = [];
+  bool _paymentHistoryLoading = true;
+  bool _statusActionLoading = false;
+  bool _savingCustomerInfo = false;
+
+  final _money = NumberFormat.currency(
+    locale: 'id_ID',
+    symbol: 'Rp. ',
+    decimalDigits: 0,
+  );
 
   String _pickString(Map<String, dynamic>? source, List<String> keys) {
     if (source == null) return '';
@@ -67,6 +79,19 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     return double.tryParse(v?.toString() ?? '');
   }
 
+  num _numVal(dynamic value) {
+    if (value is num) return value;
+    return num.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  String _formatDate(dynamic value) {
+    final raw = value?.toString().trim() ?? '';
+    if (raw.isEmpty) return '-';
+    final parsed = DateTime.tryParse(raw);
+    if (parsed == null) return raw;
+    return DateFormat('dd MMM yyyy', 'id_ID').format(parsed);
+  }
+
   /// Nomor internasional tanpa `+` untuk `https://wa.me/...` (utama: Indonesia 0… → 62…).
   String? _whatsappDigitsFromDisplay(String? raw) {
     if (raw == null) return null;
@@ -104,16 +129,10 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
       'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving',
     );
 
-    final navOk = await launchUrl(
-      navUri,
-      mode: LaunchMode.externalApplication,
-    );
+    final navOk = await launchUrl(navUri, mode: LaunchMode.externalApplication);
     if (navOk) return;
 
-    final webOk = await launchUrl(
-      webUri,
-      mode: LaunchMode.externalApplication,
-    );
+    final webOk = await launchUrl(webUri, mode: LaunchMode.externalApplication);
 
     if (!webOk && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -130,13 +149,24 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     super.initState();
     customer = Map<String, dynamic>.from(widget.customer);
     _loadPppSession();
+    _loadPaymentHistory();
+  }
+
+  List<Map<String, dynamic>> _mapList(dynamic raw) {
+    if (raw is! List) return [];
+    return raw
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
   }
 
   Future<void> _loadPppSession() async {
     final id = customer['id'];
     if (id == null) return;
     try {
-      final res = await ApiClient.get('/api/mobile-adapter/customers/$id/ppp-session');
+      final res = await ApiClient.get(
+        '/api/mobile-adapter/customers/$id/ppp-session',
+      );
       if (res.statusCode != 200) return;
       final data = jsonDecode(res.body) as Map<String, dynamic>;
       if (data['success'] == true && data['data'] is Map) {
@@ -148,9 +178,386 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     } catch (_) {}
   }
 
+  Future<void> _loadPaymentHistory() async {
+    final id = customer['id'];
+    if (id == null) {
+      setState(() => _paymentHistoryLoading = false);
+      return;
+    }
+    try {
+      final res = await ApiClient.get(
+        '/api/mobile-adapter/customers/$id/payment-history',
+      );
+      if (res.statusCode != 200) {
+        if (mounted) setState(() => _paymentHistoryLoading = false);
+        return;
+      }
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final raw = data['data'];
+      if (!mounted) return;
+      setState(() {
+        _paymentHistory = raw is List
+            ? raw
+                  .whereType<Map>()
+                  .map((e) => Map<String, dynamic>.from(e))
+                  .toList()
+            : <Map<String, dynamic>>[];
+        _paymentHistoryLoading = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _paymentHistoryLoading = false);
+    }
+  }
+
+  Future<void> _changeCustomerStatus(String nextStatus) async {
+    final id = customer['id'];
+    if (id == null || _statusActionLoading) return;
+    setState(() => _statusActionLoading = true);
+    try {
+      final res = await ApiClient.post(
+        '/api/mobile-adapter/customers/$id/status',
+        {'status': nextStatus},
+      );
+      final body = ApiClient.decodeJsonObject(
+        res,
+        debugLabel: 'customer/status',
+      );
+      final success =
+          res.statusCode == 200 && ApiClient.jsonSuccess(body['success']);
+      if (!mounted) return;
+      if (success) {
+        setState(() {
+          customer = {
+            ...customer,
+            'status': body['data'] is Map
+                ? (body['data']['status'] ?? nextStatus)
+                : nextStatus,
+          };
+        });
+        _loadPppSession();
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            success
+                ? 'Status pelanggan berhasil diperbarui'
+                : (body['message']?.toString() ?? 'Gagal memperbarui status'),
+          ),
+          backgroundColor: success ? Colors.green : Colors.red,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Gagal memperbarui status pelanggan'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _statusActionLoading = false);
+    }
+  }
+
+  Future<void> _ensurePackageOptions() async {
+    if (_packageOptions.isNotEmpty) return;
+    final res = await ApiClient.get(
+      '/api/mobile-adapter/customers/form-options',
+    );
+    final body = ApiClient.decodeJsonObject(
+      res,
+      debugLabel: 'customers/form-options',
+    );
+    if (res.statusCode != 200 || !ApiClient.jsonSuccess(body['success'])) {
+      throw Exception(body['message']?.toString() ?? 'Gagal memuat paket');
+    }
+    final data = body['data'];
+    if (!mounted) return;
+    setState(() {
+      _packageOptions = _mapList(data is Map ? data['packages'] : null);
+    });
+  }
+
+  Future<void> _saveContactInfo({
+    required String name,
+    required String phone,
+    required String email,
+    required String address,
+  }) async {
+    final id = customer['id'];
+    if (id == null || _savingCustomerInfo) return;
+    setState(() => _savingCustomerInfo = true);
+    try {
+      final res =
+          await ApiClient.patch('/api/mobile-adapter/customers/$id/contact', {
+            'name': name.trim(),
+            'phone': phone.trim(),
+            'email': email.trim(),
+            'address': address.trim(),
+          });
+      final body = ApiClient.decodeJsonObject(
+        res,
+        debugLabel: 'customers/contact',
+      );
+      final success =
+          res.statusCode == 200 && ApiClient.jsonSuccess(body['success']);
+      if (!mounted) return;
+      if (success) {
+        setState(() {
+          customer = {
+            ...customer,
+            'name': name.trim(),
+            'phone': phone.trim(),
+            'email': email.trim(),
+            'address': address.trim(),
+          };
+        });
+        Navigator.of(context).pop();
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            success
+                ? 'Info kontak berhasil diperbarui'
+                : (body['message']?.toString() ?? 'Gagal menyimpan kontak'),
+          ),
+          backgroundColor: success ? Colors.green : Colors.red,
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Gagal menyimpan info kontak'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _savingCustomerInfo = false);
+    }
+  }
+
+  Future<void> _saveCustomerPackage(int packageId) async {
+    final id = customer['id'];
+    if (id == null || _savingCustomerInfo) return;
+    final package = _packageOptions.firstWhere(
+      (item) => _asInt(item['id']) == packageId,
+      orElse: () => <String, dynamic>{},
+    );
+    setState(() => _savingCustomerInfo = true);
+    try {
+      final res = await ApiClient.patch(
+        '/api/mobile-adapter/customers/$id/package',
+        {'package_id': packageId},
+      );
+      final body = ApiClient.decodeJsonObject(
+        res,
+        debugLabel: 'customers/package',
+      );
+      final success =
+          res.statusCode == 200 && ApiClient.jsonSuccess(body['success']);
+      if (!mounted) return;
+      if (success) {
+        setState(() {
+          customer = {
+            ...customer,
+            'package_id': packageId,
+            'profile': package['name']?.toString() ?? customer['profile'],
+          };
+        });
+        Navigator.of(context).pop();
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            success
+                ? 'Paket pelanggan berhasil diperbarui'
+                : (body['message']?.toString() ?? 'Gagal menyimpan paket'),
+          ),
+          backgroundColor: success ? Colors.green : Colors.red,
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Gagal menyimpan paket pelanggan'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _savingCustomerInfo = false);
+    }
+  }
+
+  int? _asInt(dynamic value) {
+    if (value is int) return value;
+    return int.tryParse(value?.toString() ?? '');
+  }
+
+  Future<void> _showEditContactDialog() async {
+    final nameCtrl = TextEditingController(
+      text: customer['name']?.toString() ?? '',
+    );
+    final phoneCtrl = TextEditingController(
+      text: customer['phone']?.toString() ?? '',
+    );
+    final emailCtrl = TextEditingController(
+      text: customer['email']?.toString() ?? '',
+    );
+    final addressCtrl = TextEditingController(
+      text: customer['address']?.toString() ?? '',
+    );
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Text(
+          'Edit Info Kontak',
+          style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _dialogTextField(nameCtrl, 'Nama pelanggan'),
+              const SizedBox(height: 10),
+              _dialogTextField(phoneCtrl, 'Nomor HP'),
+              const SizedBox(height: 10),
+              _dialogTextField(emailCtrl, 'Email'),
+              const SizedBox(height: 10),
+              _dialogTextField(addressCtrl, 'Alamat', maxLines: 3),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: _savingCustomerInfo
+                ? null
+                : () => Navigator.of(dialogContext).pop(),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: _savingCustomerInfo
+                ? null
+                : () => _saveContactInfo(
+                    name: nameCtrl.text,
+                    phone: phoneCtrl.text,
+                    email: emailCtrl.text,
+                    address: addressCtrl.text,
+                  ),
+            child: Text(_savingCustomerInfo ? 'Menyimpan...' : 'Simpan'),
+          ),
+        ],
+      ),
+    );
+    nameCtrl.dispose();
+    phoneCtrl.dispose();
+    emailCtrl.dispose();
+    addressCtrl.dispose();
+  }
+
+  Future<void> _showEditPackageDialog() async {
+    try {
+      await _ensurePackageOptions();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
+    int? selectedPackageId = _asInt(customer['package_id']);
+    if (selectedPackageId == null && _packageOptions.isNotEmpty) {
+      final currentProfile = customer['profile']?.toString();
+      for (final item in _packageOptions) {
+        if (item['name']?.toString() == currentProfile) {
+          selectedPackageId = _asInt(item['id']);
+          break;
+        }
+      }
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+          title: const Text(
+            'Edit Paket Pelanggan',
+            style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800),
+          ),
+          content: DropdownButtonFormField<int>(
+            value: selectedPackageId,
+            isExpanded: true,
+            dropdownColor: Colors.white,
+            style: const TextStyle(color: Colors.black),
+            decoration: InputDecoration(
+              labelText: 'Paket layanan',
+              labelStyle: const TextStyle(color: Colors.black87),
+              filled: true,
+              fillColor: Colors.white,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Color(0xFFC7D7FE)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(
+                  color: Color(0xFF2563EB),
+                  width: 1.4,
+                ),
+              ),
+            ),
+            items: _packageOptions
+                .map(
+                  (item) => DropdownMenuItem<int>(
+                    value: _asInt(item['id']),
+                    child: Text(
+                      item['name']?.toString() ?? 'Paket',
+                      style: const TextStyle(color: Colors.black),
+                    ),
+                  ),
+                )
+                .where((item) => item.value != null)
+                .toList(),
+            onChanged: (value) =>
+                setDialogState(() => selectedPackageId = value),
+          ),
+          actions: [
+            TextButton(
+              onPressed: _savingCustomerInfo
+                  ? null
+                  : () => Navigator.of(dialogContext).pop(),
+              child: const Text('Batal'),
+            ),
+            FilledButton(
+              onPressed: _savingCustomerInfo || selectedPackageId == null
+                  ? null
+                  : () => _saveCustomerPackage(selectedPackageId!),
+              child: Text(_savingCustomerInfo ? 'Menyimpan...' : 'Simpan'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final isTechnician = context.watch<AuthProvider>().role == 'technician';
+    final role = context.watch<AuthProvider>().role;
+    final isAdmin = role == 'admin';
+    final isTechnician = role == 'technician';
     final status = customer['status']?.toString().toLowerCase() ?? 'active';
     final customerLat = _toDouble(customer['latitude']);
     final customerLng = _toDouble(customer['longitude']);
@@ -159,56 +566,54 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     Color statusColor = const Color(0xFF0D5930); // Dark Green text
     Color statusBgColor = const Color(0xFFD3F5E4); // Light green bg
     Color statusBorderColor = const Color(0xFFB2E9CD);
-    String statusLabel = 'Active / Stable';
+    String statusLabel = 'Status langganan: Aktif';
     IconData statusIcon = Icons.check_circle;
 
     if (status == 'suspended') {
-      statusColor = const Color(0xFF7E4990); // secondary
-      statusBgColor = const Color(
-        0xFFEBAEFD,
-      ).withValues(alpha: 0.3); // secondary-container
-      statusBorderColor = const Color(0xFFEBAEFD);
-      statusLabel = 'Suspended / Isolir';
+      statusColor = const Color(0xFFB45309);
+      statusBgColor = const Color(0xFFFFF7ED);
+      statusBorderColor = const Color(0xFFFED7AA);
+      statusLabel = 'Status langganan: Isolir';
       statusIcon = Icons.block;
     } else if (status == 'isolated') {
       statusColor = const Color(0xFF93000A); // on-error-container
       statusBgColor = const Color(0xFFFFDAD6); // error-container
       statusBorderColor = const Color(0xFFFFB4AB);
-      statusLabel = 'Isolated / Gangguan';
+      statusLabel = 'Status langganan: Nonaktif';
       statusIcon = Icons.error;
     }
 
     // Colors from Stitch design
-    const bgBackground = Color(0xFFFCF8FF);
+    const bgBackground = Color(0xFFF6FAFF);
     const bgSurfaceContainerLowest = Color(0xFFFFFFFF);
-    const bgSurfaceContainer = Color(0xFFF0EBFF);
+    const bgSurfaceContainer = Color(0xFFEAF2FF);
 
-    const primaryColor = Color(0xFF070038);
-    const errorColor = Color(0xFFBA1A1A);
+    const primaryColor = Color(0xFF2563EB);
     const errorContainerColor = Color(0xFFFFDAD6);
     const textOnErrorContainer = Color(0xFF93000A);
 
     const textOnBackground = Color(0xFF19163F);
     const textOnSurfaceVariant = Color(0xFF474551);
     const textOnPrimary = Color(0xFFFFFFFF);
-    const outlineVariant = Color(0xFFC8C4D3);
+    const outlineVariant = Color(0xFFC7D7FE);
     const outline = Color(0xFF787582);
-    const surfaceTint = Color(0xFF5A53AB);
+    const surfaceTint = Color(0xFF2E9DEB);
 
     return Scaffold(
       backgroundColor: bgBackground,
       appBar: AppBar(
-        backgroundColor: bgSurfaceContainerLowest,
+        backgroundColor: const Color(0xFF2563EB),
+        foregroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: primaryColor),
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
           'Customer Detail',
           style: TextStyle(
-            color: primaryColor,
+            color: Colors.white,
             fontSize: 18,
             fontWeight: FontWeight.bold,
           ),
@@ -216,20 +621,17 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         centerTitle: true,
         actions: [
           IconButton(
-            icon: const Icon(Icons.more_vert, color: primaryColor),
+            icon: const Icon(Icons.more_vert, color: Colors.white),
             onPressed: () {},
           ),
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(
-            color: outlineVariant.withValues(alpha: 0.5),
-            height: 1,
-          ),
+          child: Container(color: Colors.white24, height: 1),
         ),
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20.0),
+        padding: const EdgeInsets.all(14.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -237,19 +639,19 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
             Container(
               decoration: BoxDecoration(
                 color: bgSurfaceContainer,
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(14),
                 border: Border.all(color: outlineVariant),
               ),
               child: Stack(
                 children: [
                   Container(
-                    height: 80,
+                    height: 54,
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                         colors: [
-                          surfaceTint.withValues(alpha: 0.1),
+                          surfaceTint.withValues(alpha: 0.16),
                           Colors.transparent,
                         ],
                       ),
@@ -258,218 +660,152 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                       ),
                     ),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      children: [
-                        Container(
-                          width: 96,
-                          height: 96,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: bgSurfaceContainerLowest,
-                              width: 4,
+                  SizedBox(
+                    width: double.infinity,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Container(
+                            width: 74,
+                            height: 74,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: bgSurfaceContainerLowest,
+                                width: 3,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.05),
+                                  blurRadius: 4,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                              image: const DecorationImage(
+                                image: NetworkImage(
+                                  'https://via.placeholder.com/150',
+                                ), // Placeholder avatar
+                                fit: BoxFit.cover,
+                              ),
                             ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.05),
-                                blurRadius: 4,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
-                            image: const DecorationImage(
-                              image: NetworkImage(
-                                'https://via.placeholder.com/150',
-                              ), // Placeholder avatar
-                              fit: BoxFit.cover,
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            customer['name'] ?? 'Unknown Customer',
+                            style: const TextStyle(
+                              fontSize: 19,
+                              fontWeight: FontWeight.w700,
+                              color: textOnBackground,
                             ),
+                            textAlign: TextAlign.center,
                           ),
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          customer['name'] ?? 'Unknown Customer',
-                          style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w600,
-                            color: textOnBackground,
+                          const SizedBox(height: 2),
+                          Text(
+                            'ID: ${customer['customer_id'] ?? '-'}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: textOnSurfaceVariant,
+                            ),
+                            textAlign: TextAlign.center,
                           ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'ID: ${customer['customer_id'] ?? '-'}',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            color: textOnSurfaceVariant,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          alignment: WrapAlignment.center,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: statusBgColor,
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(color: statusBorderColor),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    statusIcon,
-                                    size: 14,
-                                    color: statusColor,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    statusLabel,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            alignment: WrapAlignment.center,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: statusBgColor,
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(color: statusBorderColor),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      statusIcon,
+                                      size: 13,
                                       color: statusColor,
                                     ),
-                                  ),
-                                ],
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      statusLabel,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        color: statusColor,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                          ],
-                        ),
-                      ],
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
 
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
 
             // Primary Actions
-            Row(
-              children: [
-                if (!isTechnician) ...[
+            if (isAdmin)
+              Row(
+                children: [
                   Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () {},
-                      icon: const Icon(
-                        Icons.power_settings_new,
-                        color: textOnPrimary,
-                        size: 20,
-                      ),
-                      label: const Text(
-                        'Activate',
-                        style: TextStyle(
-                          color: textOnPrimary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: primaryColor,
-                        foregroundColor: textOnPrimary,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        elevation: 1,
-                      ),
+                    child: _statusActionButton(
+                      label: 'Aktifkan',
+                      icon: Icons.power_settings_new,
+                      bgColor: primaryColor,
+                      fgColor: textOnPrimary,
+                      onPressed: () => _changeCustomerStatus('active'),
                     ),
                   ),
                   const SizedBox(width: 8),
-                ],
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () async {
-                      final success = await context
-                          .read<CustomerProvider>()
-                          .restartConnection(customer['id'].toString());
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              success
-                                  ? 'Koneksi berhasil di-restart'
-                                  : 'Gagal me-restart koneksi',
-                            ),
-                            backgroundColor: success
-                                ? Colors.green
-                                : errorColor,
-                          ),
-                        );
-                      }
-                    },
-                    icon: const Icon(
-                      Icons.restart_alt,
-                      color: textOnBackground,
-                      size: 20,
-                    ),
-                    label: const Text(
-                      'Reboot',
-                      style: TextStyle(
-                        color: textOnBackground,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      backgroundColor: bgSurfaceContainerLowest,
-                      side: const BorderSide(color: primaryColor, width: 2),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
+                  Expanded(
+                    child: _statusActionButton(
+                      label: 'Nonaktifkan',
+                      icon: Icons.power_off_rounded,
+                      bgColor: bgSurfaceContainerLowest,
+                      fgColor: textOnBackground,
+                      borderColor: primaryColor,
+                      onPressed: () => _changeCustomerStatus('isolated'),
                     ),
                   ),
-                ),
-                if (!isTechnician) ...[
                   const SizedBox(width: 8),
                   Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () {},
-                      icon: const Icon(
-                        Icons.block,
-                        color: textOnErrorContainer,
-                        size: 20,
-                      ),
-                      label: const Text(
-                        'Isolate',
-                        style: TextStyle(
-                          color: textOnErrorContainer,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: errorContainerColor,
-                        foregroundColor: textOnErrorContainer,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        elevation: 1,
-                        side: const BorderSide(color: Color(0xFFFFB4AB)),
-                      ),
+                    child: _statusActionButton(
+                      label: 'Isolir',
+                      icon: Icons.block,
+                      bgColor: errorContainerColor,
+                      fgColor: textOnErrorContainer,
+                      borderColor: const Color(0xFFFFB4AB),
+                      onPressed: () => _changeCustomerStatus('suspended'),
                     ),
                   ),
                 ],
-              ],
-            ),
+              ),
 
-            const SizedBox(height: 24),
+            const SizedBox(height: 14),
 
-            // Contact Info
+            // Info Kontak
             Container(
               decoration: BoxDecoration(
                 color: bgSurfaceContainerLowest,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: outlineVariant),
               ),
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -481,9 +817,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                           Icon(Icons.contact_mail, color: surfaceTint),
                           SizedBox(width: 8),
                           Text(
-                            'Contact Info',
+                            'Info Kontak',
                             style: TextStyle(
-                              fontSize: 18,
+                              fontSize: 16,
                               fontWeight: FontWeight.w600,
                               color: textOnBackground,
                             ),
@@ -491,19 +827,39 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                         ],
                       ),
                       if (!isTechnician)
-                        IconButton(
-                          icon: const Icon(
-                            Icons.edit,
-                            color: textOnSurfaceVariant,
-                          ),
-                          onPressed: () {},
-                          style: IconButton.styleFrom(
-                            backgroundColor: bgSurfaceContainer,
+                        InkWell(
+                          onTap: _showEditContactDialog,
+                          borderRadius: BorderRadius.circular(10),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: bgSurfaceContainer,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: outlineVariant),
+                            ),
+                            child: const Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.edit, color: surfaceTint, size: 17),
+                                SizedBox(height: 1),
+                                Text(
+                                  'Edit',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                    color: surfaceTint,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                     ],
                   ),
-                  const Divider(height: 24, color: outlineVariant),
+                  const Divider(height: 16, color: outlineVariant),
                   _buildInfoRow(
                     Icons.call,
                     'PRIMARY PHONE',
@@ -512,25 +868,36 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     textOnSurfaceVariant,
                     outline,
                     onValueTap: () {
-                      final p = _pickString(customer, ['phone', 'mobile', 'tel', 'phone_number']);
-                      final display = p.isNotEmpty ? p : (customer['phone']?.toString().trim() ?? '');
+                      final p = _pickString(customer, [
+                        'phone',
+                        'mobile',
+                        'tel',
+                        'phone_number',
+                      ]);
+                      final display = p.isNotEmpty
+                          ? p
+                          : (customer['phone']?.toString().trim() ?? '');
                       if (display.isEmpty || display == '-') return;
                       _openWhatsAppForPhone(display);
                     },
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 10),
                   _buildInfoRow(
                     Icons.mail,
                     'EMAIL ADDRESS',
                     () {
-                      final e = _pickString(customer, ['email', 'contact_email', 'mail']);
+                      final e = _pickString(customer, [
+                        'email',
+                        'contact_email',
+                        'mail',
+                      ]);
                       return e.isEmpty ? '-' : e;
                     }(),
                     textOnBackground,
                     textOnSurfaceVariant,
                     outline,
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 10),
                   _buildInfoRow(
                     Icons.location_on,
                     'SERVICE ADDRESS',
@@ -540,15 +907,23 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     outline,
                   ),
 
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 10),
                   if (customerLat != null && customerLng != null)
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        const Text('LOKASI PELANGGAN', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: textOnSurfaceVariant, letterSpacing: 1.1)),
-                        const SizedBox(height: 8),
+                        const Text(
+                          'LOKASI PELANGGAN',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: textOnSurfaceVariant,
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
                         Container(
-                          height: 130,
+                          height: 105,
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(color: outlineVariant),
@@ -558,12 +933,16 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                             options: MapOptions(
                               initialCenter: LatLng(customerLat, customerLng),
                               initialZoom: 15.5,
-                              interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
+                              interactionOptions: const InteractionOptions(
+                                flags: InteractiveFlag.none,
+                              ),
                             ),
                             children: [
                               TileLayer(
-                                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                                userAgentPackageName: 'com.example.billing_kalimasada_mobile',
+                                urlTemplate:
+                                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                userAgentPackageName:
+                                    'com.example.billing_kalimasada_mobile',
                               ),
                               MarkerLayer(
                                 markers: [
@@ -584,15 +963,20 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                             ],
                           ),
                         ),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 10),
                       ],
                     ),
                   OutlinedButton.icon(
                     onPressed: (customerLat != null && customerLng != null)
-                        ? () => _openGoogleMapsDirections(customerLat, customerLng)
+                        ? () => _openGoogleMapsDirections(
+                            customerLat,
+                            customerLng,
+                          )
                         : null,
                     icon: Icon(
-                      customer['latitude'] != null ? Icons.edit_location : Icons.my_location,
+                      customer['latitude'] != null
+                          ? Icons.edit_location
+                          : Icons.my_location,
                       color: surfaceTint,
                       size: 20,
                     ),
@@ -606,27 +990,27 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     style: OutlinedButton.styleFrom(
                       backgroundColor: Colors.transparent,
                       side: const BorderSide(color: outlineVariant),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      minimumSize: const Size.fromHeight(48),
+                      minimumSize: const Size.fromHeight(40),
                     ),
                   ),
                 ],
               ),
             ),
 
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
 
-            // Network & Hardware
+            // Layanan Jaringan
             Container(
               decoration: BoxDecoration(
                 color: bgSurfaceContainerLowest,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: outlineVariant),
               ),
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -638,9 +1022,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                           Icon(Icons.router, color: surfaceTint),
                           SizedBox(width: 8),
                           Text(
-                            'Network & Hardware',
+                            'Layanan Jaringan',
                             style: TextStyle(
-                              fontSize: 18,
+                              fontSize: 16,
                               fontWeight: FontWeight.w600,
                               color: textOnBackground,
                             ),
@@ -648,22 +1032,42 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                         ],
                       ),
                       if (!isTechnician)
-                        IconButton(
-                          icon: const Icon(
-                            Icons.edit,
-                            color: textOnSurfaceVariant,
-                          ),
-                          onPressed: () {},
-                          style: IconButton.styleFrom(
-                            backgroundColor: bgSurfaceContainer,
+                        InkWell(
+                          onTap: _showEditPackageDialog,
+                          borderRadius: BorderRadius.circular(10),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: bgSurfaceContainer,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: outlineVariant),
+                            ),
+                            child: const Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.edit, color: surfaceTint, size: 17),
+                                SizedBox(height: 1),
+                                Text(
+                                  'Edit',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                    color: surfaceTint,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                     ],
                   ),
-                  const Divider(height: 24, color: outlineVariant),
+                  const Divider(height: 16, color: outlineVariant),
 
                   Container(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
                       color: bgSurfaceContainer,
                       borderRadius: BorderRadius.circular(8),
@@ -689,7 +1093,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                             Text(
                               customer['profile'] ?? 'Standard Package',
                               style: const TextStyle(
-                                fontSize: 16,
+                                fontSize: 14,
                                 fontWeight: FontWeight.w600,
                                 color: textOnBackground,
                               ),
@@ -700,7 +1104,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     ),
                   ),
 
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 10),
 
                   Row(
                     children: [
@@ -722,7 +1126,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                                   customer['ip_address']?.toString() ??
                                   'DHCP/Dynamic',
                               style: const TextStyle(
-                                fontSize: 16,
+                                fontSize: 13,
                                 color: textOnBackground,
                                 fontFamily: 'monospace',
                               ),
@@ -751,12 +1155,12 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                                   'caller_id',
                                   'callerid',
                                   'mac-address',
-                                  'mac'
+                                  'mac',
                                 ]);
                                 return mac.isEmpty ? '-' : mac;
                               }(),
                               style: const TextStyle(
-                                fontSize: 16,
+                                fontSize: 13,
                                 color: textOnBackground,
                                 fontFamily: 'monospace',
                               ),
@@ -767,7 +1171,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     ],
                   ),
 
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 10),
 
                   Row(
                     children: [
@@ -787,7 +1191,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                             Text(
                               _pppSession?['ip_address']?.toString() ?? '-',
                               style: const TextStyle(
-                                fontSize: 16,
+                                fontSize: 13,
                                 color: textOnBackground,
                                 fontFamily: 'monospace',
                               ),
@@ -819,7 +1223,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                                     : _formatUptimeDdHhMmSs(uptime);
                               }(),
                               style: const TextStyle(
-                                fontSize: 16,
+                                fontSize: 13,
                                 fontWeight: FontWeight.w600,
                                 color: Color(0xFF16A34A),
                               ),
@@ -833,9 +1237,255 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               ),
             ),
 
-            const SizedBox(height: 48), // Padding
+            const SizedBox(height: 14),
+            _buildPaymentHistorySection(
+              bgSurfaceContainerLowest,
+              bgSurfaceContainer,
+              outlineVariant,
+              textOnBackground,
+              textOnSurfaceVariant,
+              surfaceTint,
+            ),
+
+            const SizedBox(height: 28), // Padding
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _statusActionButton({
+    required String label,
+    required IconData icon,
+    required Color bgColor,
+    required Color fgColor,
+    required VoidCallback onPressed,
+    Color? borderColor,
+  }) {
+    return ElevatedButton.icon(
+      onPressed: _statusActionLoading ? null : onPressed,
+      icon: _statusActionLoading
+          ? SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2, color: fgColor),
+            )
+          : Icon(icon, color: fgColor, size: 16),
+      label: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: fgColor,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: bgColor,
+        foregroundColor: fgColor,
+        disabledBackgroundColor: bgColor.withValues(alpha: 0.55),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: borderColor == null
+              ? BorderSide.none
+              : BorderSide(color: borderColor),
+        ),
+        elevation: borderColor == null ? 1 : 0,
+      ),
+    );
+  }
+
+  Widget _dialogTextField(
+    TextEditingController controller,
+    String label, {
+    int maxLines = 1,
+  }) {
+    return TextField(
+      controller: controller,
+      maxLines: maxLines,
+      style: const TextStyle(color: Colors.black),
+      cursorColor: const Color(0xFF2563EB),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: Colors.black87),
+        floatingLabelStyle: const TextStyle(color: Color(0xFF2563EB)),
+        hintStyle: const TextStyle(color: Colors.black54),
+        filled: true,
+        fillColor: Colors.white,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFFC7D7FE)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFF2563EB), width: 1.4),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPaymentHistorySection(
+    Color bgColor,
+    Color softBgColor,
+    Color borderColor,
+    Color textColor,
+    Color mutedColor,
+    Color accentColor,
+  ) {
+    return Container(
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: borderColor),
+      ),
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.receipt_long_rounded, color: accentColor, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                'Riwayat Pembayaran',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  color: textColor,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          if (_paymentHistoryLoading)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else if (_paymentHistory.isEmpty)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: softBgColor,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                'Belum ada riwayat pembayaran.',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: mutedColor,
+                ),
+              ),
+            )
+          else
+            ..._paymentHistory
+                .take(8)
+                .map(
+                  (item) => _paymentHistoryTile(
+                    item,
+                    softBgColor,
+                    borderColor,
+                    textColor,
+                    mutedColor,
+                  ),
+                ),
+        ],
+      ),
+    );
+  }
+
+  Widget _paymentHistoryTile(
+    Map<String, dynamic> item,
+    Color bgColor,
+    Color borderColor,
+    Color textColor,
+    Color mutedColor,
+  ) {
+    final status = item['status']?.toString().toLowerCase() ?? '';
+    final isPaid = status == 'paid' || status == 'lunas';
+    final color = isPaid ? const Color(0xFF16A34A) : const Color(0xFFBA1A1A);
+    final amount = _money.format(_numVal(item['amount']));
+    final date = _formatDate(
+      item['payment_date'] ?? item['due_date'] ?? item['created_at'],
+    );
+    final invoice = item['invoice_number']?.toString().trim();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: borderColor.withValues(alpha: 0.75)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 8,
+            height: 38,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(6),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  invoice == null || invoice.isEmpty ? 'Invoice' : invoice,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: textColor,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  date,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: mutedColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                amount,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                  color: textColor,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                isPaid ? 'Lunas' : 'Belum bayar',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -932,8 +1582,12 @@ class _TagLocationDialogState extends State<_TagLocationDialog>
       vsync: this,
       duration: const Duration(milliseconds: 1700),
     )..repeat();
-    if (widget.customer['latitude'] != null && widget.customer['longitude'] != null) {
-      _defaultLocation = LatLng(widget.customer['latitude'] as double, widget.customer['longitude'] as double);
+    if (widget.customer['latitude'] != null &&
+        widget.customer['longitude'] != null) {
+      _defaultLocation = LatLng(
+        widget.customer['latitude'] as double,
+        widget.customer['longitude'] as double,
+      );
       _selectedLocation = _defaultLocation;
     } else {
       _defaultLocation = const LatLng(-7.404620, 109.724536);
@@ -967,7 +1621,9 @@ class _TagLocationDialogState extends State<_TagLocationDialog>
                   height: 24,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: const Color(0xFF1A73E8).withValues(alpha: ringOpacity),
+                    color: const Color(
+                      0xFF1A73E8,
+                    ).withValues(alpha: ringOpacity),
                   ),
                 ),
               ),
@@ -1003,7 +1659,9 @@ class _TagLocationDialogState extends State<_TagLocationDialog>
         if (showError && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('GPS belum aktif. Silakan aktifkan lokasi di perangkat.'),
+              content: Text(
+                'GPS belum aktif. Silakan aktifkan lokasi di perangkat.',
+              ),
               backgroundColor: Colors.red,
             ),
           );
@@ -1020,7 +1678,9 @@ class _TagLocationDialogState extends State<_TagLocationDialog>
         if (showError && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Izin lokasi ditolak. Berikan izin lokasi untuk fitur ini.'),
+              content: Text(
+                'Izin lokasi ditolak. Berikan izin lokasi untuk fitur ini.',
+              ),
               backgroundColor: Colors.red,
             ),
           );
@@ -1029,7 +1689,9 @@ class _TagLocationDialogState extends State<_TagLocationDialog>
       }
 
       final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
       );
       if (!mounted) return;
       final point = LatLng(pos.latitude, pos.longitude);
@@ -1061,7 +1723,15 @@ class _TagLocationDialogState extends State<_TagLocationDialog>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Tambahkan Lokasi Pelanggan', style: TextStyle(color: Color(0xFF070038), fontSize: 16, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+            const Text(
+              'Tambahkan Lokasi Pelanggan',
+              style: TextStyle(
+                color: Color(0xFF2563EB),
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
             const SizedBox(height: 16),
             Container(
               height: 300,
@@ -1085,8 +1755,10 @@ class _TagLocationDialogState extends State<_TagLocationDialog>
                     ),
                     children: [
                       TileLayer(
-                        urlTemplate: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                        userAgentPackageName: 'com.example.billing_kalimasada_mobile',
+                        urlTemplate:
+                            'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                        userAgentPackageName:
+                            'com.example.billing_kalimasada_mobile',
                       ),
                       if (_currentLocation != null)
                         MarkerLayer(
@@ -1119,7 +1791,11 @@ class _TagLocationDialogState extends State<_TagLocationDialog>
                                   ],
                                 ),
                                 child: const Center(
-                                  child: Icon(Icons.wifi, color: Colors.green, size: 22),
+                                  child: Icon(
+                                    Icons.wifi,
+                                    color: Colors.green,
+                                    size: 22,
+                                  ),
                                 ),
                               ),
                             ),
@@ -1136,14 +1812,21 @@ class _TagLocationDialogState extends State<_TagLocationDialog>
                       elevation: 2,
                       child: IconButton(
                         tooltip: 'My Location',
-                        onPressed: _isLocating ? null : () => _loadCurrentLocation(),
+                        onPressed: _isLocating
+                            ? null
+                            : () => _loadCurrentLocation(),
                         icon: _isLocating
                             ? const SizedBox(
                                 width: 18,
                                 height: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               )
-                            : const Icon(Icons.my_location, color: Color(0xFF070038)),
+                            : const Icon(
+                                Icons.my_location,
+                                color: Color(0xFF2563EB),
+                              ),
                       ),
                     ),
                   ),
@@ -1152,43 +1835,68 @@ class _TagLocationDialogState extends State<_TagLocationDialog>
             ),
             const SizedBox(height: 16),
             ElevatedButton(
-              onPressed: _selectedLocation == null ? null : () async {
-                showDialog(
-                  context: context,
-                  barrierDismissible: false,
-                  builder: (context) => const Center(child: CircularProgressIndicator()),
-                );
-                
-                final success = await context.read<CustomerProvider>().updateLocation(
-                  widget.customer['id'].toString(),
-                  _selectedLocation!.latitude,
-                  _selectedLocation!.longitude,
-                );
-                
-                if (context.mounted) Navigator.pop(context); // Close loading dialog
-                
-                if (success && context.mounted) {
-                  Navigator.pop(context, _selectedLocation); // Close tag dialog and return new location
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lokasi Pelanggan Berhasil Disimpan'), backgroundColor: Colors.green));
-                } else if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Gagal menyimpan lokasi'), backgroundColor: Colors.red));
-                }
-              },
+              onPressed: _selectedLocation == null
+                  ? null
+                  : () async {
+                      showDialog(
+                        context: context,
+                        barrierDismissible: false,
+                        builder: (context) =>
+                            const Center(child: CircularProgressIndicator()),
+                      );
+
+                      final success = await context
+                          .read<CustomerProvider>()
+                          .updateLocation(
+                            widget.customer['id'].toString(),
+                            _selectedLocation!.latitude,
+                            _selectedLocation!.longitude,
+                          );
+
+                      if (context.mounted) {
+                        Navigator.pop(context); // Close loading dialog
+                      }
+
+                      if (success && context.mounted) {
+                        Navigator.pop(
+                          context,
+                          _selectedLocation,
+                        ); // Close tag dialog and return new location
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Lokasi Pelanggan Berhasil Disimpan'),
+                            backgroundColor: Colors.green,
+                          ),
+                        );
+                      } else if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Gagal menyimpan lokasi'),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                      }
+                    },
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF070038),
+                backgroundColor: const Color(0xFF2563EB),
                 foregroundColor: Colors.white,
                 minimumSize: const Size.fromHeight(48),
               ),
-              child: const Text('Simpan Lokasi Pelanggan', style: TextStyle(fontWeight: FontWeight.bold)),
+              child: const Text(
+                'Simpan Lokasi Pelanggan',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Batal', style: TextStyle(color: Color(0xFF070038))),
-            )
+              child: const Text(
+                'Batal',
+                style: TextStyle(color: Color(0xFF2563EB)),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 }
-

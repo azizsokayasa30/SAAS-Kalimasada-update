@@ -27,13 +27,12 @@
     }
   ],
   "tenant_subdomains": [
-    "lebakwangi",
-    "login",
+    "tenant1",
     "default"
   ],
   "auto_sync_on_tenant_change": true,
-  "last_synced_at": "2026-06-07T18:11:57.742Z",
-  "last_applied_at": "2026-06-07T18:12:09.955Z",
-  "last_apply_message": "OK: Konfigurasi Nginx diterapkan dan di-reload\n ==> Perluas SSL: kalimasada-app.com + 4 subdomain\nRenewing an existing certificate for kalimasada-app.com and 5 more domains\n\nSuccessfully received certificate.\nCertificate is saved at: /etc/letsencrypt/live/kalimasada-app.com/fullchain.pem\nKey is saved at:         /etc/letsencrypt/live/kalimasada-app.com/privkey.pem\nThis certificate expires on 2026-09-05.\nThese files will be updated when the certificate renews.\nCertbot has set up a scheduled task to automatically renew this certificate in the background.\n\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\nIf you like Certbot, please consider supporting our work by:\n * Donating to ISRG / Let's Encrypt:   https://letsencrypt.org/donate\n * Donating to EFF:                    https://eff.org/donate-le\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\nOK: Sertifikat diperluas",
-  "last_apply_ok": true
+  "last_synced_at": "2026-06-24T20:00:40.078Z",
+  "last_applied_at": "2026-06-24T20:00:40.114Z",
+  "last_apply_message": "spawn bash ENOENT",
+  "last_apply_ok": false
 }

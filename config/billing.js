@@ -725,6 +725,11 @@
                     port_number INTEGER,
                     cable_status TEXT DEFAULT 'connected',
                     cable_notes TEXT,
+                    static_ip TEXT,
+                    assigned_ip TEXT,
+                    mac_address TEXT,
+                    ktp_photo_path TEXT,
+                    house_photo_path TEXT,
                     area TEXT,
                     FOREIGN KEY (package_id) REFERENCES packages (id)
                 )`,
@@ -1221,7 +1226,12 @@
             { name: 'cable_length', type: 'INTEGER' },
             { name: 'port_number', type: 'INTEGER' },
             { name: 'cable_status', type: 'TEXT DEFAULT "connected"' },
-            { name: 'cable_notes', type: 'TEXT' }
+            { name: 'cable_notes', type: 'TEXT' },
+            { name: 'static_ip', type: 'TEXT' },
+            { name: 'assigned_ip', type: 'TEXT' },
+            { name: 'mac_address', type: 'TEXT' },
+            { name: 'ktp_photo_path', type: 'TEXT' },
+            { name: 'house_photo_path', type: 'TEXT' }
         ];
 
         cableFields.forEach(field => {
@@ -1937,8 +1947,6 @@
                 }
             }
             
-            const sql = `INSERT INTO customers (customer_id, username, password, name, phone, pppoe_username, email, address, area, area_id, package_id, odp_id, pppoe_profile, status, auto_suspension, billing_day, static_ip, assigned_ip, mac_address, latitude, longitude, cable_type, cable_length, port_number, cable_status, cable_notes, ktp_photo_path, house_photo_path, join_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-            
             // Default coordinates untuk Jakarta jika tidak ada koordinat
             // Jika tag lokasi tidak diisi, simpan NULL agar teknisi bisa update di lapangan.
             const finalLatitude = latitude !== undefined && latitude !== null && `${latitude}`.trim() !== ''
@@ -1948,38 +1956,61 @@
                 ? parseFloat(longitude)
                 : null;
 
-            const insertParams = (loginUser) => [
-                generatedCustomerId,
-                loginUser,
-                password || null,
-                name,
-                phone,
-                pppoeUserStored,
-                email,
-                address,
-                area || null,
-                area_id ? parseInt(area_id) : null,
-                package_id,
-                customerData.odp_id || null,
-                pppoe_profile,
-                finalStatus,
-                auto_suspension !== undefined ? auto_suspension : 1,
-                normBillingDay,
-                static_ip || null,
-                assigned_ip || null,
-                mac_address || null,
-                finalLatitude,
-                finalLongitude,
-                cable_type || null,
-                cable_length || null,
-                port_number || null,
-                cable_status || 'connected',
-                cable_notes || null,
-                ktp_photo_path || null,
-                house_photo_path || null,
-                joinDateStored,
-                joinDateStored
+            const baseInsertFields = [
+                { name: 'customer_id', value: () => generatedCustomerId },
+                { name: 'username', required: true, value: (loginUser) => loginUser },
+                { name: 'password', value: () => password || null },
+                { name: 'name', required: true, value: () => name },
+                { name: 'phone', required: true, value: () => phone },
+                { name: 'pppoe_username', value: () => pppoeUserStored },
+                { name: 'email', value: () => email },
+                { name: 'address', value: () => address },
+                { name: 'area', value: () => area || null },
+                { name: 'area_id', value: () => (area_id ? parseInt(area_id) : null) },
+                { name: 'package_id', value: () => package_id },
+                { name: 'odp_id', value: () => customerData.odp_id || null },
+                { name: 'pppoe_profile', value: () => pppoe_profile },
+                { name: 'status', value: () => finalStatus },
+                { name: 'auto_suspension', value: () => (auto_suspension !== undefined ? auto_suspension : 1) },
+                { name: 'billing_day', value: () => normBillingDay },
+                { name: 'static_ip', value: () => static_ip || null },
+                { name: 'assigned_ip', value: () => assigned_ip || null },
+                { name: 'mac_address', value: () => mac_address || null },
+                { name: 'latitude', value: () => finalLatitude },
+                { name: 'longitude', value: () => finalLongitude },
+                { name: 'cable_type', value: () => cable_type || null },
+                { name: 'cable_length', value: () => cable_length || null },
+                { name: 'port_number', value: () => port_number || null },
+                { name: 'cable_status', value: () => cable_status || 'connected' },
+                { name: 'cable_notes', value: () => cable_notes || null },
+                { name: 'ktp_photo_path', value: () => ktp_photo_path || null },
+                { name: 'house_photo_path', value: () => house_photo_path || null },
+                { name: 'join_date', value: () => joinDateStored },
+                { name: 'created_at', value: () => joinDateStored }
             ];
+
+            let insertFields;
+            try {
+                const customerColumns = await new Promise((resolve, rejectCols) => {
+                    db.all('PRAGMA table_info(customers)', (err, rows) => {
+                        if (err) rejectCols(err);
+                        else resolve(new Set((rows || []).map((row) => row.name)));
+                    });
+                });
+                insertFields = baseInsertFields.filter((field) => {
+                    if (customerColumns.has(field.name)) return true;
+                    if (field.required) {
+                        throw new Error(`Kolom wajib customers.${field.name} belum tersedia`);
+                    }
+                    logger.warn(`[BILLING] Kolom opsional customers.${field.name} belum ada, dilewati saat membuat pelanggan`);
+                    return false;
+                });
+            } catch (schemaErr) {
+                return reject(schemaErr);
+            }
+
+            const sql = `INSERT INTO customers (${insertFields.map((field) => field.name).join(', ')}) VALUES (${insertFields.map(() => '?').join(', ')})`;
+            const insertParams = (loginUser) => insertFields.map((field) => field.value(loginUser));
 
             let lastInsertErr = null;
             let lastID = null;
@@ -5079,7 +5110,8 @@ ${year && month ? `
 
     async getCollectorDashboardStats(collectorId, month = null, year = null) {
         const dateObj = new Date();
-        const filterMonth = (month || (dateObj.getMonth() + 1)).toString().padStart(2, '0');
+        const isYearRange = String(month) === 'all' || String(month) === '0';
+        const filterMonth = isYearRange ? null : (month || (dateObj.getMonth() + 1)).toString().padStart(2, '0');
         const filterYear = (year || dateObj.getFullYear()).toString();
         
         const todayStr = new Date(dateObj.getTime() - (dateObj.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
@@ -5090,9 +5122,15 @@ ${year && month ? `
             const hasAreas = await this._hasAreasReferenceTable();
             const areaRowMatch = this._sqlCustomerMatchesCollectorAreaRow(hasAreas, 'cra');
             /** Sama pool pelanggan dengan getCollectorCustomers: area kolektor ATAU penugasan manual. */
+            const invoicePeriodWhere = isYearRange
+                ? `strftime('%Y', i.created_at) = ?`
+                : `strftime('%m', i.created_at) = ? AND strftime('%Y', i.created_at) = ?`;
+            const paymentPeriodWhere = isYearRange
+                ? `strftime('%Y', p.payment_date) = ?`
+                : `strftime('%m', p.payment_date) = ? AND strftime('%Y', p.payment_date) = ?`;
             const poolWhere = `
                 (cra.collector_id IS NOT NULL OR casm.collector_id IS NOT NULL)
-                AND strftime('%m', i.created_at) = ? AND strftime('%Y', i.created_at) = ?
+                AND ${invoicePeriodWhere}
             `;
             const poolJoin = `
                 FROM invoices i
@@ -5123,7 +5161,7 @@ ${year && month ? `
                 FROM payments p
                 INNER JOIN invoices i ON p.invoice_id = i.id
                 WHERE p.collector_id = ?
-                AND strftime('%m', p.payment_date) = ? AND strftime('%Y', p.payment_date) = ?
+                AND ${paymentPeriodWhere}
             `;
             
             const qBelumLunas = `
@@ -5156,21 +5194,22 @@ ${year && month ? `
                 FROM payments p
                 INNER JOIN invoices i ON i.id = p.invoice_id
                 WHERE p.collector_id = ? AND p.payment_type = 'collector'
-                AND strftime('%m', p.payment_date) = ? AND strftime('%Y', p.payment_date) = ?
+                AND ${paymentPeriodWhere}
             `;
 
             const runGet = (sql, params) => new Promise((resolve, reject) => {
                 this.db.get(sql, params, (err, row) => err ? reject(err) : resolve(row || {}));
             });
 
-            const poolParams = [collectorId, collectorId, filterMonth, filterYear];
+            const periodParams = isYearRange ? [filterYear] : [filterMonth, filterYear];
+            const poolParams = [collectorId, collectorId, ...periodParams];
             const [tagihan, tagihanLunas, lunas, belumLunas, hariIni, setoran] = await Promise.all([
                 runGet(qTagihan, poolParams),
                 runGet(qTagihanLunas, poolParams),
-                runGet(qLunas, [collectorId, filterMonth, filterYear]),
+                runGet(qLunas, [collectorId, ...periodParams]),
                 runGet(qBelumLunas, poolParams),
                 runGet(qLunasHariIni, [collectorId, todayStr]),
-                runGet(qSetoran, [collectorId, filterMonth, filterYear])
+                runGet(qSetoran, [collectorId, ...periodParams])
             ]);
 
             return { tagihan, tagihanLunas, lunas, belumLunas, hariIni, setoran };
@@ -8531,7 +8570,10 @@ async handlePaymentWebhook(payload, gateway) {
         });
         let dateWhere = '';
         const payParams = [];
-        if (month && year) {
+        if (month && String(month) === 'all' && year) {
+            dateWhere = ` AND strftime('%Y', p.payment_date) = ?`;
+            payParams.push(String(year));
+        } else if (month && year) {
             dateWhere = ` AND strftime('%m', p.payment_date) = ? AND strftime('%Y', p.payment_date) = ?`;
             payParams.push(String(month).padStart(2, '0'), String(year));
         }
@@ -8595,7 +8637,9 @@ async handlePaymentWebhook(payload, gateway) {
             year != null && String(year).trim() !== '' && String(year) !== 'all'
                 ? parseInt(String(year), 10)
                 : NaN;
-        const useRange = Number.isFinite(m) && m >= 1 && m <= 12 && Number.isFinite(y);
+        const useMonthRange = Number.isFinite(m) && m >= 1 && m <= 12 && Number.isFinite(y);
+        const useYearRange = String(month) === 'all' && Number.isFinite(y);
+        const useRange = useMonthRange || useYearRange;
         const hasAreas = await this._hasAreasReferenceTable();
         const areaMatch = this._sqlCustomerMatchesCollectorAreaRow(hasAreas, 'ca', 'cust');
         const joinCollectorArea = `JOIN collector_areas ca ON ca.collector_id = c.id AND ${areaMatch}`;
@@ -8603,8 +8647,8 @@ async handlePaymentWebhook(payload, gateway) {
         let cpExtra = '';
         let cpCntExtra = '';
         if (useRange) {
-            const startDate = `${y}-${String(m).padStart(2, '0')}-01`;
-            const endDate = new Date(y, m, 0).toISOString().split('T')[0];
+            const startDate = useYearRange ? `${y}-01-01` : `${y}-${String(m).padStart(2, '0')}-01`;
+            const endDate = useYearRange ? `${y}-12-31` : new Date(y, m, 0).toISOString().split('T')[0];
             invDate = `DATE(i.created_at) >= '${startDate}' AND DATE(i.created_at) <= '${endDate}'`;
             cpExtra = `AND cp.collected_at >= '${startDate}' AND cp.collected_at <= '${endDate} 23:59:59'`;
             cpCntExtra = `AND cp2.collected_at >= '${startDate}' AND cp2.collected_at <= '${endDate} 23:59:59'`;
@@ -8678,7 +8722,7 @@ async handlePaymentWebhook(payload, gateway) {
         list.forEach((c) => {
             summary.total_komisi += Number(c.total_commission) || 0;
         });
-        if (useRange) {
+        if (useMonthRange) {
             const canon = await this.getMonthlyTagihanTotals(m, y, { scope: 'collector_territory' });
             const global = await this.getMonthlyTagihanTotals(m, y, { scope: 'all' });
             summary = {

@@ -88,17 +88,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       backgroundColor: bgBackground,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: const Color(0xFF2563EB),
+        foregroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: primaryContainer),
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
           'Settings',
           style: TextStyle(
-            color: primaryContainer,
+            color: Colors.white,
             fontSize: 20,
             fontWeight: FontWeight.bold,
           ),
@@ -106,7 +107,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         centerTitle: false,
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(color: const Color(0xFFE2E8F0), height: 1),
+          child: Container(color: Colors.white24, height: 1),
         ),
       ),
       body: SingleChildScrollView(
@@ -303,11 +304,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _buildSettingsTile(
                 icon: Icons.system_update,
                 title: 'Update aplikasi',
-                subtitle: 'Cek versi, unduh APK dari server billing atau GitHub',
-                trailing: const Icon(Icons.chevron_right, color: textOnSurfaceVariant),
+                subtitle:
+                    'Cek versi, unduh APK dari server billing atau GitHub',
+                trailing: const Icon(
+                  Icons.chevron_right,
+                  color: textOnSurfaceVariant,
+                ),
                 onTap: () {
                   Navigator.of(context).push<void>(
-                    MaterialPageRoute<void>(builder: (_) => const AppUpdateScreen()),
+                    MaterialPageRoute<void>(
+                      builder: (_) => const AppUpdateScreen(),
+                    ),
                   );
                 },
               ),
@@ -368,7 +375,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       decoration: BoxDecoration(
         color: const Color(0xFFF6F1FF),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFC8C4D3).withValues(alpha: 0.3)),
+        border: Border.all(
+          color: const Color(0xFFC8C4D3).withValues(alpha: 0.3),
+        ),
       ),
       child: Column(children: children),
     );

@@ -17,9 +17,11 @@ class _TagLocationScreenState extends State<TagLocationScreen>
     with SingleTickerProviderStateMixin {
   final MapController _mapController = MapController();
   final TextEditingController _odpCodeController = TextEditingController();
-  final TextEditingController _capacityController = TextEditingController(text: '8'); // Default 8 port
+  final TextEditingController _capacityController = TextEditingController(
+    text: '8',
+  ); // Default 8 port
   final TextEditingController _notesController = TextEditingController();
-  
+
   LatLng? _selectedLocation;
   LatLng? _currentGpsLocation;
   bool _isLoading = false;
@@ -61,7 +63,9 @@ class _TagLocationScreenState extends State<TagLocationScreen>
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('GPS belum aktif. Aktifkan lokasi perangkat terlebih dahulu.'),
+            content: Text(
+              'GPS belum aktif. Aktifkan lokasi perangkat terlebih dahulu.',
+            ),
             backgroundColor: Colors.red,
           ),
         );
@@ -73,11 +77,14 @@ class _TagLocationScreenState extends State<TagLocationScreen>
         permission = await Geolocator.requestPermission();
       }
 
-      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Izin lokasi ditolak. Izinkan akses lokasi untuk memakai My Location.'),
+            content: Text(
+              'Izin lokasi ditolak. Izinkan akses lokasi untuk memakai My Location.',
+            ),
             backgroundColor: Colors.red,
           ),
         );
@@ -130,7 +137,9 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                   height: 24,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: const Color(0xFF1A73E8).withValues(alpha: ringOpacity),
+                    color: const Color(
+                      0xFF1A73E8,
+                    ).withValues(alpha: ringOpacity),
                   ),
                 ),
               ),
@@ -161,14 +170,26 @@ class _TagLocationScreenState extends State<TagLocationScreen>
     final code = _odpCodeController.text.trim();
     if (code.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Kode ODP tidak boleh kosong', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red),
+        const SnackBar(
+          content: Text(
+            'Kode ODP tidak boleh kosong',
+            style: TextStyle(color: Colors.white),
+          ),
+          backgroundColor: Colors.red,
+        ),
       );
       return;
     }
 
     if (_selectedLocation == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Tandai lokasi di peta terlebih dahulu', style: TextStyle(color: Colors.white)), backgroundColor: Colors.red),
+        const SnackBar(
+          content: Text(
+            'Tandai lokasi di peta terlebih dahulu',
+            style: TextStyle(color: Colors.white),
+          ),
+          backgroundColor: Colors.red,
+        ),
       );
       return;
     }
@@ -176,22 +197,26 @@ class _TagLocationScreenState extends State<TagLocationScreen>
     setState(() => _isLoading = true);
 
     try {
-      final response = await ApiClient.put(
-        '/api/mobile-adapter/odps/$code/location',
-        {
-          'latitude': _selectedLocation!.latitude,
-          'longitude': _selectedLocation!.longitude,
-          'capacity': int.tryParse(_capacityController.text.trim()) ?? 8,
-          'notes': _notesController.text,
-        },
-      );
+      final response =
+          await ApiClient.put('/api/mobile-adapter/odps/$code/location', {
+            'latitude': _selectedLocation!.latitude,
+            'longitude': _selectedLocation!.longitude,
+            'capacity': int.tryParse(_capacityController.text.trim()) ?? 8,
+            'notes': _notesController.text,
+          });
 
       final responseData = jsonDecode(response.body);
 
       if (responseData['success'] == true) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Lokasi berhasil disimpan', style: TextStyle(color: Colors.white)), backgroundColor: Colors.green),
+          const SnackBar(
+            content: Text(
+              'Lokasi berhasil disimpan',
+              style: TextStyle(color: Colors.white),
+            ),
+            backgroundColor: Colors.green,
+          ),
         );
         Navigator.pop(context, true); // Return true to indicate success
       } else {
@@ -200,7 +225,13 @@ class _TagLocationScreenState extends State<TagLocationScreen>
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString(), style: const TextStyle(color: Colors.white)), backgroundColor: Colors.red),
+        SnackBar(
+          content: Text(
+            e.toString(),
+            style: const TextStyle(color: Colors.white),
+          ),
+          backgroundColor: Colors.red,
+        ),
       );
     } finally {
       if (mounted) {
@@ -211,24 +242,25 @@ class _TagLocationScreenState extends State<TagLocationScreen>
 
   @override
   Widget build(BuildContext context) {
-    const bgBackground = Color(0xFFFCF8FF);
-    const textOnSurface = Color(0xFF19163F);
-    const textOnSurfaceVariant = Color(0xFF474551);
-    
+    const bgBackground = Color(0xFFF8FBFF);
+    const textOnSurface = Color(0xFF0F172A);
+    const textOnSurfaceVariant = Color(0xFF475569);
+
     return Scaffold(
       backgroundColor: bgBackground,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: const Color(0xFF2563EB),
+        foregroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Color(0xFF070038)),
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
-          'Tag Location',
+          'Tag ODP',
           style: TextStyle(
-            color: Color(0xFF070038),
+            color: Colors.white,
             fontSize: 22,
             fontWeight: FontWeight.bold,
           ),
@@ -236,7 +268,10 @@ class _TagLocationScreenState extends State<TagLocationScreen>
         centerTitle: true,
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(color: const Color(0xFFE4DFFF), height: 1), // surface-variant
+          child: Container(
+            color: const Color(0xFFBFDBFE),
+            height: 1,
+          ), // surface-variant
         ),
       ),
       body: Stack(
@@ -251,7 +286,7 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                   height: 300,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFC8C4D3)),
+                    border: Border.all(color: const Color(0xFFBFDBFE)),
                   ),
                   clipBehavior: Clip.antiAlias,
                   child: Stack(
@@ -265,8 +300,10 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                         ),
                         children: [
                           TileLayer(
-                            urlTemplate: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                            userAgentPackageName: 'com.example.billing_kalimasada_mobile',
+                            urlTemplate:
+                                'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                            userAgentPackageName:
+                                'com.example.billing_kalimasada_mobile',
                           ),
                           if (_selectedLocation != null)
                             MarkerLayer(
@@ -301,8 +338,14 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                           decoration: BoxDecoration(
                             color: Colors.white,
                             shape: BoxShape.circle,
-                            border: Border.all(color: const Color(0xFFC8C4D3)),
-                            boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))],
+                            border: Border.all(color: const Color(0xFFBFDBFE)),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Colors.black12,
+                                blurRadius: 4,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
                           ),
                           child: IconButton(
                             icon: _isLocating
@@ -311,10 +354,13 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                                     height: 18,
                                     child: CircularProgressIndicator(
                                       strokeWidth: 2,
-                                      color: Color(0xFF070038),
+                                      color: Color(0xFF2563EB),
                                     ),
                                   )
-                                : const Icon(Icons.my_location, color: Color(0xFF070038)),
+                                : const Icon(
+                                    Icons.my_location,
+                                    color: Color(0xFF2563EB),
+                                  ),
                             onPressed: _moveToCurrentLocation,
                           ),
                         ),
@@ -322,13 +368,17 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                     ],
                   ),
                 ),
-                
+
                 const SizedBox(height: 8),
                 Center(
                   child: Text(
-                    _selectedLocation == null ? '⚠️ KLIK DULU MAPNYA YA GAESS !' : '✅ Pastikan titiknya akurat',
+                    _selectedLocation == null
+                        ? '⚠️ KLIK DULU MAPNYA YA GAESS !'
+                        : '✅ Pastikan titiknya akurat',
                     style: TextStyle(
-                      color: _selectedLocation == null ? const Color(0xFFBA1A1A) : Colors.green.shade700, // error color or green
+                      color: _selectedLocation == null
+                          ? const Color(0xFFBA1A1A)
+                          : Colors.green.shade700, // error color or green
                       fontWeight: FontWeight.w900,
                       fontSize: 14,
                       letterSpacing: 0.5,
@@ -343,19 +393,19 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w800,
-                      color: Color(0xFF070038),
+                      color: Color(0xFF2563EB),
                     ),
                   ),
                 ),
                 const SizedBox(height: 12),
-                
+
                 // ODP Code Section
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFCF8FF),
+                    color: const Color(0xFFF8FBFF),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFC8C4D3)),
+                    border: Border.all(color: const Color(0xFFBFDBFE)),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -370,43 +420,49 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                         ),
                       ),
                       const SizedBox(height: 12),
-                      const Divider(color: Color(0xFFC8C4D3)),
+                      const Divider(color: Color(0xFFBFDBFE)),
                       const SizedBox(height: 12),
                       TextField(
                         controller: _odpCodeController,
                         style: const TextStyle(color: textOnSurface),
                         decoration: InputDecoration(
                           hintText: 'Masukkan Kode ODP (Misal: ODP-JBG-01)',
-                          hintStyle: const TextStyle(color: textOnSurfaceVariant),
+                          hintStyle: const TextStyle(
+                            color: textOnSurfaceVariant,
+                          ),
                           filled: true,
-                          fillColor: const Color(0xFFF6F1FF),
+                          fillColor: const Color(0xFFEFF6FF),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFC8C4D3)),
+                            borderSide: const BorderSide(
+                              color: Color(0xFFBFDBFE),
+                            ),
                           ),
                           enabledBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFC8C4D3)),
+                            borderSide: const BorderSide(
+                              color: Color(0xFFBFDBFE),
+                            ),
                           ),
                           focusedBorder: const OutlineInputBorder(
                             borderRadius: BorderRadius.all(Radius.circular(8)),
-                            borderSide: BorderSide(color: Color(0xFF070038)),
+                            borderSide: BorderSide(color: Color(0xFF2563EB)),
                           ),
                         ),
                       ),
                     ],
                   ),
                 ),
-                
+
                 const SizedBox(height: 16),
-                
+
                 // Kapasitas Port Section
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFCF8FF),
+                    color: const Color(0xFFF8FBFF),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFC8C4D3)),
+                    border: Border.all(color: const Color(0xFFBFDBFE)),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -421,7 +477,7 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                         ),
                       ),
                       const SizedBox(height: 12),
-                      const Divider(color: Color(0xFFC8C4D3)),
+                      const Divider(color: Color(0xFFBFDBFE)),
                       const SizedBox(height: 12),
                       TextField(
                         controller: _capacityController,
@@ -429,36 +485,42 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                         style: const TextStyle(color: textOnSurface),
                         decoration: InputDecoration(
                           hintText: 'Masukkan Kapasitas Port (Misal: 8)',
-                          hintStyle: const TextStyle(color: textOnSurfaceVariant),
+                          hintStyle: const TextStyle(
+                            color: textOnSurfaceVariant,
+                          ),
                           filled: true,
-                          fillColor: const Color(0xFFF6F1FF),
+                          fillColor: const Color(0xFFEFF6FF),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFC8C4D3)),
+                            borderSide: const BorderSide(
+                              color: Color(0xFFBFDBFE),
+                            ),
                           ),
                           enabledBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFC8C4D3)),
+                            borderSide: const BorderSide(
+                              color: Color(0xFFBFDBFE),
+                            ),
                           ),
                           focusedBorder: const OutlineInputBorder(
                             borderRadius: BorderRadius.all(Radius.circular(8)),
-                            borderSide: BorderSide(color: Color(0xFF070038)),
+                            borderSide: BorderSide(color: Color(0xFF2563EB)),
                           ),
                         ),
                       ),
                     ],
                   ),
                 ),
-                
+
                 const SizedBox(height: 24),
-                
+
                 // Location Details Card
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFCF8FF),
+                    color: const Color(0xFFF8FBFF),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFC8C4D3)),
+                    border: Border.all(color: const Color(0xFFBFDBFE)),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -477,22 +539,32 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                           ),
                           if (_selectedLocation != null)
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
                               decoration: BoxDecoration(
-                                color: Colors.green.shade100, // green background
+                                color:
+                                    Colors.green.shade100, // green background
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Icon(Icons.check_circle, size: 14, color: Colors.green.shade800), // dark green icon
+                                  Icon(
+                                    Icons.check_circle,
+                                    size: 14,
+                                    color: Colors.green.shade800,
+                                  ), // dark green icon
                                   const SizedBox(width: 4),
                                   Text(
                                     'TAGGED',
                                     style: TextStyle(
                                       fontSize: 10,
                                       fontWeight: FontWeight.bold,
-                                      color: Colors.green.shade800, // dark green text
+                                      color: Colors
+                                          .green
+                                          .shade800, // dark green text
                                     ),
                                   ),
                                 ],
@@ -500,7 +572,10 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                             )
                           else
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
                               decoration: BoxDecoration(
                                 color: const Color(0xFFFFDAD6),
                                 borderRadius: BorderRadius.circular(4),
@@ -517,28 +592,44 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                         ],
                       ),
                       const SizedBox(height: 12),
-                      const Divider(color: Color(0xFFC8C4D3)),
+                      const Divider(color: Color(0xFFBFDBFE)),
                       const SizedBox(height: 12),
-                      
+
                       Row(
                         children: [
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text('LATITUDE', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: textOnSurfaceVariant)),
+                                const Text(
+                                  'LATITUDE',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: textOnSurfaceVariant,
+                                  ),
+                                ),
                                 const SizedBox(height: 4),
                                 Container(
                                   width: double.infinity,
                                   padding: const EdgeInsets.all(8),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFFF6F1FF), // surface-container-low
+                                    color: const Color(
+                                      0xFFEFF6FF,
+                                    ), // surface-container-low
                                     borderRadius: BorderRadius.circular(4),
-                                    border: Border.all(color: const Color(0xFFC8C4D3)),
+                                    border: Border.all(
+                                      color: const Color(0xFFBFDBFE),
+                                    ),
                                   ),
                                   child: Text(
-                                    _selectedLocation != null ? _selectedLocation!.latitude.toStringAsFixed(6) : '-', 
-                                    style: const TextStyle(color: textOnSurface)
+                                    _selectedLocation != null
+                                        ? _selectedLocation!.latitude
+                                              .toStringAsFixed(6)
+                                        : '-',
+                                    style: const TextStyle(
+                                      color: textOnSurface,
+                                    ),
                                   ),
                                 ),
                               ],
@@ -549,19 +640,33 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text('LONGITUDE', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: textOnSurfaceVariant)),
+                                const Text(
+                                  'LONGITUDE',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: textOnSurfaceVariant,
+                                  ),
+                                ),
                                 const SizedBox(height: 4),
                                 Container(
                                   width: double.infinity,
                                   padding: const EdgeInsets.all(8),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFFF6F1FF),
+                                    color: const Color(0xFFEFF6FF),
                                     borderRadius: BorderRadius.circular(4),
-                                    border: Border.all(color: const Color(0xFFC8C4D3)),
+                                    border: Border.all(
+                                      color: const Color(0xFFBFDBFE),
+                                    ),
                                   ),
                                   child: Text(
-                                    _selectedLocation != null ? _selectedLocation!.longitude.toStringAsFixed(6) : '-', 
-                                    style: const TextStyle(color: textOnSurface)
+                                    _selectedLocation != null
+                                        ? _selectedLocation!.longitude
+                                              .toStringAsFixed(6)
+                                        : '-',
+                                    style: const TextStyle(
+                                      color: textOnSurface,
+                                    ),
                                   ),
                                 ),
                               ],
@@ -572,16 +677,16 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                     ],
                   ),
                 ),
-                
+
                 const SizedBox(height: 24),
-                
+
                 // Notes Section
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFCF8FF),
+                    color: const Color(0xFFF8FBFF),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFC8C4D3)),
+                    border: Border.all(color: const Color(0xFFBFDBFE)),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -596,7 +701,7 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                         ),
                       ),
                       const SizedBox(height: 12),
-                      const Divider(color: Color(0xFFC8C4D3)),
+                      const Divider(color: Color(0xFFBFDBFE)),
                       const SizedBox(height: 12),
                       TextField(
                         controller: _notesController,
@@ -604,51 +709,75 @@ class _TagLocationScreenState extends State<TagLocationScreen>
                         style: const TextStyle(color: textOnSurface),
                         decoration: InputDecoration(
                           hintText: 'Masukkan catatan lokasi (opsional)...',
-                          hintStyle: const TextStyle(color: textOnSurfaceVariant),
+                          hintStyle: const TextStyle(
+                            color: textOnSurfaceVariant,
+                          ),
                           filled: true,
-                          fillColor: const Color(0xFFF6F1FF),
+                          fillColor: const Color(0xFFEFF6FF),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFC8C4D3)),
+                            borderSide: const BorderSide(
+                              color: Color(0xFFBFDBFE),
+                            ),
                           ),
                           enabledBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
-                            borderSide: const BorderSide(color: Color(0xFFC8C4D3)),
+                            borderSide: const BorderSide(
+                              color: Color(0xFFBFDBFE),
+                            ),
                           ),
                           focusedBorder: const OutlineInputBorder(
                             borderRadius: BorderRadius.all(Radius.circular(8)),
-                            borderSide: BorderSide(color: Color(0xFF070038)),
+                            borderSide: BorderSide(color: Color(0xFF2563EB)),
                           ),
                         ),
                       ),
                     ],
                   ),
                 ),
-                
+
                 const SizedBox(height: 32),
-                
+
                 // Action Buttons
                 ElevatedButton.icon(
                   onPressed: _isLoading ? null : _saveLocation,
                   icon: const Icon(Icons.save, color: Colors.white),
-                  label: Text(_isLoading ? 'Menyimpan...' : 'Save Location', style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                  label: Text(
+                    _isLoading ? 'Menyimpan...' : 'Simpan ODP',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF070038),
+                    backgroundColor: const Color(0xFF2563EB),
                     padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 16),
                 OutlinedButton(
                   onPressed: _isLoading ? null : () => Navigator.pop(context),
                   style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Color(0xFF070038)),
+                    side: const BorderSide(color: Color(0xFF2563EB)),
                     padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
                   ),
-                  child: const Text('Cancel', style: TextStyle(color: Color(0xFF070038), fontSize: 16, fontWeight: FontWeight.bold)),
+                  child: const Text(
+                    'Cancel',
+                    style: TextStyle(
+                      color: Color(0xFF2563EB),
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ),
-                
+
                 const SizedBox(height: 48), // Bottom padding
               ],
             ),
@@ -656,9 +785,7 @@ class _TagLocationScreenState extends State<TagLocationScreen>
           if (_isLoading)
             Container(
               color: Colors.black.withValues(alpha: 0.3),
-              child: const Center(
-                child: CircularProgressIndicator(),
-              ),
+              child: const Center(child: CircularProgressIndicator()),
             ),
         ],
       ),

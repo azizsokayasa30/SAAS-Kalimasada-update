@@ -69,10 +69,12 @@ class _CollectorCustomerDetailPanel extends StatefulWidget {
   final Future<void> Function()? onRefreshCustomers;
 
   @override
-  State<_CollectorCustomerDetailPanel> createState() => _CollectorCustomerDetailPanelState();
+  State<_CollectorCustomerDetailPanel> createState() =>
+      _CollectorCustomerDetailPanelState();
 }
 
-class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailPanel> {
+class _CollectorCustomerDetailPanelState
+    extends State<_CollectorCustomerDetailPanel> {
   List<Map<String, dynamic>> _history = [];
   Map<String, dynamic> _pppSession = {};
   bool _loadingDetail = true;
@@ -100,7 +102,7 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
   }
 
   String _toYmd(DateTime d) {
-    final p = (int n) => n.toString().padLeft(2, '0');
+    String p(int n) => n.toString().padLeft(2, '0');
     return '${d.year}-${p(d.month)}-${p(d.day)}';
   }
 
@@ -162,8 +164,14 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Simpan')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Simpan'),
+          ),
         ],
       ),
     );
@@ -171,7 +179,10 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
     ctrl.dispose();
     if (ok != true || !mounted) return;
     setState(() => _phoneSaving = true);
-    final err = await context.read<CollectorProvider>().updateCustomerPhone(cid, newPhone);
+    final err = await context.read<CollectorProvider>().updateCustomerPhone(
+      cid,
+      newPhone,
+    );
     if (!mounted) return;
     setState(() {
       _phoneSaving = false;
@@ -183,7 +194,9 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
       widget.row['phone'] = newPhone;
       await widget.onRefreshCustomers?.call();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nomor HP diperbarui')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Nomor HP diperbarui')));
       }
     }
   }
@@ -206,7 +219,11 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
     if (picked == null || !mounted) return;
     setState(() => _dueDateSaving = true);
     final ymd = _toYmd(picked);
-    final err = await context.read<CollectorProvider>().updateInvoiceDueDate(cid, invoiceId, ymd);
+    final err = await context.read<CollectorProvider>().updateInvoiceDueDate(
+      cid,
+      invoiceId,
+      ymd,
+    );
     if (!mounted) return;
     setState(() => _dueDateSaving = false);
     if (err != null) {
@@ -214,20 +231,27 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
       return;
     }
     setState(() {
-      final idx = _history.indexWhere((h) => h['id']?.toString() == invoiceId.toString());
+      final idx = _history.indexWhere(
+        (h) => h['id']?.toString() == invoiceId.toString(),
+      );
       if (idx >= 0) {
-        _history[idx] = Map<String, dynamic>.from(_history[idx])..['due_date'] = ymd;
+        _history[idx] = Map<String, dynamic>.from(_history[idx])
+          ..['due_date'] = ymd;
       }
     });
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Jatuh tempo diperbarui')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Jatuh tempo diperbarui')));
     }
   }
 
   Future<void> _promptIsolir() async {
     final cid = _customerId;
     if (cid == null) return;
-    final reasonCtrl = TextEditingController(text: 'Peringatan penagihan kolektor');
+    final reasonCtrl = TextEditingController(
+      text: 'Peringatan penagihan kolektor',
+    );
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -254,9 +278,14 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Batal'),
+          ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFF93000A)),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF93000A),
+            ),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Isolir'),
           ),
@@ -269,14 +298,18 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
 
     setState(() => _isolirLoading = true);
     final err = await context.read<CollectorProvider>().collectorIsolirCustomer(
-          cid,
-          reason: reasonText.isNotEmpty ? reasonText : 'Isolir manual oleh kolektor (peringatan)',
-        );
+      cid,
+      reason: reasonText.isNotEmpty
+          ? reasonText
+          : 'Isolir manual oleh kolektor (peringatan)',
+    );
     if (!mounted) return;
     setState(() => _isolirLoading = false);
     if (err != null) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(err)));
       }
       return;
     }
@@ -289,7 +322,9 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
     }
     if (parentCtx.mounted) {
       ScaffoldMessenger.of(parentCtx).showSnackBar(
-        const SnackBar(content: Text('Status isolir disimpan. Daftar pelanggan diperbarui.')),
+        const SnackBar(
+          content: Text('Status isolir disimpan. Daftar pelanggan diperbarui.'),
+        ),
       );
     }
   }
@@ -300,12 +335,18 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
       final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
       if (!ok && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Tidak ada aplikasi untuk membuka: ${uri.scheme}://${uri.host}${uri.path}')),
+          SnackBar(
+            content: Text(
+              'Tidak ada aplikasi untuk membuka: ${uri.scheme}://${uri.host}${uri.path}',
+            ),
+          ),
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Gagal membuka tautan: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Gagal membuka tautan: $e')));
       }
     }
   }
@@ -353,14 +394,17 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
     final cid = _customerId;
     final isIsolir = st == 'suspended';
     final isPaid = ps == 'paid';
-    final isUnpaidLike = ps == 'unpaid' || ps == 'overdue' || ps == 'no_invoice';
-    final hasUnpaidInvoiceInHistory = !_loadingDetail &&
+    final isUnpaidLike =
+        ps == 'unpaid' || ps == 'overdue' || ps == 'no_invoice';
+    final hasUnpaidInvoiceInHistory =
+        !_loadingDetail &&
         _history.any((inv) {
           final s = (inv['status']?.toString() ?? '').toLowerCase();
           return s.isNotEmpty && s != 'paid';
         });
     // Terisolir tetap bisa ditagih bila ada tunggakan (ringkasan atau riwayat faktur).
-    final showTagih = cid != null &&
+    final showTagih =
+        cid != null &&
         !isPaid &&
         (isUnpaidLike || (isIsolir && hasUnpaidInvoiceInHistory));
     final showResi = !isIsolir && isPaid;
@@ -415,20 +459,40 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                       children: [
                         Text(
                           name,
-                          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          style: Theme.of(context).textTheme.headlineSmall
+                              ?.copyWith(
                                 fontWeight: FontWeight.w700,
                                 color: FieldCollectorColors.onSurface,
                               ),
                         ),
                         const SizedBox(height: 4),
-                        Text(idLine, style: const TextStyle(color: FieldCollectorColors.onSurfaceVariant, fontSize: 13)),
+                        Text(
+                          idLine,
+                          style: const TextStyle(
+                            color: FieldCollectorColors.onSurfaceVariant,
+                            fontSize: 13,
+                          ),
+                        ),
                       ],
                     ),
                   ),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(color: badgeBg, borderRadius: BorderRadius.circular(8)),
-                    child: Text(badge, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: badgeFg)),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: badgeBg,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      badge,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: badgeFg,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -441,12 +505,20 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(Icons.home_work_outlined, size: 20, color: FieldCollectorColors.onSurfaceVariant),
+                    const Icon(
+                      Icons.home_work_outlined,
+                      size: 20,
+                      color: FieldCollectorColors.onSurfaceVariant,
+                    ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
                         addr,
-                        style: const TextStyle(fontSize: 14, height: 1.35, color: FieldCollectorColors.onSurface),
+                        style: const TextStyle(
+                          fontSize: 14,
+                          height: 1.35,
+                          color: FieldCollectorColors.onSurface,
+                        ),
                       ),
                     ),
                   ],
@@ -457,7 +529,9 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                 context,
                 icon: Icons.map_outlined,
                 title: 'Peta',
-                subtitle: mapUri != null ? 'Buka lokasi di Google Maps' : 'Koordinat belum diisi',
+                subtitle: mapUri != null
+                    ? 'Buka lokasi di Google Maps'
+                    : 'Koordinat belum diisi',
                 enabled: mapUri != null,
                 onTap: mapUri == null
                     ? null
@@ -479,28 +553,44 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                           child: SizedBox(
                             width: 22,
                             height: 22,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: FieldCollectorColors.primaryContainer),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: FieldCollectorColors.primaryContainer,
+                            ),
                           ),
                         ),
                       )
                     else if (!_pppSession.containsKey('online'))
                       const Text(
                         'Status sesi tidak dapat dimuat dari server.',
-                        style: TextStyle(fontSize: 12, color: FieldCollectorColors.onSurfaceVariant, height: 1.35),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: FieldCollectorColors.onSurfaceVariant,
+                          height: 1.35,
+                        ),
                       )
                     else if (loginChecked.isEmpty)
                       const Text(
                         'Login PPPoE belum diatur — tidak dapat mengecek sesi seperti di admin Mikrotik.',
-                        style: TextStyle(fontSize: 12, color: FieldCollectorColors.onSurfaceVariant, height: 1.35),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: FieldCollectorColors.onSurfaceVariant,
+                          height: 1.35,
+                        ),
                       )
                     else ...[
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
                             decoration: BoxDecoration(
-                              color: pppOnline ? const Color(0xFFD3F5D6) : const Color(0xFFE7E8E9),
+                              color: pppOnline
+                                  ? const Color(0xFFD3F5D6)
+                                  : const Color(0xFFE7E8E9),
                               borderRadius: BorderRadius.circular(6),
                             ),
                             child: Text(
@@ -508,7 +598,9 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                               style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w800,
-                                color: pppOnline ? const Color(0xFF0D5A16) : FieldCollectorColors.onSurfaceVariant,
+                                color: pppOnline
+                                    ? const Color(0xFF0D5A16)
+                                    : FieldCollectorColors.onSurfaceVariant,
                               ),
                             ),
                           ),
@@ -516,7 +608,11 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                           Expanded(
                             child: Text(
                               'Sama dengan indikator sesi di /admin/mikrotik (${_authModeLabel(pppAuth)}).',
-                              style: const TextStyle(fontSize: 11, color: FieldCollectorColors.onSurfaceVariant, height: 1.3),
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: FieldCollectorColors.onSurfaceVariant,
+                                height: 1.3,
+                              ),
                             ),
                           ),
                         ],
@@ -526,14 +622,20 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                           padding: EdgeInsets.only(top: 8),
                           child: Text(
                             'Akun billing: terisolir (suspensi).',
-                            style: TextStyle(fontSize: 11, color: Color(0xFF93000A), fontWeight: FontWeight.w600),
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF93000A),
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ),
                       const SizedBox(height: 10),
                       _kv('Login PPPoE', pppUser.isEmpty ? '—' : pppUser),
-                      if (loginChecked.isNotEmpty && loginChecked != pppUser) _kv('Dicek ke Mikrotik', loginChecked),
+                      if (loginChecked.isNotEmpty && loginChecked != pppUser)
+                        _kv('Dicek ke Mikrotik', loginChecked),
                       if (pppProfile.isNotEmpty) _kv('Profil', pppProfile),
-                      if (routerName.isNotEmpty) _kv('Router / NAS', routerName),
+                      if (routerName.isNotEmpty)
+                        _kv('Router / NAS', routerName),
                     ],
                   ],
                 ),
@@ -554,22 +656,34 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
               Text(
                 'Riwayat tagihan (tahun $tahunBerjalan)',
                 style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                      color: FieldCollectorColors.onSurface,
-                    ),
+                  fontWeight: FontWeight.w700,
+                  color: FieldCollectorColors.onSurface,
+                ),
               ),
               const SizedBox(height: 8),
               if (_loadingDetail)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 24),
-                  child: Center(child: CircularProgressIndicator(color: FieldCollectorColors.primaryContainer)),
+                  child: Center(
+                    child: CircularProgressIndicator(
+                      color: FieldCollectorColors.primaryContainer,
+                    ),
+                  ),
                 )
               else if (_detailError != null)
-                Text(_detailError!, style: const TextStyle(color: FieldCollectorColors.onErrorContainer))
+                Text(
+                  _detailError!,
+                  style: const TextStyle(
+                    color: FieldCollectorColors.onErrorContainer,
+                  ),
+                )
               else if (_history.isEmpty)
                 Text(
                   'Belum ada faktur tercatat pada tahun $tahunBerjalan.',
-                  style: const TextStyle(color: FieldCollectorColors.onSurfaceVariant, height: 1.35),
+                  style: const TextStyle(
+                    color: FieldCollectorColors.onSurfaceVariant,
+                    height: 1.35,
+                  ),
                 )
               else
                 ..._history.map((inv) => _historyInvoiceTile(context, inv)),
@@ -577,7 +691,12 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
           ),
         ),
         Padding(
-          padding: EdgeInsets.fromLTRB(20, 8, 20, MediaQuery.paddingOf(context).bottom + 16),
+          padding: EdgeInsets.fromLTRB(
+            20,
+            8,
+            20,
+            MediaQuery.paddingOf(context).bottom + 16,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -587,7 +706,9 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                     backgroundColor: FieldCollectorColors.primaryContainer,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
                   ),
                   onPressed: () async {
                     Navigator.pop(context);
@@ -614,8 +735,12 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                   style: OutlinedButton.styleFrom(
                     foregroundColor: FieldCollectorColors.onSurface,
                     padding: const EdgeInsets.symmetric(vertical: 14),
-                    side: const BorderSide(color: FieldCollectorColors.outlineVariant),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    side: const BorderSide(
+                      color: FieldCollectorColors.outlineVariant,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
                   ),
                   onPressed: () async {
                     Navigator.pop(context);
@@ -623,7 +748,8 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                     if (!parent.mounted) return;
                     await Navigator.of(parent).push<void>(
                       MaterialPageRoute<void>(
-                        builder: (_) => CollectorInvoiceReceiptScreen(customerId: cid),
+                        builder: (_) =>
+                            CollectorInvoiceReceiptScreen(customerId: cid),
                       ),
                     );
                   },
@@ -639,16 +765,23 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                     foregroundColor: const Color(0xFF93000A),
                     side: const BorderSide(color: Color(0xFFC62828)),
                     padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
                   ),
                   icon: _isolirLoading
                       ? const SizedBox(
                           width: 20,
                           height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF93000A)),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Color(0xFF93000A),
+                          ),
                         )
                       : const Icon(Icons.portable_wifi_off_outlined),
-                  label: Text(_isolirLoading ? 'Memproses…' : 'Isolir (peringatan)'),
+                  label: Text(
+                    _isolirLoading ? 'Memproses…' : 'Isolir (peringatan)',
+                  ),
                 ),
               ],
               const SizedBox(height: 10),
@@ -656,9 +789,13 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                 onPressed: _isolirLoading ? null : () => Navigator.pop(context),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: FieldCollectorColors.onSurfaceVariant,
-                  side: const BorderSide(color: FieldCollectorColors.outlineVariant),
+                  side: const BorderSide(
+                    color: FieldCollectorColors.outlineVariant,
+                  ),
                   padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
                 ),
                 child: const Text('Batal'),
               ),
@@ -702,7 +839,11 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
         ),
         child: const Text(
           'Belum ada tagihan terbuka — jatuh tempo akan tampil setelah faktur dibuat.',
-          style: TextStyle(fontSize: 13, height: 1.35, color: FieldCollectorColors.onSurfaceVariant),
+          style: TextStyle(
+            fontSize: 13,
+            height: 1.35,
+            color: FieldCollectorColors.onSurfaceVariant,
+          ),
         ),
       );
     }
@@ -751,12 +892,18 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                     const SizedBox(height: 6),
                     Text(
                       invNo,
-                      style: TextStyle(fontSize: 12, color: green.withValues(alpha: 0.75)),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: green.withValues(alpha: 0.75),
+                      ),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       'Ketuk untuk ubah tanggal',
-                      style: TextStyle(fontSize: 11, color: green.withValues(alpha: 0.65)),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: green.withValues(alpha: 0.65),
+                      ),
                     ),
                   ],
                 ),
@@ -767,14 +914,21 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                   child: SizedBox(
                     width: 24,
                     height: 24,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: green),
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: green,
+                    ),
                   ),
                 )
               else
                 Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.edit_calendar_rounded, color: green.withValues(alpha: 0.9), size: 28),
+                    Icon(
+                      Icons.edit_calendar_rounded,
+                      color: green.withValues(alpha: 0.9),
+                      size: 28,
+                    ),
                     const SizedBox(height: 2),
                     Text(
                       'Edit',
@@ -793,7 +947,11 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
     );
   }
 
-  Widget _phoneContactTile(BuildContext context, {required String phone, required String? waUri}) {
+  Widget _phoneContactTile(
+    BuildContext context, {
+    required String phone,
+    required String? waUri,
+  }) {
     return Material(
       color: const Color(0xFFF3F4F6),
       borderRadius: BorderRadius.circular(12),
@@ -803,10 +961,15 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
           children: [
             Expanded(
               child: InkWell(
-                onTap: waUri == null ? null : () => _launchExternal(Uri.parse(waUri)),
+                onTap: waUri == null
+                    ? null
+                    : () => _launchExternal(Uri.parse(waUri)),
                 borderRadius: BorderRadius.circular(10),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 12,
+                  ),
                   child: Row(
                     children: [
                       Column(
@@ -836,23 +999,38 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text('WhatsApp', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                            const Text(
+                              'WhatsApp',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
+                              ),
+                            ),
                             const SizedBox(height: 2),
                             Text(
-                              phone.isNotEmpty ? phone : 'Belum diisi — ketuk Edit untuk isi',
+                              phone.isNotEmpty
+                                  ? phone
+                                  : 'Belum diisi — ketuk Edit untuk isi',
                               style: TextStyle(
                                 fontSize: 13,
                                 color: phone.isNotEmpty
                                     ? FieldCollectorColors.primaryContainer
                                     : FieldCollectorColors.onSurfaceVariant,
-                                decoration: phone.isNotEmpty ? TextDecoration.underline : null,
+                                decoration: phone.isNotEmpty
+                                    ? TextDecoration.underline
+                                    : null,
                               ),
                             ),
                           ],
                         ),
                       ),
                       if (phone.isNotEmpty)
-                        Icon(Icons.open_in_new, size: 18, color: FieldCollectorColors.onSurfaceVariant.withValues(alpha: 0.8)),
+                        Icon(
+                          Icons.open_in_new,
+                          size: 18,
+                          color: FieldCollectorColors.onSurfaceVariant
+                              .withValues(alpha: 0.8),
+                        ),
                     ],
                   ),
                 ),
@@ -862,7 +1040,10 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
               onTap: _phoneSaving ? null : _editPhone,
               borderRadius: BorderRadius.circular(10),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -872,7 +1053,10 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                             height: 22,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Icon(Icons.edit_outlined, color: FieldCollectorColors.primaryContainer),
+                        : const Icon(
+                            Icons.edit_outlined,
+                            color: FieldCollectorColors.primaryContainer,
+                          ),
                     const SizedBox(height: 2),
                     const Text(
                       'Edit',
@@ -900,17 +1084,34 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
         children: [
           SizedBox(
             width: 120,
-            child: Text(k, style: const TextStyle(fontSize: 12, color: FieldCollectorColors.onSurfaceVariant)),
+            child: Text(
+              k,
+              style: const TextStyle(
+                fontSize: 12,
+                color: FieldCollectorColors.onSurfaceVariant,
+              ),
+            ),
           ),
           Expanded(
-            child: Text(v, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: FieldCollectorColors.onSurface)),
+            child: Text(
+              v,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: FieldCollectorColors.onSurface,
+              ),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _sectionCard(BuildContext context, {required String title, required Widget child}) {
+  Widget _sectionCard(
+    BuildContext context, {
+    required String title,
+    required Widget child,
+  }) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(14),
@@ -918,7 +1119,13 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
         color: FieldCollectorColors.surface,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: FieldCollectorColors.outlineVariant),
-        boxShadow: const [BoxShadow(color: Color(0x0A000000), blurRadius: 4, offset: Offset(0, 1))],
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0A000000),
+            blurRadius: 4,
+            offset: Offset(0, 1),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -957,26 +1164,45 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           child: Row(
             children: [
-              Icon(icon, color: enabled ? FieldCollectorColors.primaryContainer : FieldCollectorColors.onSurfaceVariant),
+              Icon(
+                icon,
+                color: enabled
+                    ? FieldCollectorColors.primaryContainer
+                    : FieldCollectorColors.onSurfaceVariant,
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
                     const SizedBox(height: 2),
                     Text(
                       subtitle,
                       style: TextStyle(
                         fontSize: 13,
-                        color: enabled ? FieldCollectorColors.primaryContainer : FieldCollectorColors.onSurfaceVariant,
+                        color: enabled
+                            ? FieldCollectorColors.primaryContainer
+                            : FieldCollectorColors.onSurfaceVariant,
                         decoration: enabled ? TextDecoration.underline : null,
                       ),
                     ),
                   ],
                 ),
               ),
-              Icon(Icons.open_in_new, size: 18, color: FieldCollectorColors.onSurfaceVariant.withValues(alpha: enabled ? 1 : 0.4)),
+              Icon(
+                Icons.open_in_new,
+                size: 18,
+                color: FieldCollectorColors.onSurfaceVariant.withValues(
+                  alpha: enabled ? 1 : 0.4,
+                ),
+              ),
             ],
           ),
         ),
@@ -989,7 +1215,8 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
     final amt = _coerceNum(inv['amount'])?.round() ?? 0;
     final due = inv['due_date']?.toString() ?? '';
     final created = inv['created_at']?.toString() ?? '';
-    final pkgName = inv['package_name']?.toString() ?? inv['description']?.toString() ?? '';
+    final pkgName =
+        inv['package_name']?.toString() ?? inv['description']?.toString() ?? '';
     final stInv = (inv['status']?.toString() ?? '').toLowerCase();
     final isPaidInv = stInv == 'paid';
 
@@ -1012,7 +1239,9 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
       } catch (_) {}
     }
 
-    final amtColor = isPaidInv ? const Color(0xFF1B5E20) : const Color(0xFFBA1A1A);
+    final amtColor = isPaidInv
+        ? const Color(0xFF1B5E20)
+        : const Color(0xFFBA1A1A);
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
@@ -1026,11 +1255,21 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
         children: [
           Row(
             children: [
-              Expanded(child: Text(numStr, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13))),
+              Expanded(
+                child: Text(
+                  numStr,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: isPaidInv ? const Color(0xFFD3F5D6) : const Color(0xFFFFDAD6),
+                  color: isPaidInv
+                      ? const Color(0xFFD3F5D6)
+                      : const Color(0xFFFFDAD6),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
@@ -1038,21 +1277,49 @@ class _CollectorCustomerDetailPanelState extends State<_CollectorCustomerDetailP
                   style: TextStyle(
                     fontSize: 10,
                     fontWeight: FontWeight.w800,
-                    color: isPaidInv ? const Color(0xFF0D5A16) : const Color(0xFF93000A),
+                    color: isPaidInv
+                        ? const Color(0xFF0D5A16)
+                        : const Color(0xFF93000A),
                   ),
                 ),
               ),
             ],
           ),
-          if (pkgName.isNotEmpty) Text(pkgName, style: const TextStyle(fontSize: 12, color: FieldCollectorColors.onSurfaceVariant)),
+          if (pkgName.isNotEmpty)
+            Text(
+              pkgName,
+              style: const TextStyle(
+                fontSize: 12,
+                color: FieldCollectorColors.onSurfaceVariant,
+              ),
+            ),
           const SizedBox(height: 6),
-          Text('Terbit: $createdLabel', style: const TextStyle(fontSize: 11, color: FieldCollectorColors.onSurfaceVariant)),
+          Text(
+            'Terbit: $createdLabel',
+            style: const TextStyle(
+              fontSize: 11,
+              color: FieldCollectorColors.onSurfaceVariant,
+            ),
+          ),
           const SizedBox(height: 4),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Jatuh tempo: $dueLabel', style: const TextStyle(fontSize: 11, color: FieldCollectorColors.onSurfaceVariant)),
-              Text(_rupiah(amt), style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: amtColor)),
+              Text(
+                'Jatuh tempo: $dueLabel',
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: FieldCollectorColors.onSurfaceVariant,
+                ),
+              ),
+              Text(
+                _rupiah(amt),
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 15,
+                  color: amtColor,
+                ),
+              ),
             ],
           ),
         ],

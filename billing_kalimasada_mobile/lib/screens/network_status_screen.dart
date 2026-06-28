@@ -11,14 +11,16 @@ class NetworkStatusScreen extends StatefulWidget {
 }
 
 class _NetworkStatusScreenState extends State<NetworkStatusScreen>
-    with WidgetsBindingObserver {
-  static const Color _primary = Color(0xFF532AA8);
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
+  static const Color _primary = Color(0xFF15803D);
   static const Color _surface = Color(0xFFF8F9FF);
   static const Color _outline = Color(0xFFCBC3D5);
   static const Color _text = Color(0xFF0B1C30);
   static const Color _subtleText = Color(0xFF494453);
+  static const _trafficInterface = 'sfp-sfpplus1';
 
   Timer? _timer;
+  late final AnimationController _blinkController;
   bool _pollingActive = false;
   bool _requestInFlight = false;
   bool _loading = true;
@@ -28,6 +30,7 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
   int _offline = 0;
   int _total = 0;
   DateTime? _lastUpdatedAt;
+  Map<String, dynamic>? _interfaceTraffic;
   List<Map<String, dynamic>> _routers = [];
   final Map<String, List<_TrafficPoint>> _trafficHistory = {};
 
@@ -35,6 +38,12 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _blinkController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 850),
+      lowerBound: 0.35,
+      upperBound: 1,
+    )..repeat(reverse: true);
     _fetchNetworkStatus();
     _startPolling();
   }
@@ -43,6 +52,7 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _stopPolling();
+    _blinkController.dispose();
     super.dispose();
   }
 
@@ -79,6 +89,57 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
     return int.tryParse('${value ?? ''}') ?? 0;
   }
 
+  num _numAt(Map<String, dynamic>? map, String key) {
+    final value = map?[key];
+    if (value is num) return value;
+    return num.tryParse('${value ?? ''}') ?? 0;
+  }
+
+  ({double rx, double tx}) _trafficFromMainInterface() {
+    final rxBits = _numAt(_interfaceTraffic, 'rx');
+    final txBits = _numAt(_interfaceTraffic, 'tx');
+    if (rxBits <= 0 && txBits <= 0) return (rx: 0, tx: 0);
+    return (rx: rxBits / 1000000, tx: txBits / 1000000);
+  }
+
+  ({double rx, double tx}) _trafficFromRouter(Map<String, dynamic> router) {
+    final rx = router['rx_mbps'] is num
+        ? (router['rx_mbps'] as num).toDouble()
+        : double.tryParse('${router['rx_mbps'] ?? ''}') ?? 0;
+    final tx = router['tx_mbps'] is num
+        ? (router['tx_mbps'] as num).toDouble()
+        : double.tryParse('${router['tx_mbps'] ?? ''}') ?? 0;
+    return (rx: rx, tx: tx);
+  }
+
+  ({double rx, double tx}) _trafficForRouter(
+    Map<String, dynamic> router, {
+    required bool useMainInterface,
+  }) {
+    final interfaceTraffic = _trafficFromMainInterface();
+    if (useMainInterface &&
+        (interfaceTraffic.rx > 0 || interfaceTraffic.tx > 0)) {
+      return interfaceTraffic;
+    }
+    return _trafficFromRouter(router);
+  }
+
+  Future<Map<String, dynamic>?> _fetchMainInterfaceTraffic() async {
+    try {
+      final response = await ApiClient.get(
+        '/api/dashboard/traffic?interface=$_trafficInterface',
+      );
+      if (response.statusCode != 200) return null;
+      final body = ApiClient.decodeJsonObject(
+        response,
+        debugLabel: 'dashboard/traffic',
+      );
+      return ApiClient.jsonSuccess(body['success']) ? body : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _fetchNetworkStatus({bool silent = false}) async {
     if (_requestInFlight) return;
     _requestInFlight = true;
@@ -91,10 +152,13 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
       setState(() => _refreshing = true);
     }
     try {
-      final response = await ApiClient.get('/api/mobile-adapter/network-status');
+      final response = await ApiClient.get(
+        '/api/mobile-adapter/network-status',
+      );
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         if (data['success'] == true) {
+          final interfaceTraffic = await _fetchMainInterfaceTraffic();
           final summary = (data['summary'] is Map)
               ? Map<String, dynamic>.from(data['summary'] as Map)
               : <String, dynamic>{};
@@ -106,16 +170,18 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
                     .toList()
               : <Map<String, dynamic>>[];
           if (!mounted) return;
-          for (final r in routers) {
+          if (interfaceTraffic != null) _interfaceTraffic = interfaceTraffic;
+          for (var i = 0; i < routers.length; i++) {
+            final r = routers[i];
             final rid = '${r['id'] ?? r['name'] ?? 'router'}';
-            final rx = (r['rx_mbps'] is num)
-                ? (r['rx_mbps'] as num).toDouble()
-                : double.tryParse('${r['rx_mbps'] ?? ''}') ?? 0;
-            final tx = (r['tx_mbps'] is num)
-                ? (r['tx_mbps'] as num).toDouble()
-                : double.tryParse('${r['tx_mbps'] ?? ''}') ?? 0;
-            final list = _trafficHistory.putIfAbsent(rid, () => <_TrafficPoint>[]);
-            list.add(_TrafficPoint(rx: rx, tx: tx, at: DateTime.now()));
+            final traffic = _trafficForRouter(r, useMainInterface: i == 0);
+            final list = _trafficHistory.putIfAbsent(
+              rid,
+              () => <_TrafficPoint>[],
+            );
+            list.add(
+              _TrafficPoint(rx: traffic.rx, tx: traffic.tx, at: DateTime.now()),
+            );
             if (list.length > 36) {
               list.removeRange(0, list.length - 36);
             }
@@ -125,13 +191,15 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
             _offline = _toInt(summary['offline']);
             _total = _toInt(summary['total']);
             _routers = routers;
+            if (interfaceTraffic != null) _interfaceTraffic = interfaceTraffic;
             _lastUpdatedAt = DateTime.now();
             _error = null;
           });
         } else {
           if (!mounted) return;
           setState(() {
-            _error = data['message']?.toString() ?? 'Gagal memuat status jaringan';
+            _error =
+                data['message']?.toString() ?? 'Gagal memuat status jaringan';
           });
         }
       } else {
@@ -157,17 +225,18 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
     return Scaffold(
       backgroundColor: _surface,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: const Color(0xFF2563EB),
+        foregroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: _primary),
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
-          'Status Jaringan',
+          'Server Mikrotik',
           style: TextStyle(
-            color: _primary,
+            color: Colors.white,
             fontSize: 22,
             fontWeight: FontWeight.w700,
           ),
@@ -180,13 +249,13 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : const Icon(Icons.settings, color: _primary),
+                : const Icon(Icons.settings, color: Colors.white),
             onPressed: _loading ? null : () => _fetchNetworkStatus(),
           ),
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(color: _outline, height: 1),
+          child: Container(color: Colors.white24, height: 1),
         ),
       ),
       body: SingleChildScrollView(
@@ -194,97 +263,99 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
         child: _loading
             ? const Padding(
                 padding: EdgeInsets.symmetric(vertical: 48),
-                child: Center(child: CircularProgressIndicator(color: _primary)),
+                child: Center(
+                  child: CircularProgressIndicator(color: _primary),
+                ),
               )
             : _error != null
-                ? _errorCard(_error!)
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+            ? _errorCard(_error!)
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
                     children: [
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(99),
-                              border: Border.all(color: _outline),
-                            ),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 8,
-                                  height: 8,
-                                  decoration: BoxDecoration(
-                                    color: _pollingActive
-                                        ? const Color(0xFF10B981)
-                                        : const Color(0xFFBA1A1A),
-                                    shape: BoxShape.circle,
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  _pollingActive ? 'LIVE (5s)' : 'PAUSED',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: _pollingActive
-                                        ? const Color(0xFF137333)
-                                        : const Color(0xFF8A1212),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(99),
-                              border: Border.all(color: _outline),
-                            ),
-                            child: Text(
-                              _lastUpdatedAt == null
-                                  ? 'Belum ada update'
-                                  : 'Update: ${_fmtTime(_lastUpdatedAt!)}',
-                              style: const TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: _subtleText,
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(99),
+                          border: Border.all(color: _outline),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: _pollingActive
+                                    ? const Color(0xFF10B981)
+                                    : const Color(0xFFBA1A1A),
+                                shape: BoxShape.circle,
                               ),
                             ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      _bentoSummary(),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'Routers Inventory',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                          color: _text,
+                            const SizedBox(width: 6),
+                            Text(
+                              _pollingActive ? 'LIVE (5s)' : 'PAUSED',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: _pollingActive
+                                    ? const Color(0xFF137333)
+                                    : const Color(0xFF8A1212),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(height: 10),
-                      if (_routers.isEmpty) _emptyCard(),
-                      ..._routers.map(_routerCard),
-                      const SizedBox(height: 24),
                     ],
                   ),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(99),
+                          border: Border.all(color: _outline),
+                        ),
+                        child: Text(
+                          _lastUpdatedAt == null
+                              ? 'Belum ada update'
+                              : 'Update: ${_fmtTime(_lastUpdatedAt!)}',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: _subtleText,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  _bentoSummary(),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Daftar NAS / Router',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      color: _text,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  if (_routers.isEmpty) _emptyCard(),
+                  ..._routers.map(_routerCard),
+                  const SizedBox(height: 24),
+                ],
+              ),
       ),
     );
   }
@@ -342,7 +413,10 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(99),
@@ -371,7 +445,7 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
           children: [
             Expanded(
               child: _miniCard(
-                label: 'Active Nodes',
+                label: 'Aktif',
                 value: '$_active',
                 valueColor: _primary,
               ),
@@ -379,7 +453,7 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
             const SizedBox(width: 12),
             Expanded(
               child: _miniCard(
-                label: 'Critical Alerts',
+                label: 'Nonaktif',
                 value: '$_offline',
                 valueColor: const Color(0xFFBA1A1A),
               ),
@@ -437,13 +511,17 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
     final total = _toInt(router['total']);
     final status = (router['status'] ?? '').toString().toLowerCase();
     final isOnline = status == 'online';
-    final rxMbps = (router['rx_mbps'] is num)
-        ? (router['rx_mbps'] as num).toDouble()
-        : double.tryParse('${router['rx_mbps'] ?? ''}') ?? 0;
-    final txMbps = (router['tx_mbps'] is num)
-        ? (router['tx_mbps'] as num).toDouble()
-        : double.tryParse('${router['tx_mbps'] ?? ''}') ?? 0;
-    final dotColor = isOnline ? const Color(0xFF10B981) : const Color(0xFFBA1A1A);
+    final routerIndex = _routers.indexOf(router);
+    final traffic = _trafficForRouter(
+      router,
+      useMainInterface: routerIndex <= 0,
+    );
+    final rxMbps = traffic.rx;
+    final txMbps = traffic.tx;
+    final dotColor = isOnline
+        ? const Color(0xFF10B981)
+        : const Color(0xFFBA1A1A);
+    final statusLabel = isOnline ? 'ONLINE' : 'OFFLINE';
     final samples = _trafficHistory[id] ?? const <_TrafficPoint>[];
 
     return Container(
@@ -453,7 +531,9 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isOnline ? _outline : const Color(0xFFBA1A1A).withValues(alpha: 0.25),
+          color: isOnline
+              ? _outline
+              : const Color(0xFFBA1A1A).withValues(alpha: 0.25),
         ),
       ),
       child: Column(
@@ -474,24 +554,39 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
                     ),
                     Text(
                       'ID: $id',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: _subtleText,
-                      ),
+                      style: const TextStyle(fontSize: 12, color: _subtleText),
                     ),
                   ],
                 ),
               ),
-              Container(
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: dotColor,
-                  boxShadow: [
-                    BoxShadow(
-                      color: dotColor.withValues(alpha: 0.55),
-                      blurRadius: 8,
+              FadeTransition(
+                opacity: _blinkController,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      statusLabel,
+                      style: TextStyle(
+                        color: dotColor,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.4,
+                      ),
+                    ),
+                    const SizedBox(width: 7),
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: dotColor,
+                        boxShadow: [
+                          BoxShadow(
+                            color: dotColor.withValues(alpha: 0.55),
+                            blurRadius: 8,
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -507,7 +602,7 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
                     const Icon(Icons.lan, size: 18, color: _primary),
                     const SizedBox(width: 6),
                     Text(
-                      'Active: $active',
+                      'Aktif: $active',
                       style: const TextStyle(
                         color: _primary,
                         fontWeight: FontWeight.w700,
@@ -519,10 +614,14 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
               Expanded(
                 child: Row(
                   children: [
-                    const Icon(Icons.wifi_off, size: 18, color: Color(0xFFBA1A1A)),
+                    const Icon(
+                      Icons.wifi_off,
+                      size: 18,
+                      color: Color(0xFFBA1A1A),
+                    ),
                     const SizedBox(width: 6),
                     Text(
-                      'Inactive: $offline',
+                      'Nonaktif: $offline',
                       style: const TextStyle(
                         color: Color(0xFFBA1A1A),
                         fontWeight: FontWeight.w700,
@@ -546,7 +645,11 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
               Expanded(
                 child: Row(
                   children: [
-                    const Icon(Icons.download_rounded, size: 16, color: _primary),
+                    const Icon(
+                      Icons.download_rounded,
+                      size: 16,
+                      color: _primary,
+                    ),
                     const SizedBox(width: 4),
                     Text(
                       '${rxMbps.toStringAsFixed(2)} Mbps',
@@ -563,7 +666,11 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    const Icon(Icons.upload_rounded, size: 16, color: _subtleText),
+                    const Icon(
+                      Icons.upload_rounded,
+                      size: 16,
+                      color: _subtleText,
+                    ),
                     const SizedBox(width: 4),
                     Text(
                       '${txMbps.toStringAsFixed(2)} Mbps',
@@ -629,11 +736,7 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
 }
 
 class _TrafficPoint {
-  const _TrafficPoint({
-    required this.rx,
-    required this.tx,
-    required this.at,
-  });
+  const _TrafficPoint({required this.rx, required this.tx, required this.at});
   final double rx;
   final double tx;
   final DateTime at;

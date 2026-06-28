@@ -19,17 +19,18 @@ class _JobCompletionScreenState extends State<JobCompletionScreen> {
     return Scaffold(
       backgroundColor: bgBackground,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: const Color(0xFF2563EB),
+        foregroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Color(0xFF070038)),
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
           'Job Summary',
           style: TextStyle(
-            color: Color(0xFF070038),
+            color: Colors.white,
             fontSize: 20,
             fontWeight: FontWeight.bold,
           ),

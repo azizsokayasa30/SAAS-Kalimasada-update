@@ -7,6 +7,7 @@ import 'package:latlong2/latlong.dart';
 import '../services/api_client.dart';
 import 'odp_detail_screen.dart';
 import '../widgets/odp_map_marker.dart';
+import 'tag_customer_location_screen.dart';
 import 'tag_location_screen.dart';
 
 class NetworkMapScreen extends StatefulWidget {
@@ -30,6 +31,7 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
   List<dynamic> _cableRoutes = [];
   List<dynamic> _backbone = [];
   bool _isLoading = true;
+
   /// Kartu ringkas pelanggan di atas peta (bukan modal).
   Map<String, dynamic>? _selectedMapCustomer;
   late final AnimationController _flowController;
@@ -117,7 +119,9 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Izin lokasi ditolak. Berikan izin lokasi untuk fitur ini.'),
+              content: Text(
+                'Izin lokasi ditolak. Berikan izin lokasi untuk fitur ini.',
+              ),
               backgroundColor: Colors.red,
             ),
           );
@@ -126,7 +130,9 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
       }
 
       final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
       );
       if (!mounted) return;
       final point = LatLng(pos.latitude, pos.longitude);
@@ -166,7 +172,9 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
     const offlineColor = Color(0xFFC62828);
 
     final name = (c['name'] ?? '-').toString().trim();
-    final pppUser = (c['pppoe_username'] ?? c['username'] ?? '').toString().trim();
+    final pppUser = (c['pppoe_username'] ?? c['username'] ?? '')
+        .toString()
+        .trim();
     final pppUserLine = pppUser.isEmpty ? '—' : pppUser;
 
     final pa = c['pppoe_active'];
@@ -286,7 +294,11 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
             borderRadius: BorderRadius.circular(14),
             border: Border.all(color: outline),
             boxShadow: const [
-              BoxShadow(color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 4)),
+              BoxShadow(
+                color: Color(0x33000000),
+                blurRadius: 12,
+                offset: Offset(0, 4),
+              ),
             ],
           ),
           child: ClipRRect(
@@ -298,11 +310,17 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                   padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
                   decoration: const BoxDecoration(
                     color: Color(0xFFF0EBFF),
-                    border: Border(bottom: BorderSide(color: outline, width: 1)),
+                    border: Border(
+                      bottom: BorderSide(color: outline, width: 1),
+                    ),
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.home_rounded, size: 20, color: Color(0xFF1B0C6B)),
+                      const Icon(
+                        Icons.home_rounded,
+                        size: 20,
+                        color: Color(0xFF1B0C6B),
+                      ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
@@ -319,7 +337,8 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                       IconButton(
                         visualDensity: VisualDensity.compact,
                         tooltip: 'Tutup',
-                        onPressed: () => setState(() => _selectedMapCustomer = null),
+                        onPressed: () =>
+                            setState(() => _selectedMapCustomer = null),
                         icon: const Icon(Icons.close_rounded, color: textMuted),
                       ),
                     ],
@@ -353,7 +372,10 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
           final fromLng = (row['odp_lng'] as num?)?.toDouble();
           final toLat = (row['customer_lat'] as num?)?.toDouble();
           final toLng = (row['customer_lng'] as num?)?.toDouble();
-          if (fromLat == null || fromLng == null || toLat == null || toLng == null) {
+          if (fromLat == null ||
+              fromLng == null ||
+              toLat == null ||
+              toLng == null) {
             return null;
           }
           return [LatLng(fromLat, fromLng), LatLng(toLat, toLng)];
@@ -370,7 +392,10 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
           final fromLng = (row['from_lng'] as num?)?.toDouble();
           final toLat = (row['to_lat'] as num?)?.toDouble();
           final toLng = (row['to_lng'] as num?)?.toDouble();
-          if (fromLat == null || fromLng == null || toLat == null || toLng == null) {
+          if (fromLat == null ||
+              fromLng == null ||
+              toLat == null ||
+              toLng == null) {
             return null;
           }
           return [LatLng(fromLat, fromLng), LatLng(toLat, toLng)];
@@ -424,7 +449,9 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                   height: 24,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: const Color(0xFF1A73E8).withValues(alpha: ringOpacity),
+                    color: const Color(
+                      0xFF1A73E8,
+                    ).withValues(alpha: ringOpacity),
                   ),
                 ),
               ),
@@ -459,22 +486,22 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
   ];
 
   TextStyle _legendBodyStyle() => const TextStyle(
-        fontSize: 10,
-        height: 1.05,
-        letterSpacing: -0.1,
-        color: Color(0xFF0D0B1A),
-        fontWeight: FontWeight.w600,
-        shadows: _legendShadows,
-      );
+    fontSize: 10,
+    height: 1.05,
+    letterSpacing: -0.1,
+    color: Color(0xFF0D0B1A),
+    fontWeight: FontWeight.w600,
+    shadows: _legendShadows,
+  );
 
   TextStyle _legendTitleStyle() => const TextStyle(
-        fontSize: 10.5,
-        height: 1.05,
-        fontWeight: FontWeight.w800,
-        color: Color(0xFF070038),
-        letterSpacing: 0.15,
-        shadows: _legendShadows,
-      );
+    fontSize: 10.5,
+    height: 1.05,
+    fontWeight: FontWeight.w800,
+    color: Color(0xFF070038),
+    letterSpacing: 0.15,
+    shadows: _legendShadows,
+  );
 
   Widget _legendRowIcon(Widget icon, String label) {
     return Padding(
@@ -509,7 +536,9 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                 decoration: const BoxDecoration(
                   color: Color(0xFF2196F3),
                   shape: BoxShape.circle,
-                  border: Border.fromBorderSide(BorderSide(color: Colors.white, width: 1)),
+                  border: Border.fromBorderSide(
+                    BorderSide(color: Colors.white, width: 1),
+                  ),
                 ),
                 child: const Icon(Icons.home, size: 8, color: Colors.white),
               ),
@@ -522,7 +551,9 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                 decoration: const BoxDecoration(
                   color: Color(0xFF9E9E9E),
                   shape: BoxShape.circle,
-                  border: Border.fromBorderSide(BorderSide(color: Colors.white, width: 1)),
+                  border: Border.fromBorderSide(
+                    BorderSide(color: Colors.white, width: 1),
+                  ),
                 ),
                 child: const Icon(Icons.home, size: 8, color: Colors.white),
               ),
@@ -537,7 +568,11 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                   shape: BoxShape.circle,
                   border: Border.all(color: const Color(0xFFF9A825)),
                 ),
-                child: const Icon(Icons.settings_input_antenna_rounded, size: 7, color: Color(0xFF5D4037)),
+                child: const Icon(
+                  Icons.settings_input_antenna_rounded,
+                  size: 7,
+                  color: Color(0xFF5D4037),
+                ),
               ),
               'ODP aktif',
             ),
@@ -550,7 +585,11 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                   shape: BoxShape.circle,
                   border: Border.all(color: Color(0xFF9E9E9E)),
                 ),
-                child: const Icon(Icons.settings_input_antenna_rounded, size: 7, color: Color(0xFF424242)),
+                child: const Icon(
+                  Icons.settings_input_antenna_rounded,
+                  size: 7,
+                  color: Color(0xFF424242),
+                ),
               ),
               'ODP nonaktif',
             ),
@@ -563,7 +602,11 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                   shape: BoxShape.circle,
                   border: Border.all(color: Color(0xFFFF9800)),
                 ),
-                child: const Icon(Icons.settings_input_component_rounded, size: 7, color: Color(0xFF5D4037)),
+                child: const Icon(
+                  Icons.settings_input_component_rounded,
+                  size: 7,
+                  color: Color(0xFF5D4037),
+                ),
               ),
               'ODP pemeliharaan',
             ),
@@ -592,8 +635,12 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
     while (elapsed < totalMs && mounted) {
       final linearT = (elapsed / totalMs).clamp(0.0, 1.0);
       final t = Curves.easeInOutCubic.transform(linearT);
-      final lat = startCenter.latitude + ((targetCenter.latitude - startCenter.latitude) * t);
-      final lng = startCenter.longitude + ((targetCenter.longitude - startCenter.longitude) * t);
+      final lat =
+          startCenter.latitude +
+          ((targetCenter.latitude - startCenter.latitude) * t);
+      final lng =
+          startCenter.longitude +
+          ((targetCenter.longitude - startCenter.longitude) * t);
       final zoom = startZoom + ((targetZoom - startZoom) * t);
       _mapController.move(LatLng(lat, lng), zoom);
       await Future<void>.delayed(const Duration(milliseconds: frameMs));
@@ -611,7 +658,7 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
     return Scaffold(
       backgroundColor: const Color(0xFFF6F1FF), // surface-container-low
       appBar: AppBar(
-        backgroundColor: const Color(0xFF070038), // primary
+        backgroundColor: const Color(0xFF2563EB),
         title: const Text(
           'Pemetaan Jaringan',
           style: TextStyle(
@@ -656,34 +703,54 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                 ),
                 children: [
                   TileLayer(
-                    urlTemplate: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                    userAgentPackageName: 'com.example.billing_kalimasada_mobile',
+                    urlTemplate:
+                        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                    userAgentPackageName:
+                        'com.example.billing_kalimasada_mobile',
                   ),
                   PolylineLayer(
                     polylines: backboneSegments
-                        .map((points) => Polyline(
-                              points: points,
-                              color: const Color(0xFFFFD400),
-                              strokeWidth: 4,
-                            ))
+                        .map(
+                          (points) => Polyline(
+                            points: points,
+                            color: const Color(0xFFFFD400),
+                            strokeWidth: 4,
+                          ),
+                        )
                         .toList(),
                   ),
                   PolylineLayer(
-                    polylines: _cableRoutes.whereType<Map>().map((row) {
-                      final fromLat = (row['customer_lat'] as num?)?.toDouble();
-                      final fromLng = (row['customer_lng'] as num?)?.toDouble();
-                      final toLat = (row['odp_lat'] as num?)?.toDouble();
-                      final toLng = (row['odp_lng'] as num?)?.toDouble();
-                      if (fromLat == null || fromLng == null || toLat == null || toLng == null) {
-                        return null;
-                      }
-                      final status = (row['status'] ?? 'connected').toString().toLowerCase();
-                      return Polyline(
-                        points: [LatLng(fromLat, fromLng), LatLng(toLat, toLng)],
-                        color: status == 'connected' ? const Color(0xFF28A745) : const Color(0xFFDC3545),
-                        strokeWidth: 3,
-                      );
-                    }).whereType<Polyline>().toList(),
+                    polylines: _cableRoutes
+                        .whereType<Map>()
+                        .map((row) {
+                          final fromLat = (row['customer_lat'] as num?)
+                              ?.toDouble();
+                          final fromLng = (row['customer_lng'] as num?)
+                              ?.toDouble();
+                          final toLat = (row['odp_lat'] as num?)?.toDouble();
+                          final toLng = (row['odp_lng'] as num?)?.toDouble();
+                          if (fromLat == null ||
+                              fromLng == null ||
+                              toLat == null ||
+                              toLng == null) {
+                            return null;
+                          }
+                          final status = (row['status'] ?? 'connected')
+                              .toString()
+                              .toLowerCase();
+                          return Polyline(
+                            points: [
+                              LatLng(fromLat, fromLng),
+                              LatLng(toLat, toLng),
+                            ],
+                            color: status == 'connected'
+                                ? const Color(0xFF28A745)
+                                : const Color(0xFFDC3545),
+                            strokeWidth: 3,
+                          );
+                        })
+                        .whereType<Polyline>()
+                        .toList(),
                   ),
                   CircleLayer(
                     circles: _buildFlowDots(
@@ -699,40 +766,59 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                       phaseShift: 0.35,
                     ),
                   ),
-              MarkerLayer(
-                markers: _customers.whereType<Map>().map((c) {
-                  final lat = (c['latitude'] as num?)?.toDouble();
-                  final lng = (c['longitude'] as num?)?.toDouble();
-                  if (lat == null || lng == null) return null;
-                  final status = (c['status'] ?? 'active').toString().toLowerCase();
-                  final color = status == 'active' ? const Color(0xFF2196F3) : const Color(0xFF9E9E9E);
-                  final row = Map<String, dynamic>.from(c);
-                  return Marker(
-                    point: LatLng(lat, lng),
-                    width: 22,
-                    height: 22,
-                    alignment: Alignment.center,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => _onCustomerMarkerTap(row),
-                      child: Container(
-                        width: 22,
-                        height: 22,
-                        decoration: BoxDecoration(
-                          color: color,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 1),
-                          boxShadow: const [
-                            BoxShadow(color: Colors.black26, blurRadius: 3, offset: Offset(0, 1)),
-                          ],
-                        ),
-                        alignment: Alignment.center,
-                        child: const Icon(Icons.home_rounded, size: 12, color: Colors.white),
-                      ),
-                    ),
-                  );
-                }).whereType<Marker>().toList(),
-              ),
+                  MarkerLayer(
+                    markers: _customers
+                        .whereType<Map>()
+                        .map((c) {
+                          final lat = (c['latitude'] as num?)?.toDouble();
+                          final lng = (c['longitude'] as num?)?.toDouble();
+                          if (lat == null || lng == null) return null;
+                          final status = (c['status'] ?? 'active')
+                              .toString()
+                              .toLowerCase();
+                          final color = status == 'active'
+                              ? const Color(0xFF2196F3)
+                              : const Color(0xFF9E9E9E);
+                          final row = Map<String, dynamic>.from(c);
+                          return Marker(
+                            point: LatLng(lat, lng),
+                            width: 22,
+                            height: 22,
+                            alignment: Alignment.center,
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () => _onCustomerMarkerTap(row),
+                              child: Container(
+                                width: 22,
+                                height: 22,
+                                decoration: BoxDecoration(
+                                  color: color,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.white,
+                                    width: 1,
+                                  ),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                      color: Colors.black26,
+                                      blurRadius: 3,
+                                      offset: Offset(0, 1),
+                                    ),
+                                  ],
+                                ),
+                                alignment: Alignment.center,
+                                child: const Icon(
+                                  Icons.home_rounded,
+                                  size: 12,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          );
+                        })
+                        .whereType<Marker>()
+                        .toList(),
+                  ),
                   if (_currentGpsLocation != null)
                     MarkerLayer(
                       markers: [
@@ -745,39 +831,49 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                         ),
                       ],
                     ),
-              MarkerLayer(
-                markers: _odps.map((odp) {
-                  final status = (odp['status'] ?? 'active').toString();
-                  final lat = (odp['latitude'] as num?)?.toDouble();
-                  final lng = (odp['longitude'] as num?)?.toDouble();
-                  if (lat == null || lng == null) {
-                    return null;
-                  }
+                  MarkerLayer(
+                    markers: _odps
+                        .map((odp) {
+                          final status = (odp['status'] ?? 'active').toString();
+                          final lat = (odp['latitude'] as num?)?.toDouble();
+                          final lng = (odp['longitude'] as num?)?.toDouble();
+                          if (lat == null || lng == null) {
+                            return null;
+                          }
 
-                  return Marker(
-                    point: LatLng(lat, lng),
-                    width: 28,
-                    height: 33,
-                    alignment: Alignment.topCenter,
-                    child: GestureDetector(
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => OdpDetailScreen(odpId: odp['code'] ?? odp['name'] ?? odp['id'].toString()),
-                          ),
-                        ).then((_) => _fetchNetworkMap()); // Refresh after returning
-                      },
-                      child: OdpMapMarker(status: status),
-                    ),
-                  );
-                }).whereType<Marker>().toList(),
-              ),
+                          return Marker(
+                            point: LatLng(lat, lng),
+                            width: 28,
+                            height: 33,
+                            alignment: Alignment.topCenter,
+                            child: GestureDetector(
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => OdpDetailScreen(
+                                      odpId:
+                                          odp['code'] ??
+                                          odp['name'] ??
+                                          odp['id'].toString(),
+                                    ),
+                                  ),
+                                ).then(
+                                  (_) => _fetchNetworkMap(),
+                                ); // Refresh after returning
+                              },
+                              child: OdpMapMarker(status: status),
+                            ),
+                          );
+                        })
+                        .whereType<Marker>()
+                        .toList(),
+                  ),
                 ],
               );
             },
           ),
-          
+
           // Overlays Layer
           SafeArea(
             child: Padding(
@@ -796,118 +892,217 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                         SizedBox(
                           width: double.infinity,
                           child: Container(
-                          height: 48,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFCF8FF), // surface
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: const Color(0xFFC8C4D3)),
-                            boxShadow: const [
-                              BoxShadow(
-                                color: Colors.black12,
-                                blurRadius: 4,
-                                offset: Offset(0, 2),
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFCF8FF), // surface
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: const Color(0xFFC8C4D3),
                               ),
-                            ],
-                          ),
-                          child: Row(
-                            children: [
-                              const Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 16),
-                                child: Icon(Icons.search, color: Color(0xFF474551)), // on-surface-variant
-                              ),
-                              Expanded(
-                                child: Autocomplete<Map<String, dynamic>>(
-                            optionsBuilder: (TextEditingValue textEditingValue) {
-                              if (textEditingValue.text.isEmpty) {
-                                return const Iterable<Map<String, dynamic>>.empty();
-                              }
-                              final allItems = <Map<String, dynamic>>[
-                                ..._odps.whereType<Map>().map((e) => Map<String, dynamic>.from(e)..['__type'] = 'ODP'),
-                                ..._customers.whereType<Map>().map((e) => Map<String, dynamic>.from(e)..['__type'] = 'CUSTOMER'),
-                              ];
-                              return allItems.where((item) {
-                                final name = (item['name'] ?? '').toString().toLowerCase();
-                                final code = (item['code'] ?? item['phone'] ?? '').toString().toLowerCase();
-                                final query = textEditingValue.text.toLowerCase();
-                                return name.contains(query) || code.contains(query);
-                              });
-                            },
-                            displayStringForOption: (Map<String, dynamic> option) => option['name'] ?? option['code'] ?? '',
-                            onSelected: (Map<String, dynamic> selection) {
-                              if (selection['latitude'] != null && selection['longitude'] != null) {
-                                final lat = (selection['latitude'] as num).toDouble();
-                                final lng = (selection['longitude'] as num).toDouble();
-                                _animateTo(LatLng(lat, lng), 18.0);
-                              }
-                            },
-                            fieldViewBuilder: (context, textEditingController, focusNode, onFieldSubmitted) {
-                              return TextField(
-                                controller: textEditingController,
-                                focusNode: focusNode,
-                                decoration: const InputDecoration(
-                                  hintText: 'Cari ODP atau perangkat',
-                                  hintStyle: TextStyle(color: Color(0xFF787582)), // outline
-                                  border: InputBorder.none,
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Colors.black12,
+                                  blurRadius: 4,
+                                  offset: Offset(0, 2),
                                 ),
-                                style: const TextStyle(color: Color(0xFF19163F)),
-                                onSubmitted: (String value) {
-                                  onFieldSubmitted();
-                                },
-                              );
-                            },
-                            optionsViewBuilder: (context, onSelected, Iterable<Map<String, dynamic>> options) {
-                              return Align(
-                                alignment: Alignment.topLeft,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(top: 8.0),
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(8),
-                                    child: BackdropFilter(
-                                      filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                                      child: Material(
-                                        elevation: 4,
-                                        color: Colors.white.withValues(alpha: 0.5),
-                                        child: ConstrainedBox(
-                                          constraints: BoxConstraints(
-                                            maxHeight: 250, 
-                                            maxWidth: MediaQuery.of(context).size.width - 40 - 48,
-                                          ),
-                                          child: ListView.builder(
-                                            padding: EdgeInsets.zero,
-                                            shrinkWrap: true,
-                                            itemCount: options.length,
-                                            itemBuilder: (context, index) {
-                                              final option = options.elementAt(index);
-                                              return ListTile(
-                                                leading: const Icon(Icons.router, color: Color(0xFF070038)),
-                                                title: Text(
-                                                  option['name'] ?? option['code'] ?? '', 
-                                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87),
+                              ],
+                            ),
+                            child: Row(
+                              children: [
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(horizontal: 16),
+                                  child: Icon(
+                                    Icons.search,
+                                    color: Color(0xFF474551),
+                                  ), // on-surface-variant
+                                ),
+                                Expanded(
+                                  child: Autocomplete<Map<String, dynamic>>(
+                                    optionsBuilder:
+                                        (TextEditingValue textEditingValue) {
+                                          if (textEditingValue.text.isEmpty) {
+                                            return const Iterable<
+                                              Map<String, dynamic>
+                                            >.empty();
+                                          }
+                                          final allItems =
+                                              <Map<String, dynamic>>[
+                                                ..._odps.whereType<Map>().map(
+                                                  (e) =>
+                                                      Map<String, dynamic>.from(
+                                                        e,
+                                                      )..['__type'] = 'ODP',
                                                 ),
-                                                subtitle: Text(
-                                                  option['__type'] == 'CUSTOMER'
-                                                      ? 'Pelanggan • ${(option['phone'] ?? '').toString()}'
-                                                      : 'ODP • ${(option['code'] ?? '').toString()}',
-                                                  style: const TextStyle(fontSize: 12, color: Colors.black54),
-                                                ),
-                                                onTap: () {
-                                                  onSelected(option);
-                                                },
-                                              );
+                                                ..._customers
+                                                    .whereType<Map>()
+                                                    .map(
+                                                      (e) =>
+                                                          Map<
+                                                              String,
+                                                              dynamic
+                                                            >.from(e)
+                                                            ..['__type'] =
+                                                                'CUSTOMER',
+                                                    ),
+                                              ];
+                                          return allItems.where((item) {
+                                            final name = (item['name'] ?? '')
+                                                .toString()
+                                                .toLowerCase();
+                                            final code =
+                                                (item['code'] ??
+                                                        item['phone'] ??
+                                                        '')
+                                                    .toString()
+                                                    .toLowerCase();
+                                            final query = textEditingValue.text
+                                                .toLowerCase();
+                                            return name.contains(query) ||
+                                                code.contains(query);
+                                          });
+                                        },
+                                    displayStringForOption:
+                                        (Map<String, dynamic> option) =>
+                                            option['name'] ??
+                                            option['code'] ??
+                                            '',
+                                    onSelected:
+                                        (Map<String, dynamic> selection) {
+                                          if (selection['latitude'] != null &&
+                                              selection['longitude'] != null) {
+                                            final lat =
+                                                (selection['latitude'] as num)
+                                                    .toDouble();
+                                            final lng =
+                                                (selection['longitude'] as num)
+                                                    .toDouble();
+                                            _animateTo(LatLng(lat, lng), 18.0);
+                                          }
+                                        },
+                                    fieldViewBuilder:
+                                        (
+                                          context,
+                                          textEditingController,
+                                          focusNode,
+                                          onFieldSubmitted,
+                                        ) {
+                                          return TextField(
+                                            controller: textEditingController,
+                                            focusNode: focusNode,
+                                            decoration: const InputDecoration(
+                                              hintText:
+                                                  'Cari ODP atau perangkat',
+                                              hintStyle: TextStyle(
+                                                color: Color(0xFF787582),
+                                              ), // outline
+                                              border: InputBorder.none,
+                                            ),
+                                            style: const TextStyle(
+                                              color: Color(0xFF19163F),
+                                            ),
+                                            onSubmitted: (String value) {
+                                              onFieldSubmitted();
                                             },
-                                          ),
-                                        ),
-                                      ),
-                                    ),
+                                          );
+                                        },
+                                    optionsViewBuilder:
+                                        (
+                                          context,
+                                          onSelected,
+                                          Iterable<Map<String, dynamic>>
+                                          options,
+                                        ) {
+                                          return Align(
+                                            alignment: Alignment.topLeft,
+                                            child: Padding(
+                                              padding: const EdgeInsets.only(
+                                                top: 8.0,
+                                              ),
+                                              child: ClipRRect(
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                                child: BackdropFilter(
+                                                  filter: ImageFilter.blur(
+                                                    sigmaX: 10,
+                                                    sigmaY: 10,
+                                                  ),
+                                                  child: Material(
+                                                    elevation: 4,
+                                                    color: Colors.white
+                                                        .withValues(alpha: 0.5),
+                                                    child: ConstrainedBox(
+                                                      constraints:
+                                                          BoxConstraints(
+                                                            maxHeight: 250,
+                                                            maxWidth:
+                                                                MediaQuery.of(
+                                                                  context,
+                                                                ).size.width -
+                                                                40 -
+                                                                48,
+                                                          ),
+                                                      child: ListView.builder(
+                                                        padding:
+                                                            EdgeInsets.zero,
+                                                        shrinkWrap: true,
+                                                        itemCount:
+                                                            options.length,
+                                                        itemBuilder: (context, index) {
+                                                          final option = options
+                                                              .elementAt(index);
+                                                          return ListTile(
+                                                            leading: const Icon(
+                                                              Icons.router,
+                                                              color: Color(
+                                                                0xFF070038,
+                                                              ),
+                                                            ),
+                                                            title: Text(
+                                                              option['name'] ??
+                                                                  option['code'] ??
+                                                                  '',
+                                                              style: const TextStyle(
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                                fontSize: 14,
+                                                                color: Colors
+                                                                    .black87,
+                                                              ),
+                                                            ),
+                                                            subtitle: Text(
+                                                              option['__type'] ==
+                                                                      'CUSTOMER'
+                                                                  ? 'Pelanggan • ${(option['phone'] ?? '').toString()}'
+                                                                  : 'ODP • ${(option['code'] ?? '').toString()}',
+                                                              style:
+                                                                  const TextStyle(
+                                                                    fontSize:
+                                                                        12,
+                                                                    color: Colors
+                                                                        .black54,
+                                                                  ),
+                                                            ),
+                                                            onTap: () {
+                                                              onSelected(
+                                                                option,
+                                                              );
+                                                            },
+                                                          );
+                                                        },
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          );
+                                        },
                                   ),
                                 ),
-                              );
-                            },
+                              ],
+                            ),
                           ),
-                        ),
-                            ],
-                          ),
-                        ),
                         ),
                         const SizedBox(height: 6),
                         _buildMapLegend(),
@@ -926,21 +1121,37 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                           color: const Color(0xFFFCF8FF),
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(color: const Color(0xFFC8C4D3)),
-                          boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))],
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Colors.black12,
+                              blurRadius: 4,
+                              offset: Offset(0, 2),
+                            ),
+                          ],
                         ),
                         child: Column(
                           children: [
                             IconButton(
                               padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(minHeight: 40, minWidth: 40),
+                              constraints: const BoxConstraints(
+                                minHeight: 40,
+                                minWidth: 40,
+                              ),
                               icon: const Icon(Icons.add, size: 20),
                               onPressed: _zoomIn,
                               color: const Color(0xFF19163F),
                             ),
-                            Container(height: 1, width: 40, color: const Color(0xFFC8C4D3)),
+                            Container(
+                              height: 1,
+                              width: 40,
+                              color: const Color(0xFFC8C4D3),
+                            ),
                             IconButton(
                               padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(minHeight: 40, minWidth: 40),
+                              constraints: const BoxConstraints(
+                                minHeight: 40,
+                                minWidth: 40,
+                              ),
                               icon: const Icon(Icons.remove, size: 20),
                               onPressed: _zoomOut,
                               color: const Color(0xFF19163F),
@@ -955,49 +1166,119 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                           color: const Color(0xFFFCF8FF),
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(color: const Color(0xFFC8C4D3)),
-                          boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))],
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Colors.black12,
+                              blurRadius: 4,
+                              offset: Offset(0, 2),
+                            ),
+                          ],
                         ),
                         child: IconButton(
                           padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(minHeight: 40, minWidth: 40),
+                          constraints: const BoxConstraints(
+                            minHeight: 40,
+                            minWidth: 40,
+                          ),
                           icon: _isLocating
                               ? const SizedBox(
                                   width: 16,
                                   height: 16,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
                                 )
                               : const Icon(Icons.my_location, size: 20),
                           onPressed: _moveToCurrentLocation,
                           color: const Color(0xFF19163F),
                         ),
                       ),
-                      
+
                       const SizedBox(height: 16),
-                      
-                      // FAB: Tambah Tagging ODP
+
+                      // FAB: Tagging ODP dan pelanggan
                       Align(
-                        alignment: Alignment.center,
-                        child: ElevatedButton.icon(
-                          onPressed: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(builder: (context) => const TagLocationScreen()),
-                            ).then((success) {
-                              if (success == true) {
-                                _fetchNetworkMap();
-                              }
-                            });
-                          },
-                          icon: const Icon(Icons.add, color: Colors.white),
-                          label: const Text('Tambah Tagging ODP', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF1B0C6B), // primary-container
-                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
+                        alignment: Alignment.centerRight,
+                        child: Wrap(
+                          alignment: WrapAlignment.end,
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            ElevatedButton.icon(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) =>
+                                        const TagLocationScreen(),
+                                  ),
+                                ).then((success) {
+                                  if (success == true) {
+                                    _fetchNetworkMap();
+                                  }
+                                });
+                              },
+                              icon: const Icon(
+                                Icons.add_location_alt,
+                                color: Colors.white,
+                              ),
+                              label: const Text(
+                                'Tag ODP',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF2563EB),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 14,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                elevation: 4,
+                              ),
                             ),
-                            elevation: 4,
-                          ),
+                            ElevatedButton.icon(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) =>
+                                        const TagCustomerLocationScreen(),
+                                  ),
+                                ).then((success) {
+                                  if (success == true) {
+                                    _fetchNetworkMap();
+                                  }
+                                });
+                              },
+                              icon: const Icon(
+                                Icons.person_pin_circle,
+                                color: Colors.white,
+                              ),
+                              label: const Text(
+                                'Tag Pelanggan',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF2563EB),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 14,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                elevation: 4,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -1016,8 +1297,7 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
               child: _buildMapCustomerCard(_selectedMapCustomer!),
             ),
 
-          if (_isLoading)
-            const Center(child: CircularProgressIndicator()),
+          if (_isLoading) const Center(child: CircularProgressIndicator()),
         ],
       ),
     );

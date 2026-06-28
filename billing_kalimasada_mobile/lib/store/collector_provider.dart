@@ -1,4 +1,5 @@
-import 'package:flutter/foundation.dart' show ChangeNotifier, debugPrint, kDebugMode;
+import 'package:flutter/foundation.dart'
+    show ChangeNotifier, debugPrint, kDebugMode;
 import '../services/api_client.dart';
 
 class CollectorProvider extends ChangeNotifier {
@@ -10,6 +11,7 @@ class CollectorProvider extends ChangeNotifier {
   Map<String, dynamic>? _settlement;
   Map<String, dynamic>? _me;
   List<Map<String, dynamic>> _collectorAreas = [];
+
   /// Query terakhir yang sukses untuk daftar pelanggan (sinkron tab / strip ringkasan).
   String _lastCustomersFetchStatus = '';
   String _lastCustomersFetchArea = '';
@@ -59,12 +61,15 @@ class CollectorProvider extends ChangeNotifier {
       final m = month ?? _overviewMonth;
       final y = year ?? _overviewYear;
       final q = <String>[];
-      if (m != null) q.add('month=$m');
+      if (m != null) q.add(m == 0 ? 'month=all' : 'month=$m');
       if (y != null) q.add('year=$y');
       final path =
           '/api/mobile-adapter/collector/overview${q.isEmpty ? '' : '?${q.join('&')}'}';
       final r = await ApiClient.get(path);
-      final body = ApiClient.decodeJsonObject(r, debugLabel: 'collector/overview');
+      final body = ApiClient.decodeJsonObject(
+        r,
+        debugLabel: 'collector/overview',
+      );
       if (r.statusCode == 200 && body['success'] == true) {
         _overview = Map<String, dynamic>.from(body['data'] as Map);
         _overviewMonth = m;
@@ -87,7 +92,9 @@ class CollectorProvider extends ChangeNotifier {
       if (r.statusCode == 200 && body['success'] == true) {
         final raw = body['data'];
         if (raw is List) {
-          _collectorAreas = raw.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+          _collectorAreas = raw
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList();
         } else {
           _collectorAreas = [];
         }
@@ -100,19 +107,30 @@ class CollectorProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> fetchCustomers({String status = '', String q = '', String area = ''}) async {
+  Future<void> fetchCustomers({
+    String status = '',
+    String q = '',
+    String area = '',
+  }) async {
     _customersLoading = true;
     _customersError = null;
     notifyListeners();
     try {
       final params = <String>[];
-      if (status.isNotEmpty) params.add('status=${Uri.encodeComponent(status)}');
+      if (status.isNotEmpty) {
+        params.add('status=${Uri.encodeComponent(status)}');
+      }
       if (q.trim().isNotEmpty) params.add('q=${Uri.encodeComponent(q.trim())}');
-      if (area.trim().isNotEmpty) params.add('area=${Uri.encodeComponent(area.trim())}');
+      if (area.trim().isNotEmpty) {
+        params.add('area=${Uri.encodeComponent(area.trim())}');
+      }
       final path =
           '/api/mobile-adapter/collector/customers${params.isEmpty ? '' : '?${params.join('&')}'}';
       final r = await ApiClient.get(path);
-      final body = ApiClient.decodeJsonObject(r, debugLabel: 'collector/customers');
+      final body = ApiClient.decodeJsonObject(
+        r,
+        debugLabel: 'collector/customers',
+      );
       if (r.statusCode == 200 && body['success'] == true) {
         final raw = body['data'];
         if (raw is List) {
@@ -125,7 +143,9 @@ class CollectorProvider extends ChangeNotifier {
           _customersError = 'Format data pelanggan tidak valid (bukan array).';
         }
         if (kDebugMode) {
-          debugPrint('[collector/customers] status=$status area="$area" q="$q" → ${_customers.length} baris');
+          debugPrint(
+            '[collector/customers] status=$status area="$area" q="$q" → ${_customers.length} baris',
+          );
         }
       } else {
         _customersError = body['message']?.toString() ?? 'Gagal memuat';
@@ -144,7 +164,10 @@ class CollectorProvider extends ChangeNotifier {
     notifyListeners();
     try {
       final r = await ApiClient.get('/api/mobile-adapter/collector/settlement');
-      final body = ApiClient.decodeJsonObject(r, debugLabel: 'collector/settlement');
+      final body = ApiClient.decodeJsonObject(
+        r,
+        debugLabel: 'collector/settlement',
+      );
       if (r.statusCode == 200 && body['success'] == true) {
         _settlement = Map<String, dynamic>.from(body['data'] as Map);
       } else {
@@ -164,12 +187,19 @@ class CollectorProvider extends ChangeNotifier {
   }
 
   /// Isolir manual (suspend layanan) untuk pelanggan di wilayah kolektor.
-  Future<String?> collectorIsolirCustomer(int customerId, {String reason = 'Isolir manual oleh kolektor (peringatan)'}) async {
+  Future<String?> collectorIsolirCustomer(
+    int customerId, {
+    String reason = 'Isolir manual oleh kolektor (peringatan)',
+  }) async {
     try {
-      final r = await ApiClient.post('/api/mobile-adapter/collector/customer-isolir/$customerId', {
-        'reason': reason,
-      });
-      final body = ApiClient.decodeJsonObject(r, debugLabel: 'collector/customer-isolir');
+      final r = await ApiClient.post(
+        '/api/mobile-adapter/collector/customer-isolir/$customerId',
+        {'reason': reason},
+      );
+      final body = ApiClient.decodeJsonObject(
+        r,
+        debugLabel: 'collector/customer-isolir',
+      );
       if (r.statusCode == 200 && body['success'] == true) {
         bumpCustomersReload();
         return null;
@@ -181,17 +211,27 @@ class CollectorProvider extends ChangeNotifier {
   }
 
   /// Riwayat faktur tahun kalender berjalan (paid & unpaid) untuk detail pelanggan.
-  Future<List<Map<String, dynamic>>> fetchCustomerInvoiceHistory(int customerId) async {
+  Future<List<Map<String, dynamic>>> fetchCustomerInvoiceHistory(
+    int customerId,
+  ) async {
     try {
-      final r = await ApiClient.get('/api/mobile-adapter/collector/customer-invoice-history/$customerId');
-      final body = ApiClient.decodeJsonObject(r, debugLabel: 'collector/customer-invoice-history');
+      final r = await ApiClient.get(
+        '/api/mobile-adapter/collector/customer-invoice-history/$customerId',
+      );
+      final body = ApiClient.decodeJsonObject(
+        r,
+        debugLabel: 'collector/customer-invoice-history',
+      );
       if (r.statusCode == 200 && body['success'] == true) {
         final raw = body['data'];
         if (raw is List) {
-          return raw.map((e) {
-            if (e is Map) return Map<String, dynamic>.from(e);
-            return <String, dynamic>{};
-          }).where((m) => m.isNotEmpty).toList();
+          return raw
+              .map((e) {
+                if (e is Map) return Map<String, dynamic>.from(e);
+                return <String, dynamic>{};
+              })
+              .where((m) => m.isNotEmpty)
+              .toList();
         }
       }
     } catch (_) {}
@@ -201,9 +241,16 @@ class CollectorProvider extends ChangeNotifier {
   /// Sesi PPP online/offline — selaras dengan /admin/mikrotik (RADIUS atau Mikrotik).
   Future<Map<String, dynamic>> fetchCustomerPppSession(int customerId) async {
     try {
-      final r = await ApiClient.get('/api/mobile-adapter/collector/customer-ppp-session/$customerId');
-      final body = ApiClient.decodeJsonObject(r, debugLabel: 'collector/customer-ppp-session');
-      if (r.statusCode == 200 && body['success'] == true && body['data'] is Map) {
+      final r = await ApiClient.get(
+        '/api/mobile-adapter/collector/customer-ppp-session/$customerId',
+      );
+      final body = ApiClient.decodeJsonObject(
+        r,
+        debugLabel: 'collector/customer-ppp-session',
+      );
+      if (r.statusCode == 200 &&
+          body['success'] == true &&
+          body['data'] is Map) {
         return Map<String, dynamic>.from(body['data'] as Map);
       }
     } catch (_) {}
@@ -211,17 +258,27 @@ class CollectorProvider extends ChangeNotifier {
   }
 
   /// Tagihan belum lunas untuk pelanggan (kolektor yang sama wilayah).
-  Future<List<Map<String, dynamic>>> fetchCustomerInvoices(int customerId) async {
+  Future<List<Map<String, dynamic>>> fetchCustomerInvoices(
+    int customerId,
+  ) async {
     try {
-      final r = await ApiClient.get('/api/mobile-adapter/collector/customer-invoices/$customerId');
-      final body = ApiClient.decodeJsonObject(r, debugLabel: 'collector/customer-invoices');
+      final r = await ApiClient.get(
+        '/api/mobile-adapter/collector/customer-invoices/$customerId',
+      );
+      final body = ApiClient.decodeJsonObject(
+        r,
+        debugLabel: 'collector/customer-invoices',
+      );
       if (r.statusCode == 200 && body['success'] == true) {
         final raw = body['data'];
         if (raw is List) {
-          return raw.map((e) {
-            if (e is Map) return Map<String, dynamic>.from(e);
-            return <String, dynamic>{};
-          }).where((m) => m.isNotEmpty).toList();
+          return raw
+              .map((e) {
+                if (e is Map) return Map<String, dynamic>.from(e);
+                return <String, dynamic>{};
+              })
+              .where((m) => m.isNotEmpty)
+              .toList();
         }
       }
     } catch (_) {
@@ -257,7 +314,10 @@ class CollectorProvider extends ChangeNotifier {
         '/api/mobile-adapter/collector/customers/$customerId/phone',
         {'phone': phone},
       );
-      final body = ApiClient.decodeJsonObject(r, debugLabel: 'collector/customers/phone');
+      final body = ApiClient.decodeJsonObject(
+        r,
+        debugLabel: 'collector/customers/phone',
+      );
       if (r.statusCode == 200 && body['success'] == true) {
         bumpCustomersReload();
         return null;
@@ -269,13 +329,20 @@ class CollectorProvider extends ChangeNotifier {
   }
 
   /// Ubah jatuh tempo tagihan belum lunas.
-  Future<String?> updateInvoiceDueDate(int customerId, int invoiceId, String dueDateYmd) async {
+  Future<String?> updateInvoiceDueDate(
+    int customerId,
+    int invoiceId,
+    String dueDateYmd,
+  ) async {
     try {
       final r = await ApiClient.patch(
         '/api/mobile-adapter/collector/customers/$customerId/invoices/$invoiceId/due-date',
         {'due_date': dueDateYmd},
       );
-      final body = ApiClient.decodeJsonObject(r, debugLabel: 'collector/customers/due-date');
+      final body = ApiClient.decodeJsonObject(
+        r,
+        debugLabel: 'collector/customers/due-date',
+      );
       if (r.statusCode == 200 && body['success'] == true) {
         return null;
       }
@@ -299,7 +366,10 @@ class CollectorProvider extends ChangeNotifier {
         'email': email ?? '',
         'address': address ?? '',
       });
-      final body = ApiClient.decodeJsonObject(r, debugLabel: 'collector/me/update');
+      final body = ApiClient.decodeJsonObject(
+        r,
+        debugLabel: 'collector/me/update',
+      );
       if (r.statusCode == 200 && body['success'] == true) {
         await fetchMe();
         return null;

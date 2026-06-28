@@ -28,17 +28,18 @@ class _CustomerContactScreenState extends State<CustomerContactScreen> {
     return Scaffold(
       backgroundColor: bgBackground,
       appBar: AppBar(
-        backgroundColor: const Color(0xFFF8FAFC), // slate-50
+        backgroundColor: const Color(0xFF2563EB),
+        foregroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: primaryColor),
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
           'Customer Details',
           style: TextStyle(
-            color: Color(0xFF1E1B4B), // indigo-950
+            color: Colors.white,
             fontSize: 18,
             fontWeight: FontWeight.w900, // font-black
           ),
@@ -46,16 +47,13 @@ class _CustomerContactScreenState extends State<CustomerContactScreen> {
         centerTitle: true,
         actions: [
           IconButton(
-            icon: const Icon(Icons.edit, color: primaryColor),
+            icon: const Icon(Icons.edit, color: Colors.white),
             onPressed: () {},
           ),
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(
-            color: const Color(0xFFE2E8F0),
-            height: 1,
-          ), // slate-200
+          child: Container(color: Colors.white24, height: 1), // slate-200
         ),
       ),
       body: SingleChildScrollView(

@@ -17,21 +17,22 @@ class _ExecutionNotesScreenState extends State<ExecutionNotesScreen> {
     const bgBackground = Color(0xFFFCF8FF);
     const textOnSurface = Color(0xFF19163F);
     const textOnSurfaceVariant = Color(0xFF474551);
-    
+
     return Scaffold(
       backgroundColor: bgBackground,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: const Color(0xFF2563EB),
+        foregroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Color(0xFF070038)),
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
           'Execution Notes',
           style: TextStyle(
-            color: Color(0xFF1B0C6B),
+            color: Colors.white,
             fontSize: 20,
             fontWeight: FontWeight.bold,
           ),
@@ -39,13 +40,18 @@ class _ExecutionNotesScreenState extends State<ExecutionNotesScreen> {
         centerTitle: true,
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(color: const Color(0xFFC8C4D3).withValues(alpha: 0.5), height: 1),
+          child: Container(color: Colors.white24, height: 1),
         ),
       ),
       body: Stack(
         children: [
           SingleChildScrollView(
-            padding: const EdgeInsets.only(left: 20, right: 20, top: 20, bottom: 100),
+            padding: const EdgeInsets.only(
+              left: 20,
+              right: 20,
+              top: 20,
+              bottom: 100,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -85,7 +91,10 @@ class _ExecutionNotesScreenState extends State<ExecutionNotesScreen> {
                         ),
                       ),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 4,
+                        ),
                         decoration: BoxDecoration(
                           color: const Color(0xFF1B0C6B), // primary-container
                           borderRadius: BorderRadius.circular(16),
@@ -109,9 +118,9 @@ class _ExecutionNotesScreenState extends State<ExecutionNotesScreen> {
                     ],
                   ),
                 ),
-                
+
                 const SizedBox(height: 24),
-                
+
                 // Technical Notes
                 const Text(
                   'Job Details & Observations',
@@ -125,7 +134,8 @@ class _ExecutionNotesScreenState extends State<ExecutionNotesScreen> {
                 TextField(
                   maxLines: 6,
                   decoration: InputDecoration(
-                    hintText: 'Enter technical observations, measurements, and encountered issues...',
+                    hintText:
+                        'Enter technical observations, measurements, and encountered issues...',
                     hintStyle: const TextStyle(color: textOnSurfaceVariant),
                     filled: true,
                     fillColor: Colors.white,
@@ -143,9 +153,9 @@ class _ExecutionNotesScreenState extends State<ExecutionNotesScreen> {
                     ),
                   ),
                 ),
-                
+
                 const SizedBox(height: 24),
-                
+
                 // Photo Evidence Grid
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -181,7 +191,9 @@ class _ExecutionNotesScreenState extends State<ExecutionNotesScreen> {
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(color: const Color(0xFFC8C4D3)),
                             image: const DecorationImage(
-                              image: NetworkImage('https://images.unsplash.com/photo-1621905252507-b35492cc74b4?q=80&w=2069&auto=format&fit=crop'), // Placeholder electrical panel
+                              image: NetworkImage(
+                                'https://images.unsplash.com/photo-1621905252507-b35492cc74b4?q=80&w=2069&auto=format&fit=crop',
+                              ), // Placeholder electrical panel
                               fit: BoxFit.cover,
                             ),
                           ),
@@ -196,7 +208,11 @@ class _ExecutionNotesScreenState extends State<ExecutionNotesScreen> {
                                     color: Color(0xFFBA1A1A),
                                     shape: BoxShape.circle,
                                   ),
-                                  child: const Icon(Icons.close, size: 16, color: Colors.white),
+                                  child: const Icon(
+                                    Icons.close,
+                                    size: 16,
+                                    color: Colors.white,
+                                  ),
                                 ),
                               ),
                             ],
@@ -215,13 +231,18 @@ class _ExecutionNotesScreenState extends State<ExecutionNotesScreen> {
                             borderRadius: BorderRadius.circular(8),
                             border: Border.all(
                               color: const Color(0xFFC8C4D3),
-                              style: BorderStyle.solid, // Flutter doesn't support dashed border out of the box easily without a package, using solid
+                              style: BorderStyle
+                                  .solid, // Flutter doesn't support dashed border out of the box easily without a package, using solid
                             ),
                           ),
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: const [
-                              Icon(Icons.add_a_photo, size: 32, color: Color(0xFF070038)),
+                              Icon(
+                                Icons.add_a_photo,
+                                size: 32,
+                                color: Color(0xFF070038),
+                              ),
                               SizedBox(height: 8),
                               Text(
                                 'Take Photo',
@@ -238,9 +259,9 @@ class _ExecutionNotesScreenState extends State<ExecutionNotesScreen> {
                     ),
                   ],
                 ),
-                
+
                 const SizedBox(height: 24),
-                
+
                 // Status Selection
                 const Text(
                   'Current Status',
@@ -256,35 +277,35 @@ class _ExecutionNotesScreenState extends State<ExecutionNotesScreen> {
                   runSpacing: 12,
                   children: [
                     _buildStatusOption(
-                      'In Progress', 
-                      'progress', 
-                      Icons.pending, 
-                      const Color(0xFFEBAEFD), 
+                      'In Progress',
+                      'progress',
+                      Icons.pending,
+                      const Color(0xFFEBAEFD),
                       const Color(0xFF6F3B81),
-                      const Color(0xFF7E4990)
+                      const Color(0xFF7E4990),
                     ),
                     _buildStatusOption(
-                      'Blocked', 
-                      'blocked', 
-                      Icons.warning, 
-                      const Color(0xFFFFDAD6), 
+                      'Blocked',
+                      'blocked',
+                      Icons.warning,
+                      const Color(0xFFFFDAD6),
                       const Color(0xFF93000A),
-                      const Color(0xFFBA1A1A)
+                      const Color(0xFFBA1A1A),
                     ),
                     _buildStatusOption(
-                      'Ready for Review', 
-                      'review', 
-                      Icons.fact_check, 
-                      const Color(0xFF1B0C6B), 
+                      'Ready for Review',
+                      'review',
+                      Icons.fact_check,
+                      const Color(0xFF1B0C6B),
                       Colors.white,
-                      const Color(0xFF070038)
+                      const Color(0xFF070038),
                     ),
                   ],
                 ),
               ],
             ),
           ),
-          
+
           // Bottom Action Area
           Positioned(
             bottom: 0,
@@ -299,11 +320,20 @@ class _ExecutionNotesScreenState extends State<ExecutionNotesScreen> {
               child: ElevatedButton.icon(
                 onPressed: () {},
                 icon: const Icon(Icons.save, color: Colors.white),
-                label: const Text('Save Notes', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                label: const Text(
+                  'Save Notes',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF070038),
                   padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
               ),
             ),
@@ -313,9 +343,16 @@ class _ExecutionNotesScreenState extends State<ExecutionNotesScreen> {
     );
   }
 
-  Widget _buildStatusOption(String label, String value, IconData icon, Color activeBgColor, Color activeTextColor, Color activeBorderColor) {
+  Widget _buildStatusOption(
+    String label,
+    String value,
+    IconData icon,
+    Color activeBgColor,
+    Color activeTextColor,
+    Color activeBorderColor,
+  ) {
     final isSelected = _status == value;
-    
+
     return GestureDetector(
       onTap: () {
         setState(() {
@@ -327,12 +364,18 @@ class _ExecutionNotesScreenState extends State<ExecutionNotesScreen> {
         decoration: BoxDecoration(
           color: isSelected ? activeBgColor : Colors.white,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: isSelected ? activeBorderColor : const Color(0xFFC8C4D3)),
+          border: Border.all(
+            color: isSelected ? activeBorderColor : const Color(0xFFC8C4D3),
+          ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 20, color: isSelected ? activeTextColor : const Color(0xFF19163F)),
+            Icon(
+              icon,
+              size: 20,
+              color: isSelected ? activeTextColor : const Color(0xFF19163F),
+            ),
             const SizedBox(width: 8),
             Text(
               label,

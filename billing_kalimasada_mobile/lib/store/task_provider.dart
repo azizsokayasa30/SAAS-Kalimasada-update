@@ -23,8 +23,10 @@ DateTime? parseTaskWorkStarted(String? raw) {
 
 class TaskProvider extends ChangeNotifier {
   bool _loading = false;
+  bool _historyLoading = false;
   String? _error;
   List<dynamic> _tasks = [];
+  List<dynamic> _historyTasks = [];
 
   bool _weekPerfLoading = false;
   String? _weekPerfError;
@@ -35,8 +37,10 @@ class TaskProvider extends ChangeNotifier {
   int _tasksWeekMaxPerDay = 0;
 
   bool get loading => _loading;
+  bool get historyLoading => _historyLoading;
   String? get error => _error;
   List<dynamic> get tasks => _tasks;
+  List<dynamic> get historyTasks => _historyTasks;
 
   bool get weekPerfLoading => _weekPerfLoading;
   String? get weekPerfError => _weekPerfError;
@@ -58,7 +62,7 @@ class TaskProvider extends ChangeNotifier {
           ? '/api/mobile-adapter/tasks?_=${DateTime.now().millisecondsSinceEpoch}'
           : '/api/mobile-adapter/tasks';
       final response = await ApiClient.get(path);
-      
+
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         if (ApiClient.jsonSuccess(data['success'])) {
@@ -74,6 +78,33 @@ class TaskProvider extends ChangeNotifier {
       _error = 'Koneksi bermasalah: ${e.toString()}';
     } finally {
       _loading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> fetchTaskHistory({bool refresh = false}) async {
+    if (_historyLoading && !refresh) return;
+
+    _historyLoading = true;
+    if (refresh) notifyListeners();
+
+    try {
+      final path = refresh
+          ? '/api/mobile-adapter/tasks?history=1&_=${DateTime.now().millisecondsSinceEpoch}'
+          : '/api/mobile-adapter/tasks?history=1';
+      final response = await ApiClient.get(path);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        if (ApiClient.jsonSuccess(data['success'])) {
+          final raw = data['data'];
+          _historyTasks = raw is List ? raw : <dynamic>[];
+        }
+      }
+    } catch (_) {
+      // Riwayat bersifat pendukung untuk filter "Selesai"; daftar aktif tetap ditampilkan.
+    } finally {
+      _historyLoading = false;
       notifyListeners();
     }
   }
@@ -106,11 +137,15 @@ class TaskProvider extends ChangeNotifier {
           _weekPerfDays = list;
           _tasksWeekTotal = (inner['tasks_week_total'] as num?)?.toInt() ?? 0;
           final rawAvg = inner['attendance_week_avg'];
-          _attendanceWeekAvg = rawAvg is num ? rawAvg.toDouble() : double.tryParse('$rawAvg') ?? 0;
+          _attendanceWeekAvg = rawAvg is num
+              ? rawAvg.toDouble()
+              : double.tryParse('$rawAvg') ?? 0;
           _employeeMatched = inner['employee_matched'] == true;
-          _tasksWeekMaxPerDay = (inner['tasks_week_max_per_day'] as num?)?.toInt() ?? 0;
+          _tasksWeekMaxPerDay =
+              (inner['tasks_week_max_per_day'] as num?)?.toInt() ?? 0;
         } else {
-          _weekPerfError = data['message']?.toString() ?? 'Gagal memuat performa';
+          _weekPerfError =
+              data['message']?.toString() ?? 'Gagal memuat performa';
         }
       } else {
         _weekPerfError = 'Gagal memuat performa (${response.statusCode})';
@@ -135,7 +170,10 @@ class TaskProvider extends ChangeNotifier {
       if (pr.isNotEmpty) {
         body['pending_reason'] = pr;
       }
-      final response = await ApiClient.post('/api/mobile-adapter/tasks/$type/$id/status', body);
+      final response = await ApiClient.post(
+        '/api/mobile-adapter/tasks/$type/$id/status',
+        body,
+      );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -157,6 +195,7 @@ class TaskProvider extends ChangeNotifier {
     String type, {
     required String completionDescription,
     String? completionPhotoBase64,
+
     /// Durasi eksekusi di layar penyelesaian (detik), dari timer app — disimpan di server untuk detail laporan.
     int? workDurationSeconds,
     double? completionLatitude,
@@ -185,7 +224,10 @@ class TaskProvider extends ChangeNotifier {
       if (completionPhotoBase64 != null && completionPhotoBase64.isNotEmpty) {
         body['completion_photo_base64'] = completionPhotoBase64;
       }
-      final response = await ApiClient.post('/api/mobile-adapter/tasks/$type/$id/status', body);
+      final response = await ApiClient.post(
+        '/api/mobile-adapter/tasks/$type/$id/status',
+        body,
+      );
       Map<String, dynamic> data;
       try {
         data = jsonDecode(response.body) as Map<String, dynamic>;

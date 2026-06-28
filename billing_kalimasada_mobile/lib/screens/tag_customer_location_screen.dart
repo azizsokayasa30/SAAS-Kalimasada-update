@@ -87,8 +87,7 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
       _odpLoadError = null;
     });
     try {
-      final response =
-          await ApiClient.get('/api/mobile-adapter/odps?all=1');
+      final response = await ApiClient.get('/api/mobile-adapter/odps?all=1');
       if (response.statusCode != 200) {
         throw Exception('HTTP ${response.statusCode}');
       }
@@ -98,9 +97,7 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
       }
       final raw = data['data'];
       final list = raw is List
-          ? raw
-              .map((e) => Map<String, dynamic>.from(e as Map))
-              .toList()
+          ? raw.map((e) => Map<String, dynamic>.from(e as Map)).toList()
           : <Map<String, dynamic>>[];
       if (!mounted) return;
       setState(() {
@@ -266,7 +263,9 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
                   height: 24,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: const Color(0xFF1A73E8).withValues(alpha: ringOpacity),
+                    color: const Color(
+                      0xFF1A73E8,
+                    ).withValues(alpha: ringOpacity),
                   ),
                 ),
               ),
@@ -335,11 +334,11 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
     setState(() => _isLoading = true);
     try {
       final ok = await context.read<CustomerProvider>().updateLocation(
-            customerPk.toString(),
-            _selectedLocation!.latitude,
-            _selectedLocation!.longitude,
-            odpId: _selectedOdpId,
-          );
+        customerPk.toString(),
+        _selectedLocation!.latitude,
+        _selectedLocation!.longitude,
+        odpId: _selectedOdpId,
+      );
       if (!mounted) return;
       if (ok) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -364,12 +363,12 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
 
   @override
   Widget build(BuildContext context) {
-    const bgBackground = Color(0xFFFCF8FF);
-    const textOnSurface = Color(0xFF19163F);
-    const textOnSurfaceVariant = Color(0xFF474551);
-    const primary = Color(0xFF070038);
-    const fieldFill = Color(0xFFF6F1FF);
-    const outline = Color(0xFFC8C4D3);
+    const bgBackground = Color(0xFFF8FBFF);
+    const textOnSurface = Color(0xFF0F172A);
+    const textOnSurfaceVariant = Color(0xFF475569);
+    const primary = Color(0xFF2563EB);
+    const fieldFill = Color(0xFFEFF6FF);
+    const outline = Color(0xFFBFDBFE);
 
     // App global = dark theme; layar ini desain terang — pakai tema terang lokal agar hint/dropdown/teks input tidak putih.
     final lightScheme = ColorScheme.fromSeed(
@@ -388,7 +387,7 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
         scaffoldBackgroundColor: bgBackground,
         textSelectionTheme: const TextSelectionThemeData(
           cursorColor: primary,
-          selectionColor: Color(0xFFC5C0FF),
+          selectionColor: Color(0xFFBFDBFE),
           selectionHandleColor: primary,
         ),
         inputDecorationTheme: InputDecorationTheme(
@@ -416,363 +415,373 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
         ),
         progressIndicatorTheme: const ProgressIndicatorThemeData(
           color: primary,
-          linearTrackColor: Color(0xFFE4DFFF),
+          linearTrackColor: Color(0xFFBFDBFE),
         ),
       ),
       child: Scaffold(
-      backgroundColor: bgBackground,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        foregroundColor: primary,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: primary),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: const Text(
-          'Tag Pelanggan',
-          style: TextStyle(
-            color: primary,
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
+        backgroundColor: bgBackground,
+        appBar: AppBar(
+          backgroundColor: const Color(0xFF2563EB),
+          foregroundColor: Colors.white,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back, color: Colors.white),
+            onPressed: () => Navigator.pop(context),
+          ),
+          title: const Text(
+            'Tag Pelanggan',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          centerTitle: true,
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(1),
+            child: Container(color: const Color(0xFFBFDBFE), height: 1),
           ),
         ),
-        centerTitle: true,
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(color: const Color(0xFFE4DFFF), height: 1),
-        ),
-      ),
-      body: Stack(
-        children: [
-          SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(
-                  height: 280,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFC8C4D3)),
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: Stack(
-                    children: [
-                      FlutterMap(
-                        mapController: _mapController,
-                        options: MapOptions(
-                          initialCenter: _defaultLocation,
-                          initialZoom: 15,
-                          onTap: _onMapTap,
-                        ),
-                        children: [
-                          TileLayer(
-                            urlTemplate:
-                                'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                            userAgentPackageName:
-                                'com.example.billing_kalimasada_mobile',
+        body: Stack(
+          children: [
+            SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    height: 280,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFBFDBFE)),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Stack(
+                      children: [
+                        FlutterMap(
+                          mapController: _mapController,
+                          options: MapOptions(
+                            initialCenter: _defaultLocation,
+                            initialZoom: 15,
+                            onTap: _onMapTap,
                           ),
-                          if (_selectedLocation != null)
-                            MarkerLayer(
-                              markers: [
-                                Marker(
-                                  point: _selectedLocation!,
-                                  width: 28,
-                                  height: 33,
-                                  alignment: Alignment.topCenter,
-                                  child: const CustomerHomeMapMarker(),
-                                ),
-                              ],
+                          children: [
+                            TileLayer(
+                              urlTemplate:
+                                  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                              userAgentPackageName:
+                                  'com.example.billing_kalimasada_mobile',
                             ),
-                          if (_currentGpsLocation != null)
-                            MarkerLayer(
-                              markers: [
-                                Marker(
-                                  point: _currentGpsLocation!,
-                                  width: 34,
-                                  height: 34,
-                                  alignment: Alignment.center,
-                                  child: _buildGpsPulseMarker(),
-                                ),
-                              ],
-                            ),
-                        ],
-                      ),
-                      Positioned(
-                        bottom: 12,
-                        right: 12,
-                        child: Material(
-                          color: Colors.white,
-                          shape: const CircleBorder(),
-                          elevation: 2,
-                          child: IconButton(
-                            tooltip: 'Lokasi saya',
-                            icon: _isLocating
-                                ? const SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
+                            if (_selectedLocation != null)
+                              MarkerLayer(
+                                markers: [
+                                  Marker(
+                                    point: _selectedLocation!,
+                                    width: 28,
+                                    height: 33,
+                                    alignment: Alignment.topCenter,
+                                    child: const CustomerHomeMapMarker(),
+                                  ),
+                                ],
+                              ),
+                            if (_currentGpsLocation != null)
+                              MarkerLayer(
+                                markers: [
+                                  Marker(
+                                    point: _currentGpsLocation!,
+                                    width: 34,
+                                    height: 34,
+                                    alignment: Alignment.center,
+                                    child: _buildGpsPulseMarker(),
+                                  ),
+                                ],
+                              ),
+                          ],
+                        ),
+                        Positioned(
+                          bottom: 12,
+                          right: 12,
+                          child: Material(
+                            color: Colors.white,
+                            shape: const CircleBorder(),
+                            elevation: 2,
+                            child: IconButton(
+                              tooltip: 'Lokasi saya',
+                              icon: _isLocating
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: primary,
+                                      ),
+                                    )
+                                  : const Icon(
+                                      Icons.my_location,
                                       color: primary,
                                     ),
-                                  )
-                                : const Icon(Icons.my_location, color: primary),
-                            onPressed: _moveToCurrentLocation,
+                              onPressed: _moveToCurrentLocation,
+                            ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _selectedLocation == null
-                      ? 'Ketuk peta untuk menempatkan pin, atau gunakan Lokasi saya.'
-                      : 'Pin: ${_selectedLocation!.latitude.toStringAsFixed(6)}, ${_selectedLocation!.longitude.toStringAsFixed(6)}',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: _selectedLocation == null
-                        ? const Color(0xFFBA1A1A)
-                        : textOnSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                const Text(
-                  'NAMA PELANGGAN',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: textOnSurfaceVariant,
-                    letterSpacing: 0.8,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _customerSearchController,
-                  onChanged: _onCustomerQueryChanged,
-                  style: const TextStyle(color: textOnSurface, fontSize: 15),
-                  decoration: const InputDecoration(
-                    hintText: 'Cari nama / telepon / ID pelanggan',
-                  ),
-                ),
-                if (_searching)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 8),
-                    child: LinearProgressIndicator(minHeight: 2),
-                  ),
-                if (_searchHits.isNotEmpty)
-                  Container(
-                    margin: const EdgeInsets.only(top: 8),
-                    constraints: const BoxConstraints(maxHeight: 200),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFC8C4D3)),
+                      ],
                     ),
-                    child: ListView.separated(
-                      shrinkWrap: true,
-                      itemCount: _searchHits.length,
-                      separatorBuilder: (context, index) =>
-                          const Divider(height: 1),
-                      itemBuilder: (context, i) {
-                        final row = _searchHits[i];
-                        final name = row['name']?.toString() ?? '';
-                        final area = _customerAreaLabel(row);
-                        final phone = row['phone']?.toString() ?? '';
-                        final cid = row['customer_id']?.toString() ?? '';
-                        final contactLine = [phone, cid]
-                            .where((s) => s.isNotEmpty)
-                            .join(' · ');
-                        return InkWell(
-                          onTap: () => _pickCustomer(row),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 10,
-                            ),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        name,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          color: textOnSurface,
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 15,
-                                        ),
-                                      ),
-                                      if (contactLine.isNotEmpty) ...[
-                                        const SizedBox(height: 2),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _selectedLocation == null
+                        ? '⚠️ KLIK DULU MAPNYA YA GAESS !'
+                        : 'Pin: ${_selectedLocation!.latitude.toStringAsFixed(6)}, ${_selectedLocation!.longitude.toStringAsFixed(6)}',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: _selectedLocation == null
+                          ? const Color(0xFFBA1A1A)
+                          : textOnSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text(
+                    'NAMA PELANGGAN',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: textOnSurfaceVariant,
+                      letterSpacing: 0.8,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _customerSearchController,
+                    onChanged: _onCustomerQueryChanged,
+                    style: const TextStyle(color: textOnSurface, fontSize: 15),
+                    decoration: const InputDecoration(
+                      hintText: 'Cari nama / telepon / ID pelanggan',
+                    ),
+                  ),
+                  if (_searching)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: LinearProgressIndicator(minHeight: 2),
+                    ),
+                  if (_searchHits.isNotEmpty)
+                    Container(
+                      margin: const EdgeInsets.only(top: 8),
+                      constraints: const BoxConstraints(maxHeight: 200),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFBFDBFE)),
+                      ),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: _searchHits.length,
+                        separatorBuilder: (context, index) =>
+                            const Divider(height: 1),
+                        itemBuilder: (context, i) {
+                          final row = _searchHits[i];
+                          final name = row['name']?.toString() ?? '';
+                          final area = _customerAreaLabel(row);
+                          final phone = row['phone']?.toString() ?? '';
+                          final cid = row['customer_id']?.toString() ?? '';
+                          final contactLine = [
+                            phone,
+                            cid,
+                          ].where((s) => s.isNotEmpty).join(' · ');
+                          return InkWell(
+                            onTap: () => _pickCustomer(row),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 10,
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
                                         Text(
-                                          contactLine,
+                                          name,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: const TextStyle(
-                                            fontSize: 12,
-                                            color: textOnSurfaceVariant,
+                                            color: textOnSurface,
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 15,
                                           ),
                                         ),
+                                        if (contactLine.isNotEmpty) ...[
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            contactLine,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: textOnSurfaceVariant,
+                                            ),
+                                          ),
+                                        ],
                                       ],
-                                    ],
-                                  ),
-                                ),
-                                if (area.isNotEmpty) ...[
-                                  const SizedBox(width: 10),
-                                  ConstrainedBox(
-                                    constraints: const BoxConstraints(maxWidth: 112),
-                                    child: Text(
-                                      area,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      textAlign: TextAlign.right,
-                                      style: const TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                        color: primary,
-                                        height: 1.25,
-                                      ),
                                     ),
                                   ),
+                                  if (area.isNotEmpty) ...[
+                                    const SizedBox(width: 10),
+                                    ConstrainedBox(
+                                      constraints: const BoxConstraints(
+                                        maxWidth: 112,
+                                      ),
+                                      child: Text(
+                                        area,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.right,
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                          color: primary,
+                                          height: 1.25,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ],
-                              ],
+                              ),
                             ),
-                          ),
-                        );
-                      },
+                          );
+                        },
+                      ),
+                    ),
+                  if (_selectedCustomer != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Terpilih: ID ${_selectedCustomer!['id']} — ${_selectedCustomer!['name']}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: textOnSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 20),
+                  const Text(
+                    'PILIH ODP (OPSIONAL)',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: textOnSurfaceVariant,
+                      letterSpacing: 0.8,
                     ),
                   ),
-                if (_selectedCustomer != null) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 4),
                   Text(
-                    'Terpilih: ID ${_selectedCustomer!['id']} — ${_selectedCustomer!['name']}',
-                    style: const TextStyle(
+                    'Boleh dikosongkan jika hanya memperbarui titik lokasi di peta.',
+                    style: TextStyle(
                       fontSize: 12,
-                      color: textOnSurfaceVariant,
+                      height: 1.35,
+                      color: textOnSurfaceVariant.withValues(alpha: 0.92),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  if (_loadingOdps)
+                    const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(16),
+                        child: CircularProgressIndicator(color: primary),
+                      ),
+                    )
+                  else if (_odpLoadError != null)
+                    Text(
+                      'Gagal memuat ODP: $_odpLoadError',
+                      style: const TextStyle(color: Color(0xFFBA1A1A)),
+                    )
+                  else
+                    InputDecorator(
+                      decoration: const InputDecoration(),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<int?>(
+                          value: _selectedOdpId,
+                          isExpanded: true,
+                          style: const TextStyle(
+                            color: textOnSurface,
+                            fontSize: 15,
+                          ),
+                          hint: const Text(
+                            'Pilih ODP (opsional)',
+                            style: TextStyle(color: textOnSurfaceVariant),
+                          ),
+                          dropdownColor: Colors.white,
+                          iconEnabledColor: primary,
+                          items: [
+                            const DropdownMenuItem<int?>(
+                              value: null,
+                              child: Text(
+                                'Tanpa ODP — hanya simpan koordinat',
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: textOnSurface,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ),
+                            ..._odpList.map((o) {
+                              final idVal = o['id'];
+                              final id = idVal is int
+                                  ? idVal
+                                  : int.tryParse(idVal?.toString() ?? '');
+                              if (id == null) return null;
+                              return DropdownMenuItem<int?>(
+                                value: id,
+                                child: Text(
+                                  _odpLabel(o),
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: textOnSurface),
+                                ),
+                              );
+                            }).whereType<DropdownMenuItem<int?>>(),
+                          ],
+                          onChanged: (v) => setState(() => _selectedOdpId = v),
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 28),
+                  SizedBox(
+                    height: 52,
+                    child: ElevatedButton(
+                      onPressed: _isLoading ? null : _save,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: primary,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: _isLoading
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text(
+                              'Simpan',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 16,
+                              ),
+                            ),
                     ),
                   ),
                 ],
-                const SizedBox(height: 20),
-                const Text(
-                  'PILIH ODP (OPSIONAL)',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: textOnSurfaceVariant,
-                    letterSpacing: 0.8,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Boleh dikosongkan jika hanya memperbarui titik lokasi di peta.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    height: 1.35,
-                    color: textOnSurfaceVariant.withValues(alpha: 0.92),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                if (_loadingOdps)
-                  const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(16),
-                      child: CircularProgressIndicator(color: primary),
-                    ),
-                  )
-                else if (_odpLoadError != null)
-                  Text(
-                    'Gagal memuat ODP: $_odpLoadError',
-                    style: const TextStyle(color: Color(0xFFBA1A1A)),
-                  )
-                else
-                  InputDecorator(
-                    decoration: const InputDecoration(),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<int?>(
-                        value: _selectedOdpId,
-                        isExpanded: true,
-                        style: const TextStyle(
-                          color: textOnSurface,
-                          fontSize: 15,
-                        ),
-                        hint: const Text(
-                          'Pilih ODP (opsional)',
-                          style: TextStyle(color: textOnSurfaceVariant),
-                        ),
-                        dropdownColor: Colors.white,
-                        iconEnabledColor: primary,
-                        items: [
-                          const DropdownMenuItem<int?>(
-                            value: null,
-                            child: Text(
-                              'Tanpa ODP — hanya simpan koordinat',
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: textOnSurface, fontSize: 14),
-                            ),
-                          ),
-                          ..._odpList.map((o) {
-                            final idVal = o['id'];
-                            final id = idVal is int
-                                ? idVal
-                                : int.tryParse(idVal?.toString() ?? '');
-                            if (id == null) return null;
-                            return DropdownMenuItem<int?>(
-                              value: id,
-                              child: Text(
-                                _odpLabel(o),
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: textOnSurface),
-                              ),
-                            );
-                          }).whereType<DropdownMenuItem<int?>>(),
-                        ],
-                        onChanged: (v) => setState(() => _selectedOdpId = v),
-                      ),
-                    ),
-                  ),
-                const SizedBox(height: 28),
-                SizedBox(
-                  height: 52,
-                  child: ElevatedButton(
-                    onPressed: _isLoading ? null : _save,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: primary,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: _isLoading
-                        ? const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Text(
-                            'Simpan',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 16,
-                            ),
-                          ),
-                  ),
-                ),
-              ],
+              ),
             ),
-          ),
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }

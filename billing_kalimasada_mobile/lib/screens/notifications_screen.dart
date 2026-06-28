@@ -68,7 +68,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Riwayat keputusan ada di menu Absensi (maks. 30 hari).'),
+          content: Text(
+            'Riwayat keputusan ada di menu Absensi (maks. 30 hari).',
+          ),
         ),
       );
       return;
@@ -102,7 +104,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Tugas belum muncul di daftar. Tarik untuk refresh di menu Tugas.'),
+          content: Text(
+            'Tugas belum muncul di daftar. Tarik untuk refresh di menu Tugas.',
+          ),
         ),
       );
     }
@@ -117,17 +121,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     return Scaffold(
       backgroundColor: bgBackground,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: const Color(0xFF2563EB),
+        foregroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Color(0xFF474551)),
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
           'Notifikasi',
           style: TextStyle(
-            color: Color(0xFF1E1B4B),
+            color: Colors.white,
             fontSize: 18,
             fontWeight: FontWeight.bold,
           ),
@@ -140,10 +145,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               final n = context.read<NotificationProvider>();
               await n.markAllRead();
               if (mounted) {
-                ms.showSnackBar(const SnackBar(content: Text('Semua ditandai dibaca')));
+                ms.showSnackBar(
+                  const SnackBar(content: Text('Semua ditandai dibaca')),
+                );
               }
             },
-            child: const Text('Tandai dibaca', style: TextStyle(color: Color(0xFF1B0C6B))),
+            child: const Text(
+              'Tandai dibaca',
+              style: TextStyle(color: Colors.white),
+            ),
           ),
         ],
         bottom: PreferredSize(
@@ -154,7 +164,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       body: Consumer<NotificationProvider>(
         builder: (context, notif, _) {
           if (notif.loading && notif.items.isEmpty) {
-            return const Center(child: CircularProgressIndicator(color: Color(0xFF070038)));
+            return const Center(
+              child: CircularProgressIndicator(color: Color(0xFF070038)),
+            );
           }
           if (notif.error != null && notif.items.isEmpty) {
             return Center(
@@ -210,7 +222,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                           border: Border.all(color: const Color(0xFFC8C4D3)),
                           boxShadow: unread
                               ? const [
-                                  BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2)),
+                                  BoxShadow(
+                                    color: Colors.black12,
+                                    blurRadius: 4,
+                                    offset: Offset(0, 2),
+                                  ),
                                 ]
                               : null,
                         ),
@@ -221,7 +237,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                               Container(
                                 width: 8,
                                 height: 8,
-                                margin: const EdgeInsets.only(top: 20, right: 8),
+                                margin: const EdgeInsets.only(
+                                  top: 20,
+                                  right: 8,
+                                ),
                                 decoration: const BoxDecoration(
                                   color: Color(0xFF070038),
                                   shape: BoxShape.circle,
@@ -233,12 +252,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                               width: 48,
                               height: 48,
                               decoration: BoxDecoration(
-                                color: unread ? const Color(0xFF1B0C6B).withValues(alpha: 0.15) : const Color(0xFFE4DFFF),
+                                color: unread
+                                    ? const Color(
+                                        0xFF1B0C6B,
+                                      ).withValues(alpha: 0.15)
+                                    : const Color(0xFFE4DFFF),
                                 shape: BoxShape.circle,
                               ),
                               child: Icon(
                                 _iconForKind(kind),
-                                color: unread ? const Color(0xFF1B0C6B) : textOnSurfaceVariant,
+                                color: unread
+                                    ? const Color(0xFF1B0C6B)
+                                    : textOnSurfaceVariant,
                               ),
                             ),
                             const SizedBox(width: 16),
@@ -247,7 +272,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
                                     children: [
                                       Expanded(
                                         child: Text(
@@ -284,7 +310,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                     _hintForKind(kind),
                                     style: TextStyle(
                                       fontSize: 12,
-                                      color: const Color(0xFF1B0C6B).withValues(alpha: 0.85),
+                                      color: const Color(
+                                        0xFF1B0C6B,
+                                      ).withValues(alpha: 0.85),
                                       fontWeight: FontWeight.w600,
                                     ),
                                   ),

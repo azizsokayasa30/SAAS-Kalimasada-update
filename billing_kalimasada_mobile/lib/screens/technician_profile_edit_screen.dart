@@ -11,7 +11,8 @@ class TechnicianProfileEditScreen extends StatefulWidget {
       _TechnicianProfileEditScreenState();
 }
 
-class _TechnicianProfileEditScreenState extends State<TechnicianProfileEditScreen> {
+class _TechnicianProfileEditScreenState
+    extends State<TechnicianProfileEditScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _name;
   late final TextEditingController _address;
@@ -66,8 +67,8 @@ class _TechnicianProfileEditScreenState extends State<TechnicianProfileEditScree
     return Scaffold(
       backgroundColor: const Color(0xFFFCF8FF),
       appBar: AppBar(
-        backgroundColor: Colors.white,
-        foregroundColor: const Color(0xFF1B0C6B),
+        backgroundColor: const Color(0xFF2563EB),
+        foregroundColor: Colors.white,
         elevation: 0,
         title: const Text(
           'Pengaturan akun',

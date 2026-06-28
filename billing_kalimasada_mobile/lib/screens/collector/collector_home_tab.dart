@@ -12,8 +12,18 @@ String _rupiah(num? v) {
 }
 
 const _kMonthShortId = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
-  'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'Mei',
+  'Jun',
+  'Jul',
+  'Agu',
+  'Sep',
+  'Okt',
+  'Nov',
+  'Des',
 ];
 
 class CollectorHomeTab extends StatefulWidget {
@@ -55,13 +65,21 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
   Widget build(BuildContext context) {
     final c = context.watch<CollectorProvider>();
     final data = c.overview;
-    final field = data != null ? data['fieldUi'] as Map<String, dynamic>? : null;
-    final collector = data != null ? data['collector'] as Map<String, dynamic>? : null;
+    final field = data != null
+        ? data['fieldUi'] as Map<String, dynamic>?
+        : null;
+    final collector = data != null
+        ? data['collector'] as Map<String, dynamic>?
+        : null;
 
     if (c.overviewLoading && field == null) {
       return ColoredBox(
         color: FieldCollectorColors.dashboardCanvas,
-        child: const Center(child: CircularProgressIndicator(color: FieldCollectorColors.primaryContainer)),
+        child: const Center(
+          child: CircularProgressIndicator(
+            color: FieldCollectorColors.primaryContainer,
+          ),
+        ),
       );
     }
     if (c.overviewError != null && field == null) {
@@ -76,7 +94,9 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                 Text(c.overviewError ?? '', textAlign: TextAlign.center),
                 const SizedBox(height: 12),
                 FilledButton(
-                  onPressed: () => context.read<CollectorProvider>().fetchOverview(month: _month, year: _year),
+                  onPressed: () => context
+                      .read<CollectorProvider>()
+                      .fetchOverview(month: _month, year: _year),
                   child: const Text('Coba lagi'),
                 ),
               ],
@@ -87,7 +107,13 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
     }
 
     final name = collector?['name']?.toString() ?? 'Kolektor';
-    final initials = name.split(RegExp(r'\s+')).where((e) => e.isNotEmpty).map((e) => e[0]).take(2).join().toUpperCase();
+    final initials = name
+        .split(RegExp(r'\s+'))
+        .where((e) => e.isNotEmpty)
+        .map((e) => e[0])
+        .take(2)
+        .join()
+        .toUpperCase();
     final area = field?['areaLabel']?.toString() ?? '';
     final displayDate = field?['displayDate']?.toString() ?? '';
     final target = (field?['targetMonth'] as num?)?.toInt() ?? 0;
@@ -103,7 +129,10 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
       color: FieldCollectorColors.dashboardCanvas,
       child: RefreshIndicator(
         color: FieldCollectorColors.primaryContainer,
-        onRefresh: () => context.read<CollectorProvider>().fetchOverview(month: _month, year: _year),
+        onRefresh: () => context.read<CollectorProvider>().fetchOverview(
+          month: _month,
+          year: _year,
+        ),
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 28),
           children: [
@@ -118,7 +147,11 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
               ),
               borderRadius: 20,
               shadows: const [
-                BoxShadow(color: Color(0x400F3460), blurRadius: 16, offset: Offset(0, 8)),
+                BoxShadow(
+                  color: Color(0x400F3460),
+                  blurRadius: 16,
+                  offset: Offset(0, 8),
+                ),
               ],
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -129,7 +162,8 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                       children: [
                         Text(
                           'Halo,',
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
                                 fontWeight: FontWeight.w600,
                                 color: FieldCollectorColors.dashWelcomeSubtitle,
                               ),
@@ -137,14 +171,18 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                         const SizedBox(height: 2),
                         Text(
                           name,
-                          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          style: Theme.of(context).textTheme.headlineSmall
+                              ?.copyWith(
                                 fontWeight: FontWeight.w800,
                                 color: FieldCollectorColors.dashWelcomeOnAccent,
                                 height: 1.15,
                               ),
                         ),
                         const SizedBox(height: 10),
-                        _rowIconWelcome(Icons.calendar_today_rounded, displayDate),
+                        _rowIconWelcome(
+                          Icons.calendar_today_rounded,
+                          displayDate,
+                        ),
                         const SizedBox(height: 6),
                         _rowIconWelcome(Icons.location_on_rounded, area),
                       ],
@@ -155,7 +193,9 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                     padding: const EdgeInsets.all(3),
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.35)),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.35),
+                      ),
                     ),
                     child: CircleAvatar(
                       radius: 26,
@@ -186,7 +226,11 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                 ),
                 borderRadius: BorderRadius.circular(20),
                 boxShadow: const [
-                  BoxShadow(color: Color(0x4D0D3B66), blurRadius: 18, offset: Offset(0, 10)),
+                  BoxShadow(
+                    color: Color(0x4D0D3B66),
+                    blurRadius: 18,
+                    offset: Offset(0, 10),
+                  ),
                 ],
               ),
               clipBehavior: Clip.antiAlias,
@@ -211,7 +255,8 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                       width: 100,
                       height: 100,
                       decoration: BoxDecoration(
-                        color: FieldCollectorColors.dashTargetProgress.withValues(alpha: 0.12),
+                        color: FieldCollectorColors.dashTargetProgress
+                            .withValues(alpha: 0.12),
                         shape: BoxShape.circle,
                       ),
                     ),
@@ -234,7 +279,9 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                                       fontSize: 11,
                                       fontWeight: FontWeight.w700,
                                       letterSpacing: 0.85,
-                                      color: FieldCollectorColors.primaryFixedDim.withValues(alpha: 0.9),
+                                      color: FieldCollectorColors
+                                          .primaryFixedDim
+                                          .withValues(alpha: 0.9),
                                     ),
                                   ),
                                   const SizedBox(height: 6),
@@ -258,7 +305,8 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                                   style: const TextStyle(
                                     fontSize: 22,
                                     fontWeight: FontWeight.w800,
-                                    color: FieldCollectorColors.dashTargetProgress,
+                                    color:
+                                        FieldCollectorColors.dashTargetProgress,
                                     height: 1,
                                   ),
                                 ),
@@ -267,7 +315,8 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                                   style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w600,
-                                    color: FieldCollectorColors.primaryFixedDim.withValues(alpha: 0.95),
+                                    color: FieldCollectorColors.primaryFixedDim
+                                        .withValues(alpha: 0.95),
                                   ),
                                 ),
                               ],
@@ -280,7 +329,8 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                           child: LinearProgressIndicator(
                             value: pct / 100,
                             minHeight: 9,
-                            backgroundColor: FieldCollectorColors.dashTargetProgressTrack,
+                            backgroundColor:
+                                FieldCollectorColors.dashTargetProgressTrack,
                             color: FieldCollectorColors.dashTargetProgress,
                           ),
                         ),
@@ -293,7 +343,8 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
-                                color: FieldCollectorColors.primaryFixedDim.withValues(alpha: 0.98),
+                                color: FieldCollectorColors.primaryFixedDim
+                                    .withValues(alpha: 0.98),
                               ),
                             ),
                             Text(
@@ -301,7 +352,8 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
-                                color: FieldCollectorColors.primaryFixedDim.withValues(alpha: 0.98),
+                                color: FieldCollectorColors.primaryFixedDim
+                                    .withValues(alpha: 0.98),
                               ),
                             ),
                           ],
@@ -318,235 +370,278 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
               borderColor: FieldCollectorColors.dashPeriodBorder,
               borderRadius: 16,
               child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Periode target',
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        color: FieldCollectorColors.onSurfaceVariant,
-                        fontWeight: FontWeight.w600,
-                      ),
-                ),
-                const SizedBox(height: 10),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    const controlH = 48.0;
-                    final labelStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
-                          color: FieldCollectorColors.onSurfaceVariant,
-                          fontWeight: FontWeight.w600,
-                        );
-                    final narrow = constraints.maxWidth < 340;
-                    final yearMin = DateTime.now().year - 2;
-                    final yearMax = DateTime.now().year + 1;
-                    final yearItems = [
-                      for (var y = yearMin; y <= yearMax; y++) DropdownMenuItem<int>(value: y, child: Text('$y')),
-                    ];
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Periode target',
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: FieldCollectorColors.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      const controlH = 48.0;
+                      final labelStyle = Theme.of(context).textTheme.labelMedium
+                          ?.copyWith(
+                            color: FieldCollectorColors.onSurfaceVariant,
+                            fontWeight: FontWeight.w600,
+                          );
+                      final narrow = constraints.maxWidth < 340;
+                      final yearMin = DateTime.now().year - 2;
+                      final yearMax = DateTime.now().year + 1;
+                      final yearItems = [
+                        for (var y = yearMin; y <= yearMax; y++)
+                          DropdownMenuItem<int>(value: y, child: Text('$y')),
+                      ];
 
-                    BoxDecoration fieldDeco() => BoxDecoration(
-                          color: FieldCollectorColors.surface,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: FieldCollectorColors.outlineVariant),
-                        );
+                      BoxDecoration fieldDeco() => BoxDecoration(
+                        color: FieldCollectorColors.surface,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: FieldCollectorColors.outlineVariant,
+                        ),
+                      );
 
-                    Widget dropdownBox({required Widget child}) {
-                      return SizedBox(
-                        height: controlH,
-                        child: DecoratedBox(
-                          decoration: fieldDeco(),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 10),
-                            child: DropdownButtonHideUnderline(
-                              child: Align(alignment: Alignment.centerLeft, child: child),
+                      Widget dropdownBox({required Widget child}) {
+                        return SizedBox(
+                          height: controlH,
+                          child: DecoratedBox(
+                            decoration: fieldDeco(),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                              ),
+                              child: DropdownButtonHideUnderline(
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: child,
+                                ),
+                              ),
                             ),
                           ),
-                        ),
-                      );
-                    }
+                        );
+                      }
 
-                    final monthCtrl = dropdownBox(
-                      child: DropdownButton<int>(
-                        value: _month,
-                        isExpanded: true,
-                        isDense: true,
-                        menuMaxHeight: 280,
-                        icon: const Icon(Icons.arrow_drop_down, size: 22),
-                        style: Theme.of(context).textTheme.bodyLarge,
-                        items: [
-                          for (var m = 1; m <= 12; m++)
-                            DropdownMenuItem<int>(value: m, child: Text(_kMonthShortId[m - 1])),
-                        ],
-                        onChanged: (v) {
-                          if (v != null) setState(() => _month = v);
-                        },
-                      ),
-                    );
-                    final yearCtrl = dropdownBox(
-                      child: DropdownButton<int>(
-                        value: _year,
-                        isExpanded: true,
-                        isDense: true,
-                        menuMaxHeight: 280,
-                        icon: const Icon(Icons.arrow_drop_down, size: 22),
-                        style: Theme.of(context).textTheme.bodyLarge,
-                        items: yearItems,
-                        onChanged: (v) {
-                          if (v != null) setState(() => _year = v);
-                        },
-                      ),
-                    );
-                    final applyStyle = FilledButton.styleFrom(
-                      backgroundColor: FieldCollectorColors.periodApplyBackground,
-                      foregroundColor: FieldCollectorColors.periodApplyForeground,
-                      elevation: 0,
-                      shadowColor: Colors.transparent,
-                      padding: const EdgeInsets.symmetric(horizontal: 14),
-                      minimumSize: const Size(0, controlH),
-                      maximumSize: const Size(double.infinity, controlH),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    );
-                    final applyBtn = SizedBox(
-                      height: controlH,
-                      child: FilledButton(
-                        style: applyStyle,
-                        onPressed: () async {
-                          await context.read<CollectorProvider>().fetchOverview(month: _month, year: _year);
-                        },
-                        child: const Text('Terapkan'),
-                      ),
-                    );
-
-                    Widget labeledColumn(String label, Widget control) {
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(label, style: labelStyle),
-                          const SizedBox(height: 6),
-                          control,
-                        ],
-                      );
-                    }
-
-                    if (narrow) {
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          labeledColumn('Bulan', monthCtrl),
-                          const SizedBox(height: 10),
-                          labeledColumn('Tahun', yearCtrl),
-                          const SizedBox(height: 10),
-                          applyBtn,
-                        ],
-                      );
-                    }
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(flex: 2, child: Text('Bulan', style: labelStyle)),
-                            const SizedBox(width: 8),
-                            Expanded(flex: 2, child: Text('Tahun', style: labelStyle)),
-                            const SizedBox(width: 8),
-                            SizedBox(
-                              width: 102,
-                              child: Text('\u00A0', style: labelStyle),
+                      final monthCtrl = dropdownBox(
+                        child: DropdownButton<int>(
+                          value: _month,
+                          isExpanded: true,
+                          isDense: true,
+                          menuMaxHeight: 280,
+                          icon: const Icon(Icons.arrow_drop_down, size: 22),
+                          style: Theme.of(context).textTheme.bodyLarge,
+                          items: [
+                            const DropdownMenuItem<int>(
+                              value: 0,
+                              child: Text('Satu tahun'),
                             ),
+                            for (var m = 1; m <= 12; m++)
+                              DropdownMenuItem<int>(
+                                value: m,
+                                child: Text(_kMonthShortId[m - 1]),
+                              ),
                           ],
+                          onChanged: (v) {
+                            if (v != null) setState(() => _month = v);
+                          },
                         ),
-                        const SizedBox(height: 6),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                      );
+                      final yearCtrl = dropdownBox(
+                        child: DropdownButton<int>(
+                          value: _year,
+                          isExpanded: true,
+                          isDense: true,
+                          menuMaxHeight: 280,
+                          icon: const Icon(Icons.arrow_drop_down, size: 22),
+                          style: Theme.of(context).textTheme.bodyLarge,
+                          items: yearItems,
+                          onChanged: (v) {
+                            if (v != null) setState(() => _year = v);
+                          },
+                        ),
+                      );
+                      final applyStyle = FilledButton.styleFrom(
+                        backgroundColor:
+                            FieldCollectorColors.periodApplyBackground,
+                        foregroundColor:
+                            FieldCollectorColors.periodApplyForeground,
+                        elevation: 0,
+                        shadowColor: Colors.transparent,
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        minimumSize: const Size(0, controlH),
+                        maximumSize: const Size(double.infinity, controlH),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      );
+                      final applyBtn = SizedBox(
+                        height: controlH,
+                        child: FilledButton(
+                          style: applyStyle,
+                          onPressed: () async {
+                            await context
+                                .read<CollectorProvider>()
+                                .fetchOverview(month: _month, year: _year);
+                          },
+                          child: const Text('Terapkan'),
+                        ),
+                      );
+
+                      Widget labeledColumn(String label, Widget control) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Expanded(flex: 2, child: monthCtrl),
-                            const SizedBox(width: 8),
-                            Expanded(flex: 2, child: yearCtrl),
-                            const SizedBox(width: 8),
-                            SizedBox(width: 102, child: applyBtn),
+                            Text(label, style: labelStyle),
+                            const SizedBox(height: 6),
+                            control,
                           ],
-                        ),
-                      ],
-                    );
-                  },
-                ),
-              ],
+                        );
+                      }
+
+                      if (narrow) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            labeledColumn('Bulan', monthCtrl),
+                            const SizedBox(height: 10),
+                            labeledColumn('Tahun', yearCtrl),
+                            const SizedBox(height: 10),
+                            applyBtn,
+                          ],
+                        );
+                      }
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                flex: 2,
+                                child: Text('Bulan', style: labelStyle),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                flex: 2,
+                                child: Text('Tahun', style: labelStyle),
+                              ),
+                              const SizedBox(width: 8),
+                              SizedBox(
+                                width: 102,
+                                child: Text('\u00A0', style: labelStyle),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(flex: 2, child: monthCtrl),
+                              const SizedBox(width: 8),
+                              Expanded(flex: 2, child: yearCtrl),
+                              const SizedBox(width: 8),
+                              SizedBox(width: 102, child: applyBtn),
+                            ],
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 6),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              'Ringkasan',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: FieldCollectorColors.onSurface,
-                    letterSpacing: -0.2,
-                  ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          _summaryGrid(context, totalPlg, blm, lunas, isolir, widget.onOpenCustomersList),
-          const SizedBox(height: 22),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              'Aksi cepat',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: FieldCollectorColors.onSurface,
-                    letterSpacing: -0.2,
-                  ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute<void>(
-                    builder: (context) => const TagCustomerLocationScreen(),
-                  ),
-                );
-              },
-              borderRadius: BorderRadius.circular(16),
-              child: Ink(
-                height: 52,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  gradient: const LinearGradient(
-                    begin: Alignment.centerLeft,
-                    end: Alignment.centerRight,
-                    colors: [
-                      FieldCollectorColors.dashActionA,
-                      FieldCollectorColors.dashActionB,
-                    ],
-                  ),
-                  boxShadow: const [
-                    BoxShadow(color: Color(0x593949AB), blurRadius: 14, offset: Offset(0, 7)),
-                  ],
-                ),
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.person_pin_circle_rounded, size: 24, color: FieldCollectorColors.dashActionFg),
-                    SizedBox(width: 10),
-                    Text(
-                      'Tag lokasi pelanggan',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 15,
-                        color: FieldCollectorColors.dashActionFg,
-                        letterSpacing: 0.2,
-                      ),
-                    ),
-                  ],
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Ringkasan',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: FieldCollectorColors.onSurface,
+                  letterSpacing: -0.2,
                 ),
               ),
             ),
-          ),
-        ],
+            const SizedBox(height: 10),
+            _summaryGrid(
+              context,
+              totalPlg,
+              blm,
+              lunas,
+              isolir,
+              widget.onOpenCustomersList,
+            ),
+            const SizedBox(height: 22),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Aksi cepat',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: FieldCollectorColors.onSurface,
+                  letterSpacing: -0.2,
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute<void>(
+                      builder: (context) => const TagCustomerLocationScreen(),
+                    ),
+                  );
+                },
+                borderRadius: BorderRadius.circular(16),
+                child: Ink(
+                  height: 52,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    gradient: const LinearGradient(
+                      begin: Alignment.centerLeft,
+                      end: Alignment.centerRight,
+                      colors: [
+                        FieldCollectorColors.dashActionA,
+                        FieldCollectorColors.dashActionB,
+                      ],
+                    ),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x593949AB),
+                        blurRadius: 14,
+                        offset: Offset(0, 7),
+                      ),
+                    ],
+                  ),
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.person_pin_circle_rounded,
+                        size: 24,
+                        color: FieldCollectorColors.dashActionFg,
+                      ),
+                      SizedBox(width: 10),
+                      Text(
+                        'Tag lokasi pelanggan',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 15,
+                          color: FieldCollectorColors.dashActionFg,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -599,7 +694,11 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
         borderRadius: 16,
         borderColor: Colors.white.withValues(alpha: 0.65),
         shadows: const [
-          BoxShadow(color: Color(0x12000000), blurRadius: 12, offset: Offset(0, 5)),
+          BoxShadow(
+            color: Color(0x12000000),
+            blurRadius: 12,
+            offset: Offset(0, 5),
+          ),
         ],
         child: SizedBox(
           height: statH,
@@ -612,7 +711,11 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                   color: iconBg,
                   borderRadius: BorderRadius.circular(14),
                   boxShadow: [
-                    BoxShadow(color: iconBg.withValues(alpha: 0.35), blurRadius: 8, offset: const Offset(0, 3)),
+                    BoxShadow(
+                      color: iconBg.withValues(alpha: 0.35),
+                      blurRadius: 8,
+                      offset: const Offset(0, 3),
+                    ),
                   ],
                 ),
                 child: Icon(icon, color: iconFg, size: 24),
@@ -627,7 +730,9 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
                     height: 1.15,
-                    color: FieldCollectorColors.onSurface.withValues(alpha: 0.88),
+                    color: FieldCollectorColors.onSurface.withValues(
+                      alpha: 0.88,
+                    ),
                   ),
                 ),
               ),
@@ -757,10 +862,15 @@ class _Card extends StatelessWidget {
         color: bg,
         borderRadius: BorderRadius.circular(borderRadius),
         border: border,
-        boxShadow: shadows ??
+        boxShadow:
+            shadows ??
             (softSurface
                 ? const [
-                    BoxShadow(color: Color(0x12000000), blurRadius: 12, offset: Offset(0, 4)),
+                    BoxShadow(
+                      color: Color(0x12000000),
+                      blurRadius: 12,
+                      offset: Offset(0, 4),
+                    ),
                   ]
                 : null),
       ),

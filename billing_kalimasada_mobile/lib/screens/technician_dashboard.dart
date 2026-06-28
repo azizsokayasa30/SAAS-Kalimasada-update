@@ -102,18 +102,26 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
     const bgSurfaceContainerLowest = Color(0xFFFFFFFF);
     const bgSurfaceContainerLow = Color(0xFFF6F1FF);
 
-    const primaryColor = Color(0xFF070038);
-    const primaryContainerColor = Color(0xFF1B0C6B);
-    const surfaceTint = Color(0xFF5A53AB);
+    const primaryColor = Color(0xFF2563EB);
+    const primaryContainerColor = Color(0xFF1D4ED8);
+    const surfaceTint = Color(0xFF2563EB);
     const secondaryColor = Color(0xFF7E4990);
 
     const textOnBackground = Color(0xFF19163F);
     const textOnSurfaceVariant = Color(0xFF474551);
     const textOnPrimary = Color(0xFFFFFFFF);
-    const inversePrimary = Color(0xFFC5C0FF);
+    const inversePrimary = Color(0xFFEAF2FF);
     const errorColor = Color(0xFFBA1A1A);
 
     final topInset = MediaQuery.paddingOf(context).top;
+    final isAdmin = auth.role == 'admin';
+    final displayName =
+        auth.user?['name'] ??
+        auth.user?['username'] ??
+        (isAdmin ? 'Admin' : 'Teknisi');
+    final displayArea = isAdmin
+        ? 'Dashboard Admin'
+        : (auth.user?['area_coverage'] ?? 'Indonesia');
 
     return Scaffold(
       backgroundColor: bgBackground,
@@ -125,7 +133,8 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
         notificationPredicate: (ScrollNotification notification) {
           if (notification.metrics.axis != Axis.vertical) return false;
           if (notification.depth == 0) return true;
-          return notification is OverscrollNotification && notification.depth == 1;
+          return notification is OverscrollNotification &&
+              notification.depth == 1;
         },
         onRefresh: _onPullRefreshDashboard,
         child: CustomScrollView(
@@ -188,7 +197,7 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'Hallo, ${auth.user?['name'] ?? 'Teknisi'}',
+                                  'Hallo, $displayName',
                                   style: const TextStyle(
                                     color: textOnPrimary,
                                     fontSize: 22,
@@ -196,7 +205,7 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
                                   ),
                                 ),
                                 Text(
-                                  auth.user?['area_coverage'] ?? 'Indonesia',
+                                  displayArea,
                                   style: const TextStyle(
                                     color: inversePrimary,
                                     fontSize: 14,
@@ -559,8 +568,9 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
                               color: bgSurfaceContainerLowest,
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(
-                                color: const Color(0xFFC8C4D3)
-                                    .withValues(alpha: 0.6),
+                                color: const Color(
+                                  0xFFC8C4D3,
+                                ).withValues(alpha: 0.6),
                               ),
                             ),
                             child: InkWell(
@@ -603,8 +613,9 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
                               color: bgSurfaceContainerLowest,
                               borderRadius: BorderRadius.circular(12),
                               border: Border.all(
-                                color: const Color(0xFFC8C4D3)
-                                    .withValues(alpha: 0.6),
+                                color: const Color(
+                                  0xFFC8C4D3,
+                                ).withValues(alpha: 0.6),
                               ),
                             ),
                             child: InkWell(
@@ -817,8 +828,9 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
                                         color: const Color(0xFF66DF75),
                                         shadows: [
                                           Shadow(
-                                            color: const Color(0xFF66DF75)
-                                                .withValues(alpha: 0.55),
+                                            color: const Color(
+                                              0xFF66DF75,
+                                            ).withValues(alpha: 0.55),
                                             blurRadius: 8,
                                           ),
                                         ],

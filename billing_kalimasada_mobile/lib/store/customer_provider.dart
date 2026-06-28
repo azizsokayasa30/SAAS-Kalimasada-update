@@ -9,6 +9,7 @@ class CustomerProvider extends ChangeNotifier {
   Map<String, dynamic> _stats = {};
   bool _hasMore = true;
   int _page = 1;
+
   /// Naik tiap refresh; respons request lama diabaikan agar tidak menimpa daftar kosong / halaman salah.
   int _customersFetchGen = 0;
 
@@ -22,6 +23,10 @@ class CustomerProvider extends ChangeNotifier {
     bool refresh = false,
     String search = '',
     String? status,
+    String? adminFilter,
+    String area = '',
+    int? month,
+    int? year,
   }) async {
     if (!refresh) {
       if (!_hasMore || _loading) return;
@@ -42,9 +47,22 @@ class CustomerProvider extends ChangeNotifier {
 
     try {
       final q = Uri.encodeQueryComponent(search);
-      String url = '/api/mobile-adapter/customers?page=$_page&limit=20&search=$q';
+      String url =
+          '/api/mobile-adapter/customers?page=$_page&limit=20&search=$q';
       if (status != null && status.isNotEmpty) {
         url += '&status=$status';
+      }
+      if (adminFilter != null && adminFilter.isNotEmpty) {
+        url += '&admin_filter=${Uri.encodeQueryComponent(adminFilter)}';
+      }
+      if (area.trim().isNotEmpty) {
+        url += '&area=${Uri.encodeQueryComponent(area.trim())}';
+      }
+      if (month != null) {
+        url += month == 0 ? '&month=all' : '&month=$month';
+      }
+      if (year != null) {
+        url += '&year=$year';
       }
       if (refresh) {
         url += '&_=${DateTime.now().millisecondsSinceEpoch}';
@@ -58,8 +76,9 @@ class CustomerProvider extends ChangeNotifier {
         if (ApiClient.jsonSuccess(data['success'])) {
           if (gen != _customersFetchGen) return;
           final raw = data['data'];
-          final newCustomers =
-              raw is List ? List<dynamic>.from(raw) : <dynamic>[];
+          final newCustomers = raw is List
+              ? List<dynamic>.from(raw)
+              : <dynamic>[];
           if (newCustomers.length < 20) {
             _hasMore = false;
           }
@@ -100,7 +119,7 @@ class CustomerProvider extends ChangeNotifier {
         final statsWrap = inner is Map ? inner['stats'] : null;
         final statsData = statsWrap is Map<String, dynamic>
             ? statsWrap
-            : (statsWrap is Map ? Map<String, dynamic>.from(statsWrap as Map) : null);
+            : (statsWrap is Map ? Map<String, dynamic>.from(statsWrap) : null);
         if (statsData != null) {
           num nz(dynamic v) {
             if (v is num) return v;
@@ -156,14 +175,16 @@ class CustomerProvider extends ChangeNotifier {
         '/api/mobile-adapter/customers/$customerId/location',
         body,
       );
-      print('UPDATE LOCATION RES: ${response.statusCode} - ${response.body}');
+      debugPrint(
+        'UPDATE LOCATION RES: ${response.statusCode} - ${response.body}',
+      );
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         return data['success'] == true;
       }
       return false;
     } catch (e) {
-      print('UPDATE LOCATION ERROR: $e');
+      debugPrint('UPDATE LOCATION ERROR: $e');
       return false;
     }
   }

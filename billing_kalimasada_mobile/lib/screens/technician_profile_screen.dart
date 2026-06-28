@@ -100,20 +100,18 @@ class _TechnicianProfileScreenState extends State<TechnicianProfileScreen> {
     return Scaffold(
       backgroundColor: bgBackground,
       appBar: AppBar(
-        backgroundColor: bgSurfaceContainerLowest,
+        backgroundColor: const Color(0xFF2563EB),
+        foregroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Container(
-            color: outlineVariant.withValues(alpha: 0.5),
-            height: 1,
-          ),
+          child: Container(color: Colors.white24, height: 1),
         ),
         title: const Text(
           'Profil',
           style: TextStyle(
-            color: primaryColor,
+            color: Colors.white,
             fontSize: 22,
             fontWeight: FontWeight.bold,
           ),
@@ -121,7 +119,7 @@ class _TechnicianProfileScreenState extends State<TechnicianProfileScreen> {
         centerTitle: false,
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh, color: primaryColor),
+            icon: const Icon(Icons.refresh, color: Colors.white),
             tooltip: 'Muat ulang',
             onPressed: () async {
               setState(() => _loading = true);
@@ -130,7 +128,7 @@ class _TechnicianProfileScreenState extends State<TechnicianProfileScreen> {
             },
           ),
           IconButton(
-            icon: const Icon(Icons.settings, color: primaryColor),
+            icon: const Icon(Icons.settings, color: Colors.white),
             onPressed: () {
               Navigator.push(
                 context,
@@ -369,7 +367,11 @@ class _TechnicianProfileScreenState extends State<TechnicianProfileScreen> {
                               color: bgSurfaceContainer,
                               shape: BoxShape.circle,
                             ),
-                            child: const Icon(Icons.system_update, color: primaryColor, size: 22),
+                            child: const Icon(
+                              Icons.system_update,
+                              color: primaryColor,
+                              size: 22,
+                            ),
                           ),
                           title: const Text(
                             'Update aplikasi',
@@ -381,12 +383,20 @@ class _TechnicianProfileScreenState extends State<TechnicianProfileScreen> {
                           ),
                           subtitle: const Text(
                             'Periksa versi terbaru dan instal APK',
-                            style: TextStyle(fontSize: 13, color: textOnSurfaceVariant),
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: textOnSurfaceVariant,
+                            ),
                           ),
-                          trailing: const Icon(Icons.chevron_right, color: outlineVariant),
+                          trailing: const Icon(
+                            Icons.chevron_right,
+                            color: outlineVariant,
+                          ),
                           onTap: () {
                             Navigator.of(context).push<void>(
-                              MaterialPageRoute<void>(builder: (_) => const AppUpdateScreen()),
+                              MaterialPageRoute<void>(
+                                builder: (_) => const AppUpdateScreen(),
+                              ),
                             );
                           },
                         ),
