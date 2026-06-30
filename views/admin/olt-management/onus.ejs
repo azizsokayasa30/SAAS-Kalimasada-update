@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <%- include('../../partials/hard-reload') %>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><%= title %> - Admin Portal</title>
+    <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+    <link href="/css/theme.css" rel="stylesheet">
+    <link href="/css/admin-mobile.css" rel="stylesheet">
+    <%- include('../../partials/theme-head') %>
+</head>
+<body>
+<div class="container-fluid">
+    <div class="row">
+        <%- include('../../partials/admin-responsive-sidebar', { page: 'onu-management' }) %>
+        <main class="col-md-10 main-content ms-sm-auto">
+            <div class="mt-4">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <div>
+                        <h2><i class="bi bi-diagram-3"></i> ONU Management</h2>
+                        <p class="text-muted mb-0">Status dan optical power berasal dari OLT, bukan ping atau simulasi.</p>
+                    </div>
+                    <a class="btn btn-outline-secondary" href="/admin/olt-management">Kembali ke OLT</a>
+                </div>
+
+                <form class="card border-0 shadow-sm mb-4" method="get">
+                    <div class="card-body">
+                        <div class="row g-3 align-items-end">
+                            <div class="col-md-2"><label class="form-label">OLT</label><select name="olt_id" class="form-select"><option value="">Semua</option><% olts.forEach((olt) => { %><option value="<%= olt.id %>" <%= String(filters.olt_id || '') === String(olt.id) ? 'selected' : '' %>><%= olt.name %></option><% }) %></select></div>
+                            <div class="col-md-2"><label class="form-label">Status</label><select name="status" class="form-select"><option value="">Semua</option><% ['ONLINE','OFFLINE','LOS','POWER_OFF','DYING_GASP','DISABLED','AUTH_FAILED','UNKNOWN'].forEach((s) => { %><option value="<%= s %>" <%= filters.status === s ? 'selected' : '' %>><%= s %></option><% }) %></select></div>
+                            <div class="col-md-2"><label class="form-label">PON</label><input name="pon" value="<%= filters.pon || '' %>" class="form-control" placeholder="0/1"></div>
+                            <div class="col-md-2"><label class="form-label">Customer</label><input name="customer" value="<%= filters.customer || '' %>" class="form-control"></div>
+                            <div class="col-md-2"><label class="form-label">Vendor</label><input name="vendor" value="<%= filters.vendor || '' %>" class="form-control"></div>
+                            <div class="col-md-2"><label class="form-label">Model</label><input name="model" value="<%= filters.model || '' %>" class="form-control"></div>
+                            <div class="col-12 text-end"><button class="btn btn-primary">Filter</button> <a class="btn btn-outline-secondary" href="/admin/olt-management/onus">Reset</a></div>
+                        </div>
+                    </div>
+                </form>
+
+                <div class="card border-0 shadow-sm">
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle">
+                                <thead><tr><th>ONU ID</th><th>SN</th><th>Customer</th><th>OLT</th><th>PON</th><th>Status</th><th>RX</th><th>TX</th><th>Distance</th><th>Last Seen</th><th>Action</th></tr></thead>
+                                <tbody>
+                                <% if (!onus.length) { %><tr><td colspan="11" class="text-center text-muted py-4">Tidak ada ONU sesuai filter.</td></tr><% } %>
+                                <%
+                                const formatMacDisplay = (onu) => {
+                                    if (onu.mac_address) return String(onu.mac_address).toUpperCase();
+                                    const hex = String(onu.onu_sn || '').replace(/[^a-fA-F0-9]/g, '').toUpperCase();
+                                    return hex.length === 12 ? hex.match(/.{1,2}/g).join(':') : (onu.onu_sn || '-');
+                                };
+                                %>
+                                <% onus.forEach((onu) => { %>
+                                    <tr>
+                                        <td><%= onu.onu_id || onu.onu_index || onu.id %></td>
+                                        <td><%= formatMacDisplay(onu) %><br><small class="text-muted">SN: <%= onu.onu_sn || '-' %></small></td>
+                                        <td><%= onu.customer_name || '-' %></td>
+                                        <td><%= onu.olt_name %></td>
+                                        <td><%= [onu.slot, onu.pon].filter(Boolean).join('/') || '-' %></td>
+                                        <td><span class="badge bg-<%= onu.status === 'ONLINE' ? 'success' : (onu.status === 'LOS' ? 'danger' : 'secondary') %>"><%= onu.status %></span></td>
+                                        <td><span class="text-<%= onu.signal_quality === 'green' ? 'success' : (onu.signal_quality === 'yellow' ? 'warning' : 'danger') %>"><%= onu.rx_power ?? '-' %></span></td>
+                                        <td><%= onu.tx_power ?? '-' %></td>
+                                        <td><%= onu.distance ?? '-' %></td>
+                                        <td><%= onu.last_seen || '-' %></td>
+                                        <td class="text-nowrap">
+                                            <button class="btn btn-sm btn-outline-info" onclick="viewOnu(<%= onu.id %>)">Detail</button>
+                                            <button class="btn btn-sm btn-outline-primary" onclick="postAction('/admin/api/olt-management/onus/<%= onu.id %>/refresh')">Refresh</button>
+                                            <button class="btn btn-sm btn-outline-success" onclick="postAction('/admin/api/olt-management/onus/<%= onu.id %>/enable')">Enable</button>
+                                            <button class="btn btn-sm btn-outline-warning" onclick="postAction('/admin/api/olt-management/onus/<%= onu.id %>/disable')">Disable</button>
+                                            <button class="btn btn-sm btn-outline-danger" onclick="postAction('/admin/api/olt-management/onus/<%= onu.id %>/reboot')">Reboot</button>
+                                        </td>
+                                    </tr>
+                                <% }) %>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="modal fade" id="onuModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header"><h5 class="modal-title">ONU Detail & History</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-body" id="onuModalBody">Loading...</div>
+        </div>
+    </div>
+</div>
+
+<script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script>
+async function postAction(url) {
+    const res = await fetch(url, { method: 'POST' });
+    const data = await res.json();
+    alert(data.success ? 'Action success/queued' : (data.message || data.error));
+    if (data.success) location.reload();
+}
+async function viewOnu(id) {
+    const modal = new bootstrap.Modal(document.getElementById('onuModal'));
+    document.getElementById('onuModalBody').innerHTML = 'Loading...';
+    modal.show();
+    const res = await fetch(`/admin/api/olt-management/onus/${id}`);
+    const data = await res.json();
+    if (!data.success) {
+        document.getElementById('onuModalBody').textContent = data.message || 'Gagal memuat ONU';
+        return;
+    }
+    const onu = data.data;
+    const history = (onu.history || []).map(h => `<tr><td>${h.created_at}</td><td>${h.status}</td><td>${h.rx_power ?? '-'}</td><td>${h.tx_power ?? '-'}</td><td>${h.distance ?? '-'}</td></tr>`).join('');
+    document.getElementById('onuModalBody').innerHTML = `
+        <div class="row g-2 mb-3">
+            <div class="col-md-4"><strong>ONU ID</strong><br>${onu.onu_id || onu.onu_index || onu.id}</div>
+            <div class="col-md-4"><strong>SN/MAC</strong><br>${onu.onu_sn || '-'} / ${onu.mac_address || '-'}</div>
+            <div class="col-md-4"><strong>Status</strong><br>${onu.status}</div>
+            <div class="col-md-4"><strong>RX/TX</strong><br>${onu.rx_power ?? '-'} / ${onu.tx_power ?? '-'}</div>
+            <div class="col-md-4"><strong>Distance</strong><br>${onu.distance ?? '-'}</div>
+            <div class="col-md-4"><strong>IP Address</strong><br>${onu.ip_address || '-'}</div>
+        </div>
+        <h6>History</h6>
+        <div class="table-responsive"><table class="table table-sm"><thead><tr><th>Time</th><th>Status</th><th>RX</th><th>TX</th><th>Distance</th></tr></thead><tbody>${history || '<tr><td colspan="5" class="text-muted">Belum ada history</td></tr>'}</tbody></table></div>
+    `;
+}
+</script>
+</body>
+</html>

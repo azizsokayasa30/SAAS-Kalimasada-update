@@ -2600,8 +2600,8 @@ router.get('/customers/summary', async (req, res) => {
         const paid = customers.filter(c => c.payment_status === 'paid').length;
         const unpaid = customers.filter(c => c.payment_status === 'unpaid').length;
         const noInvoice = customers.filter(c => c.payment_status === 'no_invoice').length;
-        const active = customers.filter(c => c.status === 'active').length;
-        const isolir = customers.filter(c => c.payment_status === 'overdue' || c.status === 'suspended').length;
+        const active = customers.filter(c => ['active', 'suspended', 'isolir'].includes(c.status)).length;
+        const isolir = customers.filter(c => c.status === 'suspended' || c.status === 'isolir').length;
 
         return res.json({
             success: true,
@@ -6875,76 +6875,8 @@ router.get('/customers', getAppSettings, async (req, res) => {
         if (req.query.payment_status) filters.payment_status = req.query.payment_status;
         if (req.query.customer_type) filters.customer_type = req.query.customer_type;
         
-        let customersResult;
-        if (routerFilter) {
-            // Jika ada router filter, gunakan query khusus dengan pagination
-            const countSql = `
-                SELECT COUNT(*) as total
-                FROM customers c
-                LEFT JOIN customer_router_map m ON m.customer_id = c.id
-                WHERE m.router_id = ?
-            `;
-            
-            const sql = `
-                SELECT c.*, p.name as package_name, p.price as package_price, p.image as package_image, p.tax_rate,
-                       r.name as router_name,
-                       CASE 
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid' 
-                               AND i.due_date < date('now','localtime')
-                           ) THEN 'overdue'
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid'
-                           ) THEN 'unpaid'
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'paid'
-                           ) THEN 'paid'
-                           ELSE 'no_invoice'
-                       END as payment_status
-                FROM customers c
-                LEFT JOIN packages p ON c.package_id = p.id
-                LEFT JOIN customer_router_map m ON m.customer_id = c.id
-                LEFT JOIN routers r ON r.id = m.router_id
-                WHERE m.router_id = ?
-                ORDER BY c.id DESC
-                LIMIT ? OFFSET ?
-            `;
-            
-            const [countRow, customers] = await Promise.all([
-                new Promise((resolve) => db.get(countSql, [routerFilter], (err, row) => resolve(err ? { total: 0 } : row))),
-                new Promise((resolve) => db.all(sql, [routerFilter, limit, offset], (err, rows) => {
-                    if (err) resolve([]);
-                    else {
-                        const processedRows = rows.map(row => {
-                            if (row.package_price && row.tax_rate !== null) {
-                                row.package_price = row.package_price * (1 + (row.tax_rate || 0) / 100);
-                            }
-                            return row;
-                        });
-                        resolve(processedRows);
-                    }
-                }))
-            ]);
-            
-            const totalCount = countRow ? countRow.total : 0;
-            customersResult = {
-                customers: customers,
-                totalCount: totalCount,
-                page: page,
-                totalPages: Math.ceil(totalCount / limit),
-                limit: limit,
-                offset: offset
-            };
-        } else {
-            // Gunakan method pagination yang sudah dioptimasi
-            customersResult = await billingManager.getCustomersPaginated(limit, offset, filters);
-        }
+        // Gunakan satu query builder agar semua filter (termasuk NAS/router) konsisten.
+        const customersResult = await billingManager.getCustomersPaginated(limit, offset, filters);
         
         const customers = customersResult.customers;
         

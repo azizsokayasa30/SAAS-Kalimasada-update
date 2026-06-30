@@ -185,6 +185,7 @@ class ServiceSuspensionManager {
             const results = {
                 mikrotik: false,
                 genieacs: false,
+                olt: false,
                 billing: false,
                 suspension_type: null
             };
@@ -348,6 +349,17 @@ class ServiceSuspensionManager {
                 }
             }
 
+            if (customer.onu_id) {
+                try {
+                    const oltService = require('../services/olt/OltService');
+                    await oltService.disableOnu(customer.onu_id);
+                    results.olt = true;
+                    logger.info(`OLT: Disabled ONU ${customer.onu_id} for suspended customer ${customer.username}`);
+                } catch (oltError) {
+                    logger.error(`OLT auto isolation failed for ${customer.username}:`, oltError.message);
+                }
+            }
+
             // Update status di billing database
             const alreadySuspended = isSuspendedStatus(customer?.status);
             const suspendReasonClass = classifySuspendReason(reason);
@@ -425,7 +437,7 @@ class ServiceSuspensionManager {
             }
 
             return {
-                success: results.mikrotik || results.genieacs || results.billing || results.radius,
+                success: results.mikrotik || results.genieacs || results.olt || results.billing || results.radius,
                 results,
                 customer: customer.username,
                 reason
@@ -448,6 +460,7 @@ class ServiceSuspensionManager {
             const results = {
                 mikrotik: false,
                 genieacs: false,
+                olt: false,
                 billing: false,
                 restoration_type: null
             };
@@ -609,6 +622,17 @@ class ServiceSuspensionManager {
                 }
             }
 
+            if (customer.onu_id) {
+                try {
+                    const oltService = require('../services/olt/OltService');
+                    await oltService.enableOnu(customer.onu_id);
+                    results.olt = true;
+                    logger.info(`OLT: Enabled ONU ${customer.onu_id} for restored customer ${customer.username}`);
+                } catch (oltError) {
+                    logger.error(`OLT auto restore failed for ${customer.username}:`, oltError.message);
+                }
+            }
+
             // 3. Update status di billing database (skip jika billing sudah active — mis. setelah updateCustomerByPhone)
             const alreadyActive = String(customer?.status || '').toLowerCase() === 'active';
             try {
@@ -670,7 +694,7 @@ class ServiceSuspensionManager {
             })();
 
             return {
-                success: results.mikrotik || results.genieacs || results.billing,
+                success: results.mikrotik || results.genieacs || results.olt || results.billing,
                 results,
                 customer: customer.username,
                 reason

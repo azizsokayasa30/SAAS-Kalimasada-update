@@ -6,6 +6,7 @@
     const { syncCustomerToRadius } = require('../utils/radiusCustomerSync');
     const { getCompanyHeader } = require('./message-templates');
     const { getSetting, getLocalTimestamp } = require('./settingsManager');
+    const { ensureOltSchema } = require('../services/olt/oltSchema');
 
     /** Diskon dari catatan admin: "… | Diskon: Rp 50.000 | …" (format id-ID) */
     function parseDiscountFromPaymentNotes(notes) {
@@ -1209,6 +1210,10 @@
     }
 
     addColumnsAndCreateIndexes() {
+        ensureOltSchema(this.db).catch((err) => {
+            console.error('Error ensuring OLT management schema:', err.message);
+        });
+
         this.db.run(
             `CREATE TABLE IF NOT EXISTS customer_portal_package_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2343,17 +2348,18 @@ ${year && month ? `
                                WHERE i.customer_id = c.id 
                                AND strftime('%m', i.created_at) = '${String(month).padStart(2, '0')}' 
                                AND strftime('%Y', i.created_at) = '${String(year)}' 
-                               AND i.status = 'paid'
-                           ) THEN 'paid'
-                           ELSE 'unpaid'
-                       END as payment_status` : `
-                       CASE 
+                               AND i.status = 'unpaid'
+                           ) THEN 'unpaid'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid' 
-                               AND i.due_date < date('now','localtime')
-                           ) THEN 'overdue'
+                               AND strftime('%m', i.created_at) = '${String(month).padStart(2, '0')}' 
+                               AND strftime('%Y', i.created_at) = '${String(year)}' 
+                               AND i.status = 'paid'
+                           ) THEN 'paid'
+                           ELSE 'no_invoice'
+                       END as payment_status` : `
+                       CASE 
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
@@ -2455,12 +2461,6 @@ ${year && month ? `
                         r.name as router_name,
                        COALESCE(col_ca.name, col_cra.name) as collector_name,
                        CASE 
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid' 
-                               AND i.due_date < date('now','localtime')
-                           ) THEN 'overdue'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
@@ -2648,9 +2648,20 @@ ${year && month ? `
         const sql = `
             SELECT 
                 COUNT(DISTINCT c.id) as total,
-                SUM(CASE WHEN c.status = 'active' THEN 1 ELSE 0 END) as aktif,
-                SUM(CASE WHEN c.status = 'suspended' OR c.status = 'isolir' THEN 1 ELSE 0 END) as nonaktif,
+                SUM(CASE WHEN c.status IN ('active', 'suspended', 'isolir') THEN 1 ELSE 0 END) as aktif,
+                SUM(CASE WHEN c.status = 'inactive' THEN 1 ELSE 0 END) as nonaktif,
                 SUM(CASE WHEN ${cjd('c')} >= date(?) AND ${cjd('c')} < date(?) AND ${cjd('c')} <= date('now','localtime') THEN 1 ELSE 0 END) as baru,
+                SUM(CASE WHEN c.status IN ('suspended', 'isolir') THEN 1 ELSE 0 END) as isolir,
+                (
+                    SELECT COUNT(DISTINCT i.id)
+                    FROM invoices i
+                    JOIN customers c_sub ON c_sub.id = i.customer_id
+                    ${fjSub}
+                    WHERE DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
+                    AND i.status IN ('paid', 'unpaid')
+                    AND ${voucherExcl}
+                    ${fwSub}
+                ) as total_tagihan,
                 (
                     SELECT COUNT(DISTINCT i.id) 
                     FROM invoices i 
@@ -2672,10 +2683,12 @@ ${year && month ? `
                     ${fwSub}
                 ) as belum_lunas,
                 ${packageNominalSub()} AS total_nominal,
-                ${invoiceNominalSub("AND i.status IN ('paid', 'unpaid')", " AND c_sub.status = 'active'")} AS aktif_nominal,
-                ${packageNominalSub(" AND (c_sum.status = 'suspended' OR c_sum.status = 'isolir')")} AS nonaktif_nominal,
+                ${invoiceNominalSub("AND i.status IN ('paid', 'unpaid')", " AND c_sub.status IN ('active', 'suspended', 'isolir')")} AS aktif_nominal,
+                ${packageNominalSub(" AND c_sum.status = 'inactive'")} AS nonaktif_nominal,
+                ${invoiceNominalSub("AND i.status IN ('paid', 'unpaid')")} AS total_tagihan_nominal,
                 ${invoiceNominalSub("AND i.status = 'paid'")} AS lunas_nominal,
                 ${invoiceNominalSub("AND i.status = 'unpaid'")} AS belum_lunas_nominal,
+                ${packageNominalSub(" AND c_sum.status IN ('suspended', 'isolir')")} AS isolir_nominal,
                 ${packageNominalSub(` AND ${cjd('c_sum')} >= date(?) AND ${cjd('c_sum')} < date(?) AND ${cjd('c_sum')} <= date('now','localtime')`)} AS baru_nominal
             FROM customers c
             ${filterJoins}
@@ -2686,11 +2699,14 @@ ${year && month ? `
             startDate, cohortEnd,
             startDate, endDateLast, ...filterParams,
             startDate, endDateLast, ...filterParams,
+            startDate, endDateLast, ...filterParams,
             cohortEnd, ...filterParams,
             ...nominalBaseParams,
             cohortEnd, ...filterParams,
             ...nominalBaseParams,
             ...nominalBaseParams,
+            ...nominalBaseParams,
+            cohortEnd, ...filterParams,
             cohortEnd, startDate, cohortEnd, ...filterParams,
             cohortEnd, ...filterParams
         ];
@@ -2704,14 +2720,18 @@ ${year && month ? `
                         total: (row && row.total) ? row.total : 0,
                         aktif: (row && row.aktif) ? row.aktif : 0,
                         nonaktif: (row && row.nonaktif) ? row.nonaktif : 0,
+                        isolir: (row && row.isolir) ? row.isolir : 0,
+                        total_tagihan: (row && row.total_tagihan) ? row.total_tagihan : 0,
                         lunas: (row && row.lunas) ? row.lunas : 0,
                         belum_lunas: (row && row.belum_lunas) ? row.belum_lunas : 0,
                         baru: (row && row.baru) ? row.baru : 0,
                         total_nominal: Number(row && row.total_nominal) || 0,
                         aktif_nominal: Number(row && row.aktif_nominal) || 0,
                         nonaktif_nominal: Number(row && row.nonaktif_nominal) || 0,
+                        total_tagihan_nominal: Number(row && row.total_tagihan_nominal) || 0,
                         lunas_nominal: Number(row && row.lunas_nominal) || 0,
                         belum_lunas_nominal: Number(row && row.belum_lunas_nominal) || 0,
+                        isolir_nominal: Number(row && row.isolir_nominal) || 0,
                         baru_nominal: Number(row && row.baru_nominal) || 0
                     });
                 }
@@ -2723,10 +2743,20 @@ ${year && month ? `
     _buildCustomersListWhereClause(filters = {}) {
         let whereClause = '';
         const params = [];
+        const hasExplicitStatusFilter = Boolean(filters.status);
 
         if (filters.status) {
-            whereClause += ' AND c.status = ?';
-            params.push(filters.status);
+            const status = String(filters.status).trim();
+            if (status === 'isolir' || status === 'suspended') {
+                whereClause += " AND c.status IN ('suspended', 'isolir')";
+            } else if (status === 'nonaktif') {
+                whereClause += " AND c.status = 'inactive'";
+            } else if (status === 'aktif') {
+                whereClause += " AND c.status IN ('active', 'suspended', 'isolir')";
+            } else {
+                whereClause += ' AND c.status = ?';
+                params.push(status);
+            }
         }
 
         if (filters.search) {
@@ -2766,24 +2796,37 @@ ${year && month ? `
             whereClause += ` AND ${this._customerJoinDateExpr('c')} < date(?)`;
             params.push(endDate);
 
-            if (filters.customer_type === 'baru') {
+            if (!hasExplicitStatusFilter && filters.customer_type === 'baru') {
                 whereClause += ` AND ${this._customerJoinDateExpr('c')} >= date(?) AND ${this._customerJoinDateExpr('c')} <= date('now','localtime')`;
                 params.push(startDate);
-            } else if (filters.customer_type === 'aktif') {
-                whereClause += " AND c.status = 'active'";
-            } else if (filters.customer_type === 'nonaktif') {
-                whereClause += " AND (c.status = 'suspended' OR c.status = 'isolir')";
+            } else if (!hasExplicitStatusFilter && filters.customer_type === 'aktif') {
+                whereClause += " AND c.status IN ('active', 'suspended', 'isolir')";
+            } else if (!hasExplicitStatusFilter && filters.customer_type === 'nonaktif') {
+                whereClause += " AND c.status = 'inactive'";
             }
 
             const endDateLast = new Date(parseInt(year, 10), parseInt(month, 10), 0).toISOString().split('T')[0];
-            if (filters.payment_status === 'paid') {
+            if (filters.payment_status === 'has_invoice') {
+                whereClause += ` AND EXISTS (
+                    SELECT 1 FROM invoices i 
+                    WHERE i.customer_id = c.id 
+                    AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
+                    AND i.status IN ('paid', 'unpaid')
+                )`;
+                params.push(startDate, endDateLast);
+            } else if (filters.payment_status === 'paid') {
                 whereClause += ` AND EXISTS (
                     SELECT 1 FROM invoices i 
                     WHERE i.customer_id = c.id 
                     AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
                     AND i.status = 'paid'
+                ) AND NOT EXISTS (
+                    SELECT 1 FROM invoices i 
+                    WHERE i.customer_id = c.id 
+                    AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
+                    AND i.status = 'unpaid'
                 )`;
-                params.push(startDate, endDateLast);
+                params.push(startDate, endDateLast, startDate, endDateLast);
             } else if (filters.payment_status === 'unpaid') {
                 whereClause += ` AND EXISTS (
                     SELECT 1 FROM invoices i 
@@ -2792,15 +2835,29 @@ ${year && month ? `
                     AND i.status = 'unpaid'
                 )`;
                 params.push(startDate, endDateLast);
+            } else if (filters.payment_status === 'no_invoice') {
+                whereClause += ` AND NOT EXISTS (
+                    SELECT 1 FROM invoices i 
+                    WHERE i.customer_id = c.id 
+                    AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
+                    AND i.status IN ('paid', 'unpaid')
+                )`;
+                params.push(startDate, endDateLast);
             }
         } else {
-            if (filters.customer_type === 'aktif') {
-                whereClause += " AND c.status = 'active'";
-            } else if (filters.customer_type === 'nonaktif') {
-                whereClause += " AND (c.status = 'suspended' OR c.status = 'isolir')";
+            if (!hasExplicitStatusFilter && filters.customer_type === 'aktif') {
+                whereClause += " AND c.status IN ('active', 'suspended', 'isolir')";
+            } else if (!hasExplicitStatusFilter && filters.customer_type === 'nonaktif') {
+                whereClause += " AND c.status = 'inactive'";
             }
 
-            if (filters.payment_status === 'paid') {
+            if (filters.payment_status === 'has_invoice') {
+                whereClause += ` AND EXISTS (
+                    SELECT 1 FROM invoices i 
+                    WHERE i.customer_id = c.id 
+                    AND i.status IN ('paid', 'unpaid')
+                )`;
+            } else if (filters.payment_status === 'paid') {
                 whereClause += ` AND NOT EXISTS (
                     SELECT 1 FROM invoices i 
                     WHERE i.customer_id = c.id 
@@ -2811,17 +2868,16 @@ ${year && month ? `
                     AND i.status = 'paid'
                 )`;
             } else if (filters.payment_status === 'unpaid') {
-                whereClause += ` AND (
-                    EXISTS (
-                        SELECT 1 FROM invoices i 
-                        WHERE i.customer_id = c.id 
-                        AND i.status = 'unpaid'
-                    ) 
-                    OR NOT EXISTS (
-                        SELECT 1 FROM invoices i 
-                        WHERE i.customer_id = c.id 
-                        AND i.status = 'paid'
-                    )
+                whereClause += ` AND EXISTS (
+                    SELECT 1 FROM invoices i 
+                    WHERE i.customer_id = c.id 
+                    AND i.status = 'unpaid'
+                )`;
+            } else if (filters.payment_status === 'no_invoice') {
+                whereClause += ` AND NOT EXISTS (
+                    SELECT 1 FROM invoices i 
+                    WHERE i.customer_id = c.id 
+                    AND i.status IN ('paid', 'unpaid')
                 )`;
             }
         }
@@ -2836,12 +2892,6 @@ ${year && month ? `
                        r.name as router_name,
                        COALESCE(col_ca.name, col_cra.name) as collector_name,
                        CASE 
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid' 
-                               AND i.due_date < date('now','localtime')
-                           ) THEN 'overdue'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
@@ -3100,12 +3150,6 @@ ${year && month ? `
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid' 
-                               AND i.due_date < date('now','localtime')
-                           ) THEN 'overdue'
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
                                AND i.status = 'unpaid'
                            ) THEN 'unpaid'
                            WHEN EXISTS (
@@ -3145,12 +3189,6 @@ ${year && month ? `
             const sql = `
                 SELECT c.*, p.name as package_name, p.price as package_price, p.speed as package_speed, p.tax_rate,
                        CASE 
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid' 
-                               AND i.due_date < date('now','localtime')
-                           ) THEN 'overdue'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
@@ -3212,12 +3250,6 @@ ${year && month ? `
             const sql = `
                 SELECT c.*, p.name as package_name, p.price as package_price, p.speed as package_speed,
                        CASE 
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid' 
-                               AND i.due_date < date('now','localtime')
-                           ) THEN 'overdue'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
@@ -6209,7 +6241,7 @@ ${year && month ? `
                         sql = `
                             SELECT 
                                 (SELECT COUNT(*) FROM customers) as total_customers,
-                                (SELECT COUNT(*) FROM customers WHERE status = 'active') as active_customers,
+                                (SELECT COUNT(*) FROM customers WHERE status IN ('active', 'suspended', 'isolir')) as active_customers,
                                 (SELECT COUNT(*) FROM invoices WHERE created_at >= ?) as monthly_invoices,
                                 (SELECT COUNT(*) FROM invoices WHERE invoice_type = 'voucher') as voucher_invoices,
                                 (SELECT COUNT(*) FROM invoices WHERE created_at >= ? AND status = 'paid') as paid_monthly_invoices,
@@ -6234,7 +6266,7 @@ ${year && month ? `
                         sql = `
                             SELECT 
                                 (SELECT COUNT(*) FROM customers) as total_customers,
-                                (SELECT COUNT(*) FROM customers WHERE status = 'active') as active_customers,
+                                (SELECT COUNT(*) FROM customers WHERE status IN ('active', 'suspended', 'isolir')) as active_customers,
                                 (SELECT COUNT(*) FROM invoices WHERE created_at >= ?) as monthly_invoices,
                                 (SELECT COUNT(*) FROM invoices WHERE invoice_number LIKE 'INV-VCR-%' OR notes LIKE 'Voucher Hotspot%') as voucher_invoices,
                                 (SELECT COUNT(*) FROM invoices WHERE created_at >= ? AND status = 'paid') as paid_monthly_invoices,
@@ -6865,7 +6897,7 @@ ${year && month ? `
                 Promise.all([
                     // Active customers
                     new Promise((res, rej) => {
-                        this.db.get(`SELECT COUNT(*) as count FROM customers WHERE status = 'active'`, [], (err, row) => {
+                        this.db.get(`SELECT COUNT(*) as count FROM customers WHERE status IN ('active', 'suspended', 'isolir')`, [], (err, row) => {
                             if (err) {
                                 console.error('Error getting active customers:', err);
                                 res(0); // Return 0 on error instead of rejecting
@@ -6876,7 +6908,7 @@ ${year && month ? `
                     }),
                     // Inactive customers
                     new Promise((res, rej) => {
-                        this.db.get(`SELECT COUNT(*) as count FROM customers WHERE status IN ('inactive', 'suspended')`, [], (err, row) => {
+                        this.db.get(`SELECT COUNT(*) as count FROM customers WHERE status = 'inactive'`, [], (err, row) => {
                             if (err) {
                                 console.error('Error getting inactive customers:', err);
                                 res(0);

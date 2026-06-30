@@ -426,7 +426,7 @@ const FORCED_APP_VERSION = 'v5.9';
         </div>
         
         <!-- TOOLS REPORTING -->
-        <% const toolsPages = ['cable-network-odp', 'cable-network-cables', 'cable-network-analytics', 'mapping-new']; %>
+        <% const toolsPages = ['olt-management', 'cable-network-odp', 'cable-network-cables', 'cable-network-analytics', 'mapping-new']; %>
         <% const toolsExpanded = typeof page !== 'undefined' && toolsPages.includes(page); %>
         <div class="sb-section">
             <div class="sb-section-title sb-collapsible"
@@ -440,6 +440,10 @@ const FORCED_APP_VERSION = 'v5.9';
                 <i class="bi <%= toolsExpanded ? 'bi-chevron-up' : 'bi-chevron-down' %> toggle-arrow sb-chevron"></i>
             </div>
             <div class="collapse <%= toolsExpanded ? 'show' : '' %>" id="toolsCollapse">
+                <a href="/admin/olt-management" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'olt-management' ? 'active' : '' %>">
+                    <i class="bi bi-hdd-network"></i>
+                    <span class="sb-item-text">OLT Management</span>
+                </a>
                 <a href="/admin/cable-network/odp" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'cable-network-odp' ? 'active' : '' %>">
                     <i class="bi bi-broadcast"></i>
                     <span class="sb-item-text">ODP Management</span>
