@@ -1,8 +1,14 @@
 # Pembaruan aplikasi Flutter (Kalimasada Mobile)
 
-Aplikasi lama memeriksa `GET {API_URL}/api/mobile-adapter/app-update/manifest` (tanpa JWT). Respons memakai `data.version`, `data.build_number`, `data.apk_url`, `data.release_notes`.
+Aplikasi memeriksa `GET {API_URL}/api/mobile-adapter/app-update/manifest` (tanpa JWT). Respons memakai `data.version`, `data.build_number`, `data.apk_url`, `data.release_notes`.
 
-## Cara deploy setelah `git pull`
+## Build dari panel admin (disarankan)
+
+1. Pasang Flutter SDK di `public/mobile-app/flutter-sdk/` (lihat `FLUTTER-SDK-INSTALL.md`).
+2. Buka **Admin → Settingan → Tool Android**, sesuaikan `.env`, versi, nama app.
+3. Klik **Build APK Release** — APK dan `manifest.json` di folder ini diperbarui otomatis untuk OTA.
+
+## Cara deploy manual setelah `git pull`
 
 1. **Bangun APK** (di mesin dev, dari folder `billing_kalimasada_mobile`):
 

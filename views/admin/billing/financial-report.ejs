@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="id">
 <head>
     <%- include('../../partials/hard-reload') %>
@@ -132,7 +132,6 @@
                             <table class="f-profit-loss-table">
                                 <tbody>
                                     <tr class="f-pl-category-row"><td colspan="2">PENDAPATAN USAHA</td></tr>
-                                    <tr><td class="ps-4">Pendapatan PPPoE</td><td class="text-end text-success">Rp <%= Number(financialData.profitLossData.revenue.pppoePayment || 0).toLocaleString('id-ID') %></td></tr>
                                     <tr><td class="ps-4">Pendapatan Member</td><td class="text-end text-success">Rp <%= Number(financialData.profitLossData.revenue.memberPayment || 0).toLocaleString('id-ID') %></td></tr>
                                     <tr><td class="ps-4">Pendapatan Voucher</td><td class="text-end text-success">Rp <%= Number(financialData.profitLossData.revenue.voucher || 0).toLocaleString('id-ID') %></td></tr>
                                     <tr><td class="ps-4">Pendapatan Invoice Penjualan</td><td class="text-end text-success">Rp <%= Number(financialData.profitLossData.revenue.goodsInvoice || 0).toLocaleString('id-ID') %></td></tr>
@@ -152,9 +151,6 @@
                                             const catTotal = financialData.profitLossData.expenses.totalByCategory[cat] || 0;
                                     %>
                                         <tr><td class="ps-4 fw-bold"><%= cat %></td><td class="text-end text-danger fw-bold">Rp <%= Number(catTotal).toLocaleString('id-ID') %></td></tr>
-                                        <% Object.keys(categories[cat]).forEach(acc => { %>
-                                            <tr><td class="ps-5 small text-muted"><%= acc %></td><td class="text-end small text-muted">Rp <%= Number(categories[cat][acc]).toLocaleString('id-ID') %></td></tr>
-                                        <% }); %>
                                     <% }); %>
                                     <tr class="f-pl-total-row"><td>Total Pengeluaran</td><td class="text-end fw-bold text-danger">Rp <%= Number(financialData.profitLossData.expenses.total || 0).toLocaleString('id-ID') %></td></tr>
                                     
@@ -279,11 +275,11 @@
             const incomeCategoryNames = Object.keys(plData.revenue.byCategory || {});
             const incomeCategoryValues = Object.values(plData.revenue.byCategory || {});
             
-            const revenueLabels = ['PPPoE', 'Member', 'Voucher', 'Inv. Penjualan', ...incomeCategoryNames.map(c => `Pendapatan ${c}`)];
-            const revenueValues = [plData.revenue.pppoePayment, plData.revenue.memberPayment, plData.revenue.voucher, plData.revenue.goodsInvoice || 0, ...incomeCategoryValues];
+            const revenueLabels = ['Member', 'Voucher', 'Inv. Penjualan', ...incomeCategoryNames.map(c => `Pendapatan ${c}`)];
+            const revenueValues = [plData.revenue.memberPayment, plData.revenue.voucher, plData.revenue.goodsInvoice || 0, ...incomeCategoryValues];
             
             const categoryColors = incomeCategoryNames.map((_, i) => `hsl(${(i * 137.5) % 360}, 70%, 50%)`);
-            const revenueColors = ['#4361ee', '#4cc9f0', '#4895ef', '#2ecc71', ...categoryColors];
+            const revenueColors = ['#4cc9f0', '#4895ef', '#2ecc71', ...categoryColors];
 
             // Arus Kas Chart
             new Chart(document.getElementById('revenueExpenseChart'), {

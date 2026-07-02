@@ -1,8 +1,11 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import '../../services/api_client.dart';
 import '../../services/whatsapp_receipt_share.dart';
@@ -60,11 +63,15 @@ class CollectorInvoiceReceiptScreen extends StatefulWidget {
 class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptScreen> {
   bool _loading = true;
   bool _sendingWa = false;
+  /// Resi ditampilkan on-screen sementara agar RepaintBoundary ter-paint di build release (APK server).
+  bool _preparingCapture = false;
   String? _error;
   Map<String, dynamic>? _invoice;
   Map<String, dynamic>? _settings;
   final GlobalKey _receiptCaptureKey = GlobalKey();
   final ScrollController _scrollController = ScrollController();
+  bool _logoPrecached = false;
+  Uint8List? _logoBytes;
 
   @override
   void dispose() {
@@ -99,7 +106,10 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
             _invoice = inv is Map ? Map<String, dynamic>.from(inv) : null;
             _settings = st is Map ? Map<String, dynamic>.from(st) : null;
             _loading = false;
+            _logoPrecached = false;
+            _logoBytes = null;
           });
+          WidgetsBinding.instance.addPostFrameCallback((_) => _precacheLogo());
         }
       } else {
         if (mounted) {
@@ -119,32 +129,136 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
     }
   }
 
-  Future<Uint8List> _captureReceiptPng() async {
-    if (_scrollController.hasClients) {
-      await _scrollController.animateTo(
-        0,
-        duration: const Duration(milliseconds: 280),
-        curve: Curves.easeOut,
-      );
+  Future<void> _precacheLogo() async {
+    if (_logoPrecached || _settings == null) return;
+    final logoName = _settings!['logoFilename']?.toString().trim();
+    final name = logoName != null && logoName.isNotEmpty ? logoName : 'logo.png';
+    final logoUri = Uri.parse(ApiClient.apiOrigin).replace(path: '/img/$name');
+    try {
+      final res = await http.get(logoUri).timeout(const Duration(seconds: 20));
+      if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
+        _logoBytes = res.bodyBytes;
+        if (mounted) {
+          setState(() => _logoPrecached = true);
+        } else {
+          _logoPrecached = true;
+        }
+        return;
+      }
+    } catch (_) {}
+    if (mounted) {
+      try {
+        await precacheImage(NetworkImage(logoUri.toString()), context);
+      } catch (_) {}
     }
+    _logoPrecached = true;
+  }
 
-    await WidgetsBinding.instance.endOfFrame;
-    await Future<void>.delayed(const Duration(milliseconds: 200));
+  Widget _logoWidget({double height = 40}) {
+    final bytes = _logoBytes;
+    if (bytes != null && bytes.isNotEmpty) {
+      return Image.memory(bytes, height: height, fit: BoxFit.contain, gaplessPlayback: true);
+    }
+    return Icon(Icons.business, size: height, color: FieldCollectorColors.primaryContainer);
+  }
+
+  Future<void> _waitForReceiptCaptureReady() async {
+    await _precacheLogo();
+    for (var attempt = 0; attempt < 40; attempt++) {
+      if (!mounted) return;
+      if (SchedulerBinding.instance.schedulerPhase != SchedulerPhase.idle) {
+        await WidgetsBinding.instance.endOfFrame;
+      }
+      await WidgetsBinding.instance.endOfFrame;
+      final boundary = _receiptCaptureKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary != null && boundary.attached && boundary.size.width > 0 && boundary.size.height > 0) {
+        boundary.markNeedsPaint();
+        await WidgetsBinding.instance.endOfFrame;
+        await WidgetsBinding.instance.endOfFrame;
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+  }
+
+  Future<Uint8List> _captureReceiptPng() async {
+    await _waitForReceiptCaptureReady();
 
     final boundary = _receiptCaptureKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-    if (boundary == null) {
+    if (boundary == null || !boundary.attached || boundary.size.width <= 0 || boundary.size.height <= 0) {
       throw Exception('Tampilan resi belum siap');
     }
-    if (boundary.debugNeedsPaint) {
-      await Future<void>.delayed(const Duration(milliseconds: 250));
+
+    const maxTextureSide = 8192.0;
+    final logicalW = boundary.size.width;
+    final logicalH = boundary.size.height;
+    final maxLogical = math.max(logicalW, logicalH);
+    var preferredRatio = 2.0;
+    if (maxLogical * preferredRatio > maxTextureSide) {
+      preferredRatio = (maxTextureSide / maxLogical).clamp(1.0, 2.0);
     }
 
-    final image = await boundary.toImage(pixelRatio: 3.0);
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-    if (byteData == null) {
-      throw Exception('Gagal mengonversi resi ke gambar');
+    final ratios = <double>{
+      1.0,
+      if (preferredRatio > 1.0) 1.5,
+      if (preferredRatio > 1.5) preferredRatio,
+    }.toList();
+
+    Object? lastError;
+    for (final ratio in ratios) {
+      try {
+        if (SchedulerBinding.instance.schedulerPhase != SchedulerPhase.idle) {
+          await WidgetsBinding.instance.endOfFrame;
+        }
+        final image = await boundary.toImage(pixelRatio: ratio);
+        try {
+          final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+          if (byteData != null && byteData.lengthInBytes > 0) {
+            return byteData.buffer.asUint8List();
+          }
+          lastError = Exception('Gagal mengonversi resi ke gambar');
+        } finally {
+          image.dispose();
+        }
+      } catch (e) {
+        lastError = e;
+      }
     }
-    return byteData.buffer.asUint8List();
+
+    final msg = lastError?.toString() ?? 'Gagal mengonversi resi ke gambar';
+    if (msg.contains('LateInitializationError') || msg.contains('not been initialized')) {
+      throw Exception('Gambar resi belum siap — coba lagi setelah halaman selesai dimuat');
+    }
+    throw Exception(lastError ?? 'Gagal mengonversi resi ke gambar');
+  }
+
+  Widget _receiptContent() {
+    return _ReceiptBody(
+      invoice: _invoice!,
+      settings: _settings!,
+      logoWidget: _logoWidget(height: 40),
+    );
+  }
+
+  Widget _receiptCaptureOverlay() {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: ColoredBox(
+          color: FieldCollectorColors.background,
+          child: SingleChildScrollView(
+            physics: const NeverScrollableScrollPhysics(),
+            child: RepaintBoundary(
+              key: _receiptCaptureKey,
+              child: MediaQuery(
+                data: MediaQuery.of(context).copyWith(textScaler: TextScaler.noScaling),
+                child: _receiptContent(),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _sendReceiptWhatsApp() async {
@@ -158,12 +272,23 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
       return;
     }
 
-    setState(() => _sendingWa = true);
+    setState(() {
+      _sendingWa = true;
+      _preparingCapture = true;
+    });
     try {
       final invNo = _invoice!['invoice_number']?.toString() ?? 'invoice';
       final customerName = _invoice!['customer_name']?.toString().trim() ?? 'Pelanggan';
 
+      await _precacheLogo();
+      if (!mounted) return;
+      await WidgetsBinding.instance.endOfFrame;
+      await _waitForReceiptCaptureReady();
+
       final pngBytes = await _captureReceiptPng();
+      if (pngBytes.isEmpty) {
+        throw Exception('Gambar resi kosong');
+      }
 
       await WhatsAppReceiptShare.shareImageToCustomer(
         pngBytes: pngBytes,
@@ -184,19 +309,44 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
       );
     } on PlatformException catch (e) {
       if (!mounted) return;
+      final msg = e.message?.trim();
+      final detail = (msg != null && msg.isNotEmpty) ? msg : 'Gagal membuka WhatsApp';
+      if (detail.contains('not been initialized')) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Gagal membuka WhatsApp — coba lagi. Pastikan WhatsApp terpasang.'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 5),
+          ),
+        );
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(e.message ?? 'Gagal membuka WhatsApp'),
+          content: Text(detail),
           backgroundColor: Colors.red.shade700,
         ),
       );
     } catch (e) {
       if (!mounted) return;
+      var detail = e.toString().replaceFirst('Exception: ', '');
+      if (detail.contains('LateInitializationError') || detail.contains('not been initialized')) {
+        detail = 'Gambar resi belum siap — tunggu halaman selesai dimuat lalu coba lagi';
+      }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Gagal menyiapkan gambar resi: $e'), backgroundColor: Colors.red.shade700),
+        SnackBar(
+          content: Text('Gagal menyiapkan gambar resi. $detail'),
+          backgroundColor: Colors.red.shade700,
+          duration: const Duration(seconds: 5),
+        ),
       );
     } finally {
-      if (mounted) setState(() => _sendingWa = false);
+      if (mounted) {
+        setState(() {
+          _sendingWa = false;
+          _preparingCapture = false;
+        });
+      }
     }
   }
 
@@ -265,46 +415,62 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
                   )
                 : _invoice == null || _settings == null
                     ? const Center(child: Text('Data tidak tersedia', style: TextStyle(color: FieldCollectorColors.onSurface)))
-                    : Column(
+                    : Stack(
                         children: [
-                          Expanded(
-                            child: SingleChildScrollView(
-                              controller: _scrollController,
-                              child: RepaintBoundary(
-                                key: _receiptCaptureKey,
-                                child: ColoredBox(
-                                  color: FieldCollectorColors.background,
-                                  child: _ReceiptBody(invoice: _invoice!, settings: _settings!),
-                                ),
-                              ),
-                            ),
-                          ),
-                          SafeArea(
-                            top: false,
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                              child: SizedBox(
-                                width: double.infinity,
-                                child: FilledButton.icon(
-                                  onPressed: _sendingWa ? null : _sendReceiptWhatsApp,
-                                  style: FilledButton.styleFrom(
-                                    backgroundColor: const Color(0xFF25D366),
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          Column(
+                            children: [
+                              Expanded(
+                                child: SingleChildScrollView(
+                                  controller: _scrollController,
+                                  child: ColoredBox(
+                                    color: FieldCollectorColors.background,
+                                    child: _ReceiptBody(
+                                      invoice: _invoice!,
+                                      settings: _settings!,
+                                      logoWidget: _logoWidget(height: 40),
+                                    ),
                                   ),
-                                  icon: _sendingWa
-                                      ? const SizedBox(
-                                          width: 20,
-                                          height: 20,
-                                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                                        )
-                                      : const Icon(Icons.send_rounded),
-                                  label: Text(_sendingWa ? 'Menyiapkan gambar…' : 'Kirim resi (WhatsApp)'),
+                                ),
+                              ),
+                              SafeArea(
+                                top: false,
+                                child: Padding(
+                                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                                  child: SizedBox(
+                                    width: double.infinity,
+                                    child: FilledButton.icon(
+                                      onPressed: _sendingWa ? null : _sendReceiptWhatsApp,
+                                      style: FilledButton.styleFrom(
+                                        backgroundColor: const Color(0xFF25D366),
+                                        foregroundColor: Colors.white,
+                                        padding: const EdgeInsets.symmetric(vertical: 14),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                      ),
+                                      icon: _sendingWa
+                                          ? const SizedBox(
+                                              width: 20,
+                                              height: 20,
+                                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                            )
+                                          : const Icon(Icons.send_rounded),
+                                      label: Text(_sendingWa ? 'Menyiapkan gambar…' : 'Kirim resi (WhatsApp)'),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (_preparingCapture) ...[
+                            _receiptCaptureOverlay(),
+                            Positioned.fill(
+                              child: ColoredBox(
+                                color: Colors.black.withValues(alpha: 0.12),
+                                child: const Center(
+                                  child: CircularProgressIndicator(color: FieldCollectorColors.primaryContainer),
                                 ),
                               ),
                             ),
-                          ),
+                          ],
                         ],
                       ),
       ),
@@ -313,17 +479,25 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
 }
 
 class _ReceiptBody extends StatelessWidget {
-  const _ReceiptBody({required this.invoice, required this.settings});
+  const _ReceiptBody({
+    required this.invoice,
+    required this.settings,
+    required this.logoWidget,
+  });
 
   final Map<String, dynamic> invoice;
   final Map<String, dynamic> settings;
+  final Widget logoWidget;
 
   @override
   Widget build(BuildContext context) {
     final company = settings['companyHeader']?.toString() ?? 'ISP';
     final slogan = settings['company_slogan']?.toString() ?? '';
     final invNo = invoice['invoice_number']?.toString() ?? '—';
-    final amount = _coerceNum(invoice['amount']) ?? 0;
+    final invoiceAmount = _coerceNum(invoice['amount']) ?? 0;
+    final discount = (_coerceNum(invoice['discount_amount']) ?? 0).round();
+    final amountPaid = (_coerceNum(invoice['amount_paid']) ?? (invoiceAmount - discount)).round();
+    final displayTotal = discount > 0 ? amountPaid : invoiceAmount.round();
     final base = _coerceNum(invoice['base_amount']);
     final taxRate = _coerceNum(invoice['tax_rate']);
     final notes = invoice['notes']?.toString().trim() ?? '';
@@ -334,11 +508,6 @@ class _ReceiptBody extends StatelessWidget {
       final tr = taxRate ?? 11;
       taxAmount = base * (tr / 100);
     }
-
-    final logoName = settings['logoFilename']?.toString().trim().isNotEmpty == true
-        ? settings['logoFilename'].toString().trim()
-        : 'logo.png';
-    final logoUri = Uri.parse(ApiClient.apiOrigin).replace(path: '/public/img/$logoName');
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
@@ -364,14 +533,7 @@ class _ReceiptBody extends StatelessWidget {
                       children: [
                         ClipRRect(
                           borderRadius: BorderRadius.circular(6),
-                          child: Image.network(
-                            logoUri.toString(),
-                            height: 40,
-                            fit: BoxFit.contain,
-                            // Parameter error/stackTrace wajib ada untuk signature Image.errorBuilder.
-                            errorBuilder: (context, error, stackTrace) =>
-                                const Icon(Icons.business, size: 40, color: FieldCollectorColors.primaryContainer),
-                          ),
+                          child: logoWidget,
                         ),
                         const SizedBox(height: 8),
                         Text(company, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: FieldCollectorColors.onSurface)),
@@ -413,6 +575,11 @@ class _ReceiptBody extends StatelessWidget {
               if ((invoice['payment_date']?.toString() ?? '').trim().isNotEmpty)
                 _kv('Tanggal bayar', _fmtIdDate(invoice['payment_date']?.toString())),
               _kv('Metode', _methodLabel(invoice['payment_method']?.toString())),
+              if (discount > 0) ...[
+                _kv('Tagihan', _rupiah(invoiceAmount.round())),
+                _kv('Diskon', '- ${_rupiah(discount)}', valueColor: const Color(0xFFB45309)),
+                _kv('Dibayar', _rupiah(amountPaid), valueColor: const Color(0xFF0D5A16)),
+              ],
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Row(
@@ -455,10 +622,33 @@ class _ReceiptBody extends StatelessWidget {
             color: FieldCollectorColors.primaryContainer,
             borderRadius: BorderRadius.circular(12),
           ),
-          child: Text(
-            'Total tagihan: ${_rupiah(amount)}',
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16),
+          child: Column(
+            children: [
+              if (discount > 0) ...[
+                Text(
+                  'Tagihan: ${_rupiah(invoiceAmount.round())}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 13),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Diskon: -${_rupiah(discount)}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Color(0xFFFFE082), fontWeight: FontWeight.w700, fontSize: 14),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Total dibayar: ${_rupiah(amountPaid)}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 17),
+                ),
+              ] else
+                Text(
+                  'Total tagihan: ${_rupiah(displayTotal)}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16),
+                ),
+            ],
           ),
         ),
         const SizedBox(height: 12),
@@ -509,7 +699,7 @@ class _ReceiptBody extends StatelessWidget {
                       Padding(
                         padding: const EdgeInsets.all(6),
                         child: Text(
-                          _rupiah(base != null && base > 0 ? base.round() : amount.round()),
+                          _rupiah(base != null && base > 0 ? base.round() : invoiceAmount.round()),
                           textAlign: TextAlign.end,
                           style: const TextStyle(fontSize: 12, color: FieldCollectorColors.onSurface),
                         ),
@@ -524,25 +714,48 @@ class _ReceiptBody extends StatelessWidget {
                       Padding(
                         padding: const EdgeInsets.all(6),
                         child: Text(
-                          _rupiah(amount),
+                          _rupiah(displayTotal),
                           textAlign: TextAlign.end,
                           style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: FieldCollectorColors.onSurface),
                         ),
                       ),
                     ],
                   ),
+                  if (discount > 0)
+                    TableRow(
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.all(6),
+                          child: Text('Diskon', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: Color(0xFFB45309))),
+                        ),
+                        const Padding(padding: EdgeInsets.all(6), child: SizedBox.shrink()),
+                        const Padding(padding: EdgeInsets.all(6), child: SizedBox.shrink()),
+                        const Padding(padding: EdgeInsets.all(6), child: SizedBox.shrink()),
+                        Padding(
+                          padding: const EdgeInsets.all(6),
+                          child: Text(
+                            '- ${_rupiah(discount)}',
+                            textAlign: TextAlign.end,
+                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFFB45309)),
+                          ),
+                        ),
+                      ],
+                    ),
                   TableRow(
                     decoration: const BoxDecoration(color: Color(0xFFE8EDF5)),
                     children: [
-                      const Padding(
-                        padding: EdgeInsets.all(6),
-                        child: Text('Subtotal', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: FieldCollectorColors.onSurface)),
+                      Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Text(
+                          discount > 0 ? 'Total dibayar' : 'Subtotal',
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: FieldCollectorColors.onSurface),
+                        ),
                       ),
                       const Padding(padding: EdgeInsets.all(6), child: SizedBox.shrink()),
                       Padding(
                         padding: const EdgeInsets.all(6),
                         child: Text(
-                          _rupiah(base != null && base > 0 ? base.round() : amount.round()),
+                          _rupiah(base != null && base > 0 ? base.round() : invoiceAmount.round()),
                           textAlign: TextAlign.end,
                           style: const TextStyle(fontSize: 11, color: FieldCollectorColors.onSurface),
                         ),
@@ -558,7 +771,7 @@ class _ReceiptBody extends StatelessWidget {
                       Padding(
                         padding: const EdgeInsets.all(6),
                         child: Text(
-                          _rupiah(amount),
+                          _rupiah(displayTotal),
                           textAlign: TextAlign.end,
                           style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: FieldCollectorColors.onSurface),
                         ),

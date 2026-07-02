@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="id">
 <head>
     <%- include('../../partials/hard-reload') %>
@@ -32,8 +32,12 @@
                             <p class="text-muted small mb-0">Statistik Penagihan & Keuangan Real-time</p>
                         </div>
                         
+                        <div class="d-flex gap-2 align-items-center">
+                            <button type="button" id="dashAmountToggle" class="btn btn-outline-secondary btn-sm dash-amount-toggle-btn" title="Tampilkan nominal" aria-label="Tampilkan nominal" aria-pressed="false">
+                                <i class="bi bi-eye" id="dashAmountToggleIcon"></i>
+                            </button>
                         <!-- Desktop Tools -->
-                        <div class="d-none d-lg-flex gap-2">
+                        <div class="d-none d-lg-flex gap-2 align-items-center">
                             <a href="/admin/billing/monthly-summary" class="btn btn-outline-secondary btn-sm">
                                 <i class="bi bi-calendar-event me-1"></i>Summary Bulanan
                             </a>
@@ -48,7 +52,7 @@
                             </a>
                         </div>
                         
-                        <!-- Mobile Dropdown -->
+                        <!-- Mobile Menu -->
                         <div class="dropdown d-lg-none">
                             <button class="btn btn-outline-primary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown">
                                 <i class="bi bi-list me-1"></i>Menu
@@ -60,6 +64,7 @@
                                 <li><hr class="dropdown-divider"></li>
                                 <li><a class="dropdown-item" href="/admin/billing/payment-settings"><i class="bi bi-gear me-2"></i>Settings</a></li>
                             </ul>
+                        </div>
                         </div>
                     </div>
                 </div>
@@ -84,7 +89,7 @@
                             <div class="metric-card-icon">
                                 <i class="bi bi-calendar-check"></i>
                             </div>
-                            <div class="metric-card-value text-success">Rp <%= (stats.monthly_revenue || 0).toLocaleString('id-ID') %></div>
+                            <div class="metric-card-value text-success dash-amount" data-amount="Rp <%= (stats.monthly_revenue || 0).toLocaleString('id-ID') %>">Rp <%= (stats.monthly_revenue || 0).toLocaleString('id-ID') %></div>
                             <div class="metric-card-label">Pendapatan Bulanan</div>
                             <div class="mt-2 small text-muted">
                                 <span class="badge bg-info-subtle text-info"><i class="bi bi-receipt-check me-1"></i><%= stats.paid_monthly_invoices || 0 %> Lunas</span>
@@ -97,10 +102,10 @@
                             <div class="metric-card-icon">
                                 <i class="bi bi-ticket-perforated"></i>
                             </div>
-                            <div class="metric-card-value text-info">Rp <%= (stats.voucher_revenue || 0).toLocaleString('id-ID') %></div>
+                            <div class="metric-card-value text-info dash-amount" data-amount="Rp <%= (stats.voucher_revenue || 0).toLocaleString('id-ID') %>">Rp <%= (stats.voucher_revenue || 0).toLocaleString('id-ID') %></div>
                             <div class="metric-card-label">Pendapatan Voucher</div>
                             <div class="mt-2 small text-muted">
-                                <span class="badge bg-danger-subtle text-danger"><i class="bi bi-exclamation-circle me-1"></i>Rp <%= ((stats.voucher_summary && stats.voucher_summary.pending_revenue) || stats.voucher_unpaid || 0).toLocaleString('id-ID') %> Pending</span>
+                                <span class="badge bg-danger-subtle text-danger"><i class="bi bi-exclamation-circle me-1"></i><span class="dash-amount" data-amount="Rp <%= ((stats.voucher_summary && stats.voucher_summary.pending_revenue) || stats.voucher_unpaid || 0).toLocaleString('id-ID') %>">Rp <%= ((stats.voucher_summary && stats.voucher_summary.pending_revenue) || stats.voucher_unpaid || 0).toLocaleString('id-ID') %></span> Pending</span>
                             </div>
                         </div>
                     </div>
@@ -110,7 +115,7 @@
                             <div class="metric-card-icon">
                                 <i class="bi bi-cash-stack"></i>
                             </div>
-                            <div class="metric-card-value text-primary">Rp <%= (stats.total_revenue || 0).toLocaleString('id-ID') %></div>
+                            <div class="metric-card-value text-primary dash-amount" data-amount="Rp <%= (stats.total_revenue || 0).toLocaleString('id-ID') %>">Rp <%= (stats.total_revenue || 0).toLocaleString('id-ID') %></div>
                             <div class="metric-card-label">Total Pendapatan</div>
                             <div class="mt-2 small text-muted">
                                 <span class="badge bg-primary-subtle text-primary"><i class="bi bi-graph-up me-1"></i><%= stats.paid_invoices || 0 %>/<%= stats.total_invoices || 0 %> Lunas</span>
@@ -144,11 +149,11 @@
                                 <div class="p-3 bg-light rounded-3">
                                     <div class="d-flex justify-content-between mb-2">
                                         <span class="text-muted small">Pendapatan:</span>
-                                        <span class="fw-bold text-success">Rp <%= (stats.monthly_revenue || 0).toLocaleString('id-ID') %></span>
+                                        <span class="fw-bold text-success dash-amount" data-amount="Rp <%= (stats.monthly_revenue || 0).toLocaleString('id-ID') %>">Rp <%= (stats.monthly_revenue || 0).toLocaleString('id-ID') %></span>
                                     </div>
                                     <div class="d-flex justify-content-between">
                                         <span class="text-muted small">Unpaid Amount:</span>
-                                        <span class="fw-bold text-danger">Rp <%= (stats.monthly_belum_lunas_canonical != null ? stats.monthly_belum_lunas_canonical : (stats.monthly_unpaid || 0)).toLocaleString('id-ID') %></span>
+                                        <span class="fw-bold text-danger dash-amount" data-amount="Rp <%= (stats.monthly_belum_lunas_canonical != null ? stats.monthly_belum_lunas_canonical : (stats.monthly_unpaid || 0)).toLocaleString('id-ID') %>">Rp <%= (stats.monthly_belum_lunas_canonical != null ? stats.monthly_belum_lunas_canonical : (stats.monthly_unpaid || 0)).toLocaleString('id-ID') %></span>
                                     </div>
                                 </div>
                             </div>
@@ -178,11 +183,11 @@
                                 <div class="p-3 bg-light rounded-3">
                                     <div class="d-flex justify-content-between mb-2">
                                         <span class="text-muted small">Pendapatan:</span>
-                                        <span class="fw-bold text-success">Rp <%= (stats.voucher_revenue || 0).toLocaleString('id-ID') %></span>
+                                        <span class="fw-bold text-success dash-amount" data-amount="Rp <%= (stats.voucher_revenue || 0).toLocaleString('id-ID') %>">Rp <%= (stats.voucher_revenue || 0).toLocaleString('id-ID') %></span>
                                     </div>
                                     <div class="d-flex justify-content-between">
                                         <span class="text-muted small">Unpaid Amount:</span>
-                                        <span class="fw-bold text-danger">Rp <%= (stats.voucher_unpaid || 0).toLocaleString('id-ID') %></span>
+                                        <span class="fw-bold text-danger dash-amount" data-amount="Rp <%= (stats.voucher_unpaid || 0).toLocaleString('id-ID') %>">Rp <%= (stats.voucher_unpaid || 0).toLocaleString('id-ID') %></span>
                                     </div>
                                 </div>
                             </div>
@@ -231,7 +236,7 @@
                                                         <td>
                                                             <span class="badge bg-primary-subtle text-primary"><%= invoice.display_package_name || invoice.package_name || 'N/A' %></span>
                                                         </td>
-                                                        <td class="fw-bold">Rp <%= parseFloat(invoice.amount).toLocaleString('id-ID') %></td>
+                                                        <td class="fw-bold"><span class="dash-amount" data-amount="Rp <%= parseFloat(invoice.amount).toLocaleString('id-ID') %>">Rp <%= parseFloat(invoice.amount).toLocaleString('id-ID') %></span></td>
                                                         <td>
                                                             <% if (invoice.status === 'paid') { %>
                                                                 <span class="badge bg-success">Lunas</span>
@@ -287,7 +292,7 @@
                                                         </td>
                                                         <td>
                                                             <div class="d-flex flex-column">
-                                                                <span class="fw-bold small">Rp <%= parseFloat(invoice.amount).toLocaleString('id-ID') %></span>
+                                                                <span class="fw-bold small dash-amount" data-amount="Rp <%= parseFloat(invoice.amount).toLocaleString('id-ID') %>">Rp <%= parseFloat(invoice.amount).toLocaleString('id-ID') %></span>
                                                                 <span class="text-danger" style="font-size: 0.7rem;"><%= new Date(invoice.due_date).toLocaleDateString('id-ID') %></span>
                                                             </div>
                                                         </td>
@@ -341,6 +346,7 @@
     <div id="toast-container"></div>
 
     <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+    <script src="/js/dashboard-amount-privacy.js"></script>
     <script>
     // Fungsi toast notification
     function showToast(type, title, message, duration = 5000) {
@@ -389,13 +395,19 @@
                 }
                 
                 const totalRevenueEl = document.querySelector('[title="Total Revenue"]');
-                if (totalRevenueEl && totalRevenueEl.nextElementSibling) {
-                    totalRevenueEl.nextElementSibling.textContent = 'Rp ' + (data.total_revenue || 0).toLocaleString('id-ID');
+                if (totalRevenueEl && totalRevenueEl.nextElementSibling && window.DashboardAmountPrivacy) {
+                    window.DashboardAmountPrivacy.updateAmount(
+                        totalRevenueEl.nextElementSibling,
+                        'Rp ' + (data.total_revenue || 0).toLocaleString('id-ID')
+                    );
                 }
                 
                 const unpaidInvoicesEl = document.querySelector('[title="Unpaid Invoices"]');
-                if (unpaidInvoicesEl && unpaidInvoicesEl.nextElementSibling) {
-                    unpaidInvoicesEl.nextElementSibling.textContent = 'Rp ' + (data.total_unpaid || 0).toLocaleString('id-ID');
+                if (unpaidInvoicesEl && unpaidInvoicesEl.nextElementSibling && window.DashboardAmountPrivacy) {
+                    window.DashboardAmountPrivacy.updateAmount(
+                        unpaidInvoicesEl.nextElementSibling,
+                        'Rp ' + (data.total_unpaid || 0).toLocaleString('id-ID')
+                    );
                 }
                 
                 const totalInvoicesEl = document.querySelector('[title="Total Invoices"]');
@@ -871,14 +883,20 @@
             
             // Update total revenue
             const totalRevenueEl = findElementByText('h3', 'Total Pendapatan');
-            if (totalRevenueEl) {
-                totalRevenueEl.textContent = 'Rp ' + (stats.total_revenue || 0).toLocaleString('id-ID');
+            if (totalRevenueEl && window.DashboardAmountPrivacy) {
+                window.DashboardAmountPrivacy.updateAmount(
+                    totalRevenueEl,
+                    'Rp ' + (stats.total_revenue || 0).toLocaleString('id-ID')
+                );
             }
             
             // Update unpaid amount
             const unpaidAmountEl = findElementByText('h3', 'Tagihan Belum Lunas');
-            if (unpaidAmountEl) {
-                unpaidAmountEl.textContent = 'Rp ' + (stats.total_unpaid || 0).toLocaleString('id-ID');
+            if (unpaidAmountEl && window.DashboardAmountPrivacy) {
+                window.DashboardAmountPrivacy.updateAmount(
+                    unpaidAmountEl,
+                    'Rp ' + (stats.total_unpaid || 0).toLocaleString('id-ID')
+                );
             }
             
             // Update total invoices

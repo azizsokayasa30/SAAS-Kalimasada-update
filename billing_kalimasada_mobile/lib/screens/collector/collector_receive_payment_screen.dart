@@ -57,6 +57,7 @@ class _CollectorReceivePaymentScreenState extends State<CollectorReceivePaymentS
   String _method = 'cash';
   XFile? _proof;
   bool _submitting = false;
+  bool _paymentSucceeded = false;
 
   @override
   void initState() {
@@ -189,6 +190,7 @@ class _CollectorReceivePaymentScreenState extends State<CollectorReceivePaymentS
   }
 
   Future<void> _submit() async {
+    if (_paymentSucceeded || _submitting) return;
     if (_invoices.isNotEmpty && _selectedIds.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Pilih minimal satu tagihan, atau gunakan mode setoran manual jika tidak ada tagihan.')),
@@ -224,7 +226,14 @@ class _CollectorReceivePaymentScreenState extends State<CollectorReceivePaymentS
       final files = <http.MultipartFile>[];
       if (_method == 'transfer' && _proof != null) {
         final p = _proof!;
-        files.add(await http.MultipartFile.fromPath('payment_proof', p.path, filename: p.name));
+        final bytes = await p.readAsBytes();
+        var fname = p.name.trim();
+        if (fname.isEmpty) {
+          fname = 'bukti_transfer.jpg';
+        } else if (!fname.contains('.')) {
+          fname = '$fname.jpg';
+        }
+        files.add(http.MultipartFile.fromBytes('payment_proof', bytes, filename: fname));
       }
       final resp = await ApiClient.postMultipart(
         '/api/mobile-adapter/collector/payment',
@@ -234,22 +243,44 @@ class _CollectorReceivePaymentScreenState extends State<CollectorReceivePaymentS
       final body = ApiClient.decodeJsonObject(resp, debugLabel: 'collector/payment');
       if (!mounted) return;
       if (resp.statusCode == 200 && body['success'] == true) {
+        _paymentSucceeded = true;
         context.read<CollectorProvider>().bumpCustomersReload();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(body['message']?.toString() ?? 'Pembayaran tersimpan')),
         );
         Navigator.of(context).pop(true);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(body['message']?.toString() ?? 'Gagal menyimpan')),
-        );
+        return;
+      }
+      final errMsg = body['message']?.toString() ?? 'Gagal menyimpan';
+      final isDuplicate = resp.statusCode == 409 ||
+          errMsg.toLowerCase().contains('sudah lunas') ||
+          errMsg.toLowerCase().contains('tidak diduplikasi');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            isDuplicate
+                ? '$errMsg\nTutup layar ini dan refresh daftar — jangan kirim ulang.'
+                : errMsg,
+          ),
+          duration: Duration(seconds: isDuplicate ? 6 : 4),
+        ),
+      );
+      if (isDuplicate) {
+        context.read<CollectorProvider>().bumpCustomersReload();
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Gagal mengirim: $e\nJika ragu, refresh daftar tagihan sebelum mencoba lagi.',
+            ),
+            duration: const Duration(seconds: 6),
+          ),
+        );
       }
     } finally {
-      if (mounted) setState(() => _submitting = false);
+      if (mounted && !_paymentSucceeded) setState(() => _submitting = false);
     }
   }
 

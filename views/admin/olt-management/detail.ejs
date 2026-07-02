@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <%- include('../../partials/hard-reload') %>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><%= title %> - Admin Portal</title>
+    <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+    <link href="/css/theme.css" rel="stylesheet">
+    <link href="/css/admin-mobile.css" rel="stylesheet">
+    <%- include('../../partials/theme-head') %>
+</head>
+<body>
+<div class="container-fluid">
+    <div class="row">
+        <%- include('../../partials/admin-responsive-sidebar', { page: 'olt-management' }) %>
+        <main class="col-md-10 main-content ms-sm-auto">
+            <div class="mt-4">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <div>
+                        <h2><i class="bi bi-hdd-network"></i> <%= olt.name %></h2>
+                        <p class="text-muted mb-0"><%= olt.vendor %> <%= olt.model || '' %> - <%= olt.ip_address %>:<%= olt.port %></p>
+                    </div>
+                    <div>
+                        <button class="btn btn-outline-success" onclick="postAction('/admin/api/olt-management/olts/<%= olt.id %>/test')">Test Connection</button>
+                        <button class="btn btn-primary js-sync-olt" data-url="/admin/api/olt-management/olts/<%= olt.id %>/sync" data-name="<%= olt.name %>">Sync Manual</button>
+                    </div>
+                </div>
+
+                <% const info = olt.system_info || {}; const online = onus.filter(o => o.status === 'ONLINE').length; const offline = onus.filter(o => ['OFFLINE','LOS','POWER_OFF','DYING_GASP','DISABLED','AUTH_FAILED'].includes(o.status)).length; %>
+                <div class="row g-3 mb-4">
+                    <div class="col-md-3"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Hostname</small><h5><%= info.hostname || '-' %></h5></div></div></div>
+                    <div class="col-md-3"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Serial Number</small><h5><%= info.serial_number || '-' %></h5></div></div></div>
+                    <div class="col-md-3"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Firmware</small><h5><%= info.firmware || '-' %></h5></div></div></div>
+                    <div class="col-md-3"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Uptime</small><h5><%= info.uptime || '-' %></h5></div></div></div>
+                    <div class="col-md-2"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">CPU</small><h5><%= info.cpu_usage ?? '-' %>%</h5></div></div></div>
+                    <div class="col-md-2"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Memory</small><h5><%= info.memory_usage ?? '-' %>%</h5></div></div></div>
+                    <div class="col-md-2"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Temperature</small><h5><%= info.temperature ?? '-' %> C</h5></div></div></div>
+                    <div class="col-md-2"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Total ONU</small><h5><%= onus.length %></h5></div></div></div>
+                    <div class="col-md-2"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Online</small><h5 class="text-success"><%= online %></h5></div></div></div>
+                    <div class="col-md-2"><div class="card border-0 shadow-sm"><div class="card-body"><small class="text-muted">Offline</small><h5 class="text-danger"><%= offline %></h5></div></div></div>
+                </div>
+
+                <div class="card border-0 shadow-sm">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="mb-0">ONU di OLT Ini</h5>
+                            <span class="badge bg-light text-dark border"><%= onus.length %> ONU</span>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle">
+                                <thead><tr><th>ONU ID</th><th>SN/MAC</th><th>Nama</th><th>PON</th><th>Status</th><th>RX</th><th>TX</th><th>Distance</th><th>Last Seen</th><th>Action</th></tr></thead>
+                                <tbody>
+                                <% if (!onus.length) { %><tr><td colspan="10" class="text-center text-muted py-4">Belum ada ONU tersinkron dari OLT.</td></tr><% } %>
+                                <%
+                                const formatMacDisplay = (onu) => {
+                                    if (onu.mac_address) return String(onu.mac_address).toUpperCase();
+                                    const hex = String(onu.onu_sn || '').replace(/[^a-fA-F0-9]/g, '').toUpperCase();
+                                    return hex.length === 12 ? hex.match(/.{1,2}/g).join(':') : (onu.onu_sn || '-');
+                                };
+                                %>
+                                <% onus.forEach((onu) => { %>
+                                    <tr>
+                                        <td><%= onu.onu_id || onu.onu_index || onu.id %></td>
+                                        <td>
+                                            <span class="fw-semibold"><%= formatMacDisplay(onu) %></span>
+                                            <% if (onu.onu_sn) { %><br><small class="text-muted">SN: <%= onu.onu_sn %></small><% } %>
+                                        </td>
+                                        <td><%= onu.onu_name || '-' %></td>
+                                        <td><%= [onu.slot, onu.pon].filter(Boolean).join('/') || '-' %></td>
+                                        <td><span class="badge bg-<%= onu.status === 'ONLINE' ? 'success' : (onu.status === 'LOS' ? 'danger' : 'secondary') %>"><%= onu.status %></span></td>
+                                        <td><span class="text-<%= onu.signal_quality === 'green' ? 'success' : (onu.signal_quality === 'yellow' ? 'warning' : 'danger') %>"><%= onu.rx_power ?? '-' %></span></td>
+                                        <td><%= onu.tx_power ?? '-' %></td>
+                                        <td><%= onu.distance ?? '-' %></td>
+                                        <td><%= onu.last_seen || '-' %></td>
+                                        <td class="text-nowrap">
+                                            <button class="btn btn-sm btn-outline-secondary js-edit-onu"
+                                                    data-id="<%= onu.id %>"
+                                                    data-name="<%= String(onu.onu_name || '').replace(/"/g, '&quot;') %>"
+                                                    data-model="<%= String(onu.model || '').replace(/"/g, '&quot;') %>"
+                                                    data-ip="<%= String(onu.ip_address || '').replace(/"/g, '&quot;') %>">Edit</button>
+                                            <button class="btn btn-sm btn-outline-primary js-onu-action" data-url="/admin/api/olt-management/onus/<%= onu.id %>/refresh">Refresh</button>
+                                            <button class="btn btn-sm btn-outline-warning js-onu-action" data-url="/admin/api/olt-management/onus/<%= onu.id %>/disable">Disable</button>
+                                            <button class="btn btn-sm btn-outline-success js-onu-action" data-url="/admin/api/olt-management/onus/<%= onu.id %>/enable">Enable</button>
+                                            <button class="btn btn-sm btn-outline-danger js-onu-action" data-url="/admin/api/olt-management/onus/<%= onu.id %>/reboot">Reboot</button>
+                                            <button class="btn btn-sm btn-danger js-unregister-onu"
+                                                    data-id="<%= onu.id %>"
+                                                    data-name="<%= String(onu.onu_name || '').replace(/"/g, '&quot;') %>"
+                                                    data-sn="<%= String(onu.onu_sn || '').replace(/"/g, '&quot;') %>"
+                                                    data-index="<%= String(onu.onu_index || '').replace(/"/g, '&quot;') %>">Unregister</button>
+                                        </td>
+                                    </tr>
+                                <% }) %>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="modal fade" id="unregisterOnuModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content border-danger">
+            <form id="unregisterOnuForm">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title">Unregister ONU dari OLT Fisik</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="id">
+                    <div class="alert alert-danger">
+                        Aksi ini akan menghapus ONT/ONU dari konfigurasi OLT fisik dan bisa memutus pelanggan.
+                    </div>
+                    <div class="mb-2"><strong id="unregisterOnuName">-</strong></div>
+                    <div class="small text-muted mb-3">
+                        SN: <span id="unregisterOnuSn">-</span><br>
+                        Index: <span id="unregisterOnuIndex">-</span>
+                    </div>
+                    <label class="form-label">Ketik SN, Nama, atau ONU Index untuk konfirmasi</label>
+                    <input name="confirmation" class="form-control" required autocomplete="off">
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+                    <button class="btn btn-danger">Unregister dari OLT</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="syncProgressModal" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Progress Sync OLT</h5>
+            </div>
+            <div class="modal-body">
+                <div class="mb-2 fw-semibold" id="syncOltName">Menyiapkan sync...</div>
+                <div class="progress mb-3" style="height: 18px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" id="syncProgressBar" style="width: 15%">Queued</div>
+                </div>
+                <div class="small text-muted mb-3" id="syncProgressMessage">Job sync sedang dibuat.</div>
+                <div class="row g-2 text-center d-none" id="syncStats">
+                    <div class="col-3"><div class="border rounded p-2"><small>PON</small><strong class="d-block" id="syncPonCount">0</strong></div></div>
+                    <div class="col-3"><div class="border rounded p-2"><small>ONU</small><strong class="d-block" id="syncOnuCount">0</strong></div></div>
+                    <div class="col-3"><div class="border rounded p-2"><small>Online</small><strong class="d-block text-success" id="syncOnlineCount">0</strong></div></div>
+                    <div class="col-3"><div class="border rounded p-2"><small>Offline</small><strong class="d-block text-danger" id="syncOfflineCount">0</strong></div></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary d-none" id="syncCloseButton" data-bs-dismiss="modal">Tutup</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="editOnuModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form id="editOnuForm">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit ONU</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" name="id">
+                    <div class="mb-3">
+                        <label class="form-label">Nama ONU</label>
+                        <input name="onu_name" class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Model</label>
+                        <input name="model" class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">IP Address</label>
+                        <input name="ip_address" class="form-control">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+                    <button class="btn btn-primary">Simpan</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script>
+async function postAction(url) {
+    const res = await fetch(url, { method: 'POST' });
+    const data = await res.json();
+    alert(data.success ? 'Action queued/success' : (data.message || data.error));
+    if (data.success) location.reload();
+}
+function setSyncProgress(status, message, stats = null) {
+    const bar = document.getElementById('syncProgressBar');
+    const closeButton = document.getElementById('syncCloseButton');
+    const config = {
+        queued: ['25%', 'Menunggu', 'bg-info', true],
+        running: ['60%', 'Running', 'bg-primary', true],
+        completed: ['100%', 'Selesai', 'bg-success', false],
+        failed: ['100%', 'Gagal', 'bg-danger', false]
+    }[status] || ['35%', status || 'Status', 'bg-secondary', true];
+
+    bar.style.width = config[0];
+    bar.textContent = config[1];
+    bar.className = `progress-bar progress-bar-striped ${config[3] ? 'progress-bar-animated' : ''} ${config[2]}`;
+    document.getElementById('syncProgressMessage').textContent = message;
+    closeButton.classList.toggle('d-none', config[3]);
+
+    if (stats) {
+        document.getElementById('syncStats').classList.remove('d-none');
+        document.getElementById('syncPonCount').textContent = stats.pon_count || 0;
+        document.getElementById('syncOnuCount').textContent = stats.onu_count || 0;
+        document.getElementById('syncOnlineCount').textContent = stats.online_count || 0;
+        document.getElementById('syncOfflineCount').textContent = stats.offline_count || 0;
+    }
+}
+async function pollSyncJob(jobId) {
+    const res = await fetch(`/admin/api/olt-management/sync-jobs/${jobId}`);
+    const data = await res.json();
+    if (!data.success) {
+        setSyncProgress('failed', data.message || data.error || 'Gagal membaca status sync.');
+        return;
+    }
+
+    const status = data.data.status;
+    if (status === 'completed') {
+        setSyncProgress('completed', 'Sync selesai. Halaman akan diperbarui otomatis.', data.data.stats);
+        setTimeout(() => location.reload(), 1500);
+        return;
+    }
+    if (status === 'failed') {
+        setSyncProgress('failed', data.data.error_message || 'Sync gagal.');
+        return;
+    }
+
+    const attempts = data.data.job?.attempts || 0;
+    const text = status === 'running'
+        ? `Sedang membaca data OLT... attempt ${attempts}. Untuk Hioso bisa memakan waktu 1-2 menit.`
+        : 'Job masuk antrian dan akan segera diproses worker.';
+    setSyncProgress(status, text);
+    setTimeout(() => pollSyncJob(jobId), 2000);
+}
+async function syncOlt(button) {
+    const modal = new bootstrap.Modal(document.getElementById('syncProgressModal'));
+    document.getElementById('syncOltName').textContent = button.dataset.name || 'OLT';
+    document.getElementById('syncStats').classList.add('d-none');
+    document.getElementById('syncCloseButton').classList.add('d-none');
+    setSyncProgress('queued', 'Mengirim job sync ke queue...');
+    modal.show();
+
+    const res = await fetch(button.dataset.url, { method: 'POST' });
+    const data = await res.json();
+    if (!data.success) {
+        setSyncProgress('failed', data.message || data.error || 'Gagal membuat job sync.');
+        return;
+    }
+    pollSyncJob(data.data.job_id);
+}
+document.querySelectorAll('.js-sync-olt').forEach((button) => {
+    button.addEventListener('click', () => syncOlt(button));
+});
+document.querySelectorAll('.js-onu-action').forEach((button) => {
+    button.addEventListener('click', () => postAction(button.dataset.url));
+});
+document.querySelectorAll('.js-unregister-onu').forEach((button) => {
+    button.addEventListener('click', () => {
+        const form = document.getElementById('unregisterOnuForm');
+        form.id.value = button.dataset.id;
+        form.confirmation.value = '';
+        document.getElementById('unregisterOnuName').textContent = button.dataset.name || '-';
+        document.getElementById('unregisterOnuSn').textContent = button.dataset.sn || '-';
+        document.getElementById('unregisterOnuIndex').textContent = button.dataset.index || '-';
+        new bootstrap.Modal(document.getElementById('unregisterOnuModal')).show();
+    });
+});
+document.getElementById('unregisterOnuForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.target;
+    const res = await fetch(`/admin/api/olt-management/onus/${form.id.value}/unregister`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmation: form.confirmation.value })
+    });
+    const data = await res.json();
+    alert(data.success ? (data.data?.message || 'Unregister command sent') : (data.message || data.error));
+    if (data.success) location.reload();
+});
+document.querySelectorAll('.js-edit-onu').forEach((button) => {
+    button.addEventListener('click', () => {
+        const form = document.getElementById('editOnuForm');
+        form.id.value = button.dataset.id;
+        form.onu_name.value = button.dataset.name || '';
+        form.model.value = button.dataset.model || '';
+        form.ip_address.value = button.dataset.ip || '';
+        new bootstrap.Modal(document.getElementById('editOnuModal')).show();
+    });
+});
+document.getElementById('editOnuForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.target;
+    const id = form.id.value;
+    const payload = Object.fromEntries(new FormData(form).entries());
+    delete payload.id;
+    const res = await fetch(`/admin/api/olt-management/onus/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    alert(data.success ? 'ONU tersimpan' : (data.message || data.error));
+    if (data.success) location.reload();
+});
+</script>
+</body>
+</html>

@@ -179,6 +179,8 @@ class _CollectorSettlementTabState extends State<CollectorSettlementTab> with Au
             final done = (p['status']?.toString() ?? '') == 'completed';
             final amt = _netPaidDisplay(p);
             final cust = p['customer_name']?.toString() ?? 'Pelanggan';
+            final method = (p['payment_method']?.toString() ?? '').toLowerCase();
+            final isTransfer = method.contains('transfer');
             final at = p['collected_at']?.toString();
             String when = '—';
             if (at != null) {
@@ -196,8 +198,21 @@ class _CollectorSettlementTabState extends State<CollectorSettlementTab> with Au
                   child: Icon(done ? Icons.check : Icons.schedule, color: done ? FieldCollectorColors.onSecondaryContainer : FieldCollectorColors.onSurfaceVariant),
                 ),
                 title: Text(_rupiah(amt), style: const TextStyle(fontWeight: FontWeight.w700)),
-                subtitle: Text('$cust · $when', maxLines: 2, overflow: TextOverflow.ellipsis),
-                trailing: Text(done ? 'Selesai' : 'Pending', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: done ? FieldCollectorColors.onSecondaryContainer : FieldCollectorColors.onSurfaceVariant)),
+                subtitle: Text(
+                  isTransfer ? '$cust · $when · Transfer ke kantor' : '$cust · $when',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: Text(
+                  isTransfer ? 'Kantor' : (done ? 'Selesai' : 'Pending'),
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: isTransfer
+                        ? FieldCollectorColors.primaryContainer
+                        : (done ? FieldCollectorColors.onSecondaryContainer : FieldCollectorColors.onSurfaceVariant),
+                  ),
+                ),
               ),
             );
           }),

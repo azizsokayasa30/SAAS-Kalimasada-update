@@ -4,6 +4,16 @@ const performanceMonitor = require('./performanceMonitor');
 
 const settingsPath = path.join(process.cwd(), 'settings.json');
 const settingsTemplatePath = path.join(process.cwd(), 'settings.server.template.json');
+const dataSettingsPath = path.join(process.cwd(), 'data', 'settings.json');
+const settingsBackupDir = path.join(process.cwd(), 'data');
+const MIN_HEALTHY_SETTINGS_KEYS = 20;
+const REQUIRED_PRODUCTION_SETTINGS = [
+  'admin_username',
+  'admin_password',
+  'server_host',
+  'server_port',
+  'whatsapp_active_provider'
+];
 
 function ensureSettingsFile() {
   try {
@@ -29,13 +39,92 @@ let lastModified = null;
 let cacheExpiry = null;
 const CACHE_TTL = 5000; // 5 detik cache
 
+function isHealthySettings(settings) {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return false;
+  const keys = Object.keys(settings);
+  if (keys.length < MIN_HEALTHY_SETTINGS_KEYS) return false;
+  return REQUIRED_PRODUCTION_SETTINGS.every((key) => settings[key] !== undefined && settings[key] !== '');
+}
+
+function readJsonFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    if (!raw || !raw.trim()) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function listSettingsRecoveryCandidates() {
+  const candidates = [];
+  if (fs.existsSync(dataSettingsPath)) candidates.push(dataSettingsPath);
+
+  try {
+    if (fs.existsSync(settingsBackupDir)) {
+      fs.readdirSync(settingsBackupDir)
+        .filter((file) => file.startsWith('settings.json.bak-'))
+        .map((file) => path.join(settingsBackupDir, file))
+        .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)
+        .forEach((filePath) => candidates.push(filePath));
+    }
+  } catch (e) {
+    console.warn(`[settings] Gagal list backup settings: ${e.message}`);
+  }
+
+  return candidates;
+}
+
+function recoverHealthySettings(reason) {
+  for (const candidate of listSettingsRecoveryCandidates()) {
+    const recovered = readJsonFile(candidate);
+    if (!isHealthySettings(recovered)) continue;
+
+    try {
+      fs.mkdirSync(settingsBackupDir, { recursive: true });
+      if (fs.existsSync(settingsPath)) {
+        const corruptBackup = path.join(settingsBackupDir, `settings.json.corrupt-${Date.now()}`);
+        fs.copyFileSync(settingsPath, corruptBackup);
+      }
+      fs.writeFileSync(settingsPath, JSON.stringify(recovered, null, 2), 'utf-8');
+      console.warn(`[settings] settings.json dipulihkan dari ${path.basename(candidate)} (${reason})`);
+      return recovered;
+    } catch (e) {
+      console.error(`[settings] Gagal memulihkan settings.json: ${e.message}`);
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function cleanupSettingsBackups(keep = 50) {
+  try {
+    if (!fs.existsSync(settingsBackupDir)) return;
+    const backups = fs.readdirSync(settingsBackupDir)
+      .filter((file) => file.startsWith('settings.json.bak-'))
+      .map((file) => path.join(settingsBackupDir, file))
+      .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+
+    backups.slice(keep).forEach((filePath) => {
+      try {
+        fs.unlinkSync(filePath);
+      } catch (_) {}
+    });
+  } catch (e) {
+    console.warn(`[settings] Cleanup backup settings gagal: ${e.message}`);
+  }
+}
+
 function backupSettingsFile() {
   try {
     if (!fs.existsSync(settingsPath)) return;
-    const backupDir = path.join(process.cwd(), 'data');
-    fs.mkdirSync(backupDir, { recursive: true });
-    const backupPath = path.join(backupDir, `settings.json.bak-${Date.now()}`);
+    fs.mkdirSync(settingsBackupDir, { recursive: true });
+    const backupPath = path.join(settingsBackupDir, `settings.json.bak-${Date.now()}`);
     fs.copyFileSync(settingsPath, backupPath);
+    cleanupSettingsBackups();
   } catch (e) {
     console.warn(`[settings] Backup settings.json gagal: ${e.message}`);
   }
@@ -44,14 +133,25 @@ function backupSettingsFile() {
 /** Baca settings.json dari disk (abaikan cache) — dipakai sebelum tulis agar tidak menimpa key lain. */
 function readSettingsFromDisk() {
   try {
-    if (!fs.existsSync(settingsPath)) return {};
-    const raw = fs.readFileSync(settingsPath, 'utf-8');
-    if (!raw || !raw.trim()) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    if (!fs.existsSync(settingsPath)) {
+      return recoverHealthySettings('file hilang') || {};
+    }
+
+    const parsed = readJsonFile(settingsPath);
+    if (!parsed) {
+      return recoverHealthySettings('file kosong/corrupt') || {};
+    }
+
+    if (!isHealthySettings(parsed)) {
+      const recovered = recoverHealthySettings('file tidak lengkap');
+      if (recovered) return recovered;
+    }
+
+    return parsed;
   } catch (e) {
     console.error(`[settings] Gagal parse settings.json: ${e.message}`);
-    return settingsCache && typeof settingsCache === 'object' ? { ...settingsCache } : {};
+    return recoverHealthySettings('parse error') ||
+      (settingsCache && typeof settingsCache === 'object' ? { ...settingsCache } : {});
   }
 }
 

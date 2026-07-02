@@ -94,6 +94,25 @@ class _CollectorCustomerDetailPanelState
     return null;
   }
 
+  int? _latestPaidInvoiceId() {
+    Map<String, dynamic>? best;
+    DateTime? bestAt;
+    for (final inv in _history) {
+      final st = (inv['status']?.toString() ?? '').toLowerCase();
+      if (st != 'paid') continue;
+      final raw = inv['payment_date']?.toString() ??
+          inv['updated_at']?.toString() ??
+          inv['created_at']?.toString();
+      final dt = raw != null ? DateTime.tryParse(raw) : null;
+      if (best == null || (dt != null && (bestAt == null || dt.isAfter(bestAt)))) {
+        best = inv;
+        bestAt = dt;
+      }
+    }
+    if (best == null) return null;
+    return int.tryParse(best['id']?.toString() ?? '');
+  }
+
   String _formatDueDateLabel(String? iso) {
     if (iso == null || iso.isEmpty) return '—';
     final d = DateTime.tryParse(iso);
@@ -746,10 +765,13 @@ class _CollectorCustomerDetailPanelState
                     Navigator.pop(context);
                     await Future<void>.delayed(Duration.zero);
                     if (!parent.mounted) return;
+                    final paidInvId = _latestPaidInvoiceId();
                     await Navigator.of(parent).push<void>(
                       MaterialPageRoute<void>(
-                        builder: (_) =>
-                            CollectorInvoiceReceiptScreen(customerId: cid),
+                        builder: (_) => CollectorInvoiceReceiptScreen(
+                          customerId: cid,
+                          invoiceId: paidInvId,
+                        ),
                       ),
                     );
                   },

@@ -11,7 +11,7 @@ const bcrypt = require('bcrypt');
 const { getSetting } = require('../config/settingsManager');
 const { collectorAuth } = require('./collectorAuth');
 const billingManager = require('../config/billing');
-const { submitCollectorPayment, collectorPaymentMulter } = require('../utils/collectorPaymentSubmit');
+const { submitCollectorPayment, collectorPaymentMulterSingle } = require('../utils/collectorPaymentSubmit');
 
 function collectorCustomerIsIsolir(c) {
     return String(c.status || '')
@@ -536,7 +536,7 @@ router.post('/api/profile/update-password', collectorAuth, async (req, res) => {
 });
 
 // Submit payment
-router.post('/api/payment', collectorAuth, collectorPaymentMulter.single('payment_proof'), async (req, res) => {
+router.post('/api/payment', collectorAuth, collectorPaymentMulterSingle('payment_proof'), async (req, res) => {
     try {
         const collectorId = req.collector.id;
         const { customer_id, payment_amount, payment_method, notes, invoice_ids, discount_amount } = req.body;
@@ -562,9 +562,10 @@ router.post('/api/payment', collectorAuth, collectorPaymentMulter.single('paymen
 
         res.json({
             success: true,
-            message: 'Payment recorded successfully',
+            message: result.message || 'Payment recorded successfully',
             payment_id: result.payment_id,
-            commission_amount: result.commission_amount
+            commission_amount: result.commission_amount,
+            already_recorded: !!result.already_recorded
         });
     } catch (error) {
         console.error('Error recording payment:', error);

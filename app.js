@@ -141,6 +141,7 @@ logger.info(`⏰ Application timezone confirmed: ${process.env.TZ} (WIB - Waktu 
 
 // Import invoice scheduler
 const invoiceScheduler = require('./config/scheduler');
+const oltSyncScheduler = require('./services/olt/OltSyncScheduler');
 
 // Bersihkan backup database lama — sisakan 3 file terbaru
 try {
@@ -210,6 +211,7 @@ const technicianSync = {
 
 // Start technician sync service
 technicianSync.start();
+oltSyncScheduler.start();
 
 // Import collector sync service
 const collectorSync = {
@@ -583,6 +585,7 @@ const apiSettingsRouter = require('./routes/api/settings');
 const apiCollectorsRouter = require('./routes/api/collectors');
 const apiSystemRouter = require('./routes/api/system');
 const apiPublicEndpointRouter = require('./routes/api/public-endpoint');
+const apiOltsRouter = require('./routes/api/olts');
 const customerPortalV1Router = require('./routes/api/customerPortalV1');
 const unifiedAuthRouter = require('./routes/unifiedAuth');
 const managementPortalRouter = require('./routes/managementPortal');
@@ -902,6 +905,9 @@ app.use('/admin/voucher-pricing', blockTechnicianAccess, adminAuth, adminVoucher
 const adminCableNetworkRouter = require('./routes/adminCableNetwork');
 app.use('/admin/cable-network', blockTechnicianAccess, adminAuth, adminCableNetworkRouter);
 
+const adminOltManagementRouter = require('./routes/adminOltManagement');
+app.use('/admin', blockTechnicianAccess, adminAuth, adminOltManagementRouter);
+
 // Import dan gunakan route adminCollectors
 const adminCollectorsRouter = require('./routes/adminCollectors');
 app.use('/admin/collectors', blockTechnicianAccess, adminCollectorsRouter);
@@ -1063,6 +1069,7 @@ app.use('/api/settings', apiSettingsRouter);
 app.use('/api/collectors', apiCollectorsRouter);
 app.use('/api/system', apiSystemRouter);
 app.use('/api/public', apiPublicEndpointRouter);
+app.use('/api', apiOltsRouter);
 
 // Import dan gunakan route Wablas webhook
 try {

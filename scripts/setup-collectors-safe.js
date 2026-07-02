@@ -166,26 +166,30 @@ async function setupCollectorsSafe() {
         }
         console.log('✅ Triggers created');
         
-        // Insert sample data
-        console.log('👥 Inserting sample collectors...');
-        const sampleCollectors = [
-            ['Ahmad Suryadi', '081234567890', 'ahmad@example.com', 'Jl. Merdeka No. 123, Jakarta', 5.00],
-            ['Budi Santoso', '081234567891', 'budi@example.com', 'Jl. Sudirman No. 456, Jakarta', 5.00],
-            ['Citra Dewi', '081234567892', 'citra@example.com', 'Jl. Thamrin No. 789, Jakarta', 5.00]
-        ];
-        
-        for (const collector of sampleCollectors) {
-            await new Promise((resolve, reject) => {
-                db.run(`
-                    INSERT OR IGNORE INTO collectors (name, phone, email, address, commission_rate) 
-                    VALUES (?, ?, ?, ?, ?)
-                `, collector, (err) => {
-                    if (err) reject(err);
-                    else resolve();
+        const seedDemo = process.argv.includes('--seed');
+        if (seedDemo) {
+            console.log('👥 Inserting sample collectors (--seed)...');
+            const sampleCollectors = [
+                ['Ahmad Suryadi', '081234567890', 'ahmad@example.com', 'Jl. Merdeka No. 123, Jakarta', 5.00],
+                ['Budi Santoso', '081234567891', 'budi@example.com', 'Jl. Sudirman No. 456, Jakarta', 5.00],
+                ['Citra Dewi', '081234567892', 'citra@example.com', 'Jl. Thamrin No. 789, Jakarta', 5.00]
+            ];
+
+            for (const collector of sampleCollectors) {
+                await new Promise((resolve, reject) => {
+                    db.run(`
+                        INSERT OR IGNORE INTO collectors (name, phone, email, address, commission_rate) 
+                        VALUES (?, ?, ?, ?, ?)
+                    `, collector, (err) => {
+                        if (err) reject(err);
+                        else resolve();
+                    });
                 });
-            });
+            }
+            console.log('✅ Sample collectors inserted');
+        } else {
+            console.log('ℹ️  Tanpa data demo. Untuk sample kolektor: node scripts/setup-collectors-safe.js --seed');
         }
-        console.log('✅ Sample collectors inserted');
         
         // Verify setup
         const finalTables = await new Promise((resolve, reject) => {

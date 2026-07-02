@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <%- include('../../partials/hard-reload') %>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><%= title %> - Admin Portal</title>
+    <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+    <link href="/css/theme.css" rel="stylesheet">
+    <link href="/css/admin-mobile.css" rel="stylesheet">
+    <%- include('../../partials/theme-head') %>
+    <style>
+        .olt-stat { border: 0; border-radius: 14px; color: #fff; box-shadow: 0 6px 16px rgba(0,0,0,.12); }
+        .olt-stat .value { font-size: 1.8rem; font-weight: 800; }
+        .bg-olt-a { background: linear-gradient(135deg,#2563eb,#38bdf8); }
+        .bg-olt-b { background: linear-gradient(135deg,#16a34a,#4ade80); }
+        .bg-olt-c { background: linear-gradient(135deg,#7c3aed,#a78bfa); }
+        .bg-olt-d { background: linear-gradient(135deg,#dc2626,#fb7185); }
+        .olt-device-card { border: 0; border-radius: 14px; box-shadow: 0 6px 16px rgba(0,0,0,.08); height: 100%; }
+        .olt-device-card .metric { border-radius: 10px; background: rgba(148, 163, 184, .12); padding: .65rem; }
+        .olt-device-card .metric strong { display: block; font-size: 1.15rem; }
+        .olt-actions { border-top: 1px solid rgba(148, 163, 184, .25); padding-top: .85rem; }
+        .json-area { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; min-height: 110px; }
+    </style>
+</head>
+<body>
+<div class="container-fluid">
+    <div class="row">
+        <%- include('../../partials/admin-responsive-sidebar', { page: 'olt-management' }) %>
+        <main class="col-md-10 main-content ms-sm-auto">
+            <div class="mt-4">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <div>
+                        <h2><i class="bi bi-hdd-network"></i> OLT Management</h2>
+                        <p class="text-muted mb-0">Monitoring dan manajemen OLT GPON multi-vendor dari data aktual perangkat.</p>
+                    </div>
+                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#oltModal" onclick="resetOltForm()">
+                        <i class="bi bi-plus-lg"></i> Tambah OLT
+                    </button>
+                </div>
+
+                <div class="row g-3 mb-4">
+                    <div class="col-6 col-lg-3"><div class="card olt-stat bg-olt-a"><div class="card-body"><div>Total OLT</div><div class="value"><%= dashboard.stats.total_olts || 0 %></div></div></div></div>
+                    <div class="col-6 col-lg-3"><div class="card olt-stat bg-olt-b"><div class="card-body"><div>Total ONU</div><div class="value"><%= dashboard.stats.total_onus || 0 %></div></div></div></div>
+                    <div class="col-6 col-lg-3"><div class="card olt-stat bg-olt-c"><div class="card-body"><div>ONU Online</div><div class="value"><%= dashboard.stats.onu_online || 0 %></div></div></div></div>
+                    <div class="col-6 col-lg-3"><div class="card olt-stat bg-olt-d"><div class="card-body"><div>ONU Offline</div><div class="value"><%= dashboard.stats.onu_offline || 0 %></div></div></div></div>
+                </div>
+
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h5 class="mb-0">Daftar OLT</h5>
+                    <a href="/admin/olt-management/onus" class="btn btn-outline-primary btn-sm">Lihat Semua ONU</a>
+                </div>
+                <% if (!olts.length) { %>
+                    <div class="card border-0 shadow-sm"><div class="card-body text-center text-muted py-4">Belum ada OLT. Tambahkan OLT terlebih dahulu.</div></div>
+                <% } %>
+                <div class="row g-3">
+                    <% olts.forEach((olt) => { %>
+                        <div class="col-md-6 col-xl-4">
+                            <div class="card olt-device-card">
+                                <div class="card-body">
+                                    <div class="d-flex justify-content-between align-items-start mb-3">
+                                        <div>
+                                            <h5 class="mb-1"><%= olt.name %></h5>
+                                            <div class="text-muted small"><%= olt.vendor %> <%= olt.model || '' %></div>
+                                        </div>
+                                        <span class="badge bg-<%= olt.last_connection_status === 'connected' ? 'success' : (olt.last_connection_status === 'error' ? 'danger' : 'secondary') %>"><%= olt.last_connection_status || olt.status %></span>
+                                    </div>
+                                    <div class="mb-3">
+                                        <div><i class="bi bi-router"></i> <strong class="d-inline"><%= olt.ip_address %>:<%= olt.port %></strong></div>
+                                        <div class="text-muted"><i class="bi bi-geo-alt"></i> <%= olt.location || 'Lokasi belum diisi' %></div>
+                                    </div>
+                                    <div class="row g-2 mb-3 text-center">
+                                        <div class="col-4"><div class="metric"><small>Total ONU</small><strong><%= olt.total_onu || 0 %></strong></div></div>
+                                        <div class="col-4"><div class="metric"><small>Online</small><strong class="text-success"><%= olt.online_onu || 0 %></strong></div></div>
+                                        <div class="col-4"><div class="metric"><small>Offline</small><strong class="text-danger"><%= olt.offline_onu || 0 %></strong></div></div>
+                                    </div>
+                                    <div class="text-muted small mb-3">Last Sync: <%= olt.last_sync || '-' %></div>
+                                    <div class="olt-actions d-flex flex-wrap gap-2">
+                                        <button class="btn btn-sm btn-outline-secondary js-edit-olt" data-olt="<%- encodeURIComponent(JSON.stringify(olt)) %>">Edit</button>
+                                        <button class="btn btn-sm btn-outline-danger js-delete-olt" data-id="<%= olt.id %>">Hapus</button>
+                                        <button class="btn btn-sm btn-outline-success js-post-action" data-url="/admin/api/olt-management/olts/<%= olt.id %>/test">Test</button>
+                                        <button class="btn btn-sm btn-outline-primary js-sync-olt" data-url="/admin/api/olt-management/olts/<%= olt.id %>/sync" data-name="<%= olt.name %>">Sync</button>
+                                        <a class="btn btn-sm btn-primary ms-auto" href="/admin/olt-management/<%= olt.id %>">Masuk</a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    <% }) %>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="modal fade" id="syncProgressModal" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Progress Sync OLT</h5>
+            </div>
+            <div class="modal-body">
+                <div class="mb-2 fw-semibold" id="syncOltName">Menyiapkan sync...</div>
+                <div class="progress mb-3" style="height: 18px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" id="syncProgressBar" style="width: 15%">Queued</div>
+                </div>
+                <div class="small text-muted mb-3" id="syncProgressMessage">Job sync sedang dibuat.</div>
+                <div class="row g-2 text-center d-none" id="syncStats">
+                    <div class="col-3"><div class="border rounded p-2"><small>PON</small><strong class="d-block" id="syncPonCount">0</strong></div></div>
+                    <div class="col-3"><div class="border rounded p-2"><small>ONU</small><strong class="d-block" id="syncOnuCount">0</strong></div></div>
+                    <div class="col-3"><div class="border rounded p-2"><small>Online</small><strong class="d-block text-success" id="syncOnlineCount">0</strong></div></div>
+                    <div class="col-3"><div class="border rounded p-2"><small>Offline</small><strong class="d-block text-danger" id="syncOfflineCount">0</strong></div></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary d-none" id="syncCloseButton" data-bs-dismiss="modal">Tutup</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="oltModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <form id="oltForm">
+                <div class="modal-header"><h5 class="modal-title" id="oltModalTitle">Tambah OLT</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <input type="hidden" name="id">
+                        <div class="col-md-4"><label class="form-label">Nama OLT</label><input name="name" class="form-control" required></div>
+                        <div class="col-md-4"><label class="form-label">Vendor</label><select name="vendor" class="form-select" required><option>Generic</option><option>Hioso</option><option>Huawei</option><option>ZTE</option><option>Fiberhome</option><option>Vsol</option><option>CData</option><option>Raisecom</option><option>HSGQ</option></select></div>
+                        <div class="col-md-4"><label class="form-label">Model</label><input name="model" class="form-control"></div>
+                        <div class="col-md-4"><label class="form-label">IP Address</label><input name="ip_address" class="form-control" required></div>
+                        <div class="col-md-2"><label class="form-label">Port</label><input name="port" type="number" class="form-control" value="80"></div>
+                        <div class="col-md-3"><label class="form-label">Connection Method</label><select name="connection_method" class="form-select" id="connectionMethod"><option value="http_api" selected>HTTP API</option><option value="https_api">HTTPS API</option><option value="ssh">SSH</option><option value="telnet">Telnet</option><option value="snmp_v2">SNMP v2</option><option value="snmp_v3">SNMP v3</option></select></div>
+                        <div class="col-md-3"><label class="form-label">Polling Interval</label><select name="polling_interval" class="form-select"><option value="1">1 menit</option><option value="5">5 menit</option><option value="10" selected>10 menit</option><option value="15">15 menit</option></select></div>
+                        <div class="col-md-4" data-connection-group="credential"><label class="form-label">Username / CLI User</label><input name="username" class="form-control"></div>
+                        <div class="col-md-4" data-connection-group="credential"><label class="form-label">Password / Token / CLI Password</label><input name="password" type="password" class="form-control"><small class="text-muted">Untuk SNMP, isi ini jika butuh action CLI seperti unregister ONU.</small></div>
+                        <div class="col-md-4" data-connection-group="enable"><label class="form-label">Enable Password</label><input name="enable_password" type="password" class="form-control"></div>
+                        <div class="col-md-4" data-connection-group="snmp"><label class="form-label">SNMP Community</label><input name="snmp_community" class="form-control"></div>
+                        <div class="col-md-2" data-connection-group="snmp"><label class="form-label">SNMP Version</label><select name="snmp_version" class="form-select"><option value="v2">v2</option><option value="v3">v3</option></select></div>
+                        <div class="col-md-3"><label class="form-label">Lokasi</label><input name="location" class="form-control"></div>
+                        <div class="col-md-3"><label class="form-label">Status Aktif</label><select name="status" class="form-select"><option value="active">Aktif</option><option value="inactive">Tidak Aktif</option></select></div>
+                        <div class="col-12"><label class="form-label">Deskripsi</label><textarea name="description" class="form-control"></textarea></div>
+                        <div class="col-12" data-connection-group="api"><hr><h6>Generic HTTP/HTTPS API Profile</h6><p class="text-muted small mb-2">Isi endpoint aktual OLT. Minimal wajib: systemInfo, ponPorts, onuList.</p></div>
+                        <div class="col-md-4" data-connection-group="api"><label class="form-label">Profile Base Path</label><input name="api_profile_base_path" class="form-control" placeholder="/api"></div>
+                        <div class="col-md-3" data-connection-group="api"><label class="form-label">Auth Type</label><select name="api_profile_auth_type" class="form-select" id="apiAuthType"><option value="basic">Basic</option><option value="bearer">Bearer</option><option value="header">Header</option><option value="none">None</option></select></div>
+                        <div class="col-md-3" data-connection-group="api-header"><label class="form-label">Auth Header</label><input name="api_profile_auth_header" class="form-control" placeholder="X-API-Key"></div>
+                        <div class="col-md-2" data-connection-group="api"><label class="form-label">Timeout ms</label><input name="api_profile_timeout_ms" type="number" class="form-control" value="10000"></div>
+                        <div class="col-md-6" data-connection-group="api"><label class="form-label">Endpoints JSON</label><textarea name="api_profile_endpoints_json" class="form-control json-area" placeholder='{"systemInfo":{"path":"/system"},"ponPorts":{"path":"/pon"},"onuList":{"path":"/onus"},"enableOnu":{"method":"POST","path":"/onus/:onuId/enable"}}'></textarea></div>
+                        <div class="col-md-6" data-connection-group="api"><label class="form-label">Parser JSON</label><textarea name="api_profile_parser_json" class="form-control json-area" placeholder='{"onuList":{"listPath":"data","onu_sn":"sn","status":"status","rx_power":"rx"}}'>{}</textarea></div>
+                    </div>
+                </div>
+                <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button><button class="btn btn-primary">Simpan</button></div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script>
+function setGroupVisible(group, visible) {
+    document.querySelectorAll(`[data-connection-group="${group}"]`).forEach((el) => {
+        el.classList.toggle('d-none', !visible);
+        el.querySelectorAll('input, select, textarea').forEach((field) => {
+            field.disabled = !visible;
+        });
+    });
+}
+function updateConnectionFields() {
+    const method = document.getElementById('connectionMethod').value;
+    const authType = document.getElementById('apiAuthType')?.value || 'basic';
+    const portInput = document.querySelector('[name="port"]');
+    const isApi = method === 'http_api' || method === 'https_api';
+    const isSnmp = method === 'snmp_v2' || method === 'snmp_v3';
+    const isCli = method === 'ssh' || method === 'telnet';
+
+    setGroupVisible('credential', isApi || isCli || isSnmp);
+    setGroupVisible('enable', isCli || isSnmp);
+    setGroupVisible('snmp', isSnmp);
+    setGroupVisible('api', isApi);
+    setGroupVisible('api-header', isApi && authType === 'header');
+
+    if (portInput && (!portInput.dataset.touched || portInput.value === '80' || portInput.value === '443' || portInput.value === '22' || portInput.value === '23' || portInput.value === '161')) {
+        const defaults = { http_api: 80, https_api: 443, ssh: 22, telnet: 23, snmp_v2: 161, snmp_v3: 161 };
+        portInput.value = defaults[method] || portInput.value;
+    }
+}
+document.getElementById('connectionMethod').addEventListener('change', updateConnectionFields);
+document.getElementById('apiAuthType').addEventListener('change', updateConnectionFields);
+document.querySelector('[name="port"]').addEventListener('input', (event) => {
+    event.target.dataset.touched = '1';
+});
+updateConnectionFields();
+async function postAction(url) {
+    const res = await fetch(url, { method: 'POST' });
+    const data = await res.json();
+    alert(data.success ? 'Action queued/success' : (data.message || data.error));
+    if (data.success) location.reload();
+}
+function setSyncProgress(status, message, stats = null) {
+    const bar = document.getElementById('syncProgressBar');
+    const closeButton = document.getElementById('syncCloseButton');
+    const config = {
+        queued: ['25%', 'Menunggu', 'bg-info', true],
+        running: ['60%', 'Running', 'bg-primary', true],
+        completed: ['100%', 'Selesai', 'bg-success', false],
+        failed: ['100%', 'Gagal', 'bg-danger', false]
+    }[status] || ['35%', status || 'Status', 'bg-secondary', true];
+
+    bar.style.width = config[0];
+    bar.textContent = config[1];
+    bar.className = `progress-bar progress-bar-striped ${config[3] ? 'progress-bar-animated' : ''} ${config[2]}`;
+    document.getElementById('syncProgressMessage').textContent = message;
+    closeButton.classList.toggle('d-none', config[3]);
+
+    if (stats) {
+        document.getElementById('syncStats').classList.remove('d-none');
+        document.getElementById('syncPonCount').textContent = stats.pon_count || 0;
+        document.getElementById('syncOnuCount').textContent = stats.onu_count || 0;
+        document.getElementById('syncOnlineCount').textContent = stats.online_count || 0;
+        document.getElementById('syncOfflineCount').textContent = stats.offline_count || 0;
+    }
+}
+async function pollSyncJob(jobId) {
+    const res = await fetch(`/admin/api/olt-management/sync-jobs/${jobId}`);
+    const data = await res.json();
+    if (!data.success) {
+        setSyncProgress('failed', data.message || data.error || 'Gagal membaca status sync.');
+        return;
+    }
+
+    const status = data.data.status;
+    if (status === 'completed') {
+        setSyncProgress('completed', 'Sync selesai. Halaman akan diperbarui otomatis.', data.data.stats);
+        setTimeout(() => location.reload(), 1500);
+        return;
+    }
+    if (status === 'failed') {
+        setSyncProgress('failed', data.data.error_message || 'Sync gagal.');
+        return;
+    }
+
+    const attempts = data.data.job?.attempts || 0;
+    const text = status === 'running'
+        ? `Sedang membaca data OLT... attempt ${attempts}. Untuk Hioso bisa memakan waktu 1-2 menit.`
+        : 'Job masuk antrian dan akan segera diproses worker.';
+    setSyncProgress(status, text);
+    setTimeout(() => pollSyncJob(jobId), 2000);
+}
+async function syncOlt(button) {
+    const modal = new bootstrap.Modal(document.getElementById('syncProgressModal'));
+    document.getElementById('syncOltName').textContent = button.dataset.name || 'OLT';
+    document.getElementById('syncStats').classList.add('d-none');
+    document.getElementById('syncCloseButton').classList.add('d-none');
+    setSyncProgress('queued', 'Mengirim job sync ke queue...');
+    modal.show();
+
+    const res = await fetch(button.dataset.url, { method: 'POST' });
+    const data = await res.json();
+    if (!data.success) {
+        setSyncProgress('failed', data.message || data.error || 'Gagal membuat job sync.');
+        return;
+    }
+    pollSyncJob(data.data.job_id);
+}
+async function deleteOlt(id) {
+    if (!confirm('Hapus OLT ini?')) return;
+    const res = await fetch(`/admin/api/olt-management/olts/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    alert(data.success ? 'OLT dihapus' : data.message);
+    if (data.success) location.reload();
+}
+function resetOltForm() {
+    const form = document.getElementById('oltForm');
+    form.reset();
+    form.querySelector('[name="id"]').value = '';
+    form.querySelector('[name="port"]').dataset.touched = '';
+    document.getElementById('oltModalTitle').textContent = 'Tambah OLT';
+    document.getElementById('connectionMethod').value = 'http_api';
+    form.querySelector('[name="port"]').value = '80';
+    updateConnectionFields();
+}
+function editOltFromButton(button) {
+    const olt = JSON.parse(decodeURIComponent(button.dataset.olt));
+    const form = document.getElementById('oltForm');
+    resetOltForm();
+    document.getElementById('oltModalTitle').textContent = `Edit OLT - ${olt.name}`;
+    ['id', 'name', 'vendor', 'model', 'ip_address', 'port', 'username', 'connection_method', 'snmp_community', 'snmp_version', 'location', 'description', 'status', 'polling_interval'].forEach((key) => {
+        const field = form.querySelector(`[name="${key}"]`);
+        if (field && olt[key] !== undefined && olt[key] !== null) field.value = olt[key];
+    });
+    updateConnectionFields();
+    new bootstrap.Modal(document.getElementById('oltModal')).show();
+}
+document.querySelectorAll('.js-post-action').forEach((button) => {
+    button.addEventListener('click', () => postAction(button.dataset.url));
+});
+document.querySelectorAll('.js-sync-olt').forEach((button) => {
+    button.addEventListener('click', () => syncOlt(button));
+});
+document.querySelectorAll('.js-delete-olt').forEach((button) => {
+    button.addEventListener('click', () => deleteOlt(button.dataset.id));
+});
+document.querySelectorAll('.js-edit-olt').forEach((button) => {
+    button.addEventListener('click', () => editOltFromButton(button));
+});
+document.getElementById('oltForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const payload = Object.fromEntries(new FormData(e.target).entries());
+    const id = payload.id;
+    delete payload.id;
+    const res = await fetch(id ? `/admin/api/olt-management/olts/${id}` : '/admin/api/olt-management/olts', { method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const data = await res.json();
+    alert(data.success ? 'OLT tersimpan' : data.message);
+    if (data.success) location.reload();
+});
+</script>
+</body>
+</html>

@@ -7,6 +7,7 @@
     const { getCompanyHeader } = require('./message-templates');
     const { getSetting, getLocalTimestamp } = require('./settingsManager');
     const { getTenantId, hasTenantContext } = require('./platform/tenantContext');
+    const { ensureOltSchema } = require('../services/olt/oltSchema');
 
     /** Diskon dari catatan admin: "… | Diskon: Rp 50.000 | …" (format id-ID) */
     function parseDiscountFromPaymentNotes(notes) {
@@ -52,6 +53,10 @@
         return m === 'transfer' || m === 'transfer bank' || m === 'transfer_bank' || m.includes('transfer');
     }
 
+    /** Kategori pengeluaran komisi kolektor (finance_categories). */
+    const COLLECTOR_COMMISSION_EXPENSE_CATEGORY = 'BAYAR KERJASAMA';
+    const COLLECTOR_COMMISSION_EXPENSE_DESC_PREFIX = 'Komisi Kolektor%';
+
     function paymentEligibleForCollectorRemittance(row) {
         if (isCollectorTransferPaymentMethod(row.payment_method)) return false;
         const st = row.remittance_status;
@@ -74,7 +79,10 @@
             this._paymentsDiscountColumnEnsured = false;
             this._collectorPaymentColumnsEnsured = false;
             this._customerIdColumnEnsured = false;
+            this._paymentsProofColumnEnsured = false;
             this._remittanceNetAppliedEnsured = false;
+            this._remittanceReceiptPaymentIdEnsured = false;
+            this._incomeSourceColumnsEnsured = false;
             this._collectorAreaUniqueEnsured = false;
             this.initDatabase();
             
@@ -165,6 +173,22 @@
                 );
             });
             this._collectorPaymentColumnsEnsured = true;
+        }
+
+        /** Bukti transfer kolektor — wajib sebelum updatePaymentProof / cleanup worker. */
+        async _ensurePaymentsProofColumn() {
+            if (this._paymentsProofColumnEnsured) return;
+            await new Promise((resolve) => {
+                this.db.run('ALTER TABLE payments ADD COLUMN payment_proof TEXT', (err) => {
+                    if (err && !String(err.message || '').toLowerCase().includes('duplicate')) {
+                        try {
+                            logger.warn('[billing] payments.payment_proof:', err.message);
+                        } catch (_) {}
+                    }
+                    this._paymentsProofColumnEnsured = true;
+                    resolve();
+                });
+            });
         }
 
         /**
@@ -1269,6 +1293,10 @@
     }
 
     addColumnsAndCreateIndexes() {
+        ensureOltSchema(this.db).catch((err) => {
+            console.error('Error ensuring OLT management schema:', err.message);
+        });
+
         this.db.run(
             `CREATE TABLE IF NOT EXISTS installation_jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1701,6 +1729,25 @@
                 }
             });
         });
+
+        this.purgeLegacyDemoSeedData();
+    }
+
+    /** Hapus kolektor/ODP demo bawaan migrasi — mencegah muncul kembali setelah restore/rollback. */
+    purgeLegacyDemoSeedData() {
+        const { purgeDemoSeedData } = require('../utils/demoSeedData');
+        purgeDemoSeedData(this.db)
+            .then((result) => {
+                const removed = (result.collectorsRemoved || 0) + (result.odpsRemoved || 0);
+                if (removed > 0) {
+                    console.log(
+                        `[billing] Demo seed guard: hapus ${result.collectorsRemoved || 0} kolektor, ${result.odpsRemoved || 0} ODP demo`
+                    );
+                }
+            })
+            .catch((err) => {
+                console.warn('[billing] Demo seed guard gagal:', err.message);
+            });
     }
 
     // Paket Management
@@ -2489,17 +2536,18 @@ ${year && month ? `
                                WHERE i.customer_id = c.id 
                                AND strftime('%m', i.created_at) = '${String(month).padStart(2, '0')}' 
                                AND strftime('%Y', i.created_at) = '${String(year)}' 
-                               AND i.status = 'paid'
-                           ) THEN 'paid'
-                           ELSE 'unpaid'
-                       END as payment_status` : `
-                       CASE 
+                               AND i.status = 'unpaid'
+                           ) THEN 'unpaid'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid' 
-                               AND i.due_date < date('now','localtime')
-                           ) THEN 'overdue'
+                               AND strftime('%m', i.created_at) = '${String(month).padStart(2, '0')}' 
+                               AND strftime('%Y', i.created_at) = '${String(year)}' 
+                               AND i.status = 'paid'
+                           ) THEN 'paid'
+                           ELSE 'no_invoice'
+                       END as payment_status` : `
+                       CASE 
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
@@ -2601,12 +2649,6 @@ ${year && month ? `
                         r.name as router_name,
                        COALESCE(col_ca.name, col_cra.name) as collector_name,
                        CASE 
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid' 
-                               AND i.due_date < date('now','localtime')
-                           ) THEN 'overdue'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
@@ -2794,9 +2836,20 @@ ${year && month ? `
         const sql = `
             SELECT 
                 COUNT(DISTINCT c.id) as total,
-                SUM(CASE WHEN c.status = 'active' THEN 1 ELSE 0 END) as aktif,
-                SUM(CASE WHEN c.status = 'suspended' OR c.status = 'isolir' THEN 1 ELSE 0 END) as nonaktif,
+                SUM(CASE WHEN c.status IN ('active', 'suspended', 'isolir') THEN 1 ELSE 0 END) as aktif,
+                SUM(CASE WHEN c.status = 'inactive' THEN 1 ELSE 0 END) as nonaktif,
                 SUM(CASE WHEN ${cjd('c')} >= date(?) AND ${cjd('c')} < date(?) AND ${cjd('c')} <= date('now','localtime') THEN 1 ELSE 0 END) as baru,
+                SUM(CASE WHEN c.status IN ('suspended', 'isolir') THEN 1 ELSE 0 END) as isolir,
+                (
+                    SELECT COUNT(DISTINCT i.id)
+                    FROM invoices i
+                    JOIN customers c_sub ON c_sub.id = i.customer_id
+                    ${fjSub}
+                    WHERE DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
+                    AND i.status IN ('paid', 'unpaid')
+                    AND ${voucherExcl}
+                    ${fwSub}
+                ) as total_tagihan,
                 (
                     SELECT COUNT(DISTINCT i.id) 
                     FROM invoices i 
@@ -2818,10 +2871,12 @@ ${year && month ? `
                     ${fwSub}
                 ) as belum_lunas,
                 ${packageNominalSub()} AS total_nominal,
-                ${invoiceNominalSub("AND i.status IN ('paid', 'unpaid')", " AND c_sub.status = 'active'")} AS aktif_nominal,
-                ${packageNominalSub(" AND (c_sum.status = 'suspended' OR c_sum.status = 'isolir')")} AS nonaktif_nominal,
+                ${invoiceNominalSub("AND i.status IN ('paid', 'unpaid')", " AND c_sub.status IN ('active', 'suspended', 'isolir')")} AS aktif_nominal,
+                ${packageNominalSub(" AND c_sum.status = 'inactive'")} AS nonaktif_nominal,
+                ${invoiceNominalSub("AND i.status IN ('paid', 'unpaid')")} AS total_tagihan_nominal,
                 ${invoiceNominalSub("AND i.status = 'paid'")} AS lunas_nominal,
                 ${invoiceNominalSub("AND i.status = 'unpaid'")} AS belum_lunas_nominal,
+                ${packageNominalSub(" AND c_sum.status IN ('suspended', 'isolir')")} AS isolir_nominal,
                 ${packageNominalSub(` AND ${cjd('c_sum')} >= date(?) AND ${cjd('c_sum')} < date(?) AND ${cjd('c_sum')} <= date('now','localtime')`)} AS baru_nominal
             FROM customers c
             ${filterJoins}
@@ -2832,11 +2887,14 @@ ${year && month ? `
             startDate, cohortEnd,
             startDate, endDateLast, ...filterParams,
             startDate, endDateLast, ...filterParams,
+            startDate, endDateLast, ...filterParams,
             cohortEnd, ...filterParams,
             ...nominalBaseParams,
             cohortEnd, ...filterParams,
             ...nominalBaseParams,
             ...nominalBaseParams,
+            ...nominalBaseParams,
+            cohortEnd, ...filterParams,
             cohortEnd, startDate, cohortEnd, ...filterParams,
             cohortEnd, ...filterParams
         ];
@@ -2850,14 +2908,18 @@ ${year && month ? `
                         total: (row && row.total) ? row.total : 0,
                         aktif: (row && row.aktif) ? row.aktif : 0,
                         nonaktif: (row && row.nonaktif) ? row.nonaktif : 0,
+                        isolir: (row && row.isolir) ? row.isolir : 0,
+                        total_tagihan: (row && row.total_tagihan) ? row.total_tagihan : 0,
                         lunas: (row && row.lunas) ? row.lunas : 0,
                         belum_lunas: (row && row.belum_lunas) ? row.belum_lunas : 0,
                         baru: (row && row.baru) ? row.baru : 0,
                         total_nominal: Number(row && row.total_nominal) || 0,
                         aktif_nominal: Number(row && row.aktif_nominal) || 0,
                         nonaktif_nominal: Number(row && row.nonaktif_nominal) || 0,
+                        total_tagihan_nominal: Number(row && row.total_tagihan_nominal) || 0,
                         lunas_nominal: Number(row && row.lunas_nominal) || 0,
                         belum_lunas_nominal: Number(row && row.belum_lunas_nominal) || 0,
+                        isolir_nominal: Number(row && row.isolir_nominal) || 0,
                         baru_nominal: Number(row && row.baru_nominal) || 0
                     });
                 }
@@ -2869,6 +2931,7 @@ ${year && month ? `
     _buildCustomersListWhereClause(filters = {}) {
         let whereClause = '';
         const params = [];
+        const hasExplicitStatusFilter = Boolean(filters.status);
 
         if (hasTenantContext()) {
             whereClause += ' AND c.tenant_id = ?';
@@ -2876,8 +2939,17 @@ ${year && month ? `
         }
 
         if (filters.status) {
-            whereClause += ' AND c.status = ?';
-            params.push(filters.status);
+            const status = String(filters.status).trim();
+            if (status === 'isolir' || status === 'suspended') {
+                whereClause += " AND c.status IN ('suspended', 'isolir')";
+            } else if (status === 'nonaktif') {
+                whereClause += " AND c.status = 'inactive'";
+            } else if (status === 'aktif') {
+                whereClause += " AND c.status IN ('active', 'suspended', 'isolir')";
+            } else {
+                whereClause += ' AND c.status = ?';
+                params.push(status);
+            }
         }
 
         if (filters.search) {
@@ -2917,24 +2989,37 @@ ${year && month ? `
             whereClause += ` AND ${this._customerJoinDateExpr('c')} < date(?)`;
             params.push(endDate);
 
-            if (filters.customer_type === 'baru') {
+            if (!hasExplicitStatusFilter && filters.customer_type === 'baru') {
                 whereClause += ` AND ${this._customerJoinDateExpr('c')} >= date(?) AND ${this._customerJoinDateExpr('c')} <= date('now','localtime')`;
                 params.push(startDate);
-            } else if (filters.customer_type === 'aktif') {
-                whereClause += " AND c.status = 'active'";
-            } else if (filters.customer_type === 'nonaktif') {
-                whereClause += " AND (c.status = 'suspended' OR c.status = 'isolir')";
+            } else if (!hasExplicitStatusFilter && filters.customer_type === 'aktif') {
+                whereClause += " AND c.status IN ('active', 'suspended', 'isolir')";
+            } else if (!hasExplicitStatusFilter && filters.customer_type === 'nonaktif') {
+                whereClause += " AND c.status = 'inactive'";
             }
 
             const endDateLast = new Date(parseInt(year, 10), parseInt(month, 10), 0).toISOString().split('T')[0];
-            if (filters.payment_status === 'paid') {
+            if (filters.payment_status === 'has_invoice') {
+                whereClause += ` AND EXISTS (
+                    SELECT 1 FROM invoices i 
+                    WHERE i.customer_id = c.id 
+                    AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
+                    AND i.status IN ('paid', 'unpaid')
+                )`;
+                params.push(startDate, endDateLast);
+            } else if (filters.payment_status === 'paid') {
                 whereClause += ` AND EXISTS (
                     SELECT 1 FROM invoices i 
                     WHERE i.customer_id = c.id 
                     AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
                     AND i.status = 'paid'
+                ) AND NOT EXISTS (
+                    SELECT 1 FROM invoices i 
+                    WHERE i.customer_id = c.id 
+                    AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
+                    AND i.status = 'unpaid'
                 )`;
-                params.push(startDate, endDateLast);
+                params.push(startDate, endDateLast, startDate, endDateLast);
             } else if (filters.payment_status === 'unpaid') {
                 whereClause += ` AND EXISTS (
                     SELECT 1 FROM invoices i 
@@ -2943,15 +3028,29 @@ ${year && month ? `
                     AND i.status = 'unpaid'
                 )`;
                 params.push(startDate, endDateLast);
+            } else if (filters.payment_status === 'no_invoice') {
+                whereClause += ` AND NOT EXISTS (
+                    SELECT 1 FROM invoices i 
+                    WHERE i.customer_id = c.id 
+                    AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
+                    AND i.status IN ('paid', 'unpaid')
+                )`;
+                params.push(startDate, endDateLast);
             }
         } else {
-            if (filters.customer_type === 'aktif') {
-                whereClause += " AND c.status = 'active'";
-            } else if (filters.customer_type === 'nonaktif') {
-                whereClause += " AND (c.status = 'suspended' OR c.status = 'isolir')";
+            if (!hasExplicitStatusFilter && filters.customer_type === 'aktif') {
+                whereClause += " AND c.status IN ('active', 'suspended', 'isolir')";
+            } else if (!hasExplicitStatusFilter && filters.customer_type === 'nonaktif') {
+                whereClause += " AND c.status = 'inactive'";
             }
 
-            if (filters.payment_status === 'paid') {
+            if (filters.payment_status === 'has_invoice') {
+                whereClause += ` AND EXISTS (
+                    SELECT 1 FROM invoices i 
+                    WHERE i.customer_id = c.id 
+                    AND i.status IN ('paid', 'unpaid')
+                )`;
+            } else if (filters.payment_status === 'paid') {
                 whereClause += ` AND NOT EXISTS (
                     SELECT 1 FROM invoices i 
                     WHERE i.customer_id = c.id 
@@ -2962,17 +3061,16 @@ ${year && month ? `
                     AND i.status = 'paid'
                 )`;
             } else if (filters.payment_status === 'unpaid') {
-                whereClause += ` AND (
-                    EXISTS (
-                        SELECT 1 FROM invoices i 
-                        WHERE i.customer_id = c.id 
-                        AND i.status = 'unpaid'
-                    ) 
-                    OR NOT EXISTS (
-                        SELECT 1 FROM invoices i 
-                        WHERE i.customer_id = c.id 
-                        AND i.status = 'paid'
-                    )
+                whereClause += ` AND EXISTS (
+                    SELECT 1 FROM invoices i 
+                    WHERE i.customer_id = c.id 
+                    AND i.status = 'unpaid'
+                )`;
+            } else if (filters.payment_status === 'no_invoice') {
+                whereClause += ` AND NOT EXISTS (
+                    SELECT 1 FROM invoices i 
+                    WHERE i.customer_id = c.id 
+                    AND i.status IN ('paid', 'unpaid')
                 )`;
             }
         }
@@ -2987,12 +3085,6 @@ ${year && month ? `
                        r.name as router_name,
                        COALESCE(col_ca.name, col_cra.name) as collector_name,
                        CASE 
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid' 
-                               AND i.due_date < date('now','localtime')
-                           ) THEN 'overdue'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
@@ -3251,12 +3343,6 @@ ${year && month ? `
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid' 
-                               AND i.due_date < date('now','localtime')
-                           ) THEN 'overdue'
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
                                AND i.status = 'unpaid'
                            ) THEN 'unpaid'
                            WHEN EXISTS (
@@ -3296,12 +3382,6 @@ ${year && month ? `
             const sql = `
                 SELECT c.*, p.name as package_name, p.price as package_price, p.speed as package_speed, p.tax_rate,
                        CASE 
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid' 
-                               AND i.due_date < date('now','localtime')
-                           ) THEN 'overdue'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
@@ -3363,12 +3443,6 @@ ${year && month ? `
             const sql = `
                 SELECT c.*, p.name as package_name, p.price as package_price, p.speed as package_speed,
                        CASE 
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid' 
-                               AND i.due_date < date('now','localtime')
-                           ) THEN 'overdue'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
@@ -4781,6 +4855,7 @@ ${year && month ? `
     async recordCollectorPayment(paymentData) {
         await this._ensurePaymentsDiscountColumn();
         await this._ensureCollectorPaymentColumns();
+        await this._migrateCollectorCommissionExpenseCategory();
         const {
             invoice_id,
             amount,
@@ -4859,7 +4934,7 @@ ${year && month ? `
                                     self.db.run(expenseSql, [
                                         `Komisi Kolektor - ${collectorName}`,
                                         commission_amount,
-                                        'Operasional',
+                                        COLLECTOR_COMMISSION_EXPENSE_CATEGORY,
                                         'Transfer Bank', // Default payment method for commission
                                         `Komisi ${commission_amount}% dari pembayaran invoice ${invoice_id} via kolektor ${collectorName}`
                                     ], function(err) {
@@ -4906,6 +4981,125 @@ ${year && month ? `
                     });
                 });
             });
+        });
+    }
+
+    isCollectorTransferPaymentMethod(method) {
+        return isCollectorTransferPaymentMethod(method);
+    }
+
+    /** Pembayaran kolektor aktif untuk tagihan (cegah lunas ganda). */
+    async getCollectorPaymentForInvoice(invoiceId, collectorId) {
+        await this._ensurePaymentsDiscountColumn();
+        return new Promise((resolve, reject) => {
+            this.db.get(
+                `SELECT id, invoice_id, collector_id, amount, payment_method, payment_date, remittance_status
+                 FROM payments
+                 WHERE invoice_id = ? AND collector_id = ?
+                   AND IFNULL(payment_type, 'collector') = 'collector'
+                 ORDER BY id DESC LIMIT 1`,
+                [invoiceId, collectorId],
+                (err, row) => (err ? reject(err) : resolve(row || null))
+            );
+        });
+    }
+
+    /**
+     * Nominal resi/nota: tagihan invoice, diskon, dan jumlah yang benar-benar dibayar pelanggan.
+     */
+    async getCollectorReceiptTotalsForInvoice(invoiceId) {
+        await this._ensurePaymentsDiscountColumn();
+        const id = parseInt(String(invoiceId), 10);
+        if (!Number.isFinite(id) || id <= 0) return null;
+        return new Promise((resolve, reject) => {
+            this.db.get(
+                `SELECT p.amount, p.discount_amount, p.notes, p.payment_method, p.payment_date,
+                        i.amount AS invoice_amount
+                 FROM payments p
+                 INNER JOIN invoices i ON i.id = p.invoice_id
+                 WHERE p.invoice_id = ?
+                   AND IFNULL(p.payment_type, 'collector') = 'collector'
+                 ORDER BY datetime(COALESCE(p.payment_date, '1970-01-01')) DESC, p.id DESC
+                 LIMIT 1`,
+                [id],
+                (err, row) => {
+                    if (err) return reject(err);
+                    if (!row) return resolve(null);
+                    const disc = effectivePaymentDiscount(row);
+                    const tag = Number(row.invoice_amount) || Number(row.amount) || 0;
+                    const paid = Math.max(0, Math.round((tag - disc) * 100) / 100);
+                    resolve({
+                        discount_amount: disc,
+                        amount_paid: paid,
+                        invoice_amount: tag,
+                        payment_method: row.payment_method,
+                        payment_date: row.payment_date
+                    });
+                }
+            );
+        });
+    }
+
+    /** Simpan bukti transfer pada baris payments (bukan collector_payments). */
+    async updatePaymentProof(paymentId, relativePath) {
+        if (!paymentId || !relativePath) return;
+        await this._ensurePaymentsProofColumn();
+        return new Promise((resolve, reject) => {
+            this.db.run(
+                'UPDATE payments SET payment_proof = ? WHERE id = ?',
+                [relativePath, paymentId],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+    }
+
+    /**
+     * Pembayaran kolektor via transfer — langsung masuk rekapan setoran kantor (bukan setoran tunai kolektor).
+     * Mencatat riwayat penerimaan kasir dan menandai baris payment sudah diakui kantor.
+     */
+    async markCollectorPaymentAsOfficeTransferReceived(paymentId) {
+        await this._ensureRemittanceNetAppliedColumn();
+        await this._ensurePaymentsProofColumn();
+        const row = await new Promise((resolve, reject) => {
+            this.db.get(
+                `SELECT p.id, p.collector_id, p.invoice_id, p.amount, p.commission_amount,
+                        p.discount_amount, p.notes, p.payment_method, p.payment_proof,
+                        p.remittance_status,
+                        COALESCE(i.amount, 0) as invoice_amount, i.invoice_number
+                 FROM payments p
+                 INNER JOIN invoices i ON i.id = p.invoice_id
+                 WHERE p.id = ? AND IFNULL(p.payment_type, 'collector') = 'collector'`,
+                [paymentId],
+                (err, r) => (err ? reject(err) : resolve(r))
+            );
+        });
+        if (!row || !isCollectorTransferPaymentMethod(row.payment_method)) return;
+        if (row.remittance_status === 'remitted') return;
+
+        const jumlah = paymentJumlahSetelahDiskon(row);
+        const invLabel = row.invoice_number ? String(row.invoice_number) : `INV-${row.invoice_id}`;
+        const receiptNotes = `Transfer langsung ke rekening kantor — ${invLabel}`;
+
+        await new Promise((resolve, reject) => {
+            this.db.run(
+                `UPDATE payments SET
+                    remittance_status = 'remitted',
+                    remittance_date = datetime('now','localtime'),
+                    remittance_notes = ?,
+                    remittance_net_applied = 0
+                 WHERE id = ?`,
+                [receiptNotes, paymentId],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+
+        await this.insertCollectorRemittanceReceipt({
+            collector_id: row.collector_id,
+            amount_net: jumlah,
+            payment_method: 'transfer',
+            notes: receiptNotes,
+            received_at: new Date().toISOString(),
+            payment_id: paymentId
         });
     }
 
@@ -5180,7 +5374,10 @@ ${year && month ? `
             
             const qSetoran = `
                 SELECT 
-                    COALESCE(SUM(COALESCE(p.remittance_net_applied, 0)), 0) as sudah_setor,
+                    COALESCE(SUM(
+                        CASE WHEN NOT ${sqlPaymentMethodIsTransfer('p')}
+                        THEN COALESCE(p.remittance_net_applied, 0) ELSE 0 END
+                    ), 0) as sudah_setor,
                     COALESCE(SUM(
                         CASE WHEN ${sqlCollectorCashRemittancePending('p')}
                              AND (
@@ -5778,13 +5975,18 @@ ${year && month ? `
             if (commission > 0 && collectorId) {
                 await dbRun(
                     `DELETE FROM expenses
-                     WHERE category = 'Operasional'
-                       AND description LIKE 'Komisi Kolektor%'
+                     WHERE description LIKE ?
                        AND notes LIKE '%pembayaran invoice ' || ? || ' via kolektor%'
                        AND ABS(CAST(amount AS REAL) - ?) < 0.05`,
-                    [String(invoiceId), commission]
+                    [COLLECTOR_COMMISSION_EXPENSE_DESC_PREFIX, String(invoiceId), commission]
                 );
             }
+
+            const remittanceRemoved = await this._deleteAutoOfficeTransferRemittanceForPayment(
+                payment,
+                dbGet,
+                dbRun
+            );
 
             const del = await dbRun('DELETE FROM payments WHERE id = ?', [pid]);
             if (!del.changes) {
@@ -5825,7 +6027,8 @@ ${year && month ? `
                 success: true,
                 payment_id: pid,
                 invoice_id: invoiceId,
-                invoice_reverted_unpaid: invoiceRevertedToUnpaid
+                invoice_reverted_unpaid: invoiceRevertedToUnpaid,
+                remittance_receipts_removed: remittanceRemoved.deleted || 0
             };
         } catch (e) {
             await dbRun('ROLLBACK').catch(() => {});
@@ -6241,7 +6444,7 @@ ${year && month ? `
                         sql = `
                             SELECT 
                                 (SELECT COUNT(*) FROM customers) as total_customers,
-                                (SELECT COUNT(*) FROM customers WHERE status = 'active') as active_customers,
+                                (SELECT COUNT(*) FROM customers WHERE status IN ('active', 'suspended', 'isolir')) as active_customers,
                                 (SELECT COUNT(*) FROM invoices WHERE created_at >= ?) as monthly_invoices,
                                 (SELECT COUNT(*) FROM invoices WHERE invoice_type = 'voucher') as voucher_invoices,
                                 (SELECT COUNT(*) FROM invoices WHERE created_at >= ? AND status = 'paid') as paid_monthly_invoices,
@@ -6266,7 +6469,7 @@ ${year && month ? `
                         sql = `
                             SELECT 
                                 (SELECT COUNT(*) FROM customers) as total_customers,
-                                (SELECT COUNT(*) FROM customers WHERE status = 'active') as active_customers,
+                                (SELECT COUNT(*) FROM customers WHERE status IN ('active', 'suspended', 'isolir')) as active_customers,
                                 (SELECT COUNT(*) FROM invoices WHERE created_at >= ?) as monthly_invoices,
                                 (SELECT COUNT(*) FROM invoices WHERE invoice_number LIKE 'INV-VCR-%' OR notes LIKE 'Voucher Hotspot%') as voucher_invoices,
                                 (SELECT COUNT(*) FROM invoices WHERE created_at >= ? AND status = 'paid') as paid_monthly_invoices,
@@ -6897,7 +7100,7 @@ ${year && month ? `
                 Promise.all([
                     // Active customers
                     new Promise((res, rej) => {
-                        this.db.get(`SELECT COUNT(*) as count FROM customers WHERE status = 'active'`, [], (err, row) => {
+                        this.db.get(`SELECT COUNT(*) as count FROM customers WHERE status IN ('active', 'suspended', 'isolir')`, [], (err, row) => {
                             if (err) {
                                 console.error('Error getting active customers:', err);
                                 res(0); // Return 0 on error instead of rejecting
@@ -6908,7 +7111,7 @@ ${year && month ? `
                     }),
                     // Inactive customers
                     new Promise((res, rej) => {
-                        this.db.get(`SELECT COUNT(*) as count FROM customers WHERE status IN ('inactive', 'suspended')`, [], (err, row) => {
+                        this.db.get(`SELECT COUNT(*) as count FROM customers WHERE status = 'inactive'`, [], (err, row) => {
                             if (err) {
                                 console.error('Error getting inactive customers:', err);
                                 res(0);
@@ -8204,6 +8407,9 @@ async handlePaymentWebhook(payload, gateway) {
     }
 
     async getExpenses(startDate = null, endDate = null) {
+        setImmediate(() => {
+            this._syncExpenseCategoryAliases().catch(() => {});
+        });
         return new Promise((resolve, reject) => {
             let sql = 'SELECT * FROM expenses';
             const params = [];
@@ -8223,6 +8429,80 @@ async handlePaymentWebhook(payload, gateway) {
                 }
             });
         });
+    }
+
+    /**
+     * Ringkasan nominal per kategori keuangan (semua kategori terdaftar + transaksi orphan).
+     * type: 'income' | 'expense'
+     */
+    async getFinanceCategorySummary(type, startDate = null, endDate = null) {
+        const catType = type === 'income' ? 'income' : 'expense';
+        const table = catType === 'income' ? 'income' : 'expenses';
+        const dateCol = catType === 'income' ? 'income_date' : 'expense_date';
+
+        const categories = await new Promise((resolve, reject) => {
+            this.db.all(
+                'SELECT name FROM finance_categories WHERE type = ? ORDER BY name COLLATE NOCASE',
+                [catType],
+                (err, rows) => (err ? reject(err) : resolve((rows || []).map((r) => r.name)))
+            );
+        });
+
+        let aggSql = `SELECT category, SUM(amount) as total, COUNT(*) as cnt FROM ${table}`;
+        const params = [];
+        if (startDate && endDate) {
+            aggSql += ` WHERE ${dateCol} BETWEEN ? AND ?`;
+            params.push(startDate, endDate);
+        }
+        aggSql += ' GROUP BY category';
+
+        const aggregates = await new Promise((resolve, reject) => {
+            this.db.all(aggSql, params, (err, rows) => (err ? reject(err) : resolve(rows || [])));
+        });
+
+        const aggMap = {};
+        for (const row of aggregates) {
+            const canonical = this._canonicalFinanceCategoryName(catType, row.category);
+            const key = String(canonical || '').trim().toLowerCase();
+            if (!key) continue;
+            if (!aggMap[key]) {
+                aggMap[key] = { total: 0, count: 0, displayName: canonical };
+            }
+            aggMap[key].total += Number(row.total) || 0;
+            aggMap[key].count += Number(row.cnt) || 0;
+        }
+
+        const seenCatKeys = new Set();
+        const rows = [];
+        for (const name of categories) {
+            const displayName = this._canonicalFinanceCategoryName(catType, name);
+            const key = String(displayName || '').trim().toLowerCase();
+            if (!key || seenCatKeys.has(key)) continue;
+            seenCatKeys.add(key);
+            const agg = aggMap[key];
+            rows.push({
+                name: displayName,
+                total: agg ? agg.total : 0,
+                count: agg ? agg.count : 0
+            });
+        }
+
+        for (const [key, agg] of Object.entries(aggMap)) {
+            if (seenCatKeys.has(key)) continue;
+            rows.push({
+                name: agg.displayName || key,
+                total: agg.total,
+                count: agg.count,
+                orphan: true
+            });
+        }
+
+        rows.sort((a, b) => String(a.name).localeCompare(String(b.name), 'id'));
+
+        const grandTotal = Object.values(aggMap).reduce((s, a) => s + (a.total || 0), 0);
+        const transactionCount = Object.values(aggMap).reduce((s, a) => s + (a.count || 0), 0);
+
+        return { rows, grandTotal, transactionCount };
     }
 
     async updateExpense(id, expenseData) {
@@ -8433,6 +8713,375 @@ async handlePaymentWebhook(payload, gateway) {
         });
     }
 
+    /** Kolom penautan pemasukan otomatis dari setoran kolektor / transfer kantor. */
+    async _ensureIncomeSourceColumns() {
+        if (this._incomeSourceColumnsEnsured) return;
+        await new Promise((resolve) => {
+            this.db.run('ALTER TABLE income ADD COLUMN source_type TEXT', (err) => {
+                if (err && !String(err.message || '').toLowerCase().includes('duplicate')) {
+                    try {
+                        logger.warn('[billing] income.source_type:', err.message);
+                    } catch (_) {}
+                }
+                resolve();
+            });
+        });
+        await new Promise((resolve) => {
+            this.db.run('ALTER TABLE income ADD COLUMN source_id INTEGER', (err) => {
+                if (err && !String(err.message || '').toLowerCase().includes('duplicate')) {
+                    try {
+                        logger.warn('[billing] income.source_id:', err.message);
+                    } catch (_) {}
+                }
+                this._incomeSourceColumnsEnsured = true;
+                resolve();
+            });
+        });
+        await new Promise((resolve) => {
+            this.db.run(
+                `CREATE UNIQUE INDEX IF NOT EXISTS idx_income_source
+                 ON income(source_type, source_id)
+                 WHERE source_type IS NOT NULL AND source_id IS NOT NULL`,
+                () => resolve()
+            );
+        });
+    }
+
+    /** Pastikan kategori pemasukan Kolektor & Kantor ada di finance_categories. */
+    async ensureCollectorKantorIncomeCategories() {
+        await this._dedupeFinanceCategories();
+        await this._syncExpenseCategoryAliases();
+        for (const name of ['Kolektor', 'Kantor']) {
+            await new Promise((resolve) => {
+                this.db.run(
+                    `INSERT INTO finance_categories (type, name, subcategories)
+                     SELECT 'income', ?, NULL
+                     WHERE NOT EXISTS (
+                         SELECT 1 FROM finance_categories
+                         WHERE type = 'income' AND LOWER(TRIM(name)) = LOWER(TRIM(?))
+                     )`,
+                    [name, name],
+                    () => resolve()
+                );
+            });
+        }
+    }
+
+    /** Nama kanonik kategori keuangan (hindari duplikat beda kapitalisasi / alias). */
+    _canonicalFinanceCategoryName(type, rawName) {
+        const key = String(rawName || '').trim().toLowerCase();
+        if (!key) return rawName;
+        if (type === 'income') {
+            const incomeMap = { kantor: 'Kantor', kolektor: 'Kolektor' };
+            if (incomeMap[key]) return incomeMap[key];
+            const trimmed = String(rawName).trim();
+            if (trimmed === trimmed.toUpperCase() && trimmed.length > 1) {
+                return trimmed.charAt(0) + trimmed.slice(1).toLowerCase();
+            }
+            return trimmed;
+        }
+        const expenseAliases = {
+            kerjasama: COLLECTOR_COMMISSION_EXPENSE_CATEGORY,
+            'bayar kerjasama': COLLECTOR_COMMISSION_EXPENSE_CATEGORY
+        };
+        if (expenseAliases[key]) return expenseAliases[key];
+        return String(rawName).trim();
+    }
+
+    /** Gabung alias kategori pengeluaran KERJASAMA ↔ BAYAR KERJASAMA. */
+    async _syncExpenseCategoryAliases() {
+        const flagPath = path.join(path.dirname(this.dbPath), '.expense_category_kerjasama_sync_v1');
+        if (fs.existsSync(flagPath)) return;
+
+        const canonical = COLLECTOR_COMMISSION_EXPENSE_CATEGORY;
+
+        await new Promise((resolve, reject) => {
+            this.db.run(
+                `UPDATE expenses SET category = ?
+                 WHERE LOWER(TRIM(category)) IN ('kerjasama', 'bayar kerjasama')`,
+                [canonical],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+
+        const aliasRows = await new Promise((resolve, reject) => {
+            this.db.all(
+                `SELECT id, name FROM finance_categories
+                 WHERE type = 'expense' AND LOWER(TRIM(name)) IN ('kerjasama', 'bayar kerjasama')
+                 ORDER BY id`,
+                [],
+                (err, rows) => (err ? reject(err) : resolve(rows || []))
+            );
+        });
+
+        if (aliasRows.length === 0) {
+            await new Promise((resolve) => {
+                this.db.run(
+                    `INSERT INTO finance_categories (type, name, subcategories) VALUES ('expense', ?, NULL)`,
+                    [canonical],
+                    () => resolve()
+                );
+            });
+        } else {
+            const winner = aliasRows.find((r) => r.name === canonical) || aliasRows[0];
+            if (winner.name !== canonical) {
+                await new Promise((resolve, reject) => {
+                    this.db.run(
+                        `UPDATE finance_categories SET name = ?, updated_at = datetime('now','localtime') WHERE id = ?`,
+                        [canonical, winner.id],
+                        (err) => (err ? reject(err) : resolve())
+                    );
+                });
+            }
+            for (const row of aliasRows) {
+                if (row.id === winner.id) continue;
+                await new Promise((resolve, reject) => {
+                    this.db.run('DELETE FROM finance_categories WHERE id = ?', [row.id], (err) =>
+                        err ? reject(err) : resolve()
+                    );
+                });
+            }
+        }
+
+        try {
+            fs.writeFileSync(flagPath, new Date().toISOString(), 'utf8');
+        } catch (_) {}
+    }
+
+    /** Hapus/gabung kategori finance_categories duplikat (case-insensitive). */
+    async _dedupeFinanceCategories() {
+        const flagPath = path.join(path.dirname(this.dbPath), '.finance_categories_dedupe_v1');
+        if (fs.existsSync(flagPath)) return;
+
+        const rows = await new Promise((resolve, reject) => {
+            this.db.all(
+                'SELECT id, type, name FROM finance_categories ORDER BY type, id',
+                [],
+                (err, r) => (err ? reject(err) : resolve(r || []))
+            );
+        });
+
+        const groups = {};
+        for (const row of rows) {
+            const key = `${row.type}::${String(row.name || '').trim().toLowerCase()}`;
+            if (!groups[key]) groups[key] = [];
+            groups[key].push(row);
+        }
+
+        for (const items of Object.values(groups)) {
+            if (items.length <= 1) continue;
+
+            const type = items[0].type;
+            const table = type === 'income' ? 'income' : 'expenses';
+            const canonical = this._canonicalFinanceCategoryName(type, items[0].name);
+
+            let winner = items.find((i) => i.name === canonical);
+            if (!winner) {
+                winner = items.reduce((best, item) => {
+                    if (!best) return item;
+                    const score = (name) => {
+                        let s = 0;
+                        if (name === canonical) s += 100;
+                        if (name !== name.toUpperCase()) s += 10;
+                        return s;
+                    };
+                    return score(item.name) > score(best.name) ? item : best;
+                }, null);
+            }
+
+            if (winner.name !== canonical) {
+                await new Promise((resolve, reject) => {
+                    this.db.run(
+                        'UPDATE finance_categories SET name = ?, updated_at = datetime(\'now\',\'localtime\') WHERE id = ?',
+                        [canonical, winner.id],
+                        (err) => (err ? reject(err) : resolve())
+                    );
+                });
+                winner = { ...winner, name: canonical };
+            }
+
+            for (const item of items) {
+                if (item.id === winner.id) continue;
+                await new Promise((resolve, reject) => {
+                    this.db.run(
+                        `UPDATE ${table} SET category = ? WHERE LOWER(TRIM(category)) = LOWER(TRIM(?))`,
+                        [canonical, item.name],
+                        (err) => (err ? reject(err) : resolve())
+                    );
+                });
+                await new Promise((resolve, reject) => {
+                    this.db.run('DELETE FROM finance_categories WHERE id = ?', [item.id], (err) =>
+                        err ? reject(err) : resolve()
+                    );
+                });
+            }
+        }
+
+        try {
+            fs.writeFileSync(flagPath, new Date().toISOString(), 'utf8');
+        } catch (_) {}
+    }
+
+    _incomeCategoryForRemittanceReceipt(receipt) {
+        return this._isAutoOfficeTransferReceipt(receipt) ? 'Kantor' : 'Kolektor';
+    }
+
+    _parseIncomeDateFromTimestamp(ts) {
+        if (!ts) return new Date().toISOString().split('T')[0];
+        const s = String(ts).trim();
+        if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+        const d = new Date(s);
+        if (!Number.isNaN(d.getTime())) return d.toISOString().split('T')[0];
+        return new Date().toISOString().split('T')[0];
+    }
+
+    _mapRemittancePaymentMethodLabel(method) {
+        const m = String(method || '').trim().toLowerCase();
+        if (!m) return '';
+        if (m === 'cash' || m === 'tunai') return 'Cash';
+        if (m.includes('transfer')) return 'Transfer Bank';
+        if (m === 'ewallet' || m.includes('wallet')) return 'E-Wallet';
+        return String(method || '').trim();
+    }
+
+    _buildIncomeFromRemittanceReceipt(receipt) {
+        const category = this._incomeCategoryForRemittanceReceipt(receipt);
+        const collectorName = receipt.collector_name || `Kolektor #${receipt.collector_id}`;
+        const amount = Number(receipt.amount != null ? receipt.amount : receipt.amount_net) || 0;
+        const notes = String(receipt.notes || '').trim();
+        let description;
+        if (category === 'Kantor') {
+            description = notes || `Pembayaran transfer kantor — ${collectorName}`;
+        } else {
+            description = `Setoran kolektor — ${collectorName}`;
+        }
+        return {
+            description,
+            amount,
+            category,
+            income_date: this._parseIncomeDateFromTimestamp(receipt.received_at),
+            payment_method: this._mapRemittancePaymentMethodLabel(receipt.payment_method),
+            notes: notes || `Riwayat setoran #${receipt.id}`,
+            source_type: 'collector_remittance',
+            source_id: receipt.id
+        };
+    }
+
+    /** Sinkronkan satu baris pemasukan dari riwayat setoran / penerimaan kantor. */
+    async syncIncomeFromRemittanceReceipt(receiptOrId) {
+        await this._ensureIncomeSourceColumns();
+        await this.ensureCollectorKantorIncomeCategories();
+
+        let receipt = receiptOrId;
+        if (
+            typeof receiptOrId === 'number' ||
+            (typeof receiptOrId === 'string' && /^\d+$/.test(String(receiptOrId)))
+        ) {
+            receipt = await this.getCollectorRemittanceReceiptById(receiptOrId);
+        }
+        if (!receipt || !receipt.id) return null;
+
+        const data = this._buildIncomeFromRemittanceReceipt(receipt);
+        const existing = await new Promise((resolve, reject) => {
+            this.db.get(
+                `SELECT id FROM income WHERE source_type = 'collector_remittance' AND source_id = ?`,
+                [receipt.id],
+                (err, row) => (err ? reject(err) : resolve(row))
+            );
+        });
+
+        if (existing?.id) {
+            return new Promise((resolve, reject) => {
+                this.db.run(
+                    `UPDATE income SET description = ?, amount = ?, category = ?, income_date = ?,
+                        payment_method = ?, notes = ?, updated_at = datetime('now','localtime')
+                     WHERE id = ?`,
+                    [
+                        data.description,
+                        data.amount,
+                        data.category,
+                        data.income_date,
+                        data.payment_method,
+                        data.notes,
+                        existing.id
+                    ],
+                    function (err) {
+                        if (err) reject(err);
+                        else resolve({ id: existing.id, ...data, updated: true });
+                    }
+                );
+            });
+        }
+
+        return new Promise((resolve, reject) => {
+            this.db.run(
+                `INSERT INTO income (description, amount, category, income_date, payment_method, notes, source_type, source_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    data.description,
+                    data.amount,
+                    data.category,
+                    data.income_date,
+                    data.payment_method,
+                    data.notes,
+                    data.source_type,
+                    data.source_id
+                ],
+                function (err) {
+                    if (err) reject(err);
+                    else resolve({ id: this.lastID, ...data, created: true });
+                }
+            );
+        });
+    }
+
+    async deleteIncomeByRemittanceReceiptId(receiptId, dbRun = null) {
+        await this._ensureIncomeSourceColumns();
+        const id = parseInt(String(receiptId), 10);
+        if (!Number.isFinite(id) || id <= 0) return { deleted: 0 };
+        const run =
+            dbRun ||
+            ((sql, params) =>
+                new Promise((resolve, reject) => {
+                    this.db.run(sql, params, function (err) {
+                        if (err) reject(err);
+                        else resolve({ changes: this.changes });
+                    });
+                }));
+        return run(`DELETE FROM income WHERE source_type = 'collector_remittance' AND source_id = ?`, [id]);
+    }
+
+    /** Backfill sekali: riwayat setoran lama → manajemen pemasukan. */
+    async backfillIncomeFromRemittanceReceipts() {
+        const flagPath = path.join(path.dirname(this.dbPath), '.income_remittance_backfill_v1');
+        if (fs.existsSync(flagPath)) return { skipped: true };
+
+        await this._ensureIncomeSourceColumns();
+        await this.ensureCollectorRemittanceReceiptsTable();
+        await this.ensureCollectorKantorIncomeCategories();
+
+        const rows = await new Promise((resolve, reject) => {
+            this.db.all('SELECT id FROM collector_remittance_receipts ORDER BY id ASC', [], (err, r) =>
+                err ? reject(err) : resolve(r || [])
+            );
+        });
+
+        let synced = 0;
+        for (const row of rows) {
+            try {
+                await this.syncIncomeFromRemittanceReceipt(row.id);
+                synced++;
+            } catch (e) {
+                console.error(`[billing] backfill income remittance #${row.id}:`, e.message);
+            }
+        }
+
+        try {
+            fs.writeFileSync(flagPath, new Date().toISOString(), 'utf8');
+        } catch (_) {}
+        return { synced };
+    }
+
     // Method untuk mengelola income (pemasukan)
     async addIncome(incomeData) {
         return new Promise((resolve, reject) => {
@@ -8451,6 +9100,10 @@ async handlePaymentWebhook(payload, gateway) {
     }
 
     async getIncomes(startDate = null, endDate = null) {
+        setImmediate(() => {
+            this.backfillIncomeFromRemittanceReceipts().catch(() => {});
+        });
+        await this._ensureIncomeSourceColumns();
         return new Promise((resolve, reject) => {
             let sql = 'SELECT * FROM income';
             const params = [];
@@ -8502,6 +9155,35 @@ async handlePaymentWebhook(payload, gateway) {
         });
     }
 
+    /** Migrasi sekali: komisi kolektor dari kategori legacy ke BAYAR KERJASAMA. */
+    async _migrateCollectorCommissionExpenseCategory() {
+        const flagPath = path.join(
+            path.dirname(this.dbPath),
+            '.collector_commission_expense_category_bayar_kerjasama_v1'
+        );
+        if (fs.existsSync(flagPath)) return;
+        await new Promise((resolve, reject) => {
+            this.db.run(
+                `UPDATE expenses
+                 SET category = ?
+                 WHERE description LIKE ?
+                   AND TRIM(COALESCE(category, '')) != ?`,
+                [
+                    COLLECTOR_COMMISSION_EXPENSE_CATEGORY,
+                    COLLECTOR_COMMISSION_EXPENSE_DESC_PREFIX,
+                    COLLECTOR_COMMISSION_EXPENSE_CATEGORY
+                ],
+                function (err) {
+                    if (err) reject(err);
+                    else resolve(this.changes || 0);
+                }
+            );
+        });
+        try {
+            fs.writeFileSync(flagPath, new Date().toISOString(), 'utf8');
+        } catch (_) {}
+    }
+
     // Method untuk mendapatkan statistik komisi kolektor
     async getCommissionStats(startDate = null, endDate = null) {
         return new Promise((resolve, reject) => {
@@ -8534,15 +9216,16 @@ async handlePaymentWebhook(payload, gateway) {
                     let expenseSql = `
                         SELECT SUM(amount) as total_commission_expenses
                         FROM expenses 
-                        WHERE category = 'Operasional' AND description LIKE 'Komisi Kolektor%'
+                        WHERE description LIKE ?
                     `;
+                    const expenseParams = [COLLECTOR_COMMISSION_EXPENSE_DESC_PREFIX];
                     
                     if (startDate && endDate) {
                         expenseSql += ' AND DATE(expense_date) BETWEEN ? AND ?';
-                        params.push(startDate, endDate);
+                        expenseParams.push(startDate, endDate);
                     }
                     
-                    this.db.get(expenseSql, params.slice(params.length - 2), (err, expenseRow) => {
+                    this.db.get(expenseSql, expenseParams, (err, expenseRow) => {
                         if (err) {
                             reject(err);
                         } else {
@@ -8594,6 +9277,8 @@ async handlePaymentWebhook(payload, gateway) {
         for (const c of collectors) {
             sums[c.id] = {
                 total_lunas_gross: 0,
+                total_lunas_transfer: 0,
+                total_commission_cash: 0,
                 sudah_setor: 0,
                 pending_amount: 0,
                 pending_payments_count: 0
@@ -8603,7 +9288,15 @@ async handlePaymentWebhook(payload, gateway) {
             const cid = p.collector_id;
             if (!sums[cid]) continue;
             const jumlah = paymentJumlahSetelahDiskon(p);
+            const isTransfer = isCollectorTransferPaymentMethod(p.payment_method);
+
+            if (isTransfer) {
+                sums[cid].total_lunas_transfer += jumlah;
+                continue;
+            }
+
             sums[cid].total_lunas_gross += jumlah;
+            sums[cid].total_commission_cash += Number(p.commission_amount) || 0;
             sums[cid].sudah_setor += Number(p.remittance_net_applied) || 0;
             const pool = paymentRemittancePoolRp(p);
             const applied = Number(p.remittance_net_applied) || 0;
@@ -8617,6 +9310,8 @@ async handlePaymentWebhook(payload, gateway) {
             ...c,
             ...(sums[c.id] || {
                 total_lunas_gross: 0,
+                total_lunas_transfer: 0,
+                total_commission_cash: 0,
                 sudah_setor: 0,
                 pending_amount: 0,
                 pending_payments_count: 0
@@ -8759,13 +9454,12 @@ async handlePaymentWebhook(payload, gateway) {
                     e.notes,
                     SUBSTR(e.description, 18) as collector_name
                 FROM expenses e
-                WHERE e.category = 'Operasional' 
-                AND e.description LIKE 'Komisi Kolektor%'
+                WHERE e.description LIKE ?
                 ORDER BY e.expense_date DESC
                 LIMIT 20
             `;
             
-            this.db.all(sql, [], (err, rows) => {
+            this.db.all(sql, [COLLECTOR_COMMISSION_EXPENSE_DESC_PREFIX], (err, rows) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -8786,10 +9480,15 @@ async handlePaymentWebhook(payload, gateway) {
                 notes TEXT,
                 received_at TEXT NOT NULL,
                 created_at TEXT DEFAULT (datetime('now','localtime')),
+                updated_at TEXT,
                 FOREIGN KEY (collector_id) REFERENCES collectors(id)
             )`;
             this.db.run(sql, (err) => {
                 if (err) return reject(err);
+                this.db.run(
+                    'ALTER TABLE collector_remittance_receipts ADD COLUMN updated_at TEXT',
+                    () => {}
+                );
                 this.db.run(
                     'CREATE INDEX IF NOT EXISTS idx_crr_collector ON collector_remittance_receipts(collector_id)',
                     () => {}
@@ -8825,38 +9524,8 @@ async handlePaymentWebhook(payload, gateway) {
         });
     }
 
-    /** Riwayat penerimaan setoran (nilai net yang disetor ke kasir). */
-    async getCollectorRemittanceReceipts(limit = 80) {
-        await this.ensureCollectorRemittanceReceiptsTable();
-        const lim = Math.min(500, Math.max(1, parseInt(String(limit), 10) || 80));
-        return new Promise((resolve, reject) => {
-            const sql = `
-                SELECT 
-                    r.id,
-                    r.amount_net as amount,
-                    r.payment_method,
-                    r.notes,
-                    r.received_at,
-                    c.name as collector_name
-                FROM collector_remittance_receipts r
-                JOIN collectors c ON c.id = r.collector_id
-                ORDER BY datetime(COALESCE(r.received_at, r.created_at)) DESC, r.id DESC
-                LIMIT ?
-            `;
-            this.db.all(sql, [lim], (err, rows) => {
-                if (err) reject(err);
-                else resolve(rows || []);
-            });
-        });
-    }
-
-    /**
-     * Riwayat penerimaan setoran untuk export (batas aman, filter periode opsional).
-     * month/year = 'all' atau kosong → tanpa filter tanggal.
-     */
-    async getCollectorRemittanceReceiptsExported({ limit = 8000, month = null, year = null } = {}) {
-        await this.ensureCollectorRemittanceReceiptsTable();
-        const lim = Math.min(20000, Math.max(1, parseInt(String(limit), 10) || 8000));
+    /** Filter tanggal + kolektor untuk riwayat setoran (UI & export). */
+    _buildRemittanceReceiptDateWhere(month, year, collectorId, alias = 'r') {
         const m =
             month != null && String(month).trim() !== '' && String(month) !== 'all'
                 ? parseInt(String(month), 10)
@@ -8866,31 +9535,73 @@ async handlePaymentWebhook(payload, gateway) {
                 ? parseInt(String(year), 10)
                 : NaN;
         const useRange = Number.isFinite(m) && m >= 1 && m <= 12 && Number.isFinite(y);
-        let dateWhere = '';
+        let where = '';
         const params = [];
         if (useRange) {
             const startDate = `${y}-${String(m).padStart(2, '0')}-01`;
             const endDate = new Date(y, m, 0).toISOString().split('T')[0];
-            dateWhere =
-                ' WHERE date(COALESCE(r.received_at, r.created_at)) >= date(?) AND date(COALESCE(r.received_at, r.created_at)) <= date(?) ';
+            where +=
+                ' WHERE date(COALESCE(' +
+                alias +
+                '.received_at, ' +
+                alias +
+                '.created_at)) >= date(?) AND date(COALESCE(' +
+                alias +
+                '.received_at, ' +
+                alias +
+                '.created_at)) <= date(?)';
             params.push(startDate, endDate);
         }
-        const sql = `
-                SELECT
+        const cid = parseInt(String(collectorId), 10);
+        if (Number.isFinite(cid) && cid > 0) {
+            where += where ? ' AND ' : ' WHERE ';
+            where += alias + '.collector_id = ?';
+            params.push(cid);
+        }
+        return { where, params, useRange, month: m, year: y };
+    }
+
+    /** Riwayat penerimaan setoran (nilai net yang disetor ke kasir). */
+    async getCollectorRemittanceReceipts(opts = 80) {
+        await this.ensureCollectorRemittanceReceiptsTable();
+        try {
+            await this.purgeOrphanAutoOfficeTransferRemittanceReceipts();
+        } catch (purgeErr) {
+            try {
+                logger.warn('[billing] purge orphan office transfer remittance:', purgeErr.message);
+            } catch (_) {}
+        }
+        const conf =
+            typeof opts === 'number' || typeof opts === 'string'
+                ? { limit: opts }
+                : opts && typeof opts === 'object'
+                  ? opts
+                  : {};
+        const lim = Math.min(20000, Math.max(1, parseInt(String(conf.limit), 10) || 5000));
+        const { where, params } = this._buildRemittanceReceiptDateWhere(
+            conf.month,
+            conf.year,
+            conf.collector_id,
+            'r'
+        );
+        return new Promise((resolve, reject) => {
+            const sql = `
+                SELECT 
                     r.id,
+                    r.collector_id,
                     r.amount_net as amount,
                     r.payment_method,
                     r.notes,
                     r.received_at,
+                    r.updated_at,
                     c.name as collector_name
                 FROM collector_remittance_receipts r
                 JOIN collectors c ON c.id = r.collector_id
-                ${dateWhere}
+                ${where}
                 ORDER BY datetime(COALESCE(r.received_at, r.created_at)) DESC, r.id DESC
                 LIMIT ?
             `;
-        params.push(lim);
-        return new Promise((resolve, reject) => {
+            params.push(lim);
             this.db.all(sql, params, (err, rows) => {
                 if (err) reject(err);
                 else resolve(rows || []);
@@ -8898,52 +9609,235 @@ async handlePaymentWebhook(payload, gateway) {
         });
     }
 
-    async insertCollectorRemittanceReceipt({ collector_id, amount_net, payment_method, notes, received_at }) {
+    async getCollectorRemittanceReceiptById(receiptId) {
         await this.ensureCollectorRemittanceReceiptsTable();
+        await this._ensureRemittanceReceiptPaymentIdColumn();
+        const id = parseInt(String(receiptId), 10);
+        if (!Number.isFinite(id) || id <= 0) return null;
+        return new Promise((resolve, reject) => {
+            this.db.get(
+                `SELECT r.id, r.collector_id, r.amount_net as amount, r.payment_method, r.notes,
+                        r.received_at, r.created_at, r.updated_at, r.payment_id,
+                        c.name as collector_name
+                 FROM collector_remittance_receipts r
+                 JOIN collectors c ON c.id = r.collector_id
+                 WHERE r.id = ?`,
+                [id],
+                (err, row) => (err ? reject(err) : resolve(row || null))
+            );
+        });
+    }
+
+    _isAutoOfficeTransferReceipt(row) {
+        const notes = String(row?.notes || '').toLowerCase();
+        const method = String(row?.payment_method || '').toLowerCase();
+        return (
+            notes.includes('transfer langsung ke rekening kantor') ||
+            (isCollectorTransferPaymentMethod(method) && notes.includes('transfer'))
+        );
+    }
+
+    async _ensureRemittanceReceiptPaymentIdColumn() {
+        if (this._remittanceReceiptPaymentIdEnsured) return;
+        await this.ensureCollectorRemittanceReceiptsTable();
+        await new Promise((resolve) => {
+            this.db.run('ALTER TABLE collector_remittance_receipts ADD COLUMN payment_id INTEGER', (err) => {
+                if (err && !String(err.message || '').toLowerCase().includes('duplicate')) {
+                    try {
+                        logger.warn('[billing] collector_remittance_receipts.payment_id:', err.message);
+                    } catch (_) {}
+                }
+                this._remittanceReceiptPaymentIdEnsured = true;
+                resolve();
+            });
+        });
+        await new Promise((resolve) => {
+            this.db.run(
+                'CREATE INDEX IF NOT EXISTS idx_crr_payment ON collector_remittance_receipts(payment_id)',
+                () => resolve()
+            );
+        });
+    }
+
+    /**
+     * Hapus riwayat setoran kantor otomatis (transfer langsung) saat pembayaran dibatalkan.
+     */
+    async _deleteAutoOfficeTransferRemittanceForPayment(payment, dbGet, dbRun) {
+        if (!payment?.collector_id || !isCollectorTransferPaymentMethod(payment.payment_method)) {
+            return { deleted: 0 };
+        }
+        if (String(payment.remittance_status || '') !== 'remitted') {
+            return { deleted: 0 };
+        }
+
+        await this._ensureRemittanceReceiptPaymentIdColumn();
+        await this._ensureIncomeSourceColumns();
+
+        const linkedReceipts = await new Promise((resolve, reject) => {
+            this.db.all(
+                'SELECT id FROM collector_remittance_receipts WHERE payment_id = ?',
+                [payment.id],
+                (err, rows) => (err ? reject(err) : resolve(rows || []))
+            );
+        });
+        for (const row of linkedReceipts) {
+            await this.deleteIncomeByRemittanceReceiptId(row.id, dbRun);
+        }
+
+        const byPaymentId = await dbRun(
+            'DELETE FROM collector_remittance_receipts WHERE payment_id = ?',
+            [payment.id]
+        );
+        if (byPaymentId.changes > 0) {
+            return { deleted: byPaymentId.changes };
+        }
+
+        const notes = String(payment.remittance_notes || '').trim();
+        if (!notes || !this._isAutoOfficeTransferReceipt({ notes, payment_method: 'transfer' })) {
+            return { deleted: 0 };
+        }
+
+        const legacy = await dbGet(
+            `SELECT id FROM collector_remittance_receipts
+             WHERE collector_id = ? AND payment_method = 'transfer' AND notes = ?
+             ORDER BY id DESC LIMIT 1`,
+            [payment.collector_id, notes]
+        );
+        if (!legacy?.id) {
+            return { deleted: 0 };
+        }
+        await this.deleteIncomeByRemittanceReceiptId(legacy.id, dbRun);
+        const del = await dbRun('DELETE FROM collector_remittance_receipts WHERE id = ?', [legacy.id]);
+        return { deleted: del.changes || 0, receipt_id: legacy.id };
+    }
+
+    /**
+     * Bersihkan riwayat transfer kantor yang pembayarannya sudah tidak ada (mis. sudah dibatalkan sebelum perbaikan ini).
+     */
+    async purgeOrphanAutoOfficeTransferRemittanceReceipts() {
+        await this.ensureCollectorRemittanceReceiptsTable();
+        await this._ensureRemittanceReceiptPaymentIdColumn();
         return new Promise((resolve, reject) => {
             this.db.run(
-                `INSERT INTO collector_remittance_receipts (collector_id, amount_net, payment_method, notes, received_at)
-                 VALUES (?, ?, ?, ?, ?)`,
-                [
-                    collector_id,
-                    Number(amount_net) || 0,
-                    payment_method != null ? String(payment_method) : '',
-                    notes != null ? String(notes) : '',
-                    received_at || new Date().toISOString()
-                ],
+                `DELETE FROM collector_remittance_receipts
+                 WHERE payment_method = 'transfer'
+                   AND LOWER(COALESCE(notes, '')) LIKE '%transfer langsung ke rekening kantor%'
+                   AND (
+                     (payment_id IS NOT NULL AND NOT EXISTS (
+                       SELECT 1 FROM payments p WHERE p.id = collector_remittance_receipts.payment_id
+                     ))
+                     OR (
+                       payment_id IS NULL
+                       AND NOT EXISTS (
+                         SELECT 1 FROM payments p
+                         WHERE IFNULL(p.payment_type, 'collector') = 'collector'
+                           AND p.collector_id = collector_remittance_receipts.collector_id
+                           AND TRIM(COALESCE(p.remittance_notes, '')) = TRIM(COALESCE(collector_remittance_receipts.notes, ''))
+                       )
+                     )
+                   )`,
                 function (err) {
                     if (err) reject(err);
-                    else resolve({ id: this.lastID });
+                    else resolve({ deleted: this.changes || 0 });
                 }
             );
         });
     }
 
-    // Method untuk mencatat remittance (update status di payments) — mendukung setoran parsial sesuai jumlah di form (FIFO).
-    async recordCollectorRemittance(remittanceData) {
-        const { collector_id, amount, payment_method, notes, remittance_date } = remittanceData;
-        const remitDate = remittance_date || new Date().toISOString();
-        const noteStr = notes != null ? String(notes) : '';
-        const collectorIdNum = parseInt(String(collector_id), 10);
-        const targetNet = Number(amount);
+    /** Batalkan alokasi setoran tunai kolektor (LIFO) — dipakai saat koreksi riwayat. */
+    async _rollbackCollectorRemittanceNet(collectorId, amountRp) {
+        const collectorIdNum = parseInt(String(collectorId), 10);
+        const targetCents = Math.round(Number(amountRp) * 100);
+        if (!Number.isFinite(collectorIdNum) || collectorIdNum <= 0 || targetCents <= 0) return;
 
+        await this._ensureRemittanceNetAppliedColumn();
+        const dbRun = (sql, params = []) =>
+            new Promise((resolve, reject) => {
+                this.db.run(sql, params, function (err) {
+                    if (err) reject(err);
+                    else resolve({ changes: this.changes });
+                });
+            });
+        const dbAll = (sql, params = []) =>
+            new Promise((resolve, reject) => {
+                this.db.all(sql, params, (err, rows) => {
+                    if (err) reject(err);
+                    else resolve(rows || []);
+                });
+            });
+
+        const rows = await dbAll(
+            `SELECT p.id, p.amount, p.commission_amount, p.discount_amount, p.notes, p.payment_method,
+                    COALESCE(p.remittance_net_applied, 0) as remittance_net_applied,
+                    COALESCE(i.amount, 0) as invoice_amount
+             FROM payments p
+             INNER JOIN invoices i ON i.id = p.invoice_id
+             WHERE p.collector_id = ?
+               AND p.payment_type = 'collector'
+               AND COALESCE(p.remittance_net_applied, 0) > 0.009
+               AND NOT ${sqlPaymentMethodIsTransfer('p')}
+             ORDER BY datetime(COALESCE(p.remittance_date, p.payment_date, '1970-01-01')) DESC, p.id DESC`,
+            [collectorIdNum]
+        );
+
+        let remaining = targetCents;
+        for (const row of rows) {
+            if (remaining <= 0) break;
+            const appliedCents = Math.round((Number(row.remittance_net_applied) || 0) * 100);
+            if (appliedCents <= 0) continue;
+            const poolCents = Math.round(paymentRemittancePoolRp(row) * 100);
+
+            if (remaining >= appliedCents) {
+                await dbRun(
+                    `UPDATE payments SET
+                        remittance_net_applied = 0,
+                        remittance_status = NULL,
+                        remittance_date = NULL,
+                        remittance_notes = NULL
+                     WHERE id = ?`,
+                    [row.id]
+                );
+                remaining -= appliedCents;
+            } else {
+                const newAppliedCents = appliedCents - remaining;
+                const newAppliedRp = newAppliedCents / 100;
+                const fullyRemitted = newAppliedCents >= poolCents - 1;
+                await dbRun(
+                    `UPDATE payments SET
+                        remittance_net_applied = ?,
+                        remittance_status = ?,
+                        remittance_date = CASE WHEN ? THEN remittance_date ELSE NULL END
+                     WHERE id = ?`,
+                    [newAppliedRp, fullyRemitted ? 'remitted' : 'pending', fullyRemitted, row.id]
+                );
+                remaining = 0;
+            }
+        }
+        if (remaining > 1) {
+            throw new Error(
+                'Koreksi setoran gagal: alokasi pembayaran kolektor tidak cukup untuk mengembalikan jumlah lama'
+            );
+        }
+    }
+
+    /** Alokasi setoran tunai ke baris payments (tanpa insert log riwayat). */
+    async _applyCollectorRemittanceAllocation(collectorId, amountRp, remitDate, noteStr) {
+        const collectorIdNum = parseInt(String(collectorId), 10);
+        const targetNet = Number(amountRp);
+        const targetCents = Math.round(targetNet * 100);
         if (!Number.isFinite(collectorIdNum) || collectorIdNum <= 0) {
             throw new Error('ID kolektor tidak valid');
         }
-        if (!Number.isFinite(targetNet) || targetNet <= 0) {
-            throw new Error('Jumlah setoran harus lebih dari 0');
-        }
+        if (!Number.isFinite(targetNet) || targetNet <= 0) return { updatedPayments: 0 };
 
         await this._ensurePaymentsDiscountColumn();
         await this._ensureRemittanceNetAppliedColumn();
-
-        const targetCents = Math.round(targetNet * 100);
 
         const dbRun = (sql, params = []) =>
             new Promise((resolve, reject) => {
                 this.db.run(sql, params, function (err) {
                     if (err) reject(err);
-                    else resolve({ lastID: this.lastID, changes: this.changes });
+                    else resolve({ changes: this.changes });
                 });
             });
         const dbAll = (sql, params = []) =>
@@ -8971,7 +9865,6 @@ async handlePaymentWebhook(payload, gateway) {
                 paymentEligibleForCollectorRemittance(r) &&
                 paymentRemittancePoolRp(r) - (Number(r.remittance_net_applied) || 0) > 0.009
         );
-
         const normalized = rows.map((r) => {
             const poolRp = paymentRemittancePoolRp(r);
             const poolCents = Math.round(poolRp * 100);
@@ -8979,9 +9872,7 @@ async handlePaymentWebhook(payload, gateway) {
             const pendingNetCents = Math.max(0, poolCents - appliedCents);
             return { ...r, _poolCents: poolCents, _appliedCents: appliedCents, _pendingNetCents: pendingNetCents };
         });
-
         const pendingNetCents = normalized.reduce((s, row) => s + row._pendingNetCents, 0);
-
         if (pendingNetCents <= 0) {
             throw new Error('Tidak ada sisa setoran untuk kolektor ini');
         }
@@ -8993,87 +9884,294 @@ async handlePaymentWebhook(payload, gateway) {
         }
 
         let rowsTouched = 0;
-        let partialApplied = false;
-
-        await dbRun('BEGIN IMMEDIATE');
-        try {
-            let remaining = targetCents;
-
-            for (const row of normalized) {
-                if (remaining <= 0) break;
-                if (row._pendingNetCents <= 0) continue;
-
-                if (remaining >= row._pendingNetCents) {
-                    const newAppliedRp = row._poolCents / 100;
-                    await dbRun(
-                        `UPDATE payments SET
-                            remittance_net_applied = ?,
-                            remittance_status = 'remitted',
-                            remittance_date = ?,
-                            remittance_notes = ?
-                         WHERE id = ?`,
-                        [newAppliedRp, remitDate, noteStr, row.id]
-                    );
-                    remaining -= row._pendingNetCents;
-                    rowsTouched += 1;
-                } else {
-                    const newAppliedCents = row._appliedCents + remaining;
-                    const newAppliedRp = newAppliedCents / 100;
-                    await dbRun(
-                        `UPDATE payments SET
-                            remittance_net_applied = ?,
-                            remittance_status = 'pending',
-                            remittance_notes = CASE
-                                WHEN TRIM(?) != '' THEN ?
-                                ELSE remittance_notes END
-                         WHERE id = ?`,
-                        [newAppliedRp, noteStr, noteStr, row.id]
-                    );
-                    partialApplied = true;
-                    rowsTouched += 1;
-                    remaining = 0;
-                    break;
-                }
+        let remaining = targetCents;
+        for (const row of normalized) {
+            if (remaining <= 0) break;
+            if (row._pendingNetCents <= 0) continue;
+            if (remaining >= row._pendingNetCents) {
+                const newAppliedRp = row._poolCents / 100;
+                await dbRun(
+                    `UPDATE payments SET
+                        remittance_net_applied = ?,
+                        remittance_status = 'remitted',
+                        remittance_date = ?,
+                        remittance_notes = ?
+                     WHERE id = ?`,
+                    [newAppliedRp, remitDate, noteStr, row.id]
+                );
+                remaining -= row._pendingNetCents;
+                rowsTouched += 1;
+            } else {
+                const newAppliedCents = row._appliedCents + remaining;
+                const newAppliedRp = newAppliedCents / 100;
+                await dbRun(
+                    `UPDATE payments SET
+                        remittance_net_applied = ?,
+                        remittance_status = 'pending',
+                        remittance_notes = CASE WHEN TRIM(?) != '' THEN ? ELSE remittance_notes END
+                     WHERE id = ?`,
+                    [newAppliedRp, noteStr, noteStr, row.id]
+                );
+                rowsTouched += 1;
+                remaining = 0;
+                break;
             }
-
-            if (remaining > 0) {
-                throw new Error('Alokasi setoran tidak selesai; coba ulangi dengan jumlah yang lebih kecil');
-            }
-
-            await dbRun('COMMIT');
-
-            let receiptLogId = null;
-            try {
-                const rec = await this.insertCollectorRemittanceReceipt({
-                    collector_id: collectorIdNum,
-                    amount_net: targetNet,
-                    payment_method,
-                    notes: noteStr,
-                    received_at: remitDate
-                });
-                receiptLogId = rec && rec.id != null ? rec.id : null;
-            } catch (logErr) {
-                console.error('[billing] Gagal mencatat riwayat setoran (payments sudah commit):', logErr.message);
-            }
-            if (receiptLogId != null) {
-                setImmediate(() => {
-                    try {
-                        const cfn = require('./collectorFieldNotifications');
-                        cfn.notifyAdminRemittanceRecorded(collectorIdNum, receiptLogId, targetNet);
-                    } catch (_) {}
-                });
-            }
-
-            return {
-                success: true,
-                updatedPayments: rowsTouched,
-                splitPayment: partialApplied,
-                ...remittanceData
-            };
-        } catch (e) {
-            await dbRun('ROLLBACK').catch(() => {});
-            throw e;
         }
+        if (remaining > 0) {
+            throw new Error('Alokasi setoran tidak selesai; coba ulangi dengan jumlah yang lebih kecil');
+        }
+        return { updatedPayments: rowsTouched };
+    }
+
+    /**
+     * Koreksi entri riwayat setoran (jumlah, kolektor, tanggal, metode, catatan).
+     * Setoran tunai: sesuaikan ulang alokasi di tabel payments.
+     * Transfer otomatis ke kantor: hanya perbarui log riwayat.
+     */
+    async updateCollectorRemittanceReceipt(receiptId, patch = {}) {
+        await this.ensureCollectorRemittanceReceiptsTable();
+        const existing = await this.getCollectorRemittanceReceiptById(receiptId);
+        if (!existing) throw new Error('Riwayat setoran tidak ditemukan');
+
+        const oldAmount = Number(existing.amount) || 0;
+        const oldCollectorId = Number(existing.collector_id);
+        const newCollectorId =
+            patch.collector_id != null && patch.collector_id !== ''
+                ? parseInt(String(patch.collector_id), 10)
+                : oldCollectorId;
+        const newAmount =
+            patch.amount_net != null && patch.amount_net !== ''
+                ? Number(patch.amount_net)
+                : patch.amount != null && patch.amount !== ''
+                  ? Number(patch.amount)
+                  : oldAmount;
+        const newMethod =
+            patch.payment_method != null ? String(patch.payment_method).trim() : String(existing.payment_method || '');
+        const newNotes = patch.notes != null ? String(patch.notes) : String(existing.notes || '');
+        const newReceivedAt = patch.received_at != null ? String(patch.received_at) : String(existing.received_at || '');
+
+        if (!Number.isFinite(newCollectorId) || newCollectorId <= 0) {
+            throw new Error('Kolektor tidak valid');
+        }
+        if (!Number.isFinite(newAmount) || newAmount <= 0) {
+            throw new Error('Jumlah setoran harus lebih dari 0');
+        }
+        if (!newMethod) throw new Error('Metode penerimaan wajib diisi');
+        if (!newReceivedAt) throw new Error('Tanggal penerimaan wajib diisi');
+
+        const isAutoTransfer = this._isAutoOfficeTransferReceipt(existing);
+        const newIsTransfer = isCollectorTransferPaymentMethod(newMethod);
+
+        if (!isAutoTransfer) {
+            if (oldAmount > 0.009) {
+                await this._rollbackCollectorRemittanceNet(oldCollectorId, oldAmount);
+            }
+            if (!newIsTransfer && newAmount > 0.009) {
+                await this._applyCollectorRemittanceAllocation(
+                    newCollectorId,
+                    newAmount,
+                    newReceivedAt,
+                    newNotes
+                );
+            }
+        }
+
+        await new Promise((resolve, reject) => {
+            this.db.run(
+                `UPDATE collector_remittance_receipts SET
+                    collector_id = ?,
+                    amount_net = ?,
+                    payment_method = ?,
+                    notes = ?,
+                    received_at = ?,
+                    updated_at = datetime('now','localtime')
+                 WHERE id = ?`,
+                [newCollectorId, newAmount, newMethod, newNotes, newReceivedAt, receiptId],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+        try {
+            await this.syncIncomeFromRemittanceReceipt(receiptId);
+        } catch (syncErr) {
+            console.error('[billing] sync income after remittance update:', syncErr.message);
+        }
+        return { success: true, id: receiptId };
+    }
+
+    /**
+     * Hapus entri riwayat setoran. Setoran tunai: kembalikan alokasi payments.
+     * Transfer otomatis ke kantor: kembalikan status pembayaran jika terhubung payment_id.
+     */
+    async deleteCollectorRemittanceReceipt(receiptId) {
+        await this.ensureCollectorRemittanceReceiptsTable();
+        await this._ensureRemittanceReceiptPaymentIdColumn();
+        await this._ensureIncomeSourceColumns();
+        await this._ensureRemittanceNetAppliedColumn();
+
+        const id = parseInt(String(receiptId), 10);
+        if (!Number.isFinite(id) || id <= 0) {
+            throw new Error('ID riwayat tidak valid');
+        }
+
+        const existing = await this.getCollectorRemittanceReceiptById(id);
+        if (!existing) throw new Error('Riwayat setoran tidak ditemukan');
+
+        const isAutoTransfer = this._isAutoOfficeTransferReceipt(existing);
+        const amount = Number(existing.amount) || 0;
+        const collectorId = Number(existing.collector_id);
+        const paymentId =
+            existing.payment_id != null && Number.isFinite(Number(existing.payment_id))
+                ? Number(existing.payment_id)
+                : null;
+
+        if (isAutoTransfer) {
+            if (paymentId > 0) {
+                await new Promise((resolve, reject) => {
+                    this.db.run(
+                        `UPDATE payments SET
+                            remittance_status = NULL,
+                            remittance_date = NULL,
+                            remittance_notes = NULL,
+                            remittance_net_applied = 0
+                         WHERE id = ? AND IFNULL(payment_type, 'collector') = 'collector'`,
+                        [paymentId],
+                        (err) => (err ? reject(err) : resolve())
+                    );
+                });
+            }
+        } else if (amount > 0.009 && Number.isFinite(collectorId) && collectorId > 0) {
+            const appliedSum = await new Promise((resolve, reject) => {
+                this.db.get(
+                    `SELECT COALESCE(SUM(COALESCE(remittance_net_applied, 0)), 0) AS total
+                     FROM payments
+                     WHERE collector_id = ?
+                       AND IFNULL(payment_type, 'collector') = 'collector'
+                       AND NOT ${sqlPaymentMethodIsTransfer('payments')}`,
+                    [collectorId],
+                    (err, row) => (err ? reject(err) : resolve(Number(row?.total) || 0))
+                );
+            });
+            if (appliedSum + 0.01 >= amount) {
+                await this._rollbackCollectorRemittanceNet(collectorId, amount);
+            }
+        }
+
+        await this.deleteIncomeByRemittanceReceiptId(id);
+
+        const deleted = await new Promise((resolve, reject) => {
+            this.db.run('DELETE FROM collector_remittance_receipts WHERE id = ?', [id], function (err) {
+                if (err) reject(err);
+                else resolve(this.changes || 0);
+            });
+        });
+        if (!deleted) throw new Error('Gagal menghapus riwayat setoran');
+
+        return { success: true, id, deleted: true };
+    }
+
+    /**
+     * Riwayat penerimaan setoran untuk export (batas aman, filter periode opsional).
+     * month/year = 'all' atau kosong → tanpa filter tanggal.
+     */
+    async getCollectorRemittanceReceiptsExported({ limit = 8000, month = null, year = null, collector_id = null } = {}) {
+        return this.getCollectorRemittanceReceipts({ limit, month, year, collector_id });
+    }
+
+    async insertCollectorRemittanceReceipt({
+        collector_id,
+        amount_net,
+        payment_method,
+        notes,
+        received_at,
+        payment_id = null
+    }) {
+        await this.ensureCollectorRemittanceReceiptsTable();
+        await this._ensureRemittanceReceiptPaymentIdColumn();
+        const pid =
+            payment_id != null && Number.isFinite(Number(payment_id)) && Number(payment_id) > 0
+                ? Number(payment_id)
+                : null;
+        const self = this;
+        return new Promise((resolve, reject) => {
+            this.db.run(
+                `INSERT INTO collector_remittance_receipts (collector_id, amount_net, payment_method, notes, received_at, payment_id)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+                [
+                    collector_id,
+                    Number(amount_net) || 0,
+                    payment_method != null ? String(payment_method) : '',
+                    notes != null ? String(notes) : '',
+                    received_at || new Date().toISOString(),
+                    pid
+                ],
+                function (err) {
+                    if (err) return reject(err);
+                    const receiptId = this.lastID;
+                    self
+                        .syncIncomeFromRemittanceReceipt(receiptId)
+                        .catch((syncErr) => {
+                            console.error('[billing] sync income from remittance receipt:', syncErr.message);
+                        })
+                        .finally(() => resolve({ id: receiptId }));
+                }
+            );
+        });
+    }
+
+    // Method untuk mencatat remittance (update status di payments) — mendukung setoran parsial sesuai jumlah di form (FIFO).
+    async recordCollectorRemittance(remittanceData) {
+        const { collector_id, amount, payment_method, notes, remittance_date } = remittanceData;
+        const remitDate = remittance_date || new Date().toISOString();
+        const noteStr = notes != null ? String(notes) : '';
+        const collectorIdNum = parseInt(String(collector_id), 10);
+        const targetNet = Number(amount);
+
+        if (!Number.isFinite(collectorIdNum) || collectorIdNum <= 0) {
+            throw new Error('ID kolektor tidak valid');
+        }
+        if (!Number.isFinite(targetNet) || targetNet <= 0) {
+            throw new Error('Jumlah setoran harus lebih dari 0');
+        }
+
+        await this._ensurePaymentsDiscountColumn();
+        await this._ensureRemittanceNetAppliedColumn();
+
+        const alloc = await this._applyCollectorRemittanceAllocation(
+            collectorIdNum,
+            targetNet,
+            remitDate,
+            noteStr
+        );
+        const rowsTouched = alloc.updatedPayments || 0;
+
+        let receiptLogId = null;
+        try {
+            const rec = await this.insertCollectorRemittanceReceipt({
+                collector_id: collectorIdNum,
+                amount_net: targetNet,
+                payment_method,
+                notes: noteStr,
+                received_at: remitDate
+            });
+            receiptLogId = rec && rec.id != null ? rec.id : null;
+        } catch (logErr) {
+            console.error('[billing] Gagal mencatat riwayat setoran (alokasi payments sudah selesai):', logErr.message);
+        }
+        if (receiptLogId != null) {
+            setImmediate(() => {
+                try {
+                    const cfn = require('./collectorFieldNotifications');
+                    cfn.notifyAdminRemittanceRecorded(collectorIdNum, receiptLogId, targetNet);
+                } catch (_) {}
+            });
+        }
+
+        return {
+            success: true,
+            updatedPayments: rowsTouched,
+            splitPayment: false,
+            ...remittanceData
+        };
     }
 
     async getPaymentTransactions(invoiceId = null) {

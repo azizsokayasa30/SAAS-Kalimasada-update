@@ -1,0 +1,179 @@
+<% if (typeof categorySummary !== 'undefined' && categorySummary) { %>
+<style>
+    .finance-category-summary .summary-footer-income td {
+        background-color: #198754 !important;
+        color: #ffffff !important;
+        border-color: #157347 !important;
+    }
+    .finance-category-summary .summary-footer-expense td {
+        background-color: #dc3545 !important;
+        color: #ffffff !important;
+        border-color: #bb2d3b !important;
+    }
+    .finance-category-summary .finance-category-filter-row {
+        cursor: pointer;
+    }
+    .finance-category-summary .finance-category-filter-row:hover td {
+        background-color: rgba(0, 0, 0, 0.04);
+    }
+    .finance-category-summary.summary-variant-income .finance-category-filter-row.finance-category-active td {
+        background-color: rgba(25, 135, 84, 0.14) !important;
+    }
+    .finance-category-summary.summary-variant-expense .finance-category-filter-row.finance-category-active td {
+        background-color: rgba(220, 53, 69, 0.12) !important;
+    }
+    .finance-category-summary .finance-category-filter-footer {
+        cursor: pointer;
+    }
+</style>
+<div class="card mb-4 finance-category-summary summary-variant-<%= summaryVariant === 'expense' ? 'expense' : 'income' %>">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div>
+            <h5 class="card-title mb-0"><%= summaryTitle || 'Ringkasan per Kategori' %></h5>
+            <small class="text-muted">Klik kategori untuk memfilter daftar transaksi di bawah</small>
+        </div>
+        <% if (typeof startDate !== 'undefined' && typeof endDate !== 'undefined' && startDate && endDate) { %>
+            <small class="text-muted">Periode: <%= startDate %> s/d <%= endDate %></small>
+        <% } %>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0 align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-3">Kategori</th>
+                        <th class="text-end">Jumlah Transaksi</th>
+                        <th class="text-end pe-3">Total Nominal</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <% if (categorySummary.rows && categorySummary.rows.length > 0) { %>
+                        <% categorySummary.rows.forEach(function(row) { %>
+                            <tr class="finance-category-filter-row"
+                                data-category-name="<%= row.name %>"
+                                title="Klik untuk filter kategori <%= row.name %>">
+                                <td class="ps-3">
+                                    <%= row.name %>
+                                    <% if (row.orphan) { %>
+                                        <span class="badge bg-secondary ms-1" title="Kategori dari transaksi, belum terdaftar di kelola kategori">Lama</span>
+                                    <% } %>
+                                </td>
+                                <td class="text-end text-muted"><%= row.count || 0 %></td>
+                                <td class="text-end pe-3 fw-semibold <%= amountClass || '' %>">
+                                    Rp <%= (row.total || 0).toLocaleString('id-ID') %>
+                                </td>
+                            </tr>
+                        <% }); %>
+                    <% } else { %>
+                        <tr>
+                            <td colspan="3" class="text-center text-muted py-4">
+                                Belum ada kategori. Tambahkan di <a href="/admin/billing/finance-categories">Kelola Kategori</a>.
+                            </td>
+                        </tr>
+                    <% } %>
+                </tbody>
+                <tfoot class="border-top border-2 finance-category-filter-footer <%= summaryVariant === 'expense' ? 'summary-footer-expense' : 'summary-footer-income' %>"
+                       title="Klik untuk tampilkan semua transaksi">
+                    <tr class="fw-bold">
+                        <td class="ps-3">Total Summary</td>
+                        <td class="text-end"><%= categorySummary.transactionCount || 0 %></td>
+                        <td class="text-end pe-3">
+                            Rp <%= (categorySummary.grandTotal || 0).toLocaleString('id-ID') %>
+                        </td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>
+</div>
+<% if (typeof transactionBodyId !== 'undefined' && transactionBodyId) { %>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const transactionBodyId = <%- JSON.stringify(transactionBodyId) %>;
+    const listTitleId = <%- JSON.stringify(typeof listTitleId !== 'undefined' ? listTitleId : '') %>;
+    const listTitleDefault = <%- JSON.stringify(typeof listTitleDefault !== 'undefined' ? listTitleDefault : 'Daftar Transaksi') %>;
+    const tableBody = document.getElementById(transactionBodyId);
+    if (!tableBody) return;
+
+    let activeCategory = null;
+
+    function normalizeCategory(value) {
+        const key = String(value || '').trim().toLowerCase();
+        if (key === 'kerjasama' || key === 'bayar kerjasama') return 'bayar kerjasama';
+        return key;
+    }
+
+    function getListTitleEl() {
+        return listTitleId ? document.getElementById(listTitleId) : null;
+    }
+
+    function getClearBtn() {
+        return document.getElementById('financeCategoryFilterClear');
+    }
+
+    function applyCategoryFilter(categoryName) {
+        activeCategory = categoryName || null;
+        const filterKey = activeCategory ? normalizeCategory(activeCategory) : null;
+        const rows = tableBody.querySelectorAll('tr[data-category]');
+        let visibleCount = 0;
+
+        rows.forEach(function (row) {
+            const match = !filterKey || normalizeCategory(row.dataset.category) === filterKey;
+            row.classList.toggle('d-none', !match);
+            if (match) visibleCount++;
+        });
+
+        const emptyRow = tableBody.querySelector('.finance-filter-empty');
+        if (emptyRow) {
+            emptyRow.classList.toggle('d-none', !filterKey || visibleCount > 0);
+        }
+
+        document.querySelectorAll('.finance-category-filter-row').forEach(function (row) {
+            const isActive = filterKey && normalizeCategory(row.dataset.categoryName) === filterKey;
+            row.classList.toggle('finance-category-active', isActive);
+        });
+
+        const titleEl = getListTitleEl();
+        const clearBtn = getClearBtn();
+        if (titleEl) {
+            titleEl.textContent = activeCategory
+                ? listTitleDefault + ' — ' + activeCategory
+                : listTitleDefault;
+        }
+        if (clearBtn) {
+            clearBtn.classList.toggle('d-none', !activeCategory);
+        }
+    }
+
+    document.querySelectorAll('.finance-category-filter-row').forEach(function (row) {
+        row.addEventListener('click', function () {
+            const categoryName = row.dataset.categoryName || '';
+            if (activeCategory && normalizeCategory(activeCategory) === normalizeCategory(categoryName)) {
+                applyCategoryFilter(null);
+                return;
+            }
+            applyCategoryFilter(categoryName);
+            const listCard = tableBody.closest('.card');
+            if (listCard) {
+                listCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        });
+    });
+
+    const footer = document.querySelector('.finance-category-filter-footer');
+    if (footer) {
+        footer.addEventListener('click', function () {
+            applyCategoryFilter(null);
+        });
+    }
+
+    const clearBtn = getClearBtn();
+    if (clearBtn) {
+        clearBtn.addEventListener('click', function () {
+            applyCategoryFilter(null);
+        });
+    }
+});
+</script>
+<% } %>
+<% } %>

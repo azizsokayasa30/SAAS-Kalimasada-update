@@ -641,17 +641,19 @@ router.post('/radius/clients/add', adminAuth, async (req, res) => {
       comment: comment || null
     });
 
-    // Write to database
-    await writeClientsConfToDB(clients);
-
-    // Restart FreeRADIUS
+    const saveResult = await writeClientsConfToDB(clients);
     const restartResult = restartFreeRADIUS();
+
+    let message = 'Client berhasil ditambahkan';
+    if (restartResult.success) message += ' dan FreeRADIUS berhasil direstart';
+    if (saveResult.warning) message += '. ' + saveResult.warning;
 
     res.json({
       success: true,
-      message: 'Client berhasil ditambahkan' + (restartResult.success ? ' dan FreeRADIUS berhasil direstart' : ''),
+      message,
       client: clients[clients.length - 1],
-      restart: restartResult
+      restart: restartResult,
+      save: saveResult
     });
   } catch (error) {
     logger.error('Error adding client:', error);
@@ -699,17 +701,19 @@ router.post('/radius/clients/edit', adminAuth, async (req, res) => {
       comment: comment || null
     };
 
-    // Write to database
-    await writeClientsConfToDB(clients);
-
-    // Restart FreeRADIUS
+    const saveResult = await writeClientsConfToDB(clients);
     const restartResult = restartFreeRADIUS();
+
+    let message = 'Client berhasil diupdate';
+    if (restartResult.success) message += ' dan FreeRADIUS berhasil direstart';
+    if (saveResult.warning) message += '. ' + saveResult.warning;
 
     res.json({
       success: true,
-      message: 'Client berhasil diupdate' + (restartResult.success ? ' dan FreeRADIUS berhasil direstart' : ''),
+      message,
       client: clients[clientIndex],
-      restart: restartResult
+      restart: restartResult,
+      save: saveResult
     });
   } catch (error) {
     logger.error('Error updating client:', error);
@@ -736,16 +740,18 @@ router.post('/radius/clients/delete', adminAuth, async (req, res) => {
       return res.json({ success: false, message: 'Client tidak ditemukan' });
     }
 
-    // Write to database
-    await writeClientsConfToDB(filteredClients);
-
-    // Restart FreeRADIUS
+    const saveResult = await writeClientsConfToDB(filteredClients);
     const restartResult = restartFreeRADIUS();
+
+    let message = 'Client berhasil dihapus';
+    if (restartResult.success) message += ' dan FreeRADIUS berhasil direstart';
+    if (saveResult.warning) message += '. ' + saveResult.warning;
 
     res.json({
       success: true,
-      message: 'Client berhasil dihapus' + (restartResult.success ? ' dan FreeRADIUS berhasil direstart' : ''),
-      restart: restartResult
+      message,
+      restart: restartResult,
+      save: saveResult
     });
   } catch (error) {
     logger.error('Error deleting client:', error);

@@ -353,52 +353,37 @@ async function replaceNasTable(clients) {
     logger.info(`[RADIUS-CLIENTS] Tabel nas diisi ulang (${clients.length} entri masukan)`);
 }
 
-/**
- * Write clients array back to clients.conf file
- */
-function writeClientsConf(clients) {
-    try {
-        // Backup original file
-        const backupPath = `${CLIENTS_CONF_PATH}.backup.${Date.now()}`;
-        let backupCreated = false;
-        
+function readClientsConfHeader() {
+    const sources = [];
+    const envMirror = process.env.RADIUS_CLIENTS_CONF_MIRROR && String(process.env.RADIUS_CLIENTS_CONF_MIRROR).trim();
+    if (envMirror) sources.push(path.resolve(envMirror));
+    sources.push(CLIENTS_CONF_MIRROR, CLIENTS_CONF_PATH);
+
+    for (const p of sources) {
         try {
-            if (fs.existsSync(CLIENTS_CONF_PATH)) {
-                // Try direct copy first
-                try {
-                    fs.copyFileSync(CLIENTS_CONF_PATH, backupPath);
-                    backupCreated = true;
-                } catch (copyError) {
-                    // If direct copy fails, try with sudo
-                    try {
-                        execSync(`sudo cp ${CLIENTS_CONF_PATH} ${backupPath}`, { encoding: 'utf8' });
-                        backupCreated = true;
-                    } catch (sudoCopyError) {
-                        logger.warn(`Cannot create backup: ${copyError.message}`);
-                    }
-                }
-            }
-        } catch (backupError) {
-            logger.warn(`Backup failed: ${backupError.message}`);
-        }
-        
-        if (backupCreated) {
-            logger.info(`Backup created: ${backupPath}`);
-        }
-
-        // Read original file untuk preserve header comments
-        let headerContent = '';
-        if (fs.existsSync(CLIENTS_CONF_PATH)) {
-            const originalContent = fs.readFileSync(CLIENTS_CONF_PATH, 'utf8');
+            if (!p || !fs.existsSync(p)) continue;
+            fs.accessSync(p, fs.constants.R_OK);
+            const originalContent = fs.readFileSync(p, 'utf8');
             const headerMatch = originalContent.match(/^([\s\S]*?)(?=^client\s)/m);
-            if (headerMatch) {
-                headerContent = headerMatch[1];
-            }
+            if (headerMatch) return headerMatch[1];
+        } catch (e) {
+            logger.debug(`[RADIUS-CLIENTS] Lewati header dari ${p}: ${e.message}`);
         }
+    }
 
-        // Default header jika tidak ada
-        if (!headerContent) {
-            headerContent = `## clients.conf -- client configuration directives
+    try {
+        const out = execSync(`sudo -n cat ${CLIENTS_CONF_PATH}`, {
+            encoding: 'utf8',
+            maxBuffer: 2 * 1024 * 1024,
+            timeout: 5000
+        });
+        const headerMatch = out.match(/^([\s\S]*?)(?=^client\s)/m);
+        if (headerMatch) return headerMatch[1];
+    } catch (e) {
+        logger.debug(`[RADIUS-CLIENTS] Lewati header sudo: ${e.message}`);
+    }
+
+    return `## clients.conf -- client configuration directives
 ##
 ##	\$Id\$
 
@@ -411,85 +396,132 @@ function writeClientsConf(clients) {
 #
 
 `;
+}
+
+function buildClientsConfContent(clients) {
+    const headerContent = readClientsConfHeader();
+    let clientsSection = '';
+
+    clients.forEach((client) => {
+        const c = { ...client };
+        if (c.name === 'localhost_ipv6' && !c.ipaddr) {
+            c.ipaddr = '::1';
+            c.addrType = 'ipv6addr';
         }
 
-        // Build clients section
-        let clientsSection = '';
-        clients.forEach(client => {
-            // Safety check for localhost_ipv6
-            if (client.name === 'localhost_ipv6' && !client.ipaddr) {
-                client.ipaddr = '::1';
-                client.addrType = 'ipv6addr';
-            }
+        clientsSection += `client ${c.name} {\n`;
 
-            clientsSection += `client ${client.name} {\n`;
-            
-            if (client.ipaddr) {
-                // Determine address keyword
-                let keyword = client.addrType || 'ipaddr';
-                if (client.ipaddr.includes(':')) {
-                    keyword = 'ipv6addr';
-                }
-                clientsSection += `\t${keyword} = ${client.ipaddr}\n`;
-            } else if (client.name === 'localhost') {
-                clientsSection += `\tipaddr = 127.0.0.1\n`;
-            }
-
-            if (client.secret) {
-                clientsSection += `\tsecret = ${client.secret}\n`;
-            }
-            if (client.nas_type) {
-                clientsSection += `\tnas_type = ${client.nas_type}\n`;
-            }
-            if (client.require_message_authenticator) {
-                clientsSection += `\trequire_message_authenticator = ${client.require_message_authenticator}\n`;
-            }
-            if (client.comment) {
-                clientsSection += `\t# ${client.comment}\n`;
-            }
-            clientsSection += `}\n\n`;
-        });
-
-        // Write to file
-        const fullContent = headerContent + clientsSection;
-        try {
-            fs.writeFileSync(CLIENTS_CONF_PATH, fullContent, 'utf8');
-        } catch (writeError) {
-            // If direct write fails, try with sudo
-            try {
-                const tempFile = `/tmp/clients.conf.${Date.now()}`;
-                fs.writeFileSync(tempFile, fullContent, 'utf8');
-                execSync(`sudo cp ${tempFile} ${CLIENTS_CONF_PATH}`, { encoding: 'utf8' });
-                fs.unlinkSync(tempFile);
-            } catch (sudoWriteError) {
-                logger.error(`Cannot write clients.conf: ${writeError.message}`);
-                throw new Error(`Tidak dapat menulis file clients.conf: ${writeError.message}`);
-            }
+        if (c.ipaddr) {
+            let keyword = c.addrType || 'ipaddr';
+            if (c.ipaddr.includes(':')) keyword = 'ipv6addr';
+            clientsSection += `\t${keyword} = ${c.ipaddr}\n`;
+        } else if (c.name === 'localhost') {
+            clientsSection += `\tipaddr = 127.0.0.1\n`;
         }
-        
-        // Ensure secure permissions (not globally writable)
-        try {
-            // Try 640 (rw-r-----) or 660 (rw-rw----)
-            const secureMode = 0o660; 
-            fs.chmodSync(CLIENTS_CONF_PATH, secureMode);
-            logger.info(`Set secure permissions (660) on clients.conf`);
-        } catch (chmodError) {
-            // If direct chmod fails, try with sudo
-            try {
-                execSync(`sudo chmod 660 ${CLIENTS_CONF_PATH}`);
-                logger.info(`Set secure permissions (660) on clients.conf via sudo`);
-            } catch (sudoChmodError) {
-                logger.warn(`Could not set secure permissions: ${chmodError.message}. FreeRADIUS might fail start if globally writable.`);
-            }
-        }
-        
-        logger.info(`clients.conf updated successfully with ${clients.length} clients`);
 
+        if (c.secret) clientsSection += `\tsecret = ${c.secret}\n`;
+        if (c.nas_type) clientsSection += `\tnas_type = ${c.nas_type}\n`;
+        if (c.require_message_authenticator) {
+            clientsSection += `\trequire_message_authenticator = ${c.require_message_authenticator}\n`;
+        }
+        if (c.comment) clientsSection += `\t# ${c.comment}\n`;
+        clientsSection += `}\n\n`;
+    });
+
+    return headerContent + clientsSection;
+}
+
+function canWritePath(targetPath) {
+    try {
+        fs.accessSync(targetPath, fs.constants.W_OK);
         return true;
-    } catch (error) {
-        logger.error(`Error writing clients.conf: ${error.message}`);
-        throw error;
+    } catch (e) {
+        return false;
     }
+}
+
+/** Tulis salinan mirror (bisa dibaca proses Node tanpa root). */
+function writeClientsConfMirror(clients) {
+    const fullContent = buildClientsConfContent(clients);
+    const mirrorDir = path.dirname(CLIENTS_CONF_MIRROR);
+    if (!fs.existsSync(mirrorDir)) {
+        fs.mkdirSync(mirrorDir, { recursive: true });
+    }
+    fs.writeFileSync(CLIENTS_CONF_MIRROR, fullContent, 'utf8');
+    try {
+        fs.chmodSync(CLIENTS_CONF_MIRROR, 0o640);
+    } catch (e) {
+        logger.debug(`[RADIUS-CLIENTS] chmod mirror: ${e.message}`);
+    }
+    logger.info(`[RADIUS-CLIENTS] Mirror diperbarui: ${CLIENTS_CONF_MIRROR}`);
+    return true;
+}
+
+/**
+ * Write clients array back to clients.conf file (best-effort).
+ * FreeRADIUS di server ini memakai read_clients=yes dari tabel nas — gagal tulis file tidak fatal.
+ */
+function writeClientsConf(clients) {
+    const fullContent = buildClientsConfContent(clients);
+    const backupPath = `${CLIENTS_CONF_PATH}.backup.${Date.now()}`;
+    let backupCreated = false;
+
+    try {
+        if (fs.existsSync(CLIENTS_CONF_PATH)) {
+            try {
+                if (canWritePath(CLIENTS_CONF_PATH)) {
+                    fs.copyFileSync(CLIENTS_CONF_PATH, backupPath);
+                    backupCreated = true;
+                } else {
+                    execSync(`sudo -n cp ${CLIENTS_CONF_PATH} ${backupPath}`, {
+                        encoding: 'utf8',
+                        timeout: 5000
+                    });
+                    backupCreated = true;
+                }
+            } catch (copyError) {
+                logger.warn(`[RADIUS-CLIENTS] Backup clients.conf dilewati: ${copyError.message}`);
+            }
+        }
+    } catch (backupError) {
+        logger.warn(`[RADIUS-CLIENTS] Backup gagal: ${backupError.message}`);
+    }
+
+    if (backupCreated) {
+        logger.info(`[RADIUS-CLIENTS] Backup: ${backupPath}`);
+    }
+
+    if (canWritePath(CLIENTS_CONF_PATH)) {
+        fs.writeFileSync(CLIENTS_CONF_PATH, fullContent, 'utf8');
+    } else {
+        const tempFile = `/tmp/clients.conf.${process.pid}.${Date.now()}`;
+        fs.writeFileSync(tempFile, fullContent, 'utf8');
+        try {
+            execSync(`sudo -n cp ${tempFile} ${CLIENTS_CONF_PATH}`, {
+                encoding: 'utf8',
+                timeout: 5000
+            });
+        } finally {
+            try {
+                fs.unlinkSync(tempFile);
+            } catch (e) {
+                /* ignore */
+            }
+        }
+    }
+
+    try {
+        if (canWritePath(CLIENTS_CONF_PATH)) {
+            fs.chmodSync(CLIENTS_CONF_PATH, 0o660);
+        } else {
+            execSync(`sudo -n chmod 660 ${CLIENTS_CONF_PATH}`, { encoding: 'utf8', timeout: 5000 });
+        }
+    } catch (chmodError) {
+        logger.warn(`[RADIUS-CLIENTS] chmod clients.conf: ${chmodError.message}`);
+    }
+
+    logger.info(`[RADIUS-CLIENTS] clients.conf diperbarui (${clients.length} client)`);
+    return true;
 }
 
 /**
@@ -508,22 +540,21 @@ function restartFreeRADIUS() {
             };
         }
 
-        // Try with sudo first
         try {
-            execSync('sudo systemctl restart freeradius', { encoding: 'utf8', timeout: 10000 });
-            logger.info('FreeRADIUS restarted successfully');
+            execSync('sudo -n systemctl restart freeradius', { encoding: 'utf8', timeout: 10000 });
+            logger.info('FreeRADIUS restarted successfully (sudo -n)');
             return { success: true, message: 'FreeRADIUS berhasil direstart' };
         } catch (sudoError) {
-            // If sudo fails, try without sudo (might work if running as root)
             try {
                 execSync('systemctl restart freeradius', { encoding: 'utf8', timeout: 10000 });
                 logger.info('FreeRADIUS restarted successfully (without sudo)');
                 return { success: true, message: 'FreeRADIUS berhasil direstart' };
             } catch (directError) {
-                logger.warn(`FreeRADIUS restart failed. Please restart manually: sudo systemctl restart freeradius`);
-                return { 
-                    success: false, 
-                    message: 'Gagal restart FreeRADIUS secara otomatis. Silakan restart manual di host: sudo systemctl restart freeradius',
+                logger.warn('FreeRADIUS restart failed — restart manual: sudo systemctl restart freeradius');
+                return {
+                    success: false,
+                    message:
+                        'Gagal restart FreeRADIUS otomatis. Jalankan manual: sudo systemctl restart freeradius',
                     error: directError.message
                 };
             }
@@ -569,19 +600,45 @@ function validateClient(client) {
 }
 
 /**
- * Tulis daftar client ke clients.conf (yang dibaca FreeRADIUS) DAN ke tabel nas (SQLite).
- * Keduanya harus sama agar UI, backup DB, dan FR konsisten.
+ * Tulis daftar client ke tabel nas (SQLite, dibaca FreeRADIUS via read_clients=yes).
+ * Sinkron clients.conf + mirror bersifat best-effort (proses Node biasanya tidak punya akses /etc).
  */
 async function writeClientsConfToDB(clients) {
+    const result = {
+        nasWritten: false,
+        clientsConfWritten: false,
+        mirrorWritten: false,
+        warning: null
+    };
+
     try {
-        writeClientsConf(clients);
         await replaceNasTable(clients);
-        logger.info(`[RADIUS-CLIENTS] Disimpan ${clients.length} client ke clients.conf + nas`);
-        return true;
+        result.nasWritten = true;
+        logger.info(`[RADIUS-CLIENTS] Disimpan ${clients.length} client ke tabel nas`);
     } catch (error) {
-        logger.error(`[RADIUS-CLIENTS] Error writing clients: ${error.message}`);
+        logger.error(`[RADIUS-CLIENTS] Gagal tulis nas: ${error.message}`);
         throw error;
     }
+
+    try {
+        writeClientsConfMirror(clients);
+        result.mirrorWritten = true;
+    } catch (mirrorError) {
+        logger.warn(`[RADIUS-CLIENTS] Mirror gagal: ${mirrorError.message}`);
+    }
+
+    try {
+        writeClientsConf(clients);
+        result.clientsConfWritten = true;
+    } catch (fileError) {
+        result.warning =
+            'NAS tersimpan di database RADIUS. clients.conf tidak bisa ditulis tanpa sudo — ' +
+            'FreeRADIUS memakai tabel nas (read_clients=yes). Opsional: npm run radius:mirror-clients atau ' +
+            'pasang sudoers NOPASSWD untuk sinkron file.';
+        logger.warn(`[RADIUS-CLIENTS] clients.conf tidak ditulis: ${fileError.message}`);
+    }
+
+    return result;
 }
 
 /**
@@ -641,7 +698,9 @@ module.exports = {
     parseClientsConf,
     parseClientsConfFromDB,
     parseClientsConfFromFile,
+    buildClientsConfContent,
     writeClientsConf,
+    writeClientsConfMirror,
     writeClientsConfToDB,
     restartFreeRADIUS,
     validateClient,
