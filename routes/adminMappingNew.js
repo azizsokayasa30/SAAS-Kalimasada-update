@@ -13,10 +13,12 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const { adminAuth } = require('./adminAuth');
 const cacheManager = require('../config/cacheManager');
+const { resolveRequestTenantId } = require('../config/platform/tenantCache');
 const {
     CACHE_KEYS,
     CACHE_TTL,
     invalidateMappingCache,
+    scopedMappingCacheKey,
     openBillingDb,
     loadMappingDbData,
     buildCorePayload,
@@ -223,34 +225,38 @@ function getTXPowerValue(device) {
 router.get('/api/mapping/new', adminAuth, async (req, res) => {
     const started = Date.now();
     const phase = String(req.query.phase || 'full').toLowerCase();
+    const tenantId = resolveRequestTenantId(req);
 
     try {
         if (phase === 'core') {
-            const cached = cacheManager.get(CACHE_KEYS.core);
+            const coreKey = scopedMappingCacheKey(CACHE_KEYS.core, tenantId);
+            const cached = cacheManager.get(coreKey);
             if (cached) {
                 return res.json({ success: true, data: cached, phase: 'core', cached: true, ms: Date.now() - started });
             }
 
             const db = openBillingDb();
-            const dbData = await loadMappingDbData(db);
+            const dbData = await loadMappingDbData(db, tenantId);
             db.close();
 
             const data = buildCorePayload(dbData);
-            cacheManager.set(CACHE_KEYS.core, data, CACHE_TTL.core);
+            cacheManager.set(coreKey, data, CACHE_TTL.core);
             console.log(`✅ Mapping core loaded in ${Date.now() - started}ms`);
             return res.json({ success: true, data, phase: 'core', cached: false, ms: Date.now() - started });
         }
 
         if (phase === 'live') {
-            const cached = cacheManager.get(CACHE_KEYS.live);
+            const liveKey = scopedMappingCacheKey(CACHE_KEYS.live, tenantId);
+            const cached = cacheManager.get(liveKey);
             if (cached) {
                 return res.json({ success: true, data: cached, phase: 'live', cached: true, ms: Date.now() - started });
             }
 
-            let customers = cacheManager.get(CACHE_KEYS.core)?.customers;
+            const coreKey = scopedMappingCacheKey(CACHE_KEYS.core, tenantId);
+            let customers = cacheManager.get(coreKey)?.customers;
             if (!customers?.length) {
                 const db = openBillingDb();
-                const dbData = await loadMappingDbData(db);
+                const dbData = await loadMappingDbData(db, tenantId);
                 db.close();
                 customers = dbData.customers;
             } else {
@@ -271,24 +277,24 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
                 }));
             }
 
-            const live = await buildLivePayload(customers);
+            const live = await buildLivePayload(customers, tenantId);
             const data = {
                 customers: live.enrichedCustomers,
                 statistics: {
                     downCustomers: live.enrichedCustomers.filter((c) => c.network_down === true).length
                 }
             };
-            cacheManager.set(CACHE_KEYS.live, data, CACHE_TTL.live);
+            cacheManager.set(liveKey, data, CACHE_TTL.live);
             console.log(`✅ Mapping live (PPPoE) loaded in ${Date.now() - started}ms`);
             return res.json({ success: true, data, phase: 'live', cached: false, ms: Date.now() - started });
         }
 
         console.log('🚀 New Mapping API - Loading full network data...');
         const db = openBillingDb();
-        const dbData = await loadMappingDbData(db);
+        const dbData = await loadMappingDbData(db, tenantId);
         db.close();
 
-        const pppoeBatch = await getPppoeBatchCached();
+        const pppoeBatch = await getPppoeBatchCached(tenantId);
         const enrichedCustomers = enrichCustomersWithPppoe(dbData.customers, pppoeBatch);
 
         const data = buildCorePayload(dbData);

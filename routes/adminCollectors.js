@@ -8,25 +8,34 @@ const router = express.Router();
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const bcrypt = require('bcrypt');
-const { getSetting } = require('../config/settingsManager');
+const billingManager = require('../config/billing');
+const { tenantSqlFromRequest, tenantIdForInsert } = require('../config/platform/tenantSqlHelpers');
+const { attachTenantAppSettings } = require('../config/platform/tenantAppSettings');
 const { adminAuth } = require('./adminAuth');
+
+router.use(attachTenantAppSettings);
+
+function tFrom(req) {
+    return tenantSqlFromRequest(req);
+}
 
 // List collectors
 router.get('/', adminAuth, async (req, res) => {
     try {
+        const t = tFrom(req);
         const dbPath = path.join(__dirname, '../data/billing.db');
         const db = new sqlite3.Database(dbPath);
         
-        // Get collectors with statistics
         const collectors = await new Promise((resolve, reject) => {
             db.all(`
                 SELECT c.*, 
                        COUNT(cp.id) as total_payments,
                        COALESCE(SUM(cp.commission_amount), 0) as total_commission,
-                       (SELECT GROUP_CONCAT(area, ', ') FROM collector_areas WHERE collector_id = c.id) as assigned_areas
+                       (SELECT GROUP_CONCAT(area, ', ') FROM collector_areas ca WHERE collector_id = c.id${t.and('ca')}) as assigned_areas
                 FROM collectors c
                 LEFT JOIN collector_payments cp ON c.id = cp.collector_id 
                     AND cp.status = 'completed'
+                WHERE 1=1${t.and('c')}
                 GROUP BY c.id
                 ORDER BY c.name
             `, (err, rows) => {
@@ -35,7 +44,7 @@ router.get('/', adminAuth, async (req, res) => {
             });
         });
         
-        const appSettings = await getAppSettings();
+        const appSettings = req.tenantSettings || {};
         
         db.close();
         
@@ -57,7 +66,7 @@ router.get('/', adminAuth, async (req, res) => {
 // Add collector form
 router.get('/add', adminAuth, async (req, res) => {
     try {
-        const appSettings = await getAppSettings();
+        const appSettings = req.tenantSettings || {};
         
         res.render('admin/collector-form', {
             title: 'Tambah Tukang Tagih',
@@ -78,13 +87,14 @@ router.get('/add', adminAuth, async (req, res) => {
 // Edit collector form
 router.get('/:id/edit', adminAuth, async (req, res) => {
     try {
+        const t = tFrom(req);
         const { id } = req.params;
 
         const dbPath = path.join(__dirname, '../data/billing.db');
         const db = new sqlite3.Database(dbPath);
         
         const collector = await new Promise((resolve, reject) => {
-            db.get('SELECT * FROM collectors WHERE id = ?', [id], (err, row) => {
+            db.get(`SELECT * FROM collectors WHERE id = ?${t.and('')}`, [id], (err, row) => {
                 if (err) reject(err);
                 else resolve(row);
             });
@@ -97,7 +107,7 @@ router.get('/:id/edit', adminAuth, async (req, res) => {
             });
         }
         
-        const appSettings = await getAppSettings();
+        const appSettings = req.tenantSettings || {};
         
         db.close();
         

@@ -7,7 +7,7 @@ const multer = require('multer');
 const { getSettingsWithCache, deleteSetting, clearSettingsCache } = require('../config/settingsManager');
 const { getVersionInfo, getVersionBadge } = require('../config/version-utils');
 const logger = require('../config/logger');
-const { logAdminActivity, getActivityLogs, clearOldActivityLogs } = require('../config/activityLogger');
+const { logAdminActivity, getActivityLogs, clearOldActivityLogs, getTenantBackupFilenames } = require('../config/activityLogger');
 const billing = require('../config/billing');
 const {
     createBillingDbBackup,
@@ -67,6 +67,155 @@ const billingQrUpload = multer({
     fileFilter: imageFileFilter
 });
 
+// Upload file database (.db/.sqlite) untuk restore dari file lokal
+const restoreDbDir = path.join(__dirname, '../data/backup');
+const restoreDbStorage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        try {
+            fs.mkdirSync(restoreDbDir, { recursive: true });
+        } catch (_) { /* ignore */ }
+        cb(null, restoreDbDir);
+    },
+    filename: function (req, file, cb) {
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        cb(null, `uploaded_backup_${ts}.db`);
+    }
+});
+
+const dbFileFilter = function (req, file, cb) {
+    const name = String(file.originalname || '').toLowerCase();
+    if (name.endsWith('.db') || name.endsWith('.sqlite') || name.endsWith('.sqlite3')) {
+        cb(null, true);
+    } else {
+        cb(new Error('Hanya file database (.db, .sqlite, .sqlite3) yang diizinkan'), false);
+    }
+};
+
+const restoreDbUpload = multer({
+    storage: restoreDbStorage,
+    limits: {
+        fileSize: 512 * 1024 * 1024
+    },
+    fileFilter: dbFileFilter
+});
+
+// Parser multipart tanpa file (untuk field teks pada restore dari daftar server)
+const multipartTextOnly = multer();
+
+/** Validasi header file SQLite ("SQLite format 3\0"). */
+function isValidSqliteFile(filePath) {
+    let fd = null;
+    try {
+        fd = fs.openSync(filePath, 'r');
+        const buf = Buffer.alloc(16);
+        const bytes = fs.readSync(fd, buf, 0, 16, 0);
+        if (bytes < 16) return false;
+        return buf.toString('utf8', 0, 15) === 'SQLite format 3';
+    } catch (_) {
+        return false;
+    } finally {
+        if (fd !== null) {
+            try { fs.closeSync(fd); } catch (_) { /* ignore */ }
+        }
+    }
+}
+
+/**
+ * Restore billing.db dari file sumber (sudah tervalidasi path-nya) MENGGUNAKAN
+ * SQLite Online Backup API langsung ke koneksi aktif aplikasi.
+ *
+ * Kenapa tidak copy file? billing.db berjalan dalam mode WAL dan koneksinya tetap
+ * terbuka selama aplikasi hidup. Menimpa file .db saat koneksi masih terbuka —
+ * apalagi meninggalkan file -wal/-shm lama — akan MERUSAK database
+ * ("SQLITE_CORRUPT: database disk image is malformed"). Backup API menyalin
+ * seluruh halaman dari file sumber ke dalam koneksi live secara aman, tanpa perlu
+ * menimpa file mentah dan tanpa perlu me-restart proses.
+ */
+async function restoreBillingDbFromFile(sourceAbsPath) {
+    const dbPath = path.join(__dirname, '../data/billing.db');
+
+    if (!isValidSqliteFile(sourceAbsPath)) {
+        throw new Error('File bukan database SQLite yang valid');
+    }
+
+    const liveDb = billing && billing.db ? billing.db : null;
+    if (!liveDb) {
+        throw new Error('Koneksi database aktif tidak tersedia untuk restore');
+    }
+
+    // Rapikan WAL supaya cadangan pra-restore konsisten, lalu buat cadangan pengaman.
+    await new Promise((resolve) => {
+        liveDb.run('PRAGMA wal_checkpoint(TRUNCATE)', () => resolve());
+    });
+    try {
+        createBillingDbBackup(dbPath, { prefix: 'pre_restore' });
+    } catch (e) {
+        logger.warn('[restore] Gagal membuat cadangan pra-restore: ' + e.message);
+    }
+
+    // Salin isi file sumber ke koneksi live via Online Backup API (arah: file -> live db).
+    await new Promise((resolve, reject) => {
+        let backup;
+        try {
+            backup = liveDb.backup(sourceAbsPath, 'main', 'main', false, (err) => {
+                if (err) reject(err);
+            });
+        } catch (err) {
+            return reject(err);
+        }
+
+        const stepAll = () => {
+            try {
+                backup.step(-1);
+            } catch (err) {
+                try { backup.finish(() => {}); } catch (_) { /* ignore */ }
+                return reject(err);
+            }
+            if (backup.completed) {
+                return backup.finish((err) => (err ? reject(err) : resolve()));
+            }
+            if (backup.failed) {
+                return backup.finish(() =>
+                    reject(new Error('Restore gagal saat menyalin data database (database sedang sibuk)'))
+                );
+            }
+            setImmediate(stepAll);
+        };
+        stepAll();
+    });
+
+    // Pastikan hasil restore tertulis penuh ke file utama.
+    await new Promise((resolve) => {
+        liveDb.run('PRAGMA wal_checkpoint(TRUNCATE)', () => resolve());
+    });
+
+    // Bangun ulang skema platform SaaS. File restore bisa berasal dari versi single
+    // (tanpa tabel tenants/subscription_plans dan tanpa kolom tenant_id), sehingga
+    // tanpa langkah ini aplikasi akan error "no such table: tenants". initPlatform()
+    // membuat tabel platform, menambahkan kolom tenant_id (default tenant #1) ke tabel
+    // single yang di-restore, dan memastikan tenant default + super admin tersedia.
+    try {
+        const tenantStore = require('../config/platform/tenantStore');
+        await tenantStore.initPlatform();
+        logger.info('[restore] Skema platform SaaS dipastikan ulang (initPlatform)');
+    } catch (e) {
+        logger.error('[restore] Gagal menjalankan initPlatform setelah restore: ' + e.message);
+    }
+
+    // Guard: hapus data demo seed jika ikut terbawa dari file restore.
+    try {
+        const { purgeDemoSeedData } = require('../utils/demoSeedData');
+        const purged = await purgeDemoSeedData(liveDb);
+        if ((purged.collectorsRemoved || 0) + (purged.odpsRemoved || 0) > 0) {
+            logger.info(
+                `[restore] Demo seed guard: hapus ${purged.collectorsRemoved || 0} kolektor, ${purged.odpsRemoved || 0} ODP demo`
+            );
+        }
+    } catch (e) {
+        logger.warn('[restore] Demo seed guard dilewati: ' + e.message);
+    }
+}
+
 const settingsPath = path.join(__dirname, '../settings.json');
 const { ensureSettingsFile } = require('../config/settingsManager');
 
@@ -89,6 +238,11 @@ async function saveSettingsForAdmin(req, sanitizedSettings) {
     }
     await fsPromises.writeFile(settingsPath, JSON.stringify(sanitizedSettings, null, 2), 'utf8');
     clearSettingsCache();
+}
+
+async function getAppSettingsForAdmin(req) {
+    const tenantId = req.session?.tenantId || req.tenantId || null;
+    return getAppSettings(billing.db, tenantId);
 }
 const PAYMENT_GATEWAY_KEY_PREFIX = 'payment_gateway';
 const WHATSAPP_SETTING_PREFIXES = [
@@ -170,7 +324,7 @@ function collapseDottedKeysIntoObjects(target) {
 router.get('/', async (req, res) => {
     try {
         const settings = await getSettingsForAdmin(req);
-        const appSettings = await getAppSettings(billing.db);
+        const appSettings = await getAppSettingsForAdmin(req);
         res.render('adminSetting', { settings, appSettings });
     } catch (error) {
         logger.error('Error loading settings page:', error);
@@ -201,32 +355,23 @@ router.get('/data', async (req, res) => {
     }
 });
 
-// GET: Serve billing QR image (used for WhatsApp notifications)
-router.get('/billing-qr', (req, res) => {
+// GET: Serve billing QR image (hanya jika sudah diunggah di pengaturan)
+router.get('/billing-qr', async (req, res) => {
     try {
-        const settings = getSettingsWithCache();
-        const candidates = [];
+        const settings = await getSettingsForAdmin(req);
 
-        if (settings && settings.billing_qr_filename) {
-            candidates.push(path.join(__dirname, '../public/img', settings.billing_qr_filename));
+        if (!settings || !settings.billing_qr_filename) {
+            return res.status(404).send('QR penagihan belum diunggah');
         }
 
-        candidates.push(
-            path.join(__dirname, '../public/img/tagihan.jpg'),
-            path.join(__dirname, '../public/img/tagihan.png'),
-            path.join(__dirname, '../public/img/invoice.jpg'),
-            path.join(__dirname, '../public/img/invoice.png'),
-            path.join(__dirname, '../public/img/logo.png')
-        );
+        const qrPath = path.join(__dirname, '../public/img', settings.billing_qr_filename);
 
-        const existingPath = candidates.find((filePath) => filePath && fs.existsSync(filePath));
-
-        if (!existingPath) {
-            return res.status(404).send('QR image not found');
+        if (!fs.existsSync(qrPath)) {
+            return res.status(404).send('File QR penagihan tidak ditemukan');
         }
 
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-        res.sendFile(existingPath);
+        res.sendFile(qrPath);
     } catch (e) {
         logger.error('Error serving billing QR:', e);
         res.status(500).send('Failed to load billing QR image');
@@ -360,7 +505,7 @@ router.post('/save', async (req, res) => {
 });
 
 // POST: Save Interval Settings
-router.post('/save-intervals', (req, res) => {
+router.post('/save-intervals', async (req, res) => {
     try {
         const intervalData = req.body;
         
@@ -418,7 +563,7 @@ router.post('/save-intervals', (req, res) => {
         // Baca settings lama
         let oldSettings = {};
         try {
-            oldSettings = getSettingsWithCache();
+            oldSettings = await getSettingsForAdmin(req);
         } catch (e) {
             console.warn('Gagal membaca settings.json lama, menggunakan default:', e.message);
             oldSettings = {};
@@ -426,9 +571,8 @@ router.post('/save-intervals', (req, res) => {
 
         // Merge dengan settings lama
         const mergedSettings = { ...oldSettings, ...intervalData };
-        
-        // Tulis ke file
-        fs.writeFileSync(settingsPath, JSON.stringify(mergedSettings, null, 2));
+
+        await saveSettingsForAdmin(req, mergedSettings);
         
         // Log perubahan
         logger.info('Interval settings updated via web interface', {
@@ -487,7 +631,7 @@ router.get('/interval-status', (req, res) => {
 });
 
 // POST: Upload Logo
-router.post('/upload-logo', upload.single('logo'), (req, res) => {
+router.post('/upload-logo', upload.single('logo'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ 
@@ -508,13 +652,13 @@ router.post('/upload-logo', upload.single('logo'), (req, res) => {
             });
         }
 
-        // Baca settings.json
+        // Baca settings
         let settings = {};
         
         try {
-            settings = getSettingsWithCache();
+            settings = await getSettingsForAdmin(req);
         } catch (err) {
-            console.error('Gagal membaca settings.json:', err);
+            console.error('Gagal membaca settings:', err);
             return res.status(500).json({ 
                 success: false, 
                 error: 'Gagal membaca pengaturan' 
@@ -535,14 +679,14 @@ router.post('/upload-logo', upload.single('logo'), (req, res) => {
             }
         }
 
-        // Update settings.json
+        // Update settings
         settings.logo_filename = filename;
         
         try {
-            fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-            console.log('Settings.json berhasil diupdate dengan logo baru:', filename);
+            await saveSettingsForAdmin(req, settings);
+            console.log('Settings berhasil diupdate dengan logo baru:', filename);
         } catch (err) {
-            console.error('Gagal menyimpan settings.json:', err);
+            console.error('Gagal menyimpan settings:', err);
             return res.status(500).json({ 
                 success: false, 
                 error: 'Gagal menyimpan pengaturan' 
@@ -565,7 +709,7 @@ router.post('/upload-logo', upload.single('logo'), (req, res) => {
 });
 
 // POST: Upload Billing QR for notifications
-router.post('/upload-billing-qr', billingQrUpload.single('billingQr'), (req, res) => {
+router.post('/upload-billing-qr', billingQrUpload.single('billingQr'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({
@@ -587,9 +731,9 @@ router.post('/upload-billing-qr', billingQrUpload.single('billingQr'), (req, res
         let settings = {};
 
         try {
-            settings = getSettingsWithCache();
+            settings = await getSettingsForAdmin(req);
         } catch (err) {
-            logger.error('Gagal membaca settings.json:', err);
+            logger.error('Gagal membaca settings:', err);
             return res.status(500).json({
                 success: false,
                 error: 'Gagal membaca pengaturan'
@@ -611,10 +755,10 @@ router.post('/upload-billing-qr', billingQrUpload.single('billingQr'), (req, res
         settings.billing_qr_filename = filename;
 
         try {
-            fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-            console.log('Settings.json diupdate dengan billing QR baru:', filename);
+            await saveSettingsForAdmin(req, settings);
+            console.log('Settings diupdate dengan billing QR baru:', filename);
         } catch (err) {
-            logger.error('Gagal menyimpan settings.json:', err);
+            logger.error('Gagal menyimpan settings:', err);
             return res.status(500).json({
                 success: false,
                 error: 'Gagal menyimpan pengaturan'
@@ -707,7 +851,7 @@ router.get('/wa-status', async (req, res) => {
             } : null
         });
 
-        const settings = getSettingsWithCache();
+        const settings = await getSettingsForAdmin(req);
         const baileysEnabled = settings.baileys_enabled === true || String(settings.baileys_enabled).toLowerCase() === 'true';
         const activeProvider = String(settings.whatsapp_active_provider || 'baileys').toLowerCase();
         const hasQr = !!(status && (status.qrCode || status.qr));
@@ -821,7 +965,7 @@ router.post('/backup', async (req, res) => {
         const { filename, cleanup } = createBillingDbBackup(dbPath);
 
         logger.info(`Database backup created: ${filename}`);
-        await logAdminActivity(req, 'database_backup', `Backup database: ${filename}`);
+        await logAdminActivity(req, 'database_backup', `Backup database: ${filename}`, { backup_file: filename });
 
         let message = 'Database backup berhasil dibuat';
         if (cleanup.deletedCount > 0) {
@@ -844,45 +988,36 @@ router.post('/backup', async (req, res) => {
     }
 });
 
-// Restore database
-router.post('/restore', upload.single('backup_file'), async (req, res) => {
+// Restore database dari file backup yang ada di server (daftar Riwayat Backup)
+router.post('/restore', multipartTextOnly.none(), async (req, res) => {
     try {
-        if (!req.file) {
+        const requested = String(req.body.backup_file || '').trim();
+        if (!requested) {
             return res.status(400).json({
                 success: false,
                 message: 'File backup tidak ditemukan'
             });
         }
-        
-        const dbPath = path.join(__dirname, '../data/billing.db');
-        const backupPath = path.join(__dirname, '../data/backup', req.file.filename);
 
-        createBillingDbBackup(dbPath, { prefix: 'pre_restore' });
-
-        // Restore database
-        fs.copyFileSync(backupPath, dbPath);
-
-        const { purgeDemoSeedData } = require('../utils/demoSeedData');
-        const sqlite3 = require('sqlite3').verbose();
-        const purgeDb = new sqlite3.Database(dbPath);
-        try {
-            const purged = await purgeDemoSeedData(purgeDb);
-            if ((purged.collectorsRemoved || 0) + (purged.odpsRemoved || 0) > 0) {
-                logger.info(
-                    `[restore] Demo seed guard: hapus ${purged.collectorsRemoved || 0} kolektor, ${purged.odpsRemoved || 0} ODP demo`
-                );
-            }
-        } finally {
-            purgeDb.close();
+        // Cegah path traversal — hanya nama file di dalam folder backup
+        const safeName = path.basename(requested);
+        const backupPath = path.join(getBackupDir(), safeName);
+        if (!fs.existsSync(backupPath)) {
+            return res.status(404).json({
+                success: false,
+                message: 'File backup tidak ditemukan di server'
+            });
         }
 
-        logger.info(`Database restored from: ${req.file.filename}`);
-        await logAdminActivity(req, 'database_restore', `Restore database: ${req.file.filename}`);
+        await restoreBillingDbFromFile(backupPath);
+
+        logger.info(`Database restored from: ${safeName}`);
+        await logAdminActivity(req, 'database_restore', `Restore database: ${safeName}`, { backup_file: safeName });
 
         res.json({
             success: true,
             message: 'Database berhasil di-restore',
-            restored_file: req.file.filename
+            restored_file: safeName
         });
     } catch (error) {
         logger.error('Error restoring database:', error);
@@ -892,6 +1027,65 @@ router.post('/restore', upload.single('backup_file'), async (req, res) => {
             error: error.message
         });
     }
+});
+
+// Upload file backup database dari komputer admin (hanya menyimpan ke daftar backup, tidak restore)
+router.post('/upload-backup', (req, res) => {
+    restoreDbUpload.single('backup_file')(req, res, async (uploadErr) => {
+        const uploadedPath = req.file ? req.file.path : null;
+        try {
+            if (uploadErr) {
+                return res.status(400).json({
+                    success: false,
+                    message: uploadErr.message || 'Gagal mengunggah file'
+                });
+            }
+
+            if (!req.file) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'File database tidak ditemukan. Pilih file .db terlebih dahulu.'
+                });
+            }
+
+            // Pastikan file yang diunggah benar-benar database SQLite
+            if (!isValidSqliteFile(uploadedPath)) {
+                try { fs.unlinkSync(uploadedPath); } catch (_) { /* ignore */ }
+                return res.status(400).json({
+                    success: false,
+                    message: 'File yang diunggah bukan database SQLite yang valid'
+                });
+            }
+
+            // Batasi jumlah file backup sesuai kebijakan (maks. DEFAULT_KEEP_COUNT terbaru)
+            const cleanup = cleanupOldBillingBackups(DEFAULT_KEEP_COUNT, getBackupDir());
+
+            const originalName = req.file.originalname || req.file.filename;
+            const storedName = req.file.filename;
+            logger.info(`Backup database di-upload: ${originalName} -> ${storedName}`);
+            await logAdminActivity(req, 'database_backup', `Upload file backup: ${originalName} (${storedName})`, {
+                backup_file: storedName
+            });
+
+            res.json({
+                success: true,
+                message: 'File backup berhasil diunggah dan ditambahkan ke daftar',
+                filename: storedName,
+                original_name: originalName,
+                cleanup
+            });
+        } catch (error) {
+            if (uploadedPath) {
+                try { fs.unlinkSync(uploadedPath); } catch (_) { /* ignore */ }
+            }
+            logger.error('Error uploading backup file:', error);
+            res.status(500).json({
+                success: false,
+                message: 'Error uploading backup file',
+                error: error.message
+            });
+        }
+    });
 });
 
 // Simpan pengaturan auto backup database billing
@@ -943,7 +1137,7 @@ router.get('/backups', async (req, res) => {
         const backupPath = getBackupDir();
 
         if (!fs.existsSync(backupPath)) {
-            const appSettings = await getAppSettings(billing.db);
+            const appSettings = await getAppSettingsForAdmin(req);
             return res.json({
                 success: true,
                 backups: [],
@@ -956,13 +1150,25 @@ router.get('/backups', async (req, res) => {
             });
         }
 
-        const files = listBackupDbFiles(backupPath).map((file) => ({
+        const tenantId = req.tenantId ?? null;
+        const tenantBackupNames = await getTenantBackupFilenames(tenantId);
+        const tenantAllowedNames = new Set(tenantBackupNames);
+
+        const files = listBackupDbFiles(backupPath)
+            .filter((file) => {
+                const allowed = tenantAllowedNames;
+                if (!allowed || allowed.size === 0) return false;
+                return allowed.has(file.filename);
+            })
+            .map((file) => ({
             filename: file.filename,
             size: file.size,
             created: file.created
         }));
-        const latestRegular = getLatestRegularBackup(backupPath);
-        const appSettings = await getAppSettings(billing.db);
+        const latestRegular = files.length
+            ? files.reduce((latest, file) => (!latest || file.created > latest.created ? file : latest), null)
+            : null;
+        const appSettings = await getAppSettingsForAdmin(req);
 
         res.json({
             success: true,
@@ -975,7 +1181,7 @@ router.get('/backups', async (req, res) => {
                     ? {
                         filename: latestRegular.filename,
                         created: latestRegular.created,
-                        modified: latestRegular.modified
+                        modified: latestRegular.created
                     }
                     : null
             }
@@ -994,7 +1200,12 @@ router.get('/activity-logs', adminAuth, async (req, res) => {
     try {
         const page = parseInt(req.query.page, 10) || 1;
         const limit = parseInt(req.query.limit, 10) || 50;
-        const result = await getActivityLogs({ page, limit, userType: 'admin' });
+        const result = await getActivityLogs({
+            page,
+            limit,
+            userType: 'admin',
+            tenantId: req.tenantId ?? null
+        });
         res.json({
             success: true,
             logs: result.logs,
@@ -1883,11 +2094,16 @@ router.post('/execute-isolir-script', adminAuth, async (req, res) => {
         const db = new sqlite3.Database(dbPath);
         
         let routerObj = null;
-        
+
+        // Isolasi tenant (literal integer aman) untuk tabel routers.
+        const _rt = billing._tenantWhere('');
+        const _rtAnd = _rt.sql ? ` AND tenant_id = ${parseInt(_rt.params[0], 10)}` : '';
+        const _rtWhere = _rt.sql ? ` WHERE tenant_id = ${parseInt(_rt.params[0], 10)}` : '';
+
         // Get router object
         if (router_id) {
             routerObj = await new Promise((resolve, reject) => {
-                db.get('SELECT * FROM routers WHERE id = ?', [router_id], (err, row) => {
+                db.get('SELECT * FROM routers WHERE id = ?' + _rtAnd, [router_id], (err, row) => {
                     if (err) reject(err);
                     else resolve(row || null);
                 });
@@ -1900,7 +2116,7 @@ router.post('/execute-isolir-script', adminAuth, async (req, res) => {
         } else {
             // Auto: get first router
             routerObj = await new Promise((resolve, reject) => {
-                db.get('SELECT * FROM routers ORDER BY id LIMIT 1', [], (err, row) => {
+                db.get('SELECT * FROM routers' + _rtWhere + ' ORDER BY id LIMIT 1', [], (err, row) => {
                     if (err) reject(err);
                     else resolve(row || null);
                 });
@@ -1947,9 +2163,7 @@ router.post('/test-wablas', async (req, res) => {
         const { getProviderManager } = require('../config/whatsapp-provider-manager');
         const { getWablasConfig, validateWablasConfig, isWablasEnabled } = require('../config/wablas-config');
         
-        // Reload settings untuk mendapatkan konfigurasi terbaru
-        const { getSettingsWithCache } = require('../config/settingsManager');
-        const settings = getSettingsWithCache();
+        const settings = await getSettingsForAdmin(req);
         
         // Cek apakah Wablas enabled
         if (!isWablasEnabled()) {
@@ -2072,14 +2286,7 @@ router.get('/api/resolve-dns', adminAuth, async (req, res) => {
 const mobileAndroidBuild = require('../utils/mobileAndroidBuild');
 
 router.get('/android-tool', async (req, res) => {
-    try {
-        const settings = getSettingsWithCache();
-        const appSettings = await getAppSettings(billing.db);
-        res.render('adminAndroidTool', { settings, appSettings });
-    } catch (error) {
-        logger.error('Error loading android tool page:', error);
-        res.status(500).send('Gagal memuat halaman Tool Android');
-    }
+    res.redirect('/admin/settings');
 });
 
 router.get('/api/android-tool/config', adminAuth, (req, res) => {

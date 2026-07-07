@@ -38,16 +38,60 @@ const { getSettingsWithCache } = require('../config/settingsManager');
 const { getVersionInfo, getVersionBadge } = require('../config/version-utils');
 const sqlite3 = require('sqlite3').verbose();
 const billingManager = require('../config/billing');
+const { getTenantId, hasTenantContext } = require('../config/platform/tenantContext');
+const { attachTenantAppSettings } = require('../config/platform/tenantAppSettings');
+const { tenantSqlFromRequest } = require('../config/platform/tenantSqlHelpers');
+
+router.use(attachTenantAppSettings);
 
 // Centralized database path
 const DB_PATH = path.join(__dirname, '../data/billing.db');
+
+/**
+ * Isolasi tenant untuk tabel routers. Mengembalikan potongan SQL dengan
+ * tenant_id sebagai literal integer (aman, tervalidasi) sehingga bisa disisipkan
+ * ke berbagai bentuk query tanpa harus mengubah parameter binding.
+ * WAJIB dipanggil SINKRON di dalam handler (konteks AsyncLocalStorage masih ada).
+ */
+function _routerTenantAnd() {
+  const t = billingManager._tenantWhere('');
+  if (!t.sql) return '';
+  return ` AND tenant_id = ${parseInt(t.params[0], 10)}`;
+}
+function _routerTenantWhere() {
+  const t = billingManager._tenantWhere('');
+  if (!t.sql) return '';
+  return ` WHERE tenant_id = ${parseInt(t.params[0], 10)}`;
+}
+
+/** Ambil filter tenant dari req (aman setelah await — tidak pakai AsyncLocalStorage). */
+function captureRouterTenantWhere(req) {
+  return tenantSqlFromRequest(req).where();
+}
+function captureRouterTenantAnd(req) {
+  return tenantSqlFromRequest(req).and('');
+}
+
+async function getAllRoutersForRequest(req) {
+  const whereSql = captureRouterTenantWhere(req);
+  return new Promise((resolve) => {
+    billingManager.db.all(`SELECT * FROM routers${whereSql} ORDER BY id`, [], (err, rows) => {
+      if (err) {
+        logger.error('[DB HELPER] Error fetching routers for tenant:', err.message);
+        resolve([]);
+      } else {
+        resolve(rows || []);
+      }
+    });
+  });
+}
 
 /**
  * Helper to get a router by ID using the centralized billingManager
  */
 async function findRouterHelper(router_id) {
   return new Promise((resolve) => {
-    billingManager.db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+    billingManager.db.get(('SELECT * FROM routers WHERE id=?' + _routerTenantAnd()), [parseInt(router_id)], (err, row) => {
       if (err) {
         logger.error(`[DB HELPER] Error fetching router ${router_id}:`, err.message);
         resolve(null);
@@ -63,7 +107,7 @@ async function findRouterHelper(router_id) {
  */
 async function getAllRoutersHelper() {
   return new Promise((resolve) => {
-    billingManager.db.all('SELECT * FROM routers ORDER BY id', [], (err, rows) => {
+    billingManager.db.all(('SELECT * FROM routers' + _routerTenantWhere() + ' ORDER BY id'), [], (err, rows) => {
       if (err) {
         logger.error('[DB HELPER] Error fetching all routers:', err.message);
         resolve([]);
@@ -107,11 +151,47 @@ function clearPppoeAdminPageCache() {
   _pppoeProfilesApiCache = null;
 }
 
+function getPppoeCacheKey(authMode) {
+  const tid = hasTenantContext() ? String(getTenantId()) : 'central';
+  return `${authMode}:${tid}`;
+}
+
 function getPppoeAdminPageCache(authMode) {
+  const key = getPppoeCacheKey(authMode);
   if (!_pppoeAdminPageCache) return null;
-  if (_pppoeAdminPageCache.authMode !== authMode) return null;
+  if (_pppoeAdminPageCache.key !== key) return null;
   if (Date.now() - _pppoeAdminPageCache.ts > PPPOE_PAGE_CACHE_MS) return null;
   return _pppoeAdminPageCache;
+}
+
+async function getTenantPppoeUsernames() {
+  const _t = billingManager._tenantWhere();
+  if (!_t.sql) return null;
+  return new Promise((resolve) => {
+    billingManager.db.all(
+      `SELECT DISTINCT TRIM(pppoe_username) AS u FROM customers
+       WHERE pppoe_username IS NOT NULL AND TRIM(pppoe_username) != ''${_t.sql}`,
+      [..._t.params],
+      (err, rows) => {
+        if (err) return resolve([]);
+        resolve((rows || []).map((r) => r.u).filter(Boolean));
+      }
+    );
+  });
+}
+
+async function getTenantPppoeUsernameSet() {
+  const names = await getTenantPppoeUsernames();
+  if (names === null) return null;
+  return new Set(names.map((u) => String(u).toLowerCase().trim()).filter(Boolean));
+}
+
+function filterUsersForTenant(users, tenantSet) {
+  if (!tenantSet) return users;
+  return (users || []).filter((u) => {
+    const name = String(u?.name || u?.username || '').toLowerCase().trim();
+    return name && tenantSet.has(name);
+  });
 }
 
 function withRouterTimeout(promise, label) {
@@ -138,13 +218,13 @@ function computeUserStats(users) {
 router.get('/mikrotik', adminAuth, async (req, res) => {
   try {
     // Check auth mode
-    const { getUserAuthModeAsync, getPPPoEUsersRadius, getActivePPPoEConnectionsRadius } = require('../config/mikrotik');
+    const { getUserAuthModeAsync, getPPPoEUsersRadius } = require('../config/mikrotik');
     const authMode = await getUserAuthModeAsync();
     const forceRefresh = String(req.query.refresh || '') === '1';
 
     const cached = !forceRefresh ? getPppoeAdminPageCache(authMode) : null;
     if (cached) {
-      const settings = getSettingsWithCache();
+      const settings = req.tenantSettings || getSettingsWithCache();
       return res.render('adminMikrotik', {
         users: cached.combined,
         routers: cached.routers,
@@ -158,34 +238,43 @@ router.get('/mikrotik', adminAuth, async (req, res) => {
 
     logger.info(`Loading PPPoE users in ${authMode} mode${forceRefresh ? ' (refresh)' : ''}`);
 
+    const tenantPppoeUsers = await getTenantPppoeUsernames();
+    const tenantUserSet =
+      tenantPppoeUsers === null
+        ? null
+        : new Set(tenantPppoeUsers.map((u) => String(u).toLowerCase().trim()).filter(Boolean));
     let combined = [];
     let routers = [];
 
     if (authMode === 'radius') {
-      // RADIUS mode: Get users from RADIUS database
+      if (tenantPppoeUsers && tenantPppoeUsers.length === 0) {
+        combined = [];
+        logger.info('RADIUS mode: tenant has no PPPoE customers — skip full RADIUS scan');
+      } else {
+      // RADIUS mode: Get users from RADIUS database (scoped to tenant customers)
       logger.info('RADIUS mode: Loading users from RADIUS database');
       try {
-        const usersRaw = await getPPPoEUsersRadius();
+        const tenantRouters = forceRefresh ? await getAllRoutersHelper() : null;
+        const usersRaw = await getPPPoEUsersRadius({
+          allowedUsernames: tenantPppoeUsers,
+          skipMikrotikActive: !forceRefresh,
+          activeRouters: tenantRouters,
+          mikrotikTimeoutMs: ROUTER_QUERY_TIMEOUT_MS,
+          forceRefreshActive: forceRefresh
+        });
         const users = Array.isArray(usersRaw) ? usersRaw : [];
-        logger.info(`Found ${users.length} users in RADIUS database`);
-
-        const activeRaw = await getActivePPPoEConnectionsRadius();
-        const activeConnections = Array.isArray(activeRaw) ? activeRaw : [];
-        logger.info(`Found ${activeConnections.length} active connections in RADIUS`);
-        
-        const activeNames = new Set(activeConnections.map(a => a.name));
+        logger.info(`Found ${users.length} users in RADIUS database for tenant scope`);
         
         // PENTING: Gunakan Map untuk menghindari duplikasi berdasarkan username
-        // Jika ada duplikasi dari query, hanya ambil yang pertama
         const userMap = new Map();
         users.forEach(user => {
           if (!userMap.has(user.name)) {
             userMap.set(user.name, {
-              id: user.name, // Use username as ID for RADIUS
+              id: user.name,
               name: user.name,
               password: user.password,
               profile: user.profile || 'default',
-              active: activeNames.has(user.name),
+              active: !!user.active,
               nas_name: 'RADIUS',
               nas_ip: 'RADIUS Server'
             });
@@ -193,12 +282,13 @@ router.get('/mikrotik', adminAuth, async (req, res) => {
         });
         
         combined = Array.from(userMap.values());
+        combined = filterUsersForTenant(combined, tenantUserSet);
         
         logger.info(`Mapped ${combined.length} unique users for display (from ${users.length} total users)`);
       } catch (radiusError) {
         logger.error(`Error loading users from RADIUS: ${radiusError.message}`, radiusError);
-        // Return empty array but log the error
         combined = [];
+      }
       }
       // No routers needed for RADIUS mode
     } else {
@@ -240,12 +330,14 @@ router.get('/mikrotik', adminAuth, async (req, res) => {
       
       // Flatten hasil dari semua router
       combined = allRouterResults.flat();
+      combined = filterUsersForTenant(combined, tenantUserSet);
     }
     
     const userStats = computeUserStats(combined);
     logger.info(`Total users to display: ${combined.length}`);
 
     _pppoeAdminPageCache = {
+      key: getPppoeCacheKey(authMode),
       ts: Date.now(),
       authMode,
       combined,
@@ -253,7 +345,7 @@ router.get('/mikrotik', adminAuth, async (req, res) => {
       userStats
     };
 
-    const settings = getSettingsWithCache();
+    const settings = req.tenantSettings || getSettingsWithCache();
     res.render('adminMikrotik', {
       users: combined,
       routers: routers,
@@ -307,7 +399,7 @@ router.post('/mikrotik/add-user', adminAuth, async (req, res) => {
     }
     
     const sqlite3 = require('sqlite3').verbose();
-    const router = await new Promise((resolve) => billingManager.db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => resolve(row || null)));
+    const router = await new Promise((resolve) => billingManager.db.get(('SELECT * FROM routers WHERE id=?' + _routerTenantAnd()), [parseInt(router_id)], (err, row) => resolve(row || null)));
     if (!router) {
       return res.json({ success: false, message: 'Router tidak ditemukan' });
     }
@@ -410,7 +502,7 @@ router.get('/mikrotik/profiles', adminAuth, async (req, res) => {
     // Always fetch routers regardless of authMode to ensure dropdown is populated
     logger.info(`[DIAGNOSTIC] Fetching routers via billingManager (authMode: ${authMode})`);
     routers = await new Promise((resolve) => {
-      billingManager.db.all('SELECT * FROM routers ORDER BY id', [], (err, rows) => {
+      billingManager.db.all(('SELECT * FROM routers' + _routerTenantWhere() + ' ORDER BY id'), [], (err, rows) => {
         if (err) {
           logger.error('[DIAGNOSTIC] Database error fetching routers:', err.message);
           resolve([]);
@@ -526,7 +618,7 @@ router.get('/mikrotik/profiles/api', adminAuth, async (req, res) => {
 
     // If router_id is provided, only fetch from that router
     if (router_id) {
-      const routerObj = await new Promise((resolve) => billingManager.db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+      const routerObj = await new Promise((resolve) => billingManager.db.get(('SELECT * FROM routers WHERE id=?' + _routerTenantAnd()), [parseInt(router_id)], (err, row) => {
         resolve(row || null);
       }));
       
@@ -750,143 +842,81 @@ router.post('/mikrotik/delete-profile', adminAuth, async (req, res) => {
   }
 });
 
-// GET: List Profile Hotspot
-// Catatan: Selalu ambil langsung dari Mikrotik (RouterOS),
-// tidak lagi menggunakan profile dari RADIUS.
+// GET: List Profile Hotspot — render cepat; data dimuat via API (AJAX)
 router.get('/mikrotik/hotspot-profiles', adminAuth, async (req, res) => {
-  let combined = [];
-  let errorMessages = [];
-  let routers = [];
-  let settings = getSettingsWithCache();
-  let userAuthMode = 'mikrotik';
-
+  const routerWhereSql = captureRouterTenantWhere(req);
   try {
-    // Try to get userAuthMode
+    let userAuthMode = 'mikrotik';
     try {
       const { getRadiusConfigValue } = require('../config/radiusConfig');
       const mode = await getRadiusConfigValue('user_auth_mode', null);
       if (mode) userAuthMode = mode;
-    } catch (e) {}
+    } catch (_) { /* ignore */ }
 
-    routers = await new Promise((resolve) => {
-      billingManager.db.all('SELECT * FROM routers ORDER BY id', [], (err, rows) => {
-        if (err) {
-          logger.error('[DIAGNOSTIC] Hotspot Profiles: error fetching routers:', err.message);
-          resolve([]);
-        } else {
-          logger.info(`[DIAGNOSTIC] Hotspot Profiles: found ${rows ? rows.length : 0} routers`);
-          resolve(rows || []);
+    const { pickSidebarSettings } = require('../config/platform/tenantAppSettings');
+    const settings = pickSidebarSettings(req.tenantSettings || {}, req.tenant);
+
+    const routers = await new Promise((resolve) => {
+      billingManager.db.all(
+        `SELECT id, name, nas_ip, port FROM routers${routerWhereSql} ORDER BY id`,
+        [],
+        (err, rows) => {
+          if (err) {
+            logger.error('[hotspot-profiles] routers:', err.message);
+            resolve([]);
+          } else {
+            resolve(rows || []);
+          }
         }
-      });
+      );
     });
 
+    const routerWarning = (!routers || routers.length === 0)
+      ? 'Tidak ada router/NAS yang dikonfigurasi. Silakan tambahkan router terlebih dahulu di menu NAS (RADIUS).'
+      : null;
 
-    // Untuk halaman Mikrotik API, router wajib ada
-    if (!routers || routers.length === 0) {
-      console.warn('No routers found in database');
-      const settings = getSettingsWithCache();
-      return res.render('adminMikrotikHotspotProfiles', { 
-        profiles: [], 
-        routers: [],
-        error: 'Tidak ada router/NAS yang dikonfigurasi. Silakan tambahkan router terlebih dahulu di menu NAS (RADIUS).', 
-        settings,
-        versionInfo: getVersionInfo(),
-        versionBadge: getVersionBadge(),
-        userAuthMode: 'mikrotik'
-      });
-    }
-
-    let combined = [];
-    let errorMessages = [];
-    for (const r of routers) {
-      try {
-        console.log(`=== Attempting to get hotspot profiles from router: ${r.name} (${r.nas_ip}:${r.port || 8728}) ===`);
-        console.log(`Router data:`, JSON.stringify({
-          id: r.id,
-          name: r.name,
-          nas_ip: r.nas_ip,
-          port: r.port,
-          user: r.user ? '***' : 'missing',
-          password: r.password ? '***' : 'missing'
-        }));
-        
-        const result = await getHotspotProfiles(r);
-        console.log(`Result from ${r.name}:`, {
-          success: result.success,
-          message: result.message,
-          dataCount: result.data ? result.data.length : 0
-        });
-        
-        if (result.success && Array.isArray(result.data)) {
-          console.log(`✓ Successfully retrieved ${result.data.length} profiles from ${r.name}`);
-          if (result.data.length > 0) {
-            console.log(`Profile names:`, result.data.map(p => p.name || p['name'] || 'unnamed').join(', '));
-          }
-          result.data.forEach(prof => {
-            const profileObj = {
-              ...prof,
-              nas_id: r.id,
-              nas_name: r.name,
-              nas_ip: r.nas_ip
-            };
-            combined.push(profileObj);
-            console.log(`  - Added profile: ${prof.name || prof['name'] || 'unnamed'} from ${r.name}`);
-          });
-        } else {
-          console.warn(`✗ Failed to get profiles from ${r.name}:`, result.message);
-          errorMessages.push(`${r.name}: ${result.message}`);
-        }
-      } catch (e) {
-        console.error(`✗ Error getting hotspot profiles from ${r.name} (${r.nas_ip}:${r.port || 8728}):`, e.message);
-        console.error('Full error:', e);
-        errorMessages.push(`${r.name}: ${e.message}`);
-      }
-    }
-    
-    console.log(`=== Total profiles collected: ${combined.length} ===`);
-    
-    res.render('adminMikrotikHotspotProfiles', { 
-      profiles: combined, 
+    res.render('adminMikrotikHotspotProfiles', {
+      profiles: [],
       routers,
       settings,
-      error: errorMessages.length > 0 ? `Beberapa router gagal: ${errorMessages.join('; ')}` : null,
+      error: routerWarning,
       versionInfo: getVersionInfo(),
       versionBadge: getVersionBadge(),
-      userAuthMode: userAuthMode,
-      page: 'hotspot-profiles'
+      userAuthMode,
+      page: 'hotspot-profiles',
+      tenantSubdomain: req.tenant?.subdomain || req.tenant?.slug || ''
     });
   } catch (err) {
     console.error('Error in hotspot profiles GET route:', err);
-    
-    // Robust Error Fallback: Refetch routers if they aren't populated yet
-    if (!routers || routers.length === 0) {
-      try {
-        routers = await getAllRoutersHelper();
-      } catch (_) {}
-    }
-
-    res.render('adminMikrotikHotspotProfiles', { 
-      profiles: [], 
-      routers: routers, // Preserve NAS list even on error
-      error: `Terjadi kesalahan: ${err.message}`, 
-      settings,
+    const { pickSidebarSettings } = require('../config/platform/tenantAppSettings');
+    res.render('adminMikrotikHotspotProfiles', {
+      profiles: [],
+      routers: [],
+      settings: pickSidebarSettings(req.tenantSettings || {}, req.tenant),
+      error: `Terjadi kesalahan: ${err.message}`,
       versionInfo: getVersionInfo(),
       versionBadge: getVersionBadge(),
-      userAuthMode: userAuthMode
+      userAuthMode: 'mikrotik',
+      page: 'hotspot-profiles'
     });
   }
 });
 
 // GET: API Daftar Profile Hotspot
 router.get('/mikrotik/hotspot-profiles/api', adminAuth, async (req, res) => {
+  const routerAndSql = captureRouterTenantAnd(req);
   try {
     const { router_id } = req.query;
     
     // If router_id is provided, only fetch from that router
     if (router_id) {
-      const routerObj = await new Promise((resolve) => billingManager.db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
-        resolve(row || null);
-      }));
+      const routerObj = await new Promise((resolve) => {
+        billingManager.db.get(
+          `SELECT * FROM routers WHERE id=?${routerAndSql}`,
+          [parseInt(router_id, 10)],
+          (err, row) => resolve(err ? null : (row || null))
+        );
+      });
       if (!routerObj) {
         return res.json({ success: false, profiles: [], message: 'Router tidak ditemukan' });
       }
@@ -905,13 +935,15 @@ router.get('/mikrotik/hotspot-profiles/api', adminAuth, async (req, res) => {
       }
     }
     
-    const routers = await getAllRoutersHelper();
+    const routers = await getAllRoutersForRequest(req);
     
-    // Untuk endpoint API ini, selalu ambil profile langsung dari Mikrotik (RouterOS),
-    // tidak lagi menggunakan profile dari RADIUS.
-    // Router wajib ada.
     if (!routers || routers.length === 0) {
-      return res.json({ success: false, profiles: [], message: 'Tidak ada router/NAS yang dikonfigurasi' });
+      return res.json({
+        success: true,
+        profiles: [],
+        no_routers: true,
+        message: 'Tidak ada router/NAS untuk tenant ini. Tambahkan di menu RADIUS → NAS.'
+      });
     }
     
     let combined = [];
@@ -989,7 +1021,7 @@ router.post('/mikrotik/hotspot-profiles/add', adminAuth, async (req, res) => {
     if (!router_id) {
       return res.json({ success: false, message: 'Pilih NAS (router) terlebih dahulu' });
     }
-    const routerObj = await new Promise((resolve) => billingManager.db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+    const routerObj = await new Promise((resolve) => billingManager.db.get(('SELECT * FROM routers WHERE id=?' + _routerTenantAnd()), [parseInt(router_id)], (err, row) => {
       resolve(row || null);
     }));
     if (!routerObj) {
@@ -1034,7 +1066,7 @@ router.post('/mikrotik/hotspot-profiles/edit', adminAuth, async (req, res) => {
     if (!id) {
       return res.json({ success: false, message: 'ID profile tidak ditemukan' });
     }
-    const routerObj = await new Promise((resolve) => billingManager.db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+    const routerObj = await new Promise((resolve) => billingManager.db.get(('SELECT * FROM routers WHERE id=?' + _routerTenantAnd()), [parseInt(router_id)], (err, row) => {
       resolve(row || null);
     }));
     if (!routerObj) {
@@ -1077,7 +1109,7 @@ router.post('/mikrotik/hotspot-profiles/delete', adminAuth, async (req, res) => 
     if (!id) {
       return res.json({ success: false, message: 'ID profile tidak ditemukan' });
     }
-    const routerObj = await new Promise((resolve) => billingManager.db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+    const routerObj = await new Promise((resolve) => billingManager.db.get(('SELECT * FROM routers WHERE id=?' + _routerTenantAnd()), [parseInt(router_id)], (err, row) => {
       resolve(row || null);
     }));
     if (!routerObj) {
@@ -1107,7 +1139,7 @@ router.post('/mikrotik/disconnect-session', adminAuth, async (req, res) => {
     logger.info(`${authMode} mode: Disconnecting session for user ${username}`);
     
     // Ambil daftar router
-    const routers = await new Promise((resolve) => billingManager.db.all('SELECT * FROM routers ORDER BY id', (err, rows) => resolve(rows || [])));
+    const routers = await new Promise((resolve) => billingManager.db.all(('SELECT * FROM routers' + _routerTenantWhere() + ' ORDER BY id'), (err, rows) => resolve(rows || [])));
     
     if (!routers || routers.length === 0) {
       return res.json({ success: false, message: 'Tidak ada router yang dikonfigurasi' });
@@ -1330,7 +1362,7 @@ router.get('/mikrotik/hotspot-server-profiles', adminAuth, async (req, res) => {
     
     // Mode Mikrotik API: Ambil routers
     const routers = await new Promise((resolve) => {
-      billingManager.db.all('SELECT * FROM routers ORDER BY id', (err, rows) => {
+      billingManager.db.all(('SELECT * FROM routers' + _routerTenantWhere() + ' ORDER BY id'), (err, rows) => {
         if (err) {
           console.error('Error fetching routers:', err);
           resolve([]);
@@ -1538,7 +1570,7 @@ router.get('/mikrotik/hotspot-server-profiles/api', adminAuth, async (req, res) 
     if (router_id) {
       const sqlite3 = require('sqlite3').verbose();
       const db = new sqlite3.Database(DB_PATH);
-      const routerObj = await new Promise((resolve) => db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+      const routerObj = await new Promise((resolve) => db.get(('SELECT * FROM routers WHERE id=?' + _routerTenantAnd()), [parseInt(router_id)], (err, row) => {
         db.close();
         resolve(row || null);
       }));
@@ -1561,7 +1593,7 @@ router.get('/mikrotik/hotspot-server-profiles/api', adminAuth, async (req, res) 
     }
 
     // Fetch from all routers
-    const routers = await new Promise((resolve) => billingManager.db.all('SELECT * FROM routers ORDER BY id', (err, rows) => {
+    const routers = await new Promise((resolve) => billingManager.db.all(('SELECT * FROM routers' + _routerTenantWhere() + ' ORDER BY id'), (err, rows) => {
       if (err) {
         console.error('Error fetching routers:', err);
         resolve([]);
@@ -1637,7 +1669,7 @@ router.post('/mikrotik/hotspot-server-profiles/add', adminAuth, async (req, res)
       return res.json({ success: false, message: 'Router ID harus diisi' });
     }
 
-    const routerObj = await new Promise((resolve) => billingManager.db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+    const routerObj = await new Promise((resolve) => billingManager.db.get(('SELECT * FROM routers WHERE id=?' + _routerTenantAnd()), [parseInt(router_id)], (err, row) => {
       resolve(row || null);
     }));
 
@@ -1681,7 +1713,7 @@ router.post('/mikrotik/hotspot-server-profiles/edit', adminAuth, async (req, res
 
     const sqlite3 = require('sqlite3').verbose();
     const db = new sqlite3.Database(DB_PATH);
-    const routerObj = await new Promise((resolve) => db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+    const routerObj = await new Promise((resolve) => db.get(('SELECT * FROM routers WHERE id=?' + _routerTenantAnd()), [parseInt(router_id)], (err, row) => {
       db.close();
       resolve(row || null);
     }));
@@ -1725,7 +1757,7 @@ router.post('/mikrotik/hotspot-server-profiles/delete', adminAuth, async (req, r
 
     const sqlite3 = require('sqlite3').verbose();
     const db = new sqlite3.Database(DB_PATH);
-    const routerObj = await new Promise((resolve) => db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+    const routerObj = await new Promise((resolve) => db.get(('SELECT * FROM routers WHERE id=?' + _routerTenantAnd()), [parseInt(router_id)], (err, row) => {
       db.close();
       resolve(row || null);
     }));
@@ -1751,7 +1783,7 @@ router.get('/mikrotik/hotspot-server-profiles/api-servers-from-mikrotik', adminA
   try {
     // Ambil semua router yang terdaftar
     const routers = await new Promise((resolve) => {
-      billingManager.db.all('SELECT * FROM routers ORDER BY name', (err, rows) => {
+      billingManager.db.all(('SELECT * FROM routers' + _routerTenantWhere() + ' ORDER BY name'), (err, rows) => {
         if (err) {
           console.error('Error fetching routers:', err);
           resolve([]);
@@ -1966,7 +1998,7 @@ router.get('/mikrotik/interfaces/api', adminAuth, async (req, res) => {
       return res.json({ success: false, interfaces: [], message: 'Router ID harus diisi' });
     }
 
-    const routerObj = await new Promise((resolve) => billingManager.db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+    const routerObj = await new Promise((resolve) => billingManager.db.get(('SELECT * FROM routers WHERE id=?' + _routerTenantAnd()), [parseInt(router_id)], (err, row) => {
       resolve(row || null);
     }));
 
@@ -1997,7 +2029,7 @@ router.get('/mikrotik/address-pools/api', adminAuth, async (req, res) => {
       return res.json({ success: false, pools: [], message: 'Router ID harus diisi' });
     }
 
-    const routerObj = await new Promise((resolve) => billingManager.db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+    const routerObj = await new Promise((resolve) => billingManager.db.get(('SELECT * FROM routers WHERE id=?' + _routerTenantAnd()), [parseInt(router_id)], (err, row) => {
       resolve(row || null);
     }));
 
@@ -2024,7 +2056,7 @@ router.get('/mikrotik/address-pools/api/all', adminAuth, async (req, res) => {
   try {
     // Get all routers
     const routers = await new Promise((resolve) => {
-      billingManager.db.all('SELECT * FROM routers ORDER BY name', (err, rows) => {
+      billingManager.db.all(('SELECT * FROM routers' + _routerTenantWhere() + ' ORDER BY name'), (err, rows) => {
         resolve(rows || []);
       });
     });
@@ -2117,7 +2149,7 @@ router.get('/mikrotik/hotspot-servers/api', adminAuth, async (req, res) => {
     const db = new sqlite3.Database(DB_PATH);
     
     if (router_id) {
-      const routerObj = await new Promise((resolve) => billingManager.db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+      const routerObj = await new Promise((resolve) => billingManager.db.get(('SELECT * FROM routers WHERE id=?' + _routerTenantAnd()), [parseInt(router_id)], (err, row) => {
         resolve(row || null);
       }));
       if (!routerObj) {
@@ -2139,7 +2171,7 @@ router.get('/mikrotik/hotspot-servers/api', adminAuth, async (req, res) => {
     }
 
     // Ambil dari semua router
-    const routers = await new Promise((resolve) => billingManager.db.all('SELECT * FROM routers ORDER BY id', (err, rows) => {
+    const routers = await new Promise((resolve) => billingManager.db.all(('SELECT * FROM routers' + _routerTenantWhere() + ' ORDER BY id'), (err, rows) => {
       if (err) {
         console.error('Error fetching routers:', err);
         resolve([]);
@@ -2204,7 +2236,7 @@ router.post('/mikrotik/hotspot-servers/add', adminAuth, async (req, res) => {
       return res.json({ success: false, message: 'Router ID harus diisi' });
     }
 
-    const routerObj = await new Promise((resolve) => billingManager.db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+    const routerObj = await new Promise((resolve) => billingManager.db.get(('SELECT * FROM routers WHERE id=?' + _routerTenantAnd()), [parseInt(router_id)], (err, row) => {
       resolve(row || null);
     }));
 
@@ -2246,7 +2278,7 @@ router.post('/mikrotik/hotspot-servers/edit', adminAuth, async (req, res) => {
       return res.json({ success: false, message: 'Router ID harus diisi' });
     }
 
-    const routerObj = await new Promise((resolve) => billingManager.db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+    const routerObj = await new Promise((resolve) => billingManager.db.get(('SELECT * FROM routers WHERE id=?' + _routerTenantAnd()), [parseInt(router_id)], (err, row) => {
       resolve(row || null);
     }));
 
@@ -2289,7 +2321,7 @@ router.post('/mikrotik/hotspot-servers/delete', adminAuth, async (req, res) => {
 
     const sqlite3 = require('sqlite3').verbose();
     const db = new sqlite3.Database(DB_PATH);
-    const routerObj = await new Promise((resolve) => db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+    const routerObj = await new Promise((resolve) => db.get(('SELECT * FROM routers WHERE id=?' + _routerTenantAnd()), [parseInt(router_id)], (err, row) => {
       db.close();
       resolve(row || null);
     }));

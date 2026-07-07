@@ -123,11 +123,9 @@ router.get('/tenants', async (req, res) => {
 });
 
 router.get('/tenants/new', async (req, res) => {
-    const plans = await tenantStore.listSubscriptionPlans();
     res.render('platform/tenants/form', {
         title: 'Tambah Tenant',
         tenant: null,
-        plans,
         tenantBaseDomain: getTenantBaseDomain(),
         adminName: req.session.platformAdminName,
         error: null,
@@ -142,8 +140,6 @@ router.post('/tenants', async (req, res) => {
             owner_email: req.body.owner_email,
             owner_phone: req.body.owner_phone,
             subdomain: req.body.subdomain,
-            subscription_plan_id: Number(req.body.subscription_plan_id),
-            subscription_months: Number(req.body.subscription_months) || 1,
             admin_username: req.body.admin_username,
             admin_password: req.body.admin_password,
         });
@@ -168,11 +164,9 @@ router.post('/tenants', async (req, res) => {
         }
         return res.redirect(`/management/tenants/${tenant.id}?success=created${nginxQ}`);
     } catch (err) {
-        const plans = await tenantStore.listSubscriptionPlans();
         return res.status(400).render('platform/tenants/form', {
             title: 'Tambah Tenant',
             tenant: req.body,
-            plans,
             tenantBaseDomain: getTenantBaseDomain(),
             adminName: req.session.platformAdminName,
             error: err.message,
@@ -216,11 +210,9 @@ router.get('/tenants/:id/edit', async (req, res) => {
     if (!tenant) return res.status(404).send('Tenant tidak ditemukan');
     const { getFullSettingsForTenantId } = require('../config/platform/tenantSettingsManager');
     const tenantSettings = await getFullSettingsForTenantId(tenant.id);
-    const plans = await tenantStore.listSubscriptionPlans();
     res.render('platform/tenants/form', {
         title: `Edit ${tenant.name}`,
         tenant: { ...tenant, settings: tenantSettings },
-        plans,
         tenantBaseDomain: getTenantBaseDomain(),
         adminName: req.session.platformAdminName,
         error: null,
@@ -235,8 +227,6 @@ router.post('/tenants/:id', async (req, res) => {
             owner_email: req.body.owner_email,
             owner_phone: req.body.owner_phone,
             subdomain: req.body.subdomain,
-            subscription_plan_id: Number(req.body.subscription_plan_id),
-            subscription_months: req.body.subscription_months ? Number(req.body.subscription_months) : null,
             admin_username: req.body.admin_username,
             admin_password: req.body.admin_password,
         });
@@ -260,15 +250,33 @@ router.post('/tenants/:id', async (req, res) => {
         }
         return res.redirect(`/management/tenants/${tenant.id}?success=updated${nginxQ}`);
     } catch (err) {
-        const plans = await tenantStore.listSubscriptionPlans();
         return res.status(400).render('platform/tenants/form', {
             title: 'Edit Tenant',
             tenant: { ...req.body, id: req.params.id },
-            plans,
             tenantBaseDomain: getTenantBaseDomain(),
             adminName: req.session.platformAdminName,
             error: err.message,
         });
+    }
+});
+
+router.post('/tenants/:id/credentials', async (req, res) => {
+    try {
+        const creds = await tenantStore.updateTenantAdminCredentials(req.params.id, {
+            admin_username: req.body.admin_username,
+            admin_password: req.body.admin_password,
+        });
+        await tenantStore.auditLog({
+            tenantId: Number(req.params.id),
+            actorType: 'SuperAdmin',
+            actorId: req.session.platformAdminId,
+            action: 'tenant_credentials_updated',
+            details: { admin_username: creds.admin_username },
+            ip: req.ip,
+        });
+        return res.redirect(`/management/tenants/${req.params.id}?success=credentials`);
+    } catch (err) {
+        return res.redirect(`/management/tenants/${req.params.id}?error=${encodeURIComponent(err.message)}`);
     }
 });
 
@@ -322,6 +330,11 @@ router.post('/tenants/:id/delete', async (req, res) => {
             action: 'tenant_deleted',
             ip: req.ip,
         });
+        try {
+            await nginxManager.syncTenantsAndApply();
+        } catch (e) {
+            console.warn('[platform] nginx sync after delete:', e.message);
+        }
         res.redirect('/management/tenants?success=deleted');
     } catch (err) {
         res.redirect(`/management/tenants/${req.params.id}?error=${encodeURIComponent(err.message)}`);

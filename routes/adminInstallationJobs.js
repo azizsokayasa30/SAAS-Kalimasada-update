@@ -2,9 +2,31 @@ const express = require('express');
 const router = express.Router();
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const billingManager = require('../config/billing');
+const { tenantIdForInsert, tenantSqlFromRequest } = require('../config/platform/tenantSqlHelpers');
+const { attachTenantAppSettings } = require('../config/platform/tenantAppSettings');
 const { adminAuth } = require('./adminAuth');
-const { getSetting, getLocalTimestamp } = require('../config/settingsManager');
+const { getLocalTimestamp } = require('../config/settingsManager');
 const logger = require('../config/logger');
+
+function tAnd(alias = '') {
+    const t = billingManager._tenantWhere(alias);
+    if (!t.sql) return '';
+    const col = alias ? `${alias}.tenant_id` : 'tenant_id';
+    return ` AND ${col} = ${parseInt(t.params[0], 10)}`;
+}
+function tWhere(alias = '') {
+    const t = billingManager._tenantWhere(alias);
+    if (!t.sql) return '';
+    const col = alias ? `${alias}.tenant_id` : 'tenant_id';
+    return ` WHERE ${col} = ${parseInt(t.params[0], 10)}`;
+}
+function tCond(alias = '') {
+    const s = tAnd(alias);
+    return s ? s.replace(/^ AND /, '') : '';
+}
+
+router.use(attachTenantAppSettings);
 
 // Database connection
 const dbPath = path.join(__dirname, '../data/billing.db');
@@ -39,10 +61,17 @@ db.serialize(() => {
             if (err) logger.warn('[admin-install-jobs] backfill assigned_at:', err.message);
         }
     );
+    db.run(
+        `ALTER TABLE installation_jobs ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1`,
+        (err) => {
+            if (err && !/duplicate column/i.test(String(err.message))) {
+                logger.warn('[admin-install-jobs] tenant_id column:', err.message);
+            }
+        }
+    );
 });
 
 // Billing manager untuk akses data packages dan technicians
-const billingManager = require('../config/billing');
 const {
     extractTechnicianInstallCompletion,
     stripTechnicianInstallCompletionNotes
@@ -51,8 +80,9 @@ const {
 /**
  * Installation Jobs - Halaman daftar jadwal instalasi
  */
-router.get('/', adminAuth, async (req, res) => {
+router.get('/', adminAuth, attachTenantAppSettings, async (req, res) => {
     try {
+        const t = tenantSqlFromRequest(req);
         const page = parseInt(req.query.page) || 1;
         const limit = 20;
         const offset = (page - 1) * limit;
@@ -63,6 +93,9 @@ router.get('/', adminAuth, async (req, res) => {
         // Build query conditions
         let whereConditions = [];
         let params = [];
+
+        const tenantCond = t.cond('ij');
+        if (tenantCond) whereConditions.push(tenantCond);
 
         if (search) {
             whereConditions.push('(job_number LIKE ? OR customer_name LIKE ? OR customer_phone LIKE ?)');
@@ -88,7 +121,7 @@ router.get('/', adminAuth, async (req, res) => {
                        p.name as package_name,
                        t.name as technician_name
                 FROM installation_jobs ij
-                LEFT JOIN packages p ON ij.package_id = p.id
+                LEFT JOIN packages p ON ij.package_id = p.id AND p.tenant_id = ij.tenant_id
                 LEFT JOIN technicians t ON ij.assigned_technician_id = t.id
                 ${whereClause}
                 ORDER BY ij.created_at DESC 
@@ -103,7 +136,7 @@ router.get('/', adminAuth, async (req, res) => {
 
         // Get total count
         const totalJobs = await new Promise((resolve, reject) => {
-            const countQuery = `SELECT COUNT(*) as count FROM installation_jobs ${whereClause}`;
+            const countQuery = `SELECT COUNT(*) as count FROM installation_jobs ij ${whereClause}`;
             db.get(countQuery, params, (err, row) => {
                 if (err) reject(err);
                 else resolve(row.count);
@@ -114,7 +147,7 @@ router.get('/', adminAuth, async (req, res) => {
 
         // Get technicians for filter dropdown
         const technicians = await new Promise((resolve, reject) => {
-            db.all('SELECT id, name, phone FROM technicians WHERE is_active = 1 ORDER BY name', (err, rows) => {
+            db.all(`SELECT id, name, phone FROM technicians WHERE is_active = 1${t.and('')} ORDER BY name`, (err, rows) => {
                 if (err) reject(err);
                 else resolve(rows);
             });
@@ -124,7 +157,7 @@ router.get('/', adminAuth, async (req, res) => {
         const stats = await new Promise((resolve, reject) => {
             db.all(`
                 SELECT status, COUNT(*) as count 
-                FROM installation_jobs 
+                FROM installation_jobs ij${t.where('ij')}
                 GROUP BY status
             `, (err, rows) => {
                 if (err) reject(err);
@@ -163,14 +196,14 @@ router.get('/', adminAuth, async (req, res) => {
             status,
             selectedTechnician: technician,
             settings: {
-                logo_filename: getSetting('logo_filename', 'logo.png'),
-                company_header: getSetting('company_header', 'GEMBOK')
+                logo_filename: req.appSettings?.logoFilename || 'logo.png',
+                company_header: req.appSettings?.companyHeader || ''
             },
             versionInfo: {
                 version: '1.0.0',
                 buildNumber: '001',
                 versionDate: '2024-01-01',
-                companyHeader: getSetting('company_header', 'GEMBOK')
+                companyHeader: req.appSettings?.companyHeader || ''
             },
             versionBadge: {
                 class: 'badge-primary',
@@ -194,7 +227,7 @@ router.get('/create', adminAuth, async (req, res) => {
         
         // Get technicians untuk assignment
         const technicians = await new Promise((resolve, reject) => {
-            db.all('SELECT id, name, phone FROM technicians WHERE is_active = 1 ORDER BY name', (err, rows) => {
+            db.all(`SELECT id, name, phone FROM technicians WHERE is_active = 1${tAnd('')} ORDER BY name`, (err, rows) => {
                 if (err) reject(err);
                 else resolve(rows);
             });
@@ -212,14 +245,14 @@ router.get('/create', adminAuth, async (req, res) => {
             job: null, // null for create mode
             prefillCustomer,
             settings: {
-                logo_filename: getSetting('logo_filename', 'logo.png'),
-                company_header: getSetting('company_header', 'GEMBOK')
+                logo_filename: req.appSettings?.logoFilename || 'logo.png',
+                company_header: req.appSettings?.companyHeader || ''
             },
             versionInfo: {
                 version: '1.0.0',
                 buildNumber: '001',
                 versionDate: '2024-01-01',
-                companyHeader: getSetting('company_header', 'GEMBOK')
+                companyHeader: req.appSettings?.companyHeader || ''
             },
             versionBadge: {
                 class: 'badge-primary',
@@ -260,7 +293,7 @@ router.post('/create', adminAuth, async (req, res) => {
 
         if (customer_id) {
             const existingCustomer = await new Promise((resolve, reject) => {
-                db.get('SELECT id, name, phone, address FROM customers WHERE id = ?', [customer_id], (err, row) => {
+                db.get('SELECT id, name, phone, address FROM customers WHERE id = ?' + tAnd(''), [customer_id], (err, row) => {
                     if (err) reject(err); else resolve(row);
                 });
             });
@@ -296,7 +329,7 @@ router.post('/create', adminAuth, async (req, res) => {
 
         const lastJobNumber = await new Promise((resolve, reject) => {
             db.get(
-                'SELECT job_number FROM installation_jobs WHERE job_number LIKE ? ORDER BY job_number DESC LIMIT 1',
+                'SELECT job_number FROM installation_jobs WHERE job_number LIKE ?' + tAnd('') + ' ORDER BY job_number DESC LIMIT 1',
                 [`${psbPrefix}%`],
                 (err, row) => {
                     if (err) reject(err);
@@ -325,8 +358,8 @@ router.post('/create', adminAuth, async (req, res) => {
                     package_id, installation_date, installation_time, assigned_technician_id,
                     status, priority, notes, equipment_needed, estimated_duration,
                     customer_latitude, customer_longitude, created_by_admin_id,
-                    assigned_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    assigned_at, tenant_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `;
             const initialStatus = assigned_technician_id ? 'assigned' : 'scheduled';
 
@@ -344,7 +377,8 @@ router.post('/create', adminAuth, async (req, res) => {
                 initialStatus, priority || 'normal', notes || null, equipment_needed || null,
                 estimated_duration || 120, customer_latitude || null, customer_longitude || null,
                 req.session.adminUser || 'admin',
-                assignedAtOnCreate
+                assignedAtOnCreate,
+                tenantIdForInsert()
             ], function(err) {
                 if (err) reject(err);
                 else resolve(this.lastID);
@@ -371,8 +405,8 @@ router.post('/create', adminAuth, async (req, res) => {
                     db.get(`
                         SELECT ij.*, p.name as package_name, p.price as package_price
                         FROM installation_jobs ij
-                        LEFT JOIN packages p ON ij.package_id = p.id
-                        WHERE ij.id = ?
+                        LEFT JOIN packages p ON ij.package_id = p.id AND p.tenant_id = ij.tenant_id
+                        WHERE ij.id = ?${tAnd('ij')}
                     `, [jobId], (err, row) => {
                         if (err) reject(err); else resolve(row);
                     });
@@ -380,7 +414,7 @@ router.post('/create', adminAuth, async (req, res) => {
 
                 // Ambil detail teknisi
                 const technician = await new Promise((resolve, reject) => {
-                    db.get('SELECT id, name, phone, role FROM technicians WHERE id = ? AND is_active = 1', [assigned_technician_id], (err, row) => {
+                    db.get('SELECT id, name, phone, role FROM technicians WHERE id = ? AND is_active = 1' + tAnd(''), [assigned_technician_id], (err, row) => {
                         if (err) reject(err); else resolve(row);
                     });
                 });
@@ -451,10 +485,10 @@ router.get('/edit/:id', adminAuth, async (req, res) => {
                        c.customer_id AS customer_public_id_loaded,
                        c.username AS customer_login_username_loaded
                 FROM installation_jobs ij
-                LEFT JOIN packages p ON ij.package_id = p.id
+                LEFT JOIN packages p ON ij.package_id = p.id AND p.tenant_id = ij.tenant_id
                 LEFT JOIN technicians t ON ij.assigned_technician_id = t.id
                 LEFT JOIN customers c ON c.id = ij.customer_id
-                WHERE ij.id = ?
+                WHERE ij.id = ?${tAnd('ij')}
             `,
                 [jobId],
                 (err, row) => {
@@ -471,7 +505,7 @@ router.get('/edit/:id', adminAuth, async (req, res) => {
         // Get packages dan technicians
         const packages = await billingManager.getPackages();
         const technicians = await new Promise((resolve, reject) => {
-            db.all('SELECT id, name, phone FROM technicians WHERE is_active = 1 ORDER BY name', (err, rows) => {
+            db.all(`SELECT id, name, phone FROM technicians WHERE is_active = 1${tAnd('')} ORDER BY name`, (err, rows) => {
                 if (err) reject(err);
                 else resolve(rows);
             });
@@ -483,14 +517,14 @@ router.get('/edit/:id', adminAuth, async (req, res) => {
             technicians,
             job, // pass job data for edit mode
             settings: {
-                logo_filename: getSetting('logo_filename', 'logo.png'),
-                company_header: getSetting('company_header', 'GEMBOK')
+                logo_filename: req.appSettings?.logoFilename || 'logo.png',
+                company_header: req.appSettings?.companyHeader || ''
             },
             versionInfo: {
                 version: '1.0.0',
                 buildNumber: '001',
                 versionDate: '2024-01-01',
-                companyHeader: getSetting('company_header', 'GEMBOK')
+                companyHeader: req.appSettings?.companyHeader || ''
             },
             versionBadge: {
                 class: 'badge-primary',
@@ -529,7 +563,7 @@ router.put('/update/:id', adminAuth, async (req, res) => {
 
         // Get current job data
         const currentJob = await new Promise((resolve, reject) => {
-            db.get('SELECT * FROM installation_jobs WHERE id = ?', [jobId], (err, row) => {
+            db.get('SELECT * FROM installation_jobs WHERE id = ?' + tAnd(''), [jobId], (err, row) => {
                 if (err) reject(err);
                 else resolve(row);
             });
@@ -544,7 +578,7 @@ router.put('/update/:id', adminAuth, async (req, res) => {
 
         const linkedCustomer = await new Promise((resolve, reject) => {
             db.get(
-                'SELECT id, name, phone, address FROM customers WHERE id = ?',
+                'SELECT id, name, phone, address FROM customers WHERE id = ?' + tAnd(''),
                 [custIdUpdate],
                 (err, row) => {
                     if (err) reject(err);
@@ -593,7 +627,7 @@ router.put('/update/:id', adminAuth, async (req, res) => {
                     equipment_needed = ?, estimated_duration = ?,
                     customer_latitude = ?, customer_longitude = ?, status = ?,
                     updated_at = ?
-                WHERE id = ?
+                WHERE id = ?${tAnd('')}
             `
                 : `
                 UPDATE installation_jobs SET
@@ -604,7 +638,7 @@ router.put('/update/:id', adminAuth, async (req, res) => {
                     equipment_needed = ?, estimated_duration = ?,
                     customer_latitude = ?, customer_longitude = ?, status = ?,
                     updated_at = ?
-                WHERE id = ?
+                WHERE id = ?${tAnd('')}
             `;
             const updateParams = [
                 custIdUpdate,
@@ -693,7 +727,7 @@ router.delete('/delete/:id', adminAuth, async (req, res) => {
 
         // Check if job exists
         const job = await new Promise((resolve, reject) => {
-            db.get('SELECT * FROM installation_jobs WHERE id = ?', [jobId], (err, row) => {
+            db.get('SELECT * FROM installation_jobs WHERE id = ?' + tAnd(''), [jobId], (err, row) => {
                 if (err) reject(err);
                 else resolve(row);
             });
@@ -716,7 +750,7 @@ router.delete('/delete/:id', adminAuth, async (req, res) => {
 
         // Delete job (cascading deletes will handle history and equipment)
         await new Promise((resolve, reject) => {
-            db.run('DELETE FROM installation_jobs WHERE id = ?', [jobId], (err) => {
+            db.run('DELETE FROM installation_jobs WHERE id = ?' + tAnd(''), [jobId], (err) => {
                 if (err) reject(err);
                 else resolve();
             });
@@ -746,7 +780,7 @@ router.put('/cancel/:id', adminAuth, async (req, res) => {
 
         // Get current job data
         const job = await new Promise((resolve, reject) => {
-            db.get('SELECT * FROM installation_jobs WHERE id = ?', [jobId], (err, row) => {
+            db.get('SELECT * FROM installation_jobs WHERE id = ?' + tAnd(''), [jobId], (err, row) => {
                 if (err) reject(err); else resolve(row);
             });
         });
@@ -765,7 +799,7 @@ router.put('/cancel/:id', adminAuth, async (req, res) => {
             db.run(`
                 UPDATE installation_jobs
                 SET status = 'cancelled', updated_at = ?
-                WHERE id = ?
+                WHERE id = ?${tAnd('')}
             `, [now, jobId], (err) => { if (err) reject(err); else resolve(); });
         });
 
@@ -795,7 +829,7 @@ router.put('/start/:id', adminAuth, async (req, res) => {
         const jobId = req.params.id;
 
         const job = await new Promise((resolve, reject) => {
-            db.get('SELECT * FROM installation_jobs WHERE id = ?', [jobId], (err, row) => {
+            db.get('SELECT * FROM installation_jobs WHERE id = ?' + tAnd(''), [jobId], (err, row) => {
                 if (err) reject(err); else resolve(row);
             });
         });
@@ -810,7 +844,7 @@ router.put('/start/:id', adminAuth, async (req, res) => {
             db.run(
                 `UPDATE installation_jobs SET status = 'in_progress',
                  work_started_at = COALESCE(work_started_at, ?),
-                 updated_at = ? WHERE id = ?`,
+                 updated_at = ? WHERE id = ?${tAnd('')}`,
                 [wallStart, wallStart, jobId],
                 (err) => {
                     if (err) reject(err);
@@ -844,7 +878,7 @@ router.put('/complete/:id', adminAuth, async (req, res) => {
         const note = req.body?.note || 'Job ditandai selesai oleh admin';
 
         const job = await new Promise((resolve, reject) => {
-            db.get('SELECT * FROM installation_jobs WHERE id = ?', [jobId], (err, row) => {
+            db.get('SELECT * FROM installation_jobs WHERE id = ?' + tAnd(''), [jobId], (err, row) => {
                 if (err) reject(err); else resolve(row);
             });
         });
@@ -857,7 +891,7 @@ router.put('/complete/:id', adminAuth, async (req, res) => {
         }
 
         await new Promise((resolve, reject) => {
-            db.run(`UPDATE installation_jobs SET status = 'completed', updated_at = ? WHERE id = ?`, [getLocalTimestamp(), jobId], (err) => {
+            db.run(`UPDATE installation_jobs SET status = 'completed', updated_at = ? WHERE id = ?${tAnd('')}`, [getLocalTimestamp(), jobId], (err) => {
                 if (err) reject(err); else resolve();
             });
         });
@@ -913,7 +947,7 @@ router.post('/assign/:id', adminAuth, async (req, res) => {
 
         // Get current job data
         const currentJob = await new Promise((resolve, reject) => {
-            db.get('SELECT * FROM installation_jobs WHERE id = ?', [jobId], (err, row) => {
+            db.get('SELECT * FROM installation_jobs WHERE id = ?' + tAnd(''), [jobId], (err, row) => {
                 if (err) reject(err);
                 else resolve(row);
             });
@@ -938,7 +972,7 @@ router.post('/assign/:id', adminAuth, async (req, res) => {
                         ELSE status
                     END,
                     updated_at = ?
-                WHERE id = ?
+                WHERE id = ?${tAnd('')}
             `, [technician_id, now, now, jobId], (err) => {
                 if (err) reject(err);
                 else resolve();
@@ -1005,9 +1039,9 @@ router.get('/view/:id', adminAuth, async (req, res) => {
                        (SELECT MIN(h.created_at) FROM installation_job_status_history h
                         WHERE h.job_id = ij.id AND LOWER(TRIM(h.new_status)) = 'assigned') AS assigned_at_history
                 FROM installation_jobs ij
-                LEFT JOIN packages p ON ij.package_id = p.id
+                LEFT JOIN packages p ON ij.package_id = p.id AND p.tenant_id = ij.tenant_id
                 LEFT JOIN technicians t ON ij.assigned_technician_id = t.id
-                WHERE ij.id = ?
+                WHERE ij.id = ?${tAnd('ij')}
             `,
                 [jobId],
                 (err, row) => {
@@ -1022,14 +1056,14 @@ router.get('/view/:id', adminAuth, async (req, res) => {
                 title: 'Job Tidak Ditemukan',
                 message: 'Jadwal instalasi yang dicari tidak ditemukan',
                 settings: {
-                    logo_filename: getSetting('logo_filename', 'logo.png'),
-                    company_header: getSetting('company_header', 'GEMBOK')
+                    logo_filename: req.appSettings?.logoFilename || 'logo.png',
+                    company_header: req.appSettings?.companyHeader || ''
                 },
                 versionInfo: {
                     version: '1.0.0',
                     buildNumber: '001',
                     versionDate: '2024-01-01',
-                    companyHeader: getSetting('company_header', 'GEMBOK')
+                    companyHeader: req.appSettings?.companyHeader || ''
                 },
                 versionBadge: {
                     class: 'badge-primary',
@@ -1052,7 +1086,7 @@ router.get('/view/:id', adminAuth, async (req, res) => {
 
         // Get available technicians for reassignment
         const technicians = await new Promise((resolve, reject) => {
-            db.all('SELECT id, name, phone, role FROM technicians WHERE is_active = 1 ORDER BY name', (err, rows) => {
+            db.all('SELECT id, name, phone, role FROM technicians WHERE is_active = 1' + tAnd('') + ' ORDER BY name', (err, rows) => {
                 if (err) reject(err);
                 else resolve(rows || []);
             });
@@ -1073,14 +1107,14 @@ router.get('/view/:id', adminAuth, async (req, res) => {
             statusHistory,
             technicians,
             settings: {
-                logo_filename: getSetting('logo_filename', 'logo.png'),
-                company_header: getSetting('company_header', 'GEMBOK')
+                logo_filename: req.appSettings?.logoFilename || 'logo.png',
+                company_header: req.appSettings?.companyHeader || ''
             },
             versionInfo: {
                 version: '1.0.0',
                 buildNumber: '001',
                 versionDate: '2024-01-01',
-                companyHeader: getSetting('company_header', 'GEMBOK')
+                companyHeader: req.appSettings?.companyHeader || ''
             },
             versionBadge: {
                 class: 'badge-primary',
@@ -1094,14 +1128,14 @@ router.get('/view/:id', adminAuth, async (req, res) => {
             title: 'Error',
             message: 'Terjadi kesalahan saat memuat detail job instalasi',
             settings: {
-                logo_filename: getSetting('logo_filename', 'logo.png'),
-                company_header: getSetting('company_header', 'GEMBOK')
+                logo_filename: req.appSettings?.logoFilename || 'logo.png',
+                company_header: req.appSettings?.companyHeader || ''
             },
             versionInfo: {
                 version: '1.0.0',
                 buildNumber: '001',
                 versionDate: '2024-01-01',
-                companyHeader: getSetting('company_header', 'GEMBOK')
+                companyHeader: req.appSettings?.companyHeader || ''
             },
             versionBadge: {
                 class: 'badge-primary',
@@ -1207,9 +1241,9 @@ router.get('/api/:id', adminAuth, async (req, res) => {
                        p.name as package_name, p.price as package_price,
                        t.name as technician_name, t.phone as technician_phone
                 FROM installation_jobs ij
-                LEFT JOIN packages p ON ij.package_id = p.id
+                LEFT JOIN packages p ON ij.package_id = p.id AND p.tenant_id = ij.tenant_id
                 LEFT JOIN technicians t ON ij.assigned_technician_id = t.id
-                WHERE ij.id = ?
+                WHERE ij.id = ?${tAnd('ij')}
             `, [jobId], (err, row) => {
                 if (err) reject(err);
                 else resolve(row);
@@ -1258,9 +1292,9 @@ router.post('/assign-technician', adminAuth, async (req, res) => {
                        p.name as package_name, p.price as package_price,
                        c.name as customer_name, c.phone as customer_phone, c.address as customer_address
                 FROM installation_jobs ij
-                LEFT JOIN packages p ON ij.package_id = p.id
+                LEFT JOIN packages p ON ij.package_id = p.id AND p.tenant_id = ij.tenant_id
                 LEFT JOIN customers c ON ij.customer_id = c.id
-                WHERE ij.id = ?
+                WHERE ij.id = ?${tAnd('ij')}
             `, [jobId], (err, row) => {
                 if (err) reject(err);
                 else resolve(row);
@@ -1276,7 +1310,7 @@ router.post('/assign-technician', adminAuth, async (req, res) => {
 
         // Get technician details
         const technician = await new Promise((resolve, reject) => {
-            db.get('SELECT id, name, phone, role FROM technicians WHERE id = ? AND is_active = 1', [technicianId], (err, row) => {
+            db.get('SELECT id, name, phone, role FROM technicians WHERE id = ? AND is_active = 1' + tAnd(''), [technicianId], (err, row) => {
                 if (err) reject(err);
                 else resolve(row);
             });
@@ -1300,7 +1334,7 @@ router.post('/assign-technician', adminAuth, async (req, res) => {
                     priority = ?,
                     notes = COALESCE(?, notes),
                     updated_at = ?
-                WHERE id = ?
+                WHERE id = ?${tAnd('')}
             `;
             
             db.run(updateQuery, [technicianId, now, priority || 'normal', notes || null, now, jobId], function(err) {

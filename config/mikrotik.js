@@ -6,6 +6,7 @@ const { getRadiusConnection: getRadiusConnectionSQLite } = require('./radiusSQLi
 const fs = require('fs');
 const path = require('path');
 const cacheManager = require('./cacheManager');
+const { tenantCacheKey } = require('./platform/tenantCache');
 const { looksLikePasswordHashNotCleartext } = require('../utils/passwordHashHeuristic');
 
 let sock = null;
@@ -16,10 +17,70 @@ const MIN_MONITOR_INTERVAL_MS = 10 * 1000;
 // Connection pool untuk router (reuse koneksi per router)
 const routerConnections = new Map();
 
-const PPPoe_EXCLUDE_CACHE_KEY = 'radius:pppoe:exclude_usernames';
+const PPPoe_EXCLUDE_CACHE_BASE = 'radius:pppoe:exclude_usernames';
 const PPPoe_EXCLUDE_CACHE_TTL = 5 * 60 * 1000;
-const ACTIVE_RADIUS_SESSIONS_CACHE_KEY = 'radius:pppoe:active_sessions';
+const ACTIVE_RADIUS_SESSIONS_CACHE_BASE = 'radius:pppoe:active_sessions';
+const ACTIVE_RADIUS_SESSIONS_RADACCT_CACHE_BASE = 'radius:pppoe:active_sessions:radacct';
 const ACTIVE_RADIUS_SESSIONS_CACHE_TTL = 45 * 1000;
+
+function scopedRadiusCacheKey(base) {
+    return tenantCacheKey(base);
+}
+
+function appendAllowedUsernamesSql(baseSql, params, allowedUsernames, columnExpr) {
+    if (!Array.isArray(allowedUsernames) || allowedUsernames.length === 0) {
+        return baseSql;
+    }
+    const normalized = [
+        ...new Set(
+            allowedUsernames
+                .map((u) => String(u).toLowerCase().trim())
+                .filter(Boolean)
+        )
+    ];
+    if (!normalized.length) {
+        return baseSql;
+    }
+    const placeholders = normalized.map(() => '?').join(',');
+    params.push(...normalized);
+    return `${baseSql} AND LOWER(TRIM(${columnExpr})) IN (${placeholders})`;
+}
+
+async function getActiveSessionsFromSqliteRadacct(excludeUsernames = [], allowedUsernames = null) {
+    const { getRadiusConnection } = require('./radiusSQLite');
+    let conn;
+    try {
+        conn = await getRadiusConnection();
+        const openAcct =
+            `(acctstoptime IS NULL OR acctstoptime = '' OR acctstoptime = '0' OR acctstoptime = '0000-00-00 00:00:00')`;
+        let sql = `
+            SELECT username, framedipaddress, acctinputoctets, acctoutputoctets, nasipaddress,
+                   CAST((julianday('now','localtime') - julianday(acctstarttime)) * 86400 AS INTEGER) AS session_time
+            FROM radacct
+            WHERE ${openAcct}
+        `;
+        const params = [];
+        if (excludeUsernames.length > 0) {
+            sql += ` AND username NOT IN (${excludeUsernames.map(() => '?').join(',')})`;
+            params.push(...excludeUsernames);
+        }
+        sql = appendAllowedUsernamesSql(sql, params, allowedUsernames, 'username');
+        sql += ' ORDER BY acctstarttime DESC';
+        const [rows] = await conn.execute(sql, params);
+        return Array.isArray(rows) ? rows : [];
+    } catch (e) {
+        logger.warn(`[PPPoE-RADIUS] SQLite radacct skip: ${e.message}`);
+        return [];
+    } finally {
+        if (conn) {
+            try {
+                await conn.end();
+            } catch (_) {
+                /* ignore */
+            }
+        }
+    }
+}
 
 /**
  * Username yang dikecualikan dari daftar PPPoE admin / query radcheck terkait:
@@ -32,10 +93,15 @@ const ACTIVE_RADIUS_SESSIONS_CACHE_TTL = 45 * 1000;
  * dan menyembunyikan pelanggan ISP padahal baris radcheck ada.
  */
 async function getPppoeRadcheckExcludeUsernames() {
-    const cached = cacheManager.get(PPPoe_EXCLUDE_CACHE_KEY);
+    const cached = cacheManager.get(scopedRadiusCacheKey(PPPoe_EXCLUDE_CACHE_BASE));
     if (cached) {
         return cached;
     }
+
+    const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
+    const _tId = hasTenantContext() ? getTenantId() : null;
+    const tCust = _tId != null ? ' AND tenant_id = ?' : '';
+    const tMember = _tId != null ? ' AND tenant_id = ?' : '';
 
     const sqlite3 = require('sqlite3').verbose();
     const dbPath = path.join(__dirname, '../data/billing.db');
@@ -52,8 +118,8 @@ async function getPppoeRadcheckExcludeUsernames() {
         const hotspotOnly = await new Promise((resolve) => {
             db.all(
                 `SELECT DISTINCT TRIM(hotspot_username) AS u FROM members
-                 WHERE hotspot_username IS NOT NULL AND TRIM(hotspot_username) != ''`,
-                [],
+                 WHERE hotspot_username IS NOT NULL AND TRIM(hotspot_username) != ''${tMember}`,
+                _tId != null ? [_tId] : [],
                 (err, rows) => {
                     if (err || !rows) return resolve([]);
                     resolve(rows.map((r) => r.u).filter(Boolean));
@@ -63,8 +129,8 @@ async function getPppoeRadcheckExcludeUsernames() {
         const customerPppoe = await new Promise((resolve) => {
             db.all(
                 `SELECT DISTINCT TRIM(pppoe_username) AS u FROM customers
-                 WHERE pppoe_username IS NOT NULL AND TRIM(pppoe_username) != ''`,
-                [],
+                 WHERE pppoe_username IS NOT NULL AND TRIM(pppoe_username) != ''${tCust}`,
+                _tId != null ? [_tId] : [],
                 (err, rows) => {
                     if (err) {
                         logger.warn(`[PPPoE-exclude] customers.pppoe_username: ${err.message}`);
@@ -87,7 +153,7 @@ async function getPppoeRadcheckExcludeUsernames() {
         } else {
             logger.info(`[PPPoE-exclude] voucher + hotspot_username: ${merged.length} username (tanpa bentrok pelanggan PPPoE)`);
         }
-        cacheManager.set(PPPoe_EXCLUDE_CACHE_KEY, merged, PPPoe_EXCLUDE_CACHE_TTL);
+        cacheManager.set(scopedRadiusCacheKey(PPPoe_EXCLUDE_CACHE_BASE), merged, PPPoe_EXCLUDE_CACHE_TTL);
         return merged;
     } finally {
         db.close();
@@ -597,7 +663,14 @@ async function getPppSecretCleartextPasswordFromMikrotikRouters(username) {
 }
 
 // Fungsi untuk mendapatkan seluruh user PPPoE dari RADIUS (BUKAN hotspot voucher DAN BUKAN member hotspot)
-async function getPPPoEUsersRadius() {
+async function getPPPoEUsersRadius(options = {}) {
+    const {
+        allowedUsernames = null,
+        skipMikrotikActive = false,
+        activeRouters = null,
+        mikrotikTimeoutMs = 3000,
+        forceRefreshActive = false
+    } = options;
     let conn;
     try {
         conn = await getRadiusConnection();
@@ -633,6 +706,7 @@ async function getPPPoEUsersRadius() {
             params.push(...excludeUsernames);
         }
 
+        query = appendAllowedUsernamesSql(query, params, allowedUsernames, 'rc.username');
         query += ` ORDER BY LOWER(TRIM(rc.username))`;
 
         const [rows] = await conn.execute(query, params);
@@ -646,13 +720,23 @@ async function getPPPoEUsersRadius() {
 
         await conn.end();
 
-        let activeUsernames = [];
+        const activeSet = new Set();
         try {
-            const activeConnections = await getActivePPPoEConnectionsRadius();
-            if (Array.isArray(activeConnections)) {
-                activeUsernames = activeConnections.map((c) => c.name || c.username);
-            } else if (activeConnections && activeConnections.success && Array.isArray(activeConnections.data)) {
-                activeUsernames = activeConnections.data.map((c) => c.name || c.username);
+            const activeConnections = await getActivePPPoEConnectionsRadius({
+                skipMikrotik: skipMikrotikActive,
+                routers: activeRouters,
+                mikrotikTimeoutMs,
+                forceRefresh: forceRefreshActive,
+                allowedUsernames
+            });
+            const activeList = Array.isArray(activeConnections)
+                ? activeConnections
+                : activeConnections && activeConnections.success && Array.isArray(activeConnections.data)
+                  ? activeConnections.data
+                  : [];
+            for (const c of activeList) {
+                const n = c && (c.name || c.username);
+                if (n) activeSet.add(String(n).toLowerCase().trim());
             }
         } catch (activeError) {
             logger.warn(`Failed to get active connections: ${activeError.message}`);
@@ -662,10 +746,10 @@ async function getPPPoEUsersRadius() {
             name: row.username,
             password: row.password,
             profile: profileMap.get(row.username) || 'default',
-            active: activeUsernames.includes(row.username)
+            active: activeSet.has(String(row.username).toLowerCase().trim())
         }));
 
-        logger.info(`Mapped ${users.length} PPPoE users successfully (${activeUsernames.length} active)`);
+        logger.info(`Mapped ${users.length} PPPoE users successfully (${activeSet.size} active)`);
         return users;
     } catch (error) {
         await conn.end();
@@ -684,18 +768,29 @@ async function getPPPoEUsersRadius() {
                 fallbackQuery += ` AND r.username NOT IN (${placeholders})`;
                 params.push(...excludeUsernames);
             }
+            fallbackQuery = appendAllowedUsernamesSql(fallbackQuery, params, allowedUsernames, 'r.username');
             fallbackQuery += ' ORDER BY LOWER(TRIM(r.username))';
 
             const [fbRows] = await conn2.execute(fallbackQuery, params);
             const fbList = Array.isArray(fbRows) ? fbRows : [];
 
-            let activeUsernames = [];
+            const activeSetFb = new Set();
             try {
-                const activeConnections = await getActivePPPoEConnectionsRadius();
-                if (Array.isArray(activeConnections)) {
-                    activeUsernames = activeConnections.map((c) => c.name || c.username);
-                } else if (activeConnections && activeConnections.success && Array.isArray(activeConnections.data)) {
-                    activeUsernames = activeConnections.data.map((c) => c.name || c.username);
+                const activeConnections = await getActivePPPoEConnectionsRadius({
+                    skipMikrotik: skipMikrotikActive,
+                    routers: activeRouters,
+                    mikrotikTimeoutMs,
+                    forceRefresh: forceRefreshActive,
+                    allowedUsernames
+                });
+                const activeListFb = Array.isArray(activeConnections)
+                    ? activeConnections
+                    : activeConnections && activeConnections.success && Array.isArray(activeConnections.data)
+                      ? activeConnections.data
+                      : [];
+                for (const c of activeListFb) {
+                    const n = c && (c.name || c.username);
+                    if (n) activeSetFb.add(String(n).toLowerCase().trim());
                 }
             } catch (activeError) {
                 logger.warn(`Failed to get active connections in fallback: ${activeError.message}`);
@@ -718,7 +813,7 @@ async function getPPPoEUsersRadius() {
                 name: row.username,
                 password: row.password,
                 profile: profileMapFb.get(row.username) || 'default',
-                active: activeUsernames.includes(row.username)
+                active: activeSetFb.has(String(row.username).toLowerCase().trim())
             }));
         } catch (fallbackError) {
             logger.error(`[PPPoE-RADIUS] Fallback query also failed: ${fallbackError.message}`);
@@ -729,35 +824,47 @@ async function getPPPoEUsersRadius() {
 
 /**
  * Semua sesi /ppp/active dari MikroTik (semua NAS) — sumber kebenaran status online.
+ * @param {{ routers?: object[], timeoutMs?: number }} [options]
  * @returns {Promise<Map<string, object>>}
  */
-async function collectMikrotikPppActiveSessionsByLoginMap() {
+async function collectMikrotikPppActiveSessionsByLoginMap(options = {}) {
     const byLogin = new Map();
     const mergeRow = (row) => {
         const n = row && row.name != null ? String(row.name).trim() : '';
         if (n) byLogin.set(n, row);
     };
-    const routers = await getAllRoutersFromBillingDb();
-    if (!routers.length) {
+    const timeoutMs = options.timeoutMs ?? 3000;
+    const routers = options.routers ?? (await getAllRoutersFromBillingDb());
+
+    const fetchActiveForRouter = async (r) => {
+        const label = r ? `router ${r.name || r.id}` : 'single NAS';
         try {
-            const conn = await getMikrotikConnection();
-            if (conn) {
-                const active = await conn.write('/ppp/active/print');
-                for (const row of active || []) mergeRow(row);
-            }
+            const active = await Promise.race([
+                (async () => {
+                    const conn = r ? await getMikrotikConnectionForRouter(r) : await getMikrotikConnection();
+                    if (!conn) return [];
+                    return await conn.write('/ppp/active/print');
+                })(),
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error(`timeout ${timeoutMs}ms`)), timeoutMs)
+                )
+            ]);
+            return active || [];
         } catch (e) {
-            logger.warn(`[collectMikrotikPppActiveSessionsByLoginMap] single NAS: ${e.message}`);
+            logger.warn(`[collectMikrotikPppActiveSessionsByLoginMap] ${label}: ${e.message}`);
+            return [];
         }
+    };
+
+    if (!routers.length) {
+        const rows = await fetchActiveForRouter(null);
+        for (const row of rows) mergeRow(row);
         return byLogin;
     }
-    for (const r of routers) {
-        try {
-            const conn = await getMikrotikConnectionForRouter(r);
-            const active = await conn.write('/ppp/active/print');
-            for (const row of active || []) mergeRow(row);
-        } catch (e) {
-            logger.warn(`[collectMikrotikPppActiveSessionsByLoginMap] router ${r.name}: ${e.message}`);
-        }
+
+    const results = await Promise.all(routers.map((r) => fetchActiveForRouter(r)));
+    for (const active of results) {
+        for (const row of active) mergeRow(row);
     }
     return byLogin;
 }
@@ -765,8 +872,12 @@ async function collectMikrotikPppActiveSessionsByLoginMap() {
 // Fungsi untuk mendapatkan active PPPoE connections dari RADIUS (BUKAN hotspot voucher DAN BUKAN member hotspot)
 async function getActivePPPoEConnectionsRadius(options = {}) {
     const forceRefresh = options.forceRefresh === true;
+    const skipMikrotik = options.skipMikrotik === true;
+    const cacheKey = scopedRadiusCacheKey(
+        skipMikrotik ? ACTIVE_RADIUS_SESSIONS_RADACCT_CACHE_BASE : ACTIVE_RADIUS_SESSIONS_CACHE_BASE
+    );
     if (!forceRefresh) {
-        const cached = cacheManager.get(ACTIVE_RADIUS_SESSIONS_CACHE_KEY);
+        const cached = cacheManager.get(cacheKey);
         if (cached) {
             return cached;
         }
@@ -777,8 +888,13 @@ async function getActivePPPoEConnectionsRadius(options = {}) {
         const excludeSet = new Set(excludeUsernames);
         logger.info(`Excluding ${excludeUsernames.length} voucher/hotspot from active PPPoE connections`);
 
-        // Sumber kebenaran online: MikroTik /ppp/active (FR accounting sering di MySQL, app baca SQLite → mismatch).
-        const mikrotikByLogin = await collectMikrotikPppActiveSessionsByLoginMap();
+        let mikrotikByLogin = new Map();
+        if (!skipMikrotik) {
+            mikrotikByLogin = await collectMikrotikPppActiveSessionsByLoginMap({
+                routers: options.routers,
+                timeoutMs: options.mikrotikTimeoutMs
+            });
+        }
 
         let mysqlByLogin = new Map();
         try {
@@ -797,36 +913,61 @@ async function getActivePPPoEConnectionsRadius(options = {}) {
             logger.warn(`[PPPoE-RADIUS] MySQL radacct skip: ${mysqlErr.message}`);
         }
 
+        if (skipMikrotik && mysqlByLogin.size === 0) {
+            const sqliteRows = await getActiveSessionsFromSqliteRadacct(
+                excludeUsernames,
+                options.allowedUsernames
+            );
+            for (const row of sqliteRows) {
+                const u = row.username != null ? String(row.username).trim() : '';
+                if (u) mysqlByLogin.set(u, row);
+            }
+        }
+
+        const allowedSet =
+            Array.isArray(options.allowedUsernames) && options.allowedUsernames.length > 0
+                ? new Set(
+                      options.allowedUsernames
+                          .map((u) => String(u).toLowerCase().trim())
+                          .filter(Boolean)
+                  )
+                : null;
+
         const seen = new Set();
         const result = [];
 
-        for (const [name, mtRow] of mikrotikByLogin.entries()) {
-            if (excludeSet.has(name)) continue;
-            seen.add(name);
-            const mysqlRow = mysqlByLogin.get(name);
-            const ip =
-                (mtRow.address && String(mtRow.address).trim()) ||
-                (mysqlRow && mysqlRow.framedipaddress) ||
-                'N/A';
-            const uptimeRaw =
-                mtRow.uptime != null && mtRow.uptime !== ''
-                    ? mtRow.uptime
-                    : mysqlRow && mysqlRow.session_time != null
-                      ? mysqlRow.session_time
-                      : 0;
-            result.push({
-                name,
-                ip,
-                uptime: uptimeRaw,
-                'bytes-in': mysqlRow?.acctinputoctets || mtRow['bytes-in'] || 0,
-                'bytes-out': mysqlRow?.acctoutputoctets || mtRow['bytes-out'] || 0,
-                nasip: mysqlRow?.nasipaddress || 'Mikrotik'
-            });
+        if (!skipMikrotik) {
+            for (const [name, mtRow] of mikrotikByLogin.entries()) {
+                if (excludeSet.has(name)) continue;
+                if (allowedSet && !allowedSet.has(String(name).toLowerCase().trim())) continue;
+                seen.add(name);
+                const mysqlRow = mysqlByLogin.get(name);
+                const ip =
+                    (mtRow.address && String(mtRow.address).trim()) ||
+                    (mysqlRow && mysqlRow.framedipaddress) ||
+                    'N/A';
+                const uptimeRaw =
+                    mtRow.uptime != null && mtRow.uptime !== ''
+                        ? mtRow.uptime
+                        : mysqlRow && mysqlRow.session_time != null
+                          ? mysqlRow.session_time
+                          : 0;
+                result.push({
+                    name,
+                    ip,
+                    uptime: uptimeRaw,
+                    'bytes-in': mysqlRow?.acctinputoctets || mtRow['bytes-in'] || 0,
+                    'bytes-out': mysqlRow?.acctoutputoctets || mtRow['bytes-out'] || 0,
+                    nasip: mysqlRow?.nasipaddress || 'Mikrotik'
+                });
+            }
         }
 
-        // Tambahan dari MySQL radacct jika belum ada di Mikrotik (jarang, tapi jaga-jaga)
+        // Tambahan dari MySQL/SQLite radacct jika belum ada di Mikrotik (atau mode radacct-only)
         for (const [name, mysqlRow] of mysqlByLogin.entries()) {
-            if (excludeSet.has(name) || seen.has(name)) continue;
+            if (excludeSet.has(name)) continue;
+            if (allowedSet && !allowedSet.has(String(name).toLowerCase().trim())) continue;
+            if (!skipMikrotik && seen.has(name)) continue;
             result.push({
                 name,
                 ip: mysqlRow.framedipaddress || 'N/A',
@@ -837,9 +978,9 @@ async function getActivePPPoEConnectionsRadius(options = {}) {
             });
         }
 
-        cacheManager.set(ACTIVE_RADIUS_SESSIONS_CACHE_KEY, result, ACTIVE_RADIUS_SESSIONS_CACHE_TTL);
+        cacheManager.set(cacheKey, result, ACTIVE_RADIUS_SESSIONS_CACHE_TTL);
         logger.info(
-            `[PPPoE-RADIUS] Active sessions: ${result.length} (Mikrotik: ${mikrotikByLogin.size}, MySQL radacct: ${mysqlByLogin.size})`
+            `[PPPoE-RADIUS] Active sessions: ${result.length} (Mikrotik: ${mikrotikByLogin.size}, radacct: ${mysqlByLogin.size}, skipMikrotik: ${skipMikrotik})`
         );
         return result;
     } catch (error) {

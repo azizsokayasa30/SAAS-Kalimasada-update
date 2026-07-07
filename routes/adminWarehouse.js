@@ -7,9 +7,25 @@ const path = require('path');
 const crypto = require('crypto');
 const sqlite3 = require('sqlite3').verbose();
 const ExcelJS = require('exceljs');
-const { getSetting, getSettingsWithCache, getLocalTimestamp } = require('../config/settingsManager');
+const billingManager = require('../config/billing');
+const { tenantIdForInsert } = require('../config/platform/tenantSqlHelpers');
+const { attachTenantAppSettings } = require('../config/platform/tenantAppSettings');
+const { getSettingsWithCache, getLocalTimestamp } = require('../config/settingsManager');
 const { getVersionInfo } = require('../config/version-utils');
 const logger = require('../config/logger');
+
+function tAnd(alias = '') {
+    const t = billingManager._tenantWhere(alias);
+    if (!t.sql) return '';
+    const col = alias ? `${alias}.tenant_id` : 'tenant_id';
+    return ` AND ${col} = ${parseInt(t.params[0], 10)}`;
+}
+function tWhere(alias = '') {
+    const t = billingManager._tenantWhere(alias);
+    if (!t.sql) return '';
+    const col = alias ? `${alias}.tenant_id` : 'tenant_id';
+    return ` WHERE ${col} = ${parseInt(t.params[0], 10)}`;
+}
 
 const router = express.Router();
 router.use(express.json());
@@ -52,17 +68,10 @@ function genPublicCode() {
     return `WH${crypto.randomBytes(8).toString('hex').toUpperCase()}`;
 }
 
-const getAppSettings = (req, res, next) => {
-    req.appSettings = {
-        companyHeader: getSetting('company_header', 'ISP Monitor'),
-        footerInfo: getSetting('footer_info', ''),
-        logoFilename: getSetting('logo_filename', 'logo.png')
-    };
-    next();
-};
+const getAppSettings = attachTenantAppSettings;
 
 function renderLocals(req, page, title) {
-    const settings = getSettingsWithCache();
+    const settings = req.tenantSettings || getSettingsWithCache();
     return {
         title,
         page,
@@ -106,7 +115,7 @@ async function resolveEmployeeForOutbound(db, reqBody) {
         }
         const row = await dbGet(
             db,
-            `SELECT id, nama_lengkap, nik, jabatan, public_code, status FROM employees WHERE id = ?`,
+            `SELECT id, nama_lengkap, nik, jabatan, public_code, status FROM employees WHERE id = ?${tAnd('')}`,
             [employeeId]
         );
         if (!row) return { error: { status: 404, message: 'Karyawan tidak ditemukan.' } };
@@ -122,7 +131,7 @@ async function resolveEmployeeForOutbound(db, reqBody) {
     if (parsed.kind === 'id') {
         const row = await dbGet(
             db,
-            `SELECT id, nama_lengkap, nik, jabatan, public_code, status FROM employees WHERE id = ?`,
+            `SELECT id, nama_lengkap, nik, jabatan, public_code, status FROM employees WHERE id = ?${tAnd('')}`,
             [parsed.value]
         );
         if (!row) return { error: { status: 404, message: 'Karyawan tidak ditemukan.' } };
@@ -132,7 +141,7 @@ async function resolveEmployeeForOutbound(db, reqBody) {
 
     const row = await dbGet(
         db,
-        `SELECT id, nama_lengkap, nik, jabatan, public_code, status FROM employees WHERE UPPER(TRIM(public_code)) = ?`,
+        `SELECT id, nama_lengkap, nik, jabatan, public_code, status FROM employees WHERE UPPER(TRIM(public_code)) = ?${tAnd('')}`,
         [parsed.value]
     );
     if (!row) return { error: { status: 404, message: 'Kode karyawan tidak dikenali.' } };
@@ -196,7 +205,7 @@ router.get('/cetak-qr/:batchId', getAppSettings, async (req, res) => {
         const batch = await dbGet(
             db,
             `SELECT b.*, i.name AS item_name FROM warehouse_inbound_batches b
-             JOIN warehouse_items i ON i.id = b.item_id WHERE b.id = ?`,
+             JOIN warehouse_items i ON i.id = b.item_id WHERE b.id = ?${tAnd('b')}`,
             [batchId]
         );
         if (!batch) {
@@ -204,7 +213,7 @@ router.get('/cetak-qr/:batchId', getAppSettings, async (req, res) => {
         }
         const units = await dbAll(
             db,
-            `SELECT id, public_code FROM warehouse_units WHERE inbound_batch_id = ? ORDER BY id`,
+            `SELECT id, public_code FROM warehouse_units WHERE inbound_batch_id = ?${tAnd('')} ORDER BY id`,
             [batchId]
         );
         res.render('admin/warehouse/cetak-qr-batch', {
@@ -250,8 +259,8 @@ router.get('/api/items', async (req, res) => {
     try {
         const activeOnly = req.query.all !== '1';
         const sql = activeOnly
-            ? `SELECT * FROM warehouse_items WHERE is_active = 1 ORDER BY name COLLATE NOCASE`
-            : `SELECT * FROM warehouse_items ORDER BY is_active DESC, name COLLATE NOCASE`;
+            ? `SELECT * FROM warehouse_items WHERE is_active = 1${tAnd('')} ORDER BY name COLLATE NOCASE`
+            : `SELECT * FROM warehouse_items${tWhere('')} ORDER BY is_active DESC, name COLLATE NOCASE`;
         const rows = await dbAll(db, sql);
         res.json({ success: true, items: rows });
     } catch (e) {
@@ -272,8 +281,8 @@ router.post('/api/items', async (req, res) => {
     try {
         const r = await dbRun(
             db,
-            `INSERT INTO warehouse_items (name, unit, low_stock_threshold, is_active) VALUES (?,?,?,1)`,
-            [name, unit, low]
+            `INSERT INTO warehouse_items (name, unit, low_stock_threshold, is_active, tenant_id) VALUES (?,?,?,1,?)`,
+            [name, unit, low, tenantIdForInsert()]
         );
         res.json({ success: true, id: r.lastID });
     } catch (e) {
@@ -299,7 +308,7 @@ router.put('/api/items/:id', async (req, res) => {
     try {
         await dbRun(
             db,
-            `UPDATE warehouse_items SET name = ?, unit = ?, low_stock_threshold = ?, is_active = ?, updated_at = ? WHERE id = ?`,
+            `UPDATE warehouse_items SET name = ?, unit = ?, low_stock_threshold = ?, is_active = ?, updated_at = ? WHERE id = ?${tAnd('')}`,
             [name, unit, low, is_active, getLocalTimestamp(), id]
         );
         res.json({ success: true });
@@ -317,14 +326,14 @@ router.delete('/api/items/:id', async (req, res) => {
     }
     const db = openDb();
     try {
-        const u = await dbGet(db, `SELECT COUNT(*) AS c FROM warehouse_units WHERE item_id = ?`, [id]);
+        const u = await dbGet(db, `SELECT COUNT(*) AS c FROM warehouse_units WHERE item_id = ?${tAnd('')}`, [id]);
         if (u && u.c > 0) {
             return res.status(400).json({
                 success: false,
                 message: 'Barang sudah punya riwayat unit/stok. Nonaktifkan saja, jangan hapus.'
             });
         }
-        await dbRun(db, `DELETE FROM warehouse_items WHERE id = ?`, [id]);
+        await dbRun(db, `DELETE FROM warehouse_items WHERE id = ?${tAnd('')}`, [id]);
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ success: false, message: e.message });
@@ -346,15 +355,15 @@ router.post('/api/inbound', async (req, res) => {
     const db = openDb();
     try {
         const now = getLocalTimestamp();
-        const item = await dbGet(db, `SELECT id FROM warehouse_items WHERE id = ? AND is_active = 1`, [item_id]);
+        const item = await dbGet(db, `SELECT id FROM warehouse_items WHERE id = ? AND is_active = 1${tAnd('')}`, [item_id]);
         if (!item) {
             return res.status(400).json({ success: false, message: 'Master barang tidak ditemukan atau nonaktif' });
         }
 
         const { lastID: batchId } = await dbRun(
             db,
-            `INSERT INTO warehouse_inbound_batches (item_id, quantity, reference, notes, created_at) VALUES (?,?,?,?,?)`,
-            [item_id, quantity, reference, notes, now]
+            `INSERT INTO warehouse_inbound_batches (item_id, quantity, reference, notes, created_at, tenant_id) VALUES (?,?,?,?,?,?)`,
+            [item_id, quantity, reference, notes, now, tenantIdForInsert()]
         );
 
         const units = [];
@@ -365,8 +374,8 @@ router.post('/api/inbound', async (req, res) => {
                 try {
                     const r = await dbRun(
                         db,
-                        `INSERT INTO warehouse_units (item_id, inbound_batch_id, public_code, status, created_at) VALUES (?,?,?, 'in_stock', ?)`,
-                        [item_id, batchId, code, now]
+                        `INSERT INTO warehouse_units (item_id, inbound_batch_id, public_code, status, created_at, tenant_id) VALUES (?,?,?, 'in_stock', ?, ?)`,
+                        [item_id, batchId, code, now, tenantIdForInsert()]
                     );
                     units.push({ id: r.lastID, public_code: code });
                     inserted = true;
@@ -401,10 +410,11 @@ router.get('/api/inbound-history', async (req, res) => {
             db,
             `SELECT b.id, b.item_id, b.quantity, b.reference, b.notes, b.created_at,
                     i.name AS item_name, i.unit,
-                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.inbound_batch_id = b.id AND u.status = 'out') AS units_out,
-                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.inbound_batch_id = b.id AND u.status = 'in_stock') AS units_in_stock
+                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.inbound_batch_id = b.id AND u.status = 'out'${tAnd('u')}) AS units_out,
+                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.inbound_batch_id = b.id AND u.status = 'in_stock'${tAnd('u')}) AS units_in_stock
              FROM warehouse_inbound_batches b
              JOIN warehouse_items i ON i.id = b.item_id
+             WHERE 1=1${tAnd('b')}
              ORDER BY b.created_at DESC, b.id DESC
              LIMIT ?`,
             [limit]
@@ -431,20 +441,20 @@ router.put('/api/inbound-batches/:id', async (req, res) => {
 
     const db = openDb();
     try {
-        const batch = await dbGet(db, `SELECT * FROM warehouse_inbound_batches WHERE id = ?`, [batchId]);
+        const batch = await dbGet(db, `SELECT * FROM warehouse_inbound_batches WHERE id = ?${tAnd('')}`, [batchId]);
         if (!batch) {
             return res.status(404).json({ success: false, message: 'Batch tidak ditemukan' });
         }
 
         const outRow = await dbGet(
             db,
-            `SELECT COUNT(*) AS c FROM warehouse_units WHERE inbound_batch_id = ? AND status = 'out'`,
+            `SELECT COUNT(*) AS c FROM warehouse_units WHERE inbound_batch_id = ? AND status = 'out'${tAnd('')}`,
             [batchId]
         );
         const unitsOut = Number(outRow?.c) || 0;
 
         if (unitsOut > 0) {
-            await dbRun(db, `UPDATE warehouse_inbound_batches SET reference = ?, notes = ? WHERE id = ?`, [
+            await dbRun(db, `UPDATE warehouse_inbound_batches SET reference = ?, notes = ? WHERE id = ?${tAnd('')}`, [
                 reference,
                 notes,
                 batchId
@@ -469,7 +479,7 @@ router.put('/api/inbound-batches/:id', async (req, res) => {
             return res.status(400).json({ success: false, message: 'Barang dan jumlah (1–5000) harus valid' });
         }
 
-        const itemOk = await dbGet(db, `SELECT id FROM warehouse_items WHERE id = ? AND is_active = 1`, [item_id]);
+        const itemOk = await dbGet(db, `SELECT id FROM warehouse_items WHERE id = ? AND is_active = 1${tAnd('')}`, [item_id]);
         if (!itemOk) {
             return res.status(400).json({ success: false, message: 'Master barang tidak ditemukan atau nonaktif' });
         }
@@ -480,7 +490,7 @@ router.put('/api/inbound-batches/:id', async (req, res) => {
             const toRemove = oldQ - quantity;
             const victims = await dbAll(
                 db,
-                `SELECT id FROM warehouse_units WHERE inbound_batch_id = ? AND status = 'in_stock' ORDER BY id DESC LIMIT ?`,
+                `SELECT id FROM warehouse_units WHERE inbound_batch_id = ? AND status = 'in_stock'${tAnd('')} ORDER BY id DESC LIMIT ?`,
                 [batchId, toRemove]
             );
             if (victims.length < toRemove) {
@@ -490,7 +500,7 @@ router.put('/api/inbound-batches/:id', async (req, res) => {
                 });
             }
             for (const v of victims) {
-                await dbRun(db, `DELETE FROM warehouse_units WHERE id = ?`, [v.id]);
+                await dbRun(db, `DELETE FROM warehouse_units WHERE id = ?${tAnd('')}`, [v.id]);
             }
         } else if (quantity > oldQ) {
             const add = quantity - oldQ;
@@ -502,8 +512,8 @@ router.put('/api/inbound-batches/:id', async (req, res) => {
                     try {
                         await dbRun(
                             db,
-                            `INSERT INTO warehouse_units (item_id, inbound_batch_id, public_code, status, created_at) VALUES (?,?,?, 'in_stock', ?)`,
-                            [item_id, batchId, code, now]
+                            `INSERT INTO warehouse_units (item_id, inbound_batch_id, public_code, status, created_at, tenant_id) VALUES (?,?,?, 'in_stock', ?, ?)`,
+                            [item_id, batchId, code, now, tenantIdForInsert()]
                         );
                         inserted = true;
                     } catch (err) {
@@ -516,10 +526,10 @@ router.put('/api/inbound-batches/:id', async (req, res) => {
 
         await dbRun(
             db,
-            `UPDATE warehouse_inbound_batches SET item_id = ?, quantity = ?, reference = ?, notes = ? WHERE id = ?`,
+            `UPDATE warehouse_inbound_batches SET item_id = ?, quantity = ?, reference = ?, notes = ? WHERE id = ?${tAnd('')}`,
             [item_id, quantity, reference, notes, batchId]
         );
-        await dbRun(db, `UPDATE warehouse_units SET item_id = ? WHERE inbound_batch_id = ?`, [item_id, batchId]);
+        await dbRun(db, `UPDATE warehouse_units SET item_id = ? WHERE inbound_batch_id = ?${tAnd('')}`, [item_id, batchId]);
 
         res.json({ success: true });
     } catch (e) {
@@ -537,13 +547,13 @@ router.delete('/api/inbound-batches/:id', async (req, res) => {
     }
     const db = openDb();
     try {
-        const batch = await dbGet(db, `SELECT id FROM warehouse_inbound_batches WHERE id = ?`, [batchId]);
+        const batch = await dbGet(db, `SELECT id FROM warehouse_inbound_batches WHERE id = ?${tAnd('')}`, [batchId]);
         if (!batch) {
             return res.status(404).json({ success: false, message: 'Batch tidak ditemukan' });
         }
         const outRow = await dbGet(
             db,
-            `SELECT COUNT(*) AS c FROM warehouse_units WHERE inbound_batch_id = ? AND status = 'out'`,
+            `SELECT COUNT(*) AS c FROM warehouse_units WHERE inbound_batch_id = ? AND status = 'out'${tAnd('')}`,
             [batchId]
         );
         if (Number(outRow?.c) > 0) {
@@ -552,8 +562,8 @@ router.delete('/api/inbound-batches/:id', async (req, res) => {
                 message: 'Tidak bisa menghapus: sudah ada unit dari batch ini yang keluar (sudah di-scan keluar).'
             });
         }
-        await dbRun(db, `DELETE FROM warehouse_units WHERE inbound_batch_id = ?`, [batchId]);
-        await dbRun(db, `DELETE FROM warehouse_inbound_batches WHERE id = ?`, [batchId]);
+        await dbRun(db, `DELETE FROM warehouse_units WHERE inbound_batch_id = ?${tAnd('')}`, [batchId]);
+        await dbRun(db, `DELETE FROM warehouse_inbound_batches WHERE id = ?${tAnd('')}`, [batchId]);
         res.json({ success: true });
     } catch (e) {
         logger.error('inbound-batch delete', e);
@@ -604,7 +614,7 @@ router.post('/api/outbound-scan', async (req, res) => {
             `SELECT u.id, u.public_code, u.status, u.item_id, i.name AS item_name
              FROM warehouse_units u
              JOIN warehouse_items i ON i.id = u.item_id
-             WHERE UPPER(TRIM(u.public_code)) = ?`,
+             WHERE UPPER(TRIM(u.public_code)) = ?${tAnd('u')}`,
             [code]
         );
         if (!row) {
@@ -618,7 +628,7 @@ router.post('/api/outbound-scan', async (req, res) => {
         }
         await dbRun(
             db,
-            `UPDATE warehouse_units SET status = 'out', outbound_at = ?, outbound_recipient = ?, outbound_notes = ?, outbound_employee_id = ? WHERE id = ?`,
+            `UPDATE warehouse_units SET status = 'out', outbound_at = ?, outbound_recipient = ?, outbound_notes = ?, outbound_employee_id = ? WHERE id = ?${tAnd('')}`,
             [getLocalTimestamp(), recipient, outbound_notes, outboundEmployeeId, row.id]
         );
         res.json({
@@ -650,7 +660,7 @@ router.get('/api/outbound-history', async (req, res) => {
              FROM warehouse_units u
              JOIN warehouse_items i ON i.id = u.item_id
              LEFT JOIN employees e ON e.id = u.outbound_employee_id
-             WHERE u.status = 'out' AND u.outbound_at IS NOT NULL
+             WHERE u.status = 'out' AND u.outbound_at IS NOT NULL${tAnd('u')}
              ORDER BY u.outbound_at DESC, u.id DESC
              LIMIT ?`,
             [limit]
@@ -670,17 +680,17 @@ router.get('/api/report-summary', async (req, res) => {
         const items = await dbAll(
             db,
             `SELECT i.id, i.name, i.unit, i.low_stock_threshold,
-                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.item_id = i.id AND u.status = 'in_stock') AS stock_in,
-                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.item_id = i.id AND u.status = 'out') AS stock_out
+                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.item_id = i.id AND u.status = 'in_stock'${tAnd('u')}) AS stock_in,
+                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.item_id = i.id AND u.status = 'out'${tAnd('u')}) AS stock_out
              FROM warehouse_items i
-             WHERE i.is_active = 1
+             WHERE i.is_active = 1${tAnd('i')}
              ORDER BY i.name COLLATE NOCASE`
         );
 
         const lowStock = items.filter((r) => Number(r.stock_in) <= Number(r.low_stock_threshold));
 
-        const inboundTotal = await dbGet(db, `SELECT COUNT(*) AS c FROM warehouse_inbound_batches`, []);
-        const unitsTotal = await dbGet(db, `SELECT COUNT(*) AS c FROM warehouse_units`, []);
+        const inboundTotal = await dbGet(db, `SELECT COUNT(*) AS c FROM warehouse_inbound_batches${tWhere('')}`, []);
+        const unitsTotal = await dbGet(db, `SELECT COUNT(*) AS c FROM warehouse_units${tWhere('')}`, []);
 
         res.json({
             success: true,
@@ -704,10 +714,10 @@ router.get('/export/laporan.xlsx', getAppSettings, async (req, res) => {
         const items = await dbAll(
             db,
             `SELECT i.id, i.name, i.unit, i.low_stock_threshold,
-                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.item_id = i.id AND u.status = 'in_stock') AS stock_in,
-                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.item_id = i.id AND u.status = 'out') AS stock_out
+                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.item_id = i.id AND u.status = 'in_stock'${tAnd('u')}) AS stock_in,
+                    (SELECT COUNT(*) FROM warehouse_units u WHERE u.item_id = i.id AND u.status = 'out'${tAnd('u')}) AS stock_out
              FROM warehouse_items i
-             WHERE i.is_active = 1
+             WHERE i.is_active = 1${tAnd('i')}
              ORDER BY i.name COLLATE NOCASE`
         );
 

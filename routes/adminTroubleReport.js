@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+const billingManager = require('../config/billing');
+const { attachTenantAppSettings } = require('../config/platform/tenantAppSettings');
 const { adminAuth } = require('./adminAuth');
 const { 
   getAllTroubleReports, 
@@ -11,8 +13,15 @@ const {
   extractTechnicianCompletion
 } = require('../config/troubleReport');
 
-// Middleware admin auth untuk semua route
+function tAnd(alias = '') {
+  const t = billingManager._tenantWhere(alias);
+  if (!t.sql) return '';
+  const col = alias ? `${alias}.tenant_id` : 'tenant_id';
+  return ` AND ${col} = ${parseInt(t.params[0], 10)}`;
+}
+
 router.use(adminAuth);
+router.use(attachTenantAppSettings);
 
 // GET: Halaman daftar semua laporan gangguan
 router.get('/', async (req, res) => {
@@ -165,7 +174,7 @@ router.get('/customers/search', async (req, res) => {
     const sqlite3 = require('sqlite3').verbose();
     const db = new sqlite3.Database(dbPath);
     
-    db.all("SELECT * FROM customers WHERE name LIKE ? OR phone LIKE ? LIMIT 10", ['%'+q+'%', '%'+q+'%'], (err, rows) => {
+    db.all(`SELECT * FROM customers WHERE (name LIKE ? OR phone LIKE ?)${tAnd('')} LIMIT 10`, ['%'+q+'%', '%'+q+'%'], (err, rows) => {
       db.close();
       if (err) return res.status(500).json({ success: false, message: 'Database error' });
       res.json({ success: true, data: rows });
@@ -182,7 +191,7 @@ router.get('/technicians/list', async (req, res) => {
     const sqlite3 = require('sqlite3').verbose();
     const db = new sqlite3.Database(dbPath);
     
-    db.all("SELECT id, name, role FROM technicians WHERE is_active = 1", [], (err, rows) => {
+    db.all(`SELECT id, name, role FROM technicians WHERE is_active = 1${tAnd('')}`, [], (err, rows) => {
       db.close();
       if (err) return res.status(500).json({ success: false, message: 'Database error' });
       res.json({ success: true, technicians: rows });

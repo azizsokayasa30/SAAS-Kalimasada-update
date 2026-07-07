@@ -166,6 +166,18 @@ const TENANT_SCOPED_TABLES = [
     'customers', 'packages', 'invoices', 'payments', 'routers',
     'technicians', 'collectors', 'areas', 'app_settings', 'agents',
     'members', 'member_packages', 'expenses', 'income', 'odps',
+    // Operasional & HR
+    'installation_jobs', 'installation_job_status_history', 'trouble_reports',
+    'employees', 'employee_attendance', 'employee_payroll', 'employee_leave_requests',
+    'attendance_branches', 'attendance_settings', 'attendance_shifts',
+    // Gudang
+    'warehouse_items', 'warehouse_inbound_batches', 'warehouse_units',
+    // Keuangan tambahan
+    'finance_categories', 'goods_invoices', 'goods_invoice_items',
+    'collector_areas', 'collector_assignments', 'collector_payments',
+    'collector_remittance_receipts',
+    'voucher_revenue',
+    'activity_logs',
 ];
 
 async function tableExists(tableName) {
@@ -353,6 +365,42 @@ function releasedIdentifier(base, id) {
     return `${String(base).slice(0, maxBase)}${suffix}`;
 }
 
+async function purgeTenantBillingData(tenantId) {
+    const tid = Number(tenantId);
+    if (!Number.isFinite(tid) || tid <= 0) return;
+
+    // Tabel junction tanpa tenant_id — hapus lewat relasi pelanggan/kolektor tenant.
+    const junctionDeletes = [
+        `DELETE FROM customer_router_map WHERE customer_id IN (SELECT id FROM customers WHERE tenant_id = ?)`,
+        `DELETE FROM collector_assignments WHERE customer_id IN (SELECT id FROM customers WHERE tenant_id = ?)`,
+        `DELETE FROM collector_assignments WHERE collector_id IN (SELECT id FROM collectors WHERE tenant_id = ?)`,
+        `DELETE FROM collector_areas WHERE collector_id IN (SELECT id FROM collectors WHERE tenant_id = ?)`,
+        `DELETE FROM collector_payments WHERE collector_id IN (SELECT id FROM collectors WHERE tenant_id = ?)`,
+        `DELETE FROM collector_payments WHERE customer_id IN (SELECT id FROM customers WHERE tenant_id = ?)`,
+    ];
+    for (const sql of junctionDeletes) {
+        if (await tableExists(sql.match(/FROM (\w+)/)?.[1] || '')) {
+            try { await dbRun(sql, [tid]); } catch (_) { /* tabel opsional */ }
+        }
+    }
+
+    // Urutan: child dulu (payments/invoices), lalu parent.
+    const ordered = [
+        'payments', 'invoices', 'customers', 'collectors', 'packages', 'routers',
+        'areas', 'odps', 'expenses', 'income', 'members', 'member_packages',
+        'agents', 'technicians', 'app_settings',
+    ];
+    for (const table of ordered) {
+        if (!(await tableExists(table))) continue;
+        if (!(await tableHasColumn(table, 'tenant_id'))) continue;
+        await dbRun(`DELETE FROM ${table} WHERE tenant_id = ?`, [tid]);
+    }
+
+    if (await tableExists('tenant_provisioning_logs')) {
+        await dbRun('DELETE FROM tenant_provisioning_logs WHERE tenant_id = ?', [tid]);
+    }
+}
+
 async function releaseTenantIdentifiers(id) {
     const row = await dbGet('SELECT subdomain, slug FROM tenants WHERE id = ?', [id]);
     if (!row) return;
@@ -399,13 +447,18 @@ async function createTenant(data) {
     );
     if (dup) throw new Error('Subdomain sudah digunakan.');
 
-    const plan = await dbGet('SELECT * FROM subscription_plans WHERE id = ?', [data.subscription_plan_id]);
-    if (!plan) throw new Error('Paket subscription tidak valid.');
+    // Paket & durasi tidak diisi dari form — default Starter, tanpa batas akhir.
+    const planId = data.subscription_plan_id ? Number(data.subscription_plan_id) : 1;
+    const plan = await dbGet('SELECT * FROM subscription_plans WHERE id = ?', [planId]);
+    if (!plan) throw new Error('Paket subscription default tidak ditemukan.');
 
-    const months = Number(data.subscription_months) || 1;
-    const endsAt = new Date();
-    endsAt.setMonth(endsAt.getMonth() + months);
-    const endsAtSql = endsAt.toISOString().slice(0, 19).replace('T', ' ');
+    const endsAtSql = data.subscription_months
+        ? (() => {
+            const endsAt = new Date();
+            endsAt.setMonth(endsAt.getMonth() + Number(data.subscription_months));
+            return endsAt.toISOString().slice(0, 19).replace('T', ' ');
+        })()
+        : null;
     const settings = defaultTenantSettings({
         name: data.name,
         owner_email: data.owner_email,
@@ -428,7 +481,7 @@ async function createTenant(data) {
             data.owner_name,
             data.owner_email,
             data.owner_phone,
-            data.subscription_plan_id,
+            planId,
             endsAtSql,
             JSON.stringify(settings),
         ]
@@ -530,6 +583,34 @@ async function updateTenant(id, data) {
     return getTenantById(id);
 }
 
+/**
+ * Ubah HANYA username & password admin tenant (dipakai tombol edit cepat di
+ * halaman detail tenant management). Login admin tenant membaca langsung dari
+ * tenant.settings.admin_username / admin_password (lihat resolveLoginCredentials),
+ * jadi perubahan ini langsung berlaku untuk login.
+ * Jika admin_password dikosongkan, password lama dipertahankan.
+ */
+async function updateTenantAdminCredentials(id, { admin_username, admin_password } = {}) {
+    const tenant = await getTenantById(id);
+    if (!tenant) throw new Error('Tenant tidak ditemukan.');
+
+    const creds = resolveAdminCredentials(
+        { admin_username, admin_password },
+        {
+            admin_username: tenant.settings?.admin_username,
+            admin_password: tenant.settings?.admin_password,
+        }
+    );
+
+    const settings = {
+        ...(tenant.settings || {}),
+        admin_username: creds.admin_username,
+        admin_password: creds.admin_password,
+    };
+    await updateTenantSettings(id, settings);
+    return creds;
+}
+
 async function suspendTenant(id, reason = 'Suspended by Super Admin') {
     await dbRun(
         `UPDATE tenants SET status = 'suspended', suspended_at = datetime('now','localtime'),
@@ -552,6 +633,7 @@ async function deleteTenant(id) {
     if (Number(id) === 1) {
         throw new Error('Tenant default tidak bisa dihapus.');
     }
+    await purgeTenantBillingData(id);
     await releaseTenantIdentifiers(id);
     await dbRun(
         `UPDATE tenants SET status = 'deleted', deleted_at = datetime('now','localtime'),
@@ -588,6 +670,7 @@ module.exports = {
     getGlobalStats,
     createTenant,
     updateTenant,
+    updateTenantAdminCredentials,
     suspendTenant,
     activateTenant,
     deleteTenant,

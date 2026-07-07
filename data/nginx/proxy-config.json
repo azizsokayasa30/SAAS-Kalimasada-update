@@ -27,12 +27,13 @@
     }
   ],
   "tenant_subdomains": [
+    "tenant2",
     "tenant1",
     "default"
   ],
   "auto_sync_on_tenant_change": true,
-  "last_synced_at": "2026-06-24T20:00:40.078Z",
-  "last_applied_at": "2026-06-24T20:00:40.114Z",
-  "last_apply_message": "spawn bash ENOENT",
+  "last_synced_at": "2026-07-07T14:47:16.432Z",
+  "last_applied_at": "2026-07-07T14:47:16.444Z",
+  "last_apply_message": "Sertifikat belum ada: /etc/letsencrypt/live/kalimasada-app.com/fullchain.pem. Jalankan certbot terlebih dahulu. Setelah certbot selesai, aktifkan SSL lagi.",
   "last_apply_ok": false
 }

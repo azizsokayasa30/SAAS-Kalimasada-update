@@ -3,26 +3,38 @@ const router = express.Router();
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const logger = require('../config/logger');
-const { adminAuth } = require('./adminAuth');
-const { getSetting } = require('../config/settingsManager');
+const billingManager = require('../config/billing');
+const { tenantSqlFromRequest, tenantIdForInsert } = require('../config/platform/tenantSqlHelpers');
+const { attachTenantAppSettings } = require('../config/platform/tenantAppSettings');
 const CableNetworkUtils = require('../utils/cableNetworkUtils');
+const { adminAuth } = require('./adminAuth');
+
+router.use(attachTenantAppSettings);
+
+let _activeTenantSql = null;
+router.use((req, res, next) => {
+    _activeTenantSql = tenantSqlFromRequest(req);
+    next();
+});
+
+function tA(alias = '') {
+    return _activeTenantSql ? _activeTenantSql.and(alias) : '';
+}
+function tW(alias = '') {
+    return _activeTenantSql ? _activeTenantSql.where(alias) : '';
+}
 
 // Middleware untuk mendapatkan pengaturan aplikasi
 const getAppSettings = (req, res, next) => {
     req.appSettings = {
-        companyHeader: getSetting('company_header', 'ISP Monitor'),
-        companyName: getSetting('company_name', 'ISP Company'),
-        companyAddress: getSetting('company_address', ''),
-        companyPhone: getSetting('company_phone', ''),
-        companyEmail: getSetting('company_email', ''),
-        logoUrl: getSetting('logo_url', ''),
-        whatsappNumber: getSetting('whatsapp_number', ''),
-        whatsappApiKey: getSetting('whatsapp_api_key', ''),
-        midtransServerKey: getSetting('midtrans_server_key', ''),
-        midtransClientKey: getSetting('midtrans_client_key', ''),
-        xenditSecretKey: getSetting('xendit_secret_key', ''),
-        xenditPublicKey: getSetting('xendit_public_key', ''),
-        timezone: getSetting('timezone', 'Asia/Jakarta')
+        companyHeader: req.tenantSettings?.company_header || 'ISP Monitor',
+        companyName: req.tenantSettings?.company_name || 'ISP Company',
+        companyAddress: req.tenantSettings?.contact_address || '',
+        companyPhone: req.tenantSettings?.contact_phone || '',
+        companyEmail: req.tenantSettings?.contact_email || '',
+        logoUrl: req.tenantSettings?.logo_filename || '',
+        whatsappNumber: req.tenantSettings?.contact_whatsapp || '',
+        timezone: req.tenantSettings?.timezone || 'Asia/Jakarta'
     };
     next();
 };
@@ -49,12 +61,12 @@ router.get('/', adminAuth, getAppSettings, async (req, res) => {
         const stats = await new Promise((resolve, reject) => {
             db.all(`
                 SELECT 
-                    (SELECT COUNT(*) FROM odps) as total_odps,
-                    (SELECT COUNT(*) FROM odps WHERE status = 'active') as active_odps,
-                    (SELECT COUNT(*) FROM odps WHERE status = 'maintenance') as maintenance_odps,
-                    (SELECT COUNT(*) FROM cable_routes) as total_cables,
-                    (SELECT COUNT(*) FROM cable_routes WHERE status = 'connected') as connected_cables,
-                    (SELECT COUNT(*) FROM customers WHERE latitude IS NOT NULL AND longitude IS NOT NULL) as mapped_customers
+                    (SELECT COUNT(*) FROM odps o WHERE 1=1${tA('o')}) as total_odps,
+                    (SELECT COUNT(*) FROM odps o WHERE status = 'active'${tA('o')}) as active_odps,
+                    (SELECT COUNT(*) FROM odps o WHERE status = 'maintenance'${tA('o')}) as maintenance_odps,
+                    (SELECT COUNT(*) FROM cable_routes cr INNER JOIN customers c ON cr.customer_id = c.id WHERE 1=1${tA('c')}) as total_cables,
+                    (SELECT COUNT(*) FROM cable_routes cr INNER JOIN customers c ON cr.customer_id = c.id WHERE cr.status = 'connected'${tA('c')}) as connected_cables,
+                    (SELECT COUNT(*) FROM customers c WHERE latitude IS NOT NULL AND longitude IS NOT NULL${tA('c')}) as mapped_customers
             `, (err, rows) => {
                 if (err) reject(err);
                 else resolve(rows[0]);
@@ -64,7 +76,8 @@ router.get('/', adminAuth, getAppSettings, async (req, res) => {
         // Ambil ODP terbaru
         const recentODPs = await new Promise((resolve, reject) => {
             db.all(`
-                SELECT * FROM odps 
+                SELECT * FROM odps o
+                WHERE 1=1${tA('o')}
                 ORDER BY created_at DESC 
                 LIMIT 5
             `, (err, rows) => {
@@ -123,8 +136,9 @@ router.get('/odp', adminAuth, getAppSettings, async (req, res) => {
                        COUNT(CASE WHEN cr.customer_id IS NOT NULL THEN cr.id END) as connected_customers,
                        COUNT(CASE WHEN cr.status = 'connected' AND cr.customer_id IS NOT NULL THEN 1 END) as active_connections
                 FROM odps o
-                LEFT JOIN odps p ON o.parent_odp_id = p.id
+                LEFT JOIN odps p ON o.parent_odp_id = p.id AND p.tenant_id = o.tenant_id
                 LEFT JOIN cable_routes cr ON o.id = cr.odp_id
+                WHERE 1=1${tA('o')}
                 GROUP BY o.id
                 ORDER BY o.name
             `, [], (err, rows) => {
@@ -140,7 +154,8 @@ router.get('/odp', adminAuth, getAppSettings, async (req, res) => {
                 `
                 SELECT id, name, code, capacity, used_ports, status,
                        latitude, longitude
-                FROM odps
+                FROM odps o
+                WHERE 1=1${tA('o')}
                 ORDER BY name COLLATE NOCASE
             `,
                 [],
@@ -477,7 +492,8 @@ router.get('/cables', adminAuth, getAppSettings, async (req, res) => {
                        o.latitude as odp_latitude, o.longitude as odp_longitude
                 FROM cable_routes cr
                 JOIN customers c ON cr.customer_id = c.id
-                JOIN odps o ON cr.odp_id = o.id
+                JOIN odps o ON cr.odp_id = o.id AND o.tenant_id = c.tenant_id
+                WHERE 1=1${tA('c')}
                 ORDER BY cr.created_at DESC
             `, [], (err, rows) => {
                 if (err) reject(err);
@@ -487,7 +503,7 @@ router.get('/cables', adminAuth, getAppSettings, async (req, res) => {
         
         // Ambil data ODP untuk dropdown
         const odps = await new Promise((resolve, reject) => {
-            db.all('SELECT * FROM odps WHERE status = "active" ORDER BY name', [], (err, rows) => {
+            db.all(`SELECT * FROM odps o WHERE status = "active"${tA('o')} ORDER BY name`, [], (err, rows) => {
                 if (err) reject(err);
                 else resolve(rows);
             });
@@ -502,7 +518,7 @@ router.get('/cables', adminAuth, getAppSettings, async (req, res) => {
                 FROM customers c
                 WHERE NOT EXISTS (
                     SELECT 1 FROM cable_routes cr WHERE cr.customer_id = c.id
-                )
+                )${tA('c')}
                 ORDER BY c.name
             `,
                 [],
@@ -854,7 +870,8 @@ router.get('/api/statistics', adminAuth, async (req, res) => {
                     SUM(used_ports) as total_used_ports,
                     COUNT(CASE WHEN status = 'active' THEN 1 END) as active_odps,
                     COUNT(CASE WHEN status = 'maintenance' THEN 1 END) as maintenance_odps
-                FROM odps
+                FROM odps o
+                WHERE 1=1${tA('o')}
             `, [], (err, row) => {
                 if (err) reject(err);
                 else resolve(row);
@@ -866,12 +883,14 @@ router.get('/api/statistics', adminAuth, async (req, res) => {
             db.get(`
                 SELECT 
                     COUNT(*) as total_cables,
-                    SUM(cable_length) as total_length,
-                    COUNT(CASE WHEN status = 'connected' THEN 1 END) as connected_cables,
-                    COUNT(CASE WHEN status = 'disconnected' THEN 1 END) as disconnected_cables,
-                    COUNT(CASE WHEN status = 'maintenance' THEN 1 END) as maintenance_cables,
-                    COUNT(CASE WHEN status = 'damaged' THEN 1 END) as damaged_cables
-                FROM cable_routes
+                    SUM(cr.cable_length) as total_length,
+                    COUNT(CASE WHEN cr.status = 'connected' THEN 1 END) as connected_cables,
+                    COUNT(CASE WHEN cr.status = 'disconnected' THEN 1 END) as disconnected_cables,
+                    COUNT(CASE WHEN cr.status = 'maintenance' THEN 1 END) as maintenance_cables,
+                    COUNT(CASE WHEN cr.status = 'damaged' THEN 1 END) as damaged_cables
+                FROM cable_routes cr
+                INNER JOIN customers c ON c.id = cr.customer_id
+                WHERE 1=1${tA('c')}
             `, [], (err, row) => {
                 if (err) reject(err);
                 else resolve(row);
@@ -912,6 +931,7 @@ router.get('/api/analytics', adminAuth, async (req, res) => {
                        COUNT(CASE WHEN cr.status = 'connected' AND cr.customer_id IS NOT NULL THEN 1 END) as active_connections
                 FROM odps o
                 LEFT JOIN cable_routes cr ON o.id = cr.odp_id
+                WHERE 1=1${tA('o')}
                 GROUP BY o.id
                 ORDER BY o.name
             `, [], (err, rows) => {
@@ -929,8 +949,8 @@ router.get('/api/analytics', adminAuth, async (req, res) => {
                        o.name as odp_name, o.latitude as odp_latitude, o.longitude as odp_longitude
                 FROM cable_routes cr
                 JOIN customers c ON cr.customer_id = c.id
-                JOIN odps o ON cr.odp_id = o.id
-                WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL
+                JOIN odps o ON cr.odp_id = o.id AND o.tenant_id = c.tenant_id
+                WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL${tA('c')}
             `, [], (err, rows) => {
                 if (err) reject(err);
                 else resolve(rows);
@@ -1121,7 +1141,7 @@ router.get('/odp-connections', adminAuth, getAppSettings, async (req, res) => {
         
         // Ambil data ODP untuk dropdown
         const odps = await new Promise((resolve, reject) => {
-            db.all('SELECT * FROM odps WHERE status = "active" ORDER BY name', [], (err, rows) => {
+            db.all(`SELECT * FROM odps o WHERE status = "active"${tA('o')} ORDER BY name`, [], (err, rows) => {
                 if (err) reject(err);
                 else resolve(rows);
             });

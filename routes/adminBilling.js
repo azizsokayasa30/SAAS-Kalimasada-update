@@ -19,6 +19,25 @@ const { adminBillingActivityMiddleware } = require('../config/activityLogger');
 
 router.use(adminBillingActivityMiddleware);
 
+/**
+ * Isolasi tenant untuk raw SQL di route ini. tenant_id disisipkan sebagai literal
+ * integer (tervalidasi) sehingga aman dan tidak mengubah parameter binding.
+ * Panggil SINKRON di dalam handler. `alias` = alias tabel yang punya kolom tenant_id.
+ * Tanpa konteks tenant (mis. scheduler) → string kosong.
+ */
+function tAnd(alias = '') {
+    const t = billingManager._tenantWhere(alias);
+    if (!t.sql) return '';
+    const col = alias ? `${alias}.tenant_id` : 'tenant_id';
+    return ` AND ${col} = ${parseInt(t.params[0], 10)}`;
+}
+function tWhere(alias = '') {
+    const t = billingManager._tenantWhere(alias);
+    if (!t.sql) return '';
+    const col = alias ? `${alias}.tenant_id` : 'tenant_id';
+    return ` WHERE ${col} = ${parseInt(t.params[0], 10)}`;
+}
+
 /** Password konfirmasi aksi sensitif: `super_admin_password` di settings jika diisi, else `admin_password`. */
 function verifySuperAdminPassword(plain) {
     const dedicated = String(getSetting('super_admin_password', '') || '').trim();
@@ -328,29 +347,9 @@ const resolveMonthYearRange = (query = {}) => {
     return { month, year, startDate, endDate };
 };
 
-// Middleware untuk mendapatkan pengaturan aplikasi
-const getAppSettings = (req, res, next) => {
-    req.appSettings = {
-        companyHeader: getSetting('company_header', 'ISP Monitor'),
-        footerInfo: getSetting('footer_info', ''),
-        logoFilename: getSetting('logo_filename', 'logo.png'),
-        company_slogan: getSetting('company_slogan', ''),
-        company_website: getSetting('company_website', ''),
-        invoice_notes: getSetting('invoice_notes', ''),
-        payment_bank_name: getSetting('payment_bank_name', ''),
-        payment_account_number: getSetting('payment_account_number', ''),
-        payment_account_holder: getSetting('payment_account_holder', ''),
-        payment_cash_address: getSetting('payment_cash_address', ''),
-        payment_cash_hours: getSetting('payment_cash_hours', ''),
-        contact_phone: getSetting('contact_phone', ''),
-        contact_email: getSetting('contact_email', ''),
-        contact_address: getSetting('contact_address', ''),
-        contact_whatsapp: getSetting('contact_whatsapp', ''),
-        suspension_grace_period_days: getSetting('suspension_grace_period_days', '3'),
-        isolir_profile: getSetting('isolir_profile', 'isolir')
-    };
-    next();
-};
+// Middleware untuk mendapatkan pengaturan aplikasi (per-tenant)
+const { attachTenantAppSettings } = require('../config/platform/tenantAppSettings');
+const getAppSettings = attachTenantAppSettings;
 
 // Mobile Admin Billing Dashboard
 router.get('/mobile', getAppSettings, async (req, res) => {
@@ -503,6 +502,7 @@ router.get('/mobile/collector', getAppSettings, async (req, res) => {
                 FROM collectors c
                 LEFT JOIN collector_payments cp ON c.id = cp.collector_id 
                     AND cp.status = 'completed'
+                ${tWhere('c')}
                 GROUP BY c.id
                 ORDER BY c.name
             `, (err, rows) => {
@@ -573,7 +573,7 @@ router.get('/api/customer-invoices/:customerId', adminAuth, async (req, res) => 
                 SELECT i.*, p.name as package_name
                 FROM invoices i
                 LEFT JOIN packages p ON i.package_id = p.id
-                WHERE i.customer_id = ? AND i.status = 'unpaid'
+                WHERE i.customer_id = ? AND i.status = 'unpaid'${tAnd('i')}
                 ORDER BY i.created_at DESC
             `, [customerId], (err, rows) => {
                 if (err) reject(err);
@@ -632,7 +632,7 @@ router.post('/api/collector-payment', adminAuth, async (req, res) => {
         try {
             // Get collector commission rate
         const collector = await new Promise((resolve, reject) => {
-            db.get('SELECT commission_rate FROM collectors WHERE id = ?', [collector_id], (err, row) => {
+            db.get('SELECT commission_rate FROM collectors WHERE id = ?' + tAnd(), [collector_id], (err, row) => {
                 if (err) reject(err);
                 else resolve(row);
             });
@@ -695,7 +695,7 @@ router.post('/api/collector-payment', adminAuth, async (req, res) => {
                 const unpaidInvoices = await new Promise((resolve, reject) => {
                     db.all(`
                         SELECT id, amount FROM invoices 
-                        WHERE customer_id = ? AND status = 'unpaid'
+                        WHERE customer_id = ? AND status = 'unpaid'${tAnd()}
                         ORDER BY due_date ASC, id ASC
                     `, [customer_id], (err, rows) => {
                         if (err) reject(err);
@@ -786,13 +786,13 @@ router.get('/mobile/collector/payment', getAppSettings, async (req, res) => {
         
         const [collectors, customers] = await Promise.all([
             new Promise((resolve, reject) => {
-                db.all('SELECT * FROM collectors WHERE status = "active" ORDER BY name', (err, rows) => {
+                db.all('SELECT * FROM collectors WHERE status = "active"' + tAnd() + ' ORDER BY name', (err, rows) => {
                     if (err) reject(err);
                     else resolve(rows || []);
                 });
             }),
             new Promise((resolve, reject) => {
-                db.all('SELECT * FROM customers WHERE status = "active" ORDER BY name', (err, rows) => {
+                db.all('SELECT * FROM customers WHERE status = "active"' + tAnd() + ' ORDER BY name', (err, rows) => {
                     if (err) reject(err);
                     else resolve(rows || []);
                 });
@@ -914,7 +914,7 @@ router.get('/collector-reports', getAppSettings, async (req, res) => {
                 LEFT JOIN collector_payments cp ON c.id = cp.collector_id 
                     AND cp.status = 'completed'
                     ${dateFilter}
-                WHERE c.status = 'active' ${collectorFilter}
+                WHERE c.status = 'active' ${collectorFilter}${tAnd('c')}
                 GROUP BY c.id
                 ORDER BY c.name
             `;
@@ -1005,7 +1005,7 @@ router.get('/collector-reports/export', getAppSettings, async (req, res) => {
                 LEFT JOIN collector_payments cp ON c.id = cp.collector_id 
                     AND cp.status = 'completed'
                     AND cp.collected_at >= ? AND cp.collected_at <= ?
-                WHERE c.status = 'active' ${collectorFilter}
+                WHERE c.status = 'active' ${collectorFilter}${tAnd('c')}
                 GROUP BY c.id
                 ORDER BY c.name
             `, params, (err, rows) => {
@@ -1077,7 +1077,7 @@ router.get('/collector-details/:id', getAppSettings, async (req, res) => {
         
         // Get collector details
         const collector = await new Promise((resolve, reject) => {
-            db.get('SELECT * FROM collectors WHERE id = ?', [id], (err, row) => {
+            db.get(('SELECT * FROM collectors WHERE id = ?' + tAnd()), [id], (err, row) => {
                 if (err) reject(err);
                 else resolve(row);
             });
@@ -1211,7 +1211,7 @@ router.get('/collector-details/:id/export', getAppSettings, async (req, res) => 
         const endDate = dateTo || new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
         
         const collector = await new Promise((resolve, reject) => {
-            db.get('SELECT * FROM collectors WHERE id = ?', [id], (err, row) => {
+            db.get(('SELECT * FROM collectors WHERE id = ?' + tAnd()), [id], (err, row) => {
                 if (err) reject(err);
                 else resolve(row);
             });
@@ -1836,8 +1836,10 @@ router.get('/financial-report', getAppSettings, async (req, res) => {
         const startDate = start_date || period.startDate;
         const endDate = end_date || period.endDate;
         
-        const rawFinancialData = await billingManager.getFinancialReport(startDate, endDate, type);
-        const financialData = await normalizeFinancialReportForView(rawFinancialData, startDate, endDate);
+        const tenantId = req.tenantId ?? null;
+        const reportOpts = { tenantId };
+        const rawFinancialData = await billingManager.getFinancialReport(startDate, endDate, type, reportOpts);
+        const financialData = await normalizeFinancialReportForView(rawFinancialData, startDate, endDate, tenantId);
         
         res.render('admin/billing/financial-report', {
             title: 'Laporan Keuangan',
@@ -1871,8 +1873,10 @@ router.get('/api/financial-report', async (req, res) => {
         const period = resolveMonthYearRange(req.query);
         const startDate = start_date || period.startDate;
         const endDate = end_date || period.endDate;
-        const rawFinancialData = await billingManager.getFinancialReport(startDate, endDate, type);
-        const financialData = await normalizeFinancialReportForView(rawFinancialData, startDate, endDate);
+        const tenantId = req.tenantId ?? null;
+        const reportOpts = { tenantId };
+        const rawFinancialData = await billingManager.getFinancialReport(startDate, endDate, type, reportOpts);
+        const financialData = await normalizeFinancialReportForView(rawFinancialData, startDate, endDate, tenantId);
         res.json({ success: true, data: financialData });
     } catch (error) {
         logger.error('Error getting financial report data:', error);
@@ -1894,7 +1898,7 @@ router.get('/reports/voucher', getAppSettings, adminAuth, async (req, res) => {
         // Script update_voucher_invoices_on_use.js sebaiknya dijalankan via cron job
         // atau manual via tombol "Update Status" di UI
         
-        const allInvoices = await billingManager.getVoucherInvoices(startDate, endDate);
+        const allInvoices = await billingManager.getVoucherInvoices(startDate, endDate, { tenantId: req.tenantId ?? null });
         const filteredInvoices = billingManager.filterVoucherInvoicesByStatus(allInvoices, status || 'all');
         const stats = billingManager.calculateVoucherStats(filteredInvoices);
         
@@ -2110,21 +2114,21 @@ router.get('/api/revenue/summary', adminAuth, async (req, res) => {
                 db.get(`
                     SELECT COALESCE(SUM(amount),0) AS total
                     FROM payments
-                    WHERE date(payment_date) = date(?)
+                    WHERE date(payment_date) = date(?)${tAnd()}
                 `, [todayStr], (err, row) => err ? reject(err) : resolve(row?.total || 0));
             }),
             new Promise((resolve, reject) => {
                 db.get(`
                     SELECT COALESCE(SUM(amount),0) AS total
                     FROM payments
-                    WHERE date(payment_date) BETWEEN date(?) AND date(?)
+                    WHERE date(payment_date) BETWEEN date(?) AND date(?)${tAnd()}
                 `, [weekAgoStr, todayStr], (err, row) => err ? reject(err) : resolve(row?.total || 0));
             }),
             new Promise((resolve, reject) => {
                 db.get(`
                     SELECT COALESCE(SUM(amount),0) AS total
                     FROM payments
-                    WHERE strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now', 'localtime')
+                    WHERE strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now', 'localtime')${tAnd()}
                 `, [], (err, row) => err ? reject(err) : resolve(row?.total || 0));
             }),
         ]);
@@ -2201,6 +2205,7 @@ router.get('/invoices-by-type', adminAuth, async (req, res) => {
         
         res.render('admin/billing/invoices-by-type', {
             title: 'Invoice by Type',
+            page: 'invoices-by-type',
             monthlyInvoices: monthlyInvoices.slice(0, 50), // Limit to 50 per type
             voucherInvoices: voucherInvoices.slice(0, 50),
             manualInvoices: manualInvoices.slice(0, 50),
@@ -2522,8 +2527,10 @@ router.get('/export/financial-report.xlsx', async (req, res) => {
         const period = resolveMonthYearRange(req.query);
         const startDate = start_date || period.startDate;
         const endDate = end_date || period.endDate;
-        const rawFinancialData = await billingManager.getFinancialReport(startDate, endDate, type);
-        const financialData = await normalizeFinancialReportForView(rawFinancialData, startDate, endDate);
+        const tenantId = req.tenantId ?? null;
+        const reportOpts = { tenantId };
+        const rawFinancialData = await billingManager.getFinancialReport(startDate, endDate, type, reportOpts);
+        const financialData = await normalizeFinancialReportForView(rawFinancialData, startDate, endDate, tenantId);
         
         // Buat workbook Excel
         const workbook = new ExcelJS.Workbook();
@@ -3877,7 +3884,7 @@ async function runCustomerXlsxImport(req, res) {
                     continue;
                 }
                 const existing = await dbGet(
-                    `SELECT * FROM customers WHERE TRIM(COALESCE(pppoe_username, '')) = ? LIMIT 1`,
+                    `SELECT * FROM customers WHERE TRIM(COALESCE(pppoe_username, '')) = ?${tAnd()} LIMIT 1`,
                     [pppoeUsernameKey]
                 );
                 const customerData = {
@@ -3914,7 +3921,7 @@ async function runCustomerXlsxImport(req, res) {
 
                 let result;
                 if (existing) {
-                    const beforeSnapshot = importFastMode ? null : await dbGet(`SELECT * FROM customers WHERE id = ?`, [existing.id]);
+                    const beforeSnapshot = importFastMode ? null : await dbGet(`SELECT * FROM customers WHERE id = ?${tAnd()}`, [existing.id]);
                     result = await billingManager.updateCustomer(existing.phone, customerData);
                     if (raw.join_date) {
                         await applyCustomerJoinAndCreatedDates(db, existing.id, raw.join_date);
@@ -3951,7 +3958,7 @@ async function runCustomerXlsxImport(req, res) {
                                 try {
                                     const db = require('../config/billing').db;
                                     return new Promise((resolve, reject) => {
-                                        db.get('SELECT * FROM routers WHERE id = ?', [parseInt(routerId)], (err, row) => {
+                                        db.get(('SELECT * FROM routers WHERE id = ?' + tAnd()), [parseInt(routerId)], (err, row) => {
                                             if (err) reject(err);
                                             else resolve(row || null);
                                         });
@@ -4231,7 +4238,7 @@ router.post('/import/customers/revert/:operationId', async (req, res) => {
                 const chunk = createdIds.slice(i, i + chunkSize);
                 if (!chunk.length) continue;
                 const placeholders = chunk.map(() => '?').join(', ');
-                const r = await dbRun(`DELETE FROM customers WHERE id IN (${placeholders})`, chunk);
+                const r = await dbRun(`DELETE FROM customers WHERE id IN (${placeholders})${tAnd()}`, chunk);
                 revertedCreated += (r && r.changes) ? r.changes : 0;
             }
 
@@ -4396,7 +4403,7 @@ async function runCustomerJsonImport(req, res) {
                     continue;
                 }
                 const existing = await dbGet(
-                    `SELECT * FROM customers WHERE TRIM(COALESCE(pppoe_username, '')) = ? LIMIT 1`,
+                    `SELECT * FROM customers WHERE TRIM(COALESCE(pppoe_username, '')) = ?${tAnd()} LIMIT 1`,
                     [pppoeUsernameKey]
                 );
                 const optNum = (v) => {
@@ -4479,7 +4486,7 @@ async function runCustomerJsonImport(req, res) {
                                 try {
                                     const db = require('../config/billing').db;
                                     return new Promise((resolve, reject) => {
-                                        db.get('SELECT * FROM routers WHERE id = ?', [parseInt(routerId)], (err, row) => {
+                                        db.get(('SELECT * FROM routers WHERE id = ?' + tAnd()), [parseInt(routerId)], (err, row) => {
                                             if (err) reject(err);
                                             else resolve(row || null);
                                         });
@@ -4980,10 +4987,19 @@ router.get('/whatsapp-settings', getAppSettings, async (req, res) => {
     }
 });
 
-router.get('/whatsapp-settings/gateway', async (req, res) => {
+router.get('/whatsapp-settings/gateway', getAppSettings, async (req, res) => {
     try {
-        const { getWhatsAppProviderSettings } = require('../config/whatsapp-provider-settings');
-        const providerSettings = getWhatsAppProviderSettings();
+        const tenantId = req.session?.tenantId || req.tenantId || null;
+        let providerSettings;
+        if (tenantId) {
+            const { getFullSettingsForTenantId } = require('../config/platform/tenantSettingsManager');
+            const ts = await getFullSettingsForTenantId(tenantId);
+            const { getWhatsAppProviderSettingsFromObject } = require('../config/whatsapp-provider-settings');
+            providerSettings = getWhatsAppProviderSettingsFromObject(ts);
+        } else {
+            const { getWhatsAppProviderSettings } = require('../config/whatsapp-provider-settings');
+            providerSettings = getWhatsAppProviderSettings();
+        }
         res.json({
             success: true,
             settings: providerSettings,
@@ -4995,11 +5011,22 @@ router.get('/whatsapp-settings/gateway', async (req, res) => {
     }
 });
 
-router.post('/whatsapp-settings/gateway', async (req, res) => {
+router.post('/whatsapp-settings/gateway', getAppSettings, async (req, res) => {
     try {
-        const { saveWhatsAppProviderSettings } = require('../config/whatsapp-provider-settings');
-        const providerSettings = saveWhatsAppProviderSettings(req.body || {});
-        clearSettingsCache();
+        const tenantId = req.session?.tenantId || req.tenantId || null;
+        let providerSettings;
+        if (tenantId) {
+            const { getFullSettingsForTenantId, saveFullSettingsForTenantId } = require('../config/platform/tenantSettingsManager');
+            const ts = await getFullSettingsForTenantId(tenantId);
+            const { getWhatsAppProviderSettingsFromObject, saveWhatsAppProviderSettingsToObject } = require('../config/whatsapp-provider-settings');
+            const merged = saveWhatsAppProviderSettingsToObject(ts, req.body || {});
+            await saveFullSettingsForTenantId(tenantId, merged);
+            providerSettings = getWhatsAppProviderSettingsFromObject(merged);
+        } else {
+            const { saveWhatsAppProviderSettings } = require('../config/whatsapp-provider-settings');
+            providerSettings = saveWhatsAppProviderSettings(req.body || {});
+            clearSettingsCache();
+        }
 
         try {
             const { getProviderManager } = require('../config/whatsapp-provider-manager');
@@ -6103,7 +6130,7 @@ router.get('/packages', getAppSettings, async (req, res) => {
         const sqlite3 = require('sqlite3').verbose();
         const db = new sqlite3.Database('./data/billing.db');
         const routers = await new Promise((resolve, reject) => {
-            db.all('SELECT * FROM routers ORDER BY id', (err, rows) => {
+            db.all('SELECT * FROM routers' + tWhere() + ' ORDER BY id', (err, rows) => {
                 db.close();
                 if (err) reject(err);
                 else resolve(rows || []);
@@ -6206,7 +6233,7 @@ router.post('/packages', imageUpload.single('image'), async (req, res) => {
                     const sqlite3 = require('sqlite3').verbose();
                     const db = new sqlite3.Database('./data/billing.db');
                     const routerObj = await new Promise((resolve, reject) => {
-                        db.get('SELECT * FROM routers WHERE id=?', [newPackage.router_id], (err, row) => {
+                        db.get(('SELECT * FROM routers WHERE id=?' + tAnd()), [newPackage.router_id], (err, row) => {
                             db.close();
                             if (err) reject(err);
                             else resolve(row || null);
@@ -6357,7 +6384,7 @@ router.put('/packages/:id', imageUpload.single('image'), async (req, res) => {
                     const sqlite3 = require('sqlite3').verbose();
                     const db = new sqlite3.Database('./data/billing.db');
                     const routerObj = await new Promise((resolve, reject) => {
-                        db.get('SELECT * FROM routers WHERE id=?', [updatedPackage.router_id], (err, row) => {
+                        db.get(('SELECT * FROM routers WHERE id=?' + tAnd()), [updatedPackage.router_id], (err, row) => {
                             db.close();
                             if (err) reject(err);
                             else resolve(row || null);
@@ -6557,6 +6584,9 @@ router.get('/areas', getAppSettings, async (req, res) => {
 
         let whereClauses = [];
         let params = [];
+        // Isolasi tenant (areas.tenant_id) sebagai literal integer.
+        const _areaT = billingManager._tenantWhere('a');
+        if (_areaT.sql) { whereClauses.push(`a.tenant_id = ${parseInt(_areaT.params[0], 10)}`); }
         if (search)       { whereClauses.push(`a.nama_area LIKE ?`); params.push(`%${search}%`); }
         if (filterStatus) { whereClauses.push(`a.status = ?`);        params.push(filterStatus); }
         const where = whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : '';
@@ -6582,7 +6612,7 @@ router.get('/areas', getAppSettings, async (req, res) => {
                     COUNT(*) as total,
                     SUM(CASE WHEN status='aktif'    THEN 1 ELSE 0 END) as aktif,
                     SUM(CASE WHEN status='nonaktif' THEN 1 ELSE 0 END) as nonaktif
-                FROM areas
+                FROM areas${tWhere()}
             `, [], (err, row) => resolve(row || { total: 0, aktif: 0, nonaktif: 0 }))),
         ]);
 
@@ -6626,7 +6656,7 @@ router.get('/collector-areas', getAppSettings, async (req, res) => {
             db.all(`
                 SELECT c.id, c.name, c.phone, 
                        (SELECT GROUP_CONCAT(area, ',') FROM collector_areas WHERE collector_id = c.id) as assigned_areas
-                FROM collectors c
+                FROM collectors c${tWhere('c')}
                 ORDER BY c.name ASC
             `, (err, rows) => {
                 if (err) reject(err);
@@ -6636,7 +6666,7 @@ router.get('/collector-areas', getAppSettings, async (req, res) => {
 
         // Ambil semua area yang tersedia (dari tabel areas)
         const allAreas = await new Promise((resolve, reject) => {
-            db.all(`SELECT nama_area FROM areas ORDER BY nama_area ASC`, (err, rows) => {
+            db.all(`SELECT nama_area FROM areas${tWhere()} ORDER BY nama_area ASC`, (err, rows) => {
                 if (err) reject(err);
                 else resolve(rows || []);
             });
@@ -6682,8 +6712,12 @@ router.get('/areas/list', async (req, res) => {
         const db = require('../config/billing').db;
         await ensureAreasTable(db);
         const { status } = req.query;
-        const where  = status ? `WHERE status = ?`  : '';
-        const params = status ? [status]             : [];
+        const _lt = billingManager._tenantWhere('');
+        const conds = [];
+        const params = [];
+        if (_lt.sql) { conds.push(`tenant_id = ${parseInt(_lt.params[0], 10)}`); }
+        if (status) { conds.push('status = ?'); params.push(status); }
+        const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
         const areas  = await new Promise((resolve) =>
             db.all(`SELECT id, kode_area, nama_area, deskripsi, status FROM areas ${where} ORDER BY nama_area ASC`, params,
                    (err, rows) => resolve(rows || []))
@@ -6709,14 +6743,14 @@ router.post('/areas', adminAuth, async (req, res) => {
 
         // Cek duplikat nama
         const existing = await new Promise((resolve) =>
-            db.get(`SELECT id FROM areas WHERE nama_area = ? COLLATE NOCASE`, [trimmed], (err, row) => resolve(row))
+            db.get(`SELECT id FROM areas WHERE nama_area = ? COLLATE NOCASE${tAnd()}`, [trimmed], (err, row) => resolve(row))
         );
         if (existing) return res.status(409).json({ success: false, message: `Area "${trimmed}" sudah ada.` });
 
         // Cek duplikat kode (jika diisi)
         if (trimmedKode) {
             const existingKode = await new Promise((resolve) =>
-                db.get(`SELECT id FROM areas WHERE kode_area = ? COLLATE NOCASE`, [trimmedKode], (err, row) => resolve(row))
+                db.get(`SELECT id FROM areas WHERE kode_area = ? COLLATE NOCASE${tAnd()}`, [trimmedKode], (err, row) => resolve(row))
             );
             if (existingKode) return res.status(409).json({ success: false, message: `Kode area "${trimmedKode}" sudah digunakan.` });
         }
@@ -6747,14 +6781,14 @@ router.put('/areas/:id', adminAuth, async (req, res) => {
 
         // Cek duplikat nama (kecuali dirinya sendiri)
         const existing = await new Promise((resolve) =>
-            db.get(`SELECT id FROM areas WHERE nama_area = ? COLLATE NOCASE AND id != ?`, [trimmed, id], (err, row) => resolve(row))
+            db.get(`SELECT id FROM areas WHERE nama_area = ? COLLATE NOCASE AND id != ?${tAnd()}`, [trimmed, id], (err, row) => resolve(row))
         );
         if (existing) return res.status(409).json({ success: false, message: `Area "${trimmed}" sudah ada.` });
 
         // Cek duplikat kode (kecuali dirinya sendiri, jika diisi)
         if (trimmedKode) {
             const existingKode = await new Promise((resolve) =>
-                db.get(`SELECT id FROM areas WHERE kode_area = ? COLLATE NOCASE AND id != ?`, [trimmedKode, id], (err, row) => resolve(row))
+                db.get(`SELECT id FROM areas WHERE kode_area = ? COLLATE NOCASE AND id != ?${tAnd()}`, [trimmedKode, id], (err, row) => resolve(row))
             );
             if (existingKode) return res.status(409).json({ success: false, message: `Kode area "${trimmedKode}" sudah digunakan.` });
         }
@@ -6798,7 +6832,7 @@ router.delete('/areas/:id', adminAuth, async (req, res) => {
 
         // Cek apakah area dipakai pelanggan
         const usageRow = await new Promise((resolve) =>
-            db.get(`SELECT COUNT(*) as cnt FROM customers WHERE area_id = ?`, [id], (err, row) => resolve(row || { cnt: 0 }))
+            db.get(`SELECT COUNT(*) as cnt FROM customers WHERE area_id = ?${tAnd()}`, [id], (err, row) => resolve(row || { cnt: 0 }))
         );
         if (usageRow.cnt > 0) {
             return res.status(409).json({
@@ -6808,7 +6842,7 @@ router.delete('/areas/:id', adminAuth, async (req, res) => {
         }
 
         await new Promise((resolve, reject) =>
-            db.run(`DELETE FROM areas WHERE id = ?`, [id], (err) => err ? reject(err) : resolve())
+            db.run(`DELETE FROM areas WHERE id = ?${tAnd()}`, [id], (err) => err ? reject(err) : resolve())
         );
         res.json({ success: true, message: 'Area berhasil dihapus.' });
     } catch (error) {
@@ -6820,6 +6854,7 @@ router.delete('/areas/:id', adminAuth, async (req, res) => {
 // Customer Management
 router.get('/customers', getAppSettings, async (req, res) => {
     try {
+        const tenantId = req.session?.tenantId || req.tenantId || null;
         const packages = await billingManager.getPackages();
         // Ensure routers table exists and load routers for dropdown & filter
         const db = require('../config/billing').db;
@@ -6830,13 +6865,13 @@ router.get('/customers', getAppSettings, async (req, res) => {
         const authMode = await getUserAuthModeAsync();
         
         // Load routers dari database
-        const routers = await new Promise((resolve) => db.all(`SELECT id, name, nas_ip FROM routers ORDER BY id`, (err, rows) => resolve(rows || [])));
+        const routers = await new Promise((resolve) => db.all(`SELECT id, name, nas_ip FROM routers${tWhere()} ORDER BY id`, (err, rows) => resolve(rows || [])));
         
         // Jika mode RADIUS, cek apakah ada router "RADIUS" atau buat virtual entry
         let radiusRouterId = null;
         if (authMode === 'radius') {
             // Cek apakah sudah ada router dengan nama "RADIUS"
-            const radiusRouter = await new Promise((resolve) => db.get(`SELECT id FROM routers WHERE name = 'RADIUS' OR nas_ip = 'RADIUS' LIMIT 1`, (err, row) => resolve(row || null)));
+            const radiusRouter = await new Promise((resolve) => db.get(`SELECT id FROM routers WHERE (name = 'RADIUS' OR nas_ip = 'RADIUS')${tAnd()} LIMIT 1`, (err, row) => resolve(row || null)));
             if (radiusRouter) {
                 radiusRouterId = radiusRouter.id;
             } else {
@@ -6862,8 +6897,23 @@ router.get('/customers', getAppSettings, async (req, res) => {
         
         // Month and Year defaults to current if not provided
         const now = new Date();
-        const month = req.query.month ? parseInt(req.query.month) : (now.getMonth() + 1);
-        const year = req.query.year ? parseInt(req.query.year) : now.getFullYear();
+        const hasMonthQuery = req.query.month != null || req.query.year != null;
+        let month = req.query.month ? parseInt(req.query.month) : (now.getMonth() + 1);
+        let year = req.query.year ? parseInt(req.query.year) : now.getFullYear();
+
+        // Jika bulan berjalan belum punya invoice (mis. setelah restore / sebelum auto-generate tgl 1),
+        // tampilkan ringkasan bulan terakhir yang punya data agar kartu tidak kosong.
+        if (!hasMonthQuery && tenantId) {
+            const curTotals = await billingManager.getMonthlyTagihanTotals(month, year, { tenantId });
+            if (!curTotals.count_total) {
+                const latest = await billingManager.getLatestInvoiceActivityMonth({ tenantId });
+                if (latest && latest.year && latest.month) {
+                    month = latest.month;
+                    year = latest.year;
+                }
+            }
+        }
+
         filters.month = month;
         filters.year = year;
         
@@ -6888,7 +6938,7 @@ router.get('/customers', getAppSettings, async (req, res) => {
                        p.name as parent_name, p.code as parent_code
                 FROM odps o
                 LEFT JOIN odps p ON o.parent_odp_id = p.id
-                WHERE o.status = 'active' 
+                WHERE o.status = 'active'${tAnd('o')}
                 ORDER BY p.name, o.name
             `, (err, rows) => {
                 if (err) reject(err);
@@ -6899,7 +6949,7 @@ router.get('/customers', getAppSettings, async (req, res) => {
         // Get Collectors for dropdown selection
         const collectors = await new Promise((resolve) => {
             const db = require('../config/billing').db;
-            db.all('SELECT id, name, phone FROM collectors WHERE status = "active" ORDER BY name', (err, rows) => {
+            db.all('SELECT id, name, phone FROM collectors WHERE status = "active"' + tAnd() + ' ORDER BY name', (err, rows) => {
                 resolve(rows || []);
             });
         });
@@ -6907,18 +6957,18 @@ router.get('/customers', getAppSettings, async (req, res) => {
         // Get areas from areas table (status aktif for dropdown, all for filter)
         await ensureAreasTable(db);
         const areasForDropdown = await new Promise((resolve) => {
-            db.all('SELECT id, nama_area FROM areas WHERE status = "aktif" ORDER BY nama_area', (err, rows) => {
+            db.all('SELECT id, nama_area FROM areas WHERE status = "aktif"' + tAnd() + ' ORDER BY nama_area', (err, rows) => {
                 resolve(rows || []);
             });
         });
 
         const uniqueAreas = await new Promise((resolve) => {
-            db.all('SELECT DISTINCT area FROM customers WHERE area IS NOT NULL AND area != "" ORDER BY area', (err, rows) => {
+            db.all('SELECT DISTINCT area FROM customers WHERE area IS NOT NULL AND area != ""' + tAnd() + ' ORDER BY area', (err, rows) => {
                 resolve(rows ? rows.map(r => r.area) : []);
             });
         });
 
-        const customerStats = await billingManager.getCustomerStatsByMonth(month, year, filters);
+        const customerStats = await billingManager.getCustomerStatsByMonth(month, year, filters, { tenantId });
         
         res.render('admin/billing/customers', {
             title: 'Kelola Pelanggan',
@@ -7109,7 +7159,7 @@ router.post('/customers', customerPhotoUpload.fields([
                     try {
                         const db = require('../config/billing').db;
                         return new Promise((resolve, reject) => {
-                            db.get('SELECT * FROM routers WHERE id = ?', [parseInt(routerId)], (err, row) => {
+                            db.get(('SELECT * FROM routers WHERE id = ?' + tAnd()), [parseInt(routerId)], (err, row) => {
                                 if (err) reject(err);
                                 else resolve(row || null);
                             });
@@ -7350,7 +7400,7 @@ router.get('/customers/:phone', getAppSettings, async (req, res) => {
             const mappingRow = await new Promise((resolve) => dblcl.get(`SELECT collector_id FROM collector_assignments WHERE customer_id = ?`, [customer.id], (err, row) => resolve(row)));
             if (mappingRow) assignedCollectorId = mappingRow.collector_id;
             
-            activeCollectors = await new Promise((resolve) => dblcl.all(`SELECT id, name FROM collectors WHERE status = 'active'`, (err, rows) => resolve(rows || [])));
+            activeCollectors = await new Promise((resolve) => dblcl.all(`SELECT id, name FROM collectors WHERE status = 'active'${tAnd()}`, (err, rows) => resolve(rows || [])));
             dblcl.close();
         } catch (e) {
             logger.warn('Failed to load collector assigning options:', e.message);
@@ -7741,7 +7791,7 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
                 try {
                     const db = require('../config/billing').db;
                     return new Promise((resolve, reject) => {
-                        db.get('SELECT * FROM routers WHERE id = ?', [parseInt(routerId)], (err, row) => {
+                        db.get(('SELECT * FROM routers WHERE id = ?' + tAnd()), [parseInt(routerId)], (err, row) => {
                             if (err) reject(err);
                             else resolve(row || null);
                         });
@@ -8917,6 +8967,7 @@ router.get('/api/odps', adminAuth, async (req, res) => {
                        p.name as parent_name
                 FROM odps o
                 LEFT JOIN odps p ON o.parent_odp_id = p.id
+                ${tWhere('o')}
                 ORDER BY o.name
             `, (err, rows) => {
                 if (err) reject(err);
@@ -9117,7 +9168,7 @@ router.get('/api/devices', async (req, res) => {
                         db.get(`
                             SELECT id, name, phone, latitude, longitude 
                             FROM customers 
-                            WHERE pppoe_username = ? AND latitude IS NOT NULL AND longitude IS NOT NULL
+                            WHERE pppoe_username = ? AND latitude IS NOT NULL AND longitude IS NOT NULL${tAnd()}
                         `, [pppoeUsername], (err, row) => {
                             if (err) reject(err);
                             else resolve(row);
@@ -10614,16 +10665,25 @@ router.post('/invoices/:id/restore', async (req, res) => {
     }
 });
 
+function tenantIdForInsertFromBilling() {
+    const { hasTenantContext, getTenantId } = require('../config/platform/tenantContext');
+    return hasTenantContext() ? getTenantId() : 1;
+}
+
 // API untuk Kelola Kategori Keuangan
 router.get('/api/finance-categories', async (req, res) => {
     try {
         const { type } = req.query;
         let query = 'SELECT * FROM finance_categories';
         const params = [];
+        const conds = [];
+        const tClause = tAnd('');
+        if (tClause) conds.push(tClause.replace(/^ AND /, ''));
         if (type) {
-            query += ' WHERE type = ?';
+            conds.push('type = ?');
             params.push(type);
         }
+        if (conds.length) query += ' WHERE ' + conds.join(' AND ');
         query += ' ORDER BY name ASC';
         
         const db = new sqlite3.Database(path.join(__dirname, '../data/billing.db'));
@@ -10648,7 +10708,7 @@ router.post('/api/finance-categories', async (req, res) => {
         const subCatStr = subcategories ? JSON.stringify(subcategories) : null;
         const db = new sqlite3.Database(path.join(__dirname, '../data/billing.db'));
         db.get(
-            'SELECT id FROM finance_categories WHERE type = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1',
+            'SELECT id FROM finance_categories WHERE type = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?))' + tAnd('') + ' LIMIT 1',
             [type, trimmedName],
             (dupErr, dupRow) => {
                 if (dupErr) {
@@ -10660,8 +10720,8 @@ router.post('/api/finance-categories', async (req, res) => {
                     return res.status(400).json({ success: false, message: 'Kategori dengan nama serupa sudah ada' });
                 }
                 db.run(
-                    'INSERT INTO finance_categories (type, name, subcategories) VALUES (?, ?, ?)',
-                    [type, trimmedName, subCatStr],
+                    'INSERT INTO finance_categories (type, name, subcategories, tenant_id) VALUES (?, ?, ?, ?)',
+                    [type, trimmedName, subCatStr, tenantIdForInsertFromBilling()],
                     function(err) {
                         db.close();
                         if (err) return res.status(500).json({ success: false, message: err.message });
@@ -10683,7 +10743,7 @@ router.put('/api/finance-categories/:id', async (req, res) => {
         
         const subCatStr = subcategories ? JSON.stringify(subcategories) : null;
         const db = new sqlite3.Database(path.join(__dirname, '../data/billing.db'));
-        db.run("UPDATE finance_categories SET name = ?, subcategories = ?, updated_at = datetime('now','localtime') WHERE id = ?", [name, subCatStr, id], function(err) {
+        db.run("UPDATE finance_categories SET name = ?, subcategories = ?, updated_at = datetime('now','localtime') WHERE id = ?" + tAnd(''), [name, subCatStr, id], function(err) {
             db.close();
             if (err) return res.status(500).json({ success: false, message: err.message });
             res.json({ success: true, message: 'Kategori berhasil diupdate' });
@@ -10697,7 +10757,7 @@ router.delete('/api/finance-categories/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const db = new sqlite3.Database(path.join(__dirname, '../data/billing.db'));
-        db.run('DELETE FROM finance_categories WHERE id = ?', [id], function(err) {
+        db.run('DELETE FROM finance_categories WHERE id = ?' + tAnd(''), [id], function(err) {
             db.close();
             if (err) return res.status(500).json({ success: false, message: err.message });
             res.json({ success: true, message: 'Kategori berhasil dihapus' });
@@ -10963,7 +11023,8 @@ router.get('/export/profit-loss.xlsx', async (req, res) => {
         const startDate = start_date || new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
         const endDate = end_date || new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
         
-        const financialData = await billingManager.getFinancialReport(startDate, endDate, 'all');
+        const tenantId = req.tenantId ?? null;
+        const financialData = await billingManager.getFinancialReport(startDate, endDate, 'all', { tenantId });
         
         if (!financialData || !financialData.profitLossData) {
             return res.status(404).json({ success: false, message: 'Data laba rugi tidak ditemukan' });
@@ -11188,7 +11249,8 @@ router.get('/mapping-new', getAppSettings, async (req, res) => {
             settings: req.appSettings,
             defaultMapLat: mapCenter.lat,
             defaultMapLng: mapCenter.lng,
-            defaultMapZoom: mapCenter.zoom
+            defaultMapZoom: mapCenter.zoom,
+            tenantSubdomain: req.tenant?.subdomain || req.tenant?.slug || ''
         });
     } catch (error) {
         console.error('Error rendering new mapping page:', error);
@@ -11815,7 +11877,7 @@ router.get('/api/reports/revenue-chart', adminAuth, async (req, res) => {
                 db.get(`
                     SELECT COALESCE(SUM(amount), 0) AS total
                     FROM payments
-                    WHERE date(payment_date) = date(?)
+                    WHERE date(payment_date) = date(?)${tAnd()}
                 `, [dateStr], (err, row) => {
                     if (err) reject(err);
                     else resolve(row?.total || 0);
@@ -11862,21 +11924,21 @@ router.post('/api/reports/export', adminAuth, async (req, res) => {
                 db.get(`
                     SELECT COALESCE(SUM(amount),0) AS total
                     FROM payments
-                    WHERE date(payment_date) = date(?)
+                    WHERE date(payment_date) = date(?)${tAnd()}
                 `, [todayStr], (err, row) => err ? reject(err) : resolve(row?.total || 0));
             }),
             new Promise((resolve, reject) => {
                 db.get(`
                     SELECT COALESCE(SUM(amount),0) AS total
                     FROM payments
-                    WHERE date(payment_date) BETWEEN date(?) AND date(?)
+                    WHERE date(payment_date) BETWEEN date(?) AND date(?)${tAnd()}
                 `, [weekAgoStr, todayStr], (err, row) => err ? reject(err) : resolve(row?.total || 0));
             }),
             new Promise((resolve, reject) => {
                 db.get(`
                     SELECT COALESCE(SUM(amount),0) AS total
                     FROM payments
-                    WHERE strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now', 'localtime')
+                    WHERE strftime('%Y-%m', payment_date) = strftime('%Y-%m', 'now', 'localtime')${tAnd()}
                 `, [], (err, row) => err ? reject(err) : resolve(row?.total || 0));
             }),
         ]);
@@ -12155,7 +12217,7 @@ router.post('/api/customers/:id/set-password', adminAuth, async (req, res) => {
         
         // Check if customer exists
         const customer = await new Promise((resolve) => {
-            db.get('SELECT id, name, username FROM customers WHERE id = ?', [id], (err, row) => resolve(row));
+            db.get('SELECT id, name, username FROM customers WHERE id = ?' + tAnd(), [id], (err, row) => resolve(row));
         });
         
         if (!customer) {

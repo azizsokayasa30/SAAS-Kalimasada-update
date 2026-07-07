@@ -326,6 +326,11 @@ async function ensureOltSchema(db) {
     for (const statement of OLT_SCHEMA_STATEMENTS.slice(8)) {
         await run(db, statement);
     }
+    try {
+        await run(db, 'ALTER TABLE olts ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1');
+    } catch (e) {
+        if (!String(e.message || '').includes('duplicate column')) throw e;
+    }
 }
 
 module.exports = {

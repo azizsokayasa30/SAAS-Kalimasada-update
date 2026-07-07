@@ -77,6 +77,14 @@
 
         <main class="col-md-10 main-content ms-sm-auto">
 
+            <% if (typeof error !== 'undefined' && error) { %>
+            <div class="alert alert-warning alert-dismissible fade show mt-3" role="alert">
+                <i class="bi bi-exclamation-triangle me-2"></i>
+                <%= error %>
+                <a href="/admin/radius" class="alert-link ms-1">Buka pengaturan NAS (RADIUS)</a>
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+            <% } %>
 
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h3>Profile Hotspot</h3>
@@ -382,6 +390,13 @@
 $(function() {
     let profiles = [];
     let dataTable;
+    const HOTSPOT_TENANT_SLUG = '<%= typeof tenantSubdomain !== "undefined" ? tenantSubdomain : "" %>';
+    function hotspotApiUrl(extra) {
+        const params = new URLSearchParams(extra || {});
+        if (HOTSPOT_TENANT_SLUG) params.set('tenant', HOTSPOT_TENANT_SLUG);
+        const qs = params.toString();
+        return '/admin/mikrotik/hotspot-profiles/api' + (qs ? '?' + qs : '');
+    }
     
     // Check if mode RADIUS
     const isRadiusMode = userAuthMode === 'radius';
@@ -572,10 +587,16 @@ $(function() {
     function loadProfiles() {
         $('#btnRefresh').prop('disabled', true).html('<i class="bi bi-arrow-clockwise spin"></i> Loading...');
         
-        $.get('/admin/mikrotik/hotspot-profiles/api', function(res) {
+        $.get(hotspotApiUrl(), function(res) {
             if (res.success) {
                 profiles = res.profiles || [];
                 updateStatistics();
+                
+                if (res.no_routers) {
+                    showWarningAlert('Belum Ada NAS', res.message || 'Tambahkan router/NAS di menu RADIUS untuk tenant ini.');
+                } else if (res.error) {
+                    showWarningAlert('Sebagian Router Gagal', res.error);
+                }
                 
                 if (dataTable) {
                     dataTable.clear().rows.add(profiles).draw();
@@ -961,5 +982,5 @@ if (hamburger && sidebar && overlay) {
     });
 }
 </script>
-
-<%- include('partials/footer') %> 
+</body>
+</html> 

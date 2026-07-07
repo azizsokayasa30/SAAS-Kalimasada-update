@@ -18,7 +18,9 @@ function dbAll(db, sql, params = []) {
 }
 
 /** Nomor invoice tagihan bulanan pelanggan PPPoE yang dibayar di periode (sumber payments). */
-async function loadPppoeInvoiceNumbers(db, startDate, endDate) {
+async function loadPppoeInvoiceNumbers(db, startDate, endDate, tenantId = null) {
+    const tPay = tenantId != null ? ` AND p.tenant_id = ${Number(tenantId)}` : '';
+    const tInv = tenantId != null ? ` AND i.tenant_id = ${Number(tenantId)}` : '';
     const rows = await dbAll(
         db,
         `
@@ -36,6 +38,7 @@ async function loadPppoeInvoiceNumbers(db, startDate, endDate) {
           AND (i.invoice_type IS NULL OR i.invoice_type != 'voucher')
           AND i.invoice_number IS NOT NULL
           AND TRIM(i.invoice_number) != ''
+          ${tPay}${tInv}
         `,
         [startDate, endDate]
     );
@@ -113,12 +116,12 @@ function recalculateSummary(transactions, profitLossData) {
  * @param {string} startDate
  * @param {string} endDate
  */
-async function normalizeFinancialReportForView(financialData, startDate, endDate) {
+async function normalizeFinancialReportForView(financialData, startDate, endDate, tenantId = null) {
     if (!financialData) return financialData;
 
     const db = openBillingDb();
     try {
-        const pppoeInvoiceNumbers = await loadPppoeInvoiceNumbers(db, startDate, endDate);
+        const pppoeInvoiceNumbers = await loadPppoeInvoiceNumbers(db, startDate, endDate, tenantId);
         const transactions = (financialData.transactions || []).filter(
             (tx) => !isPppoePaymentTransaction(tx, pppoeInvoiceNumbers)
         );

@@ -4,6 +4,7 @@ const mikrotik = require('./mikrotik');
 const { getMikrotikConnection } = require('./mikrotik');
 const { getSetting } = require('./settingsManager');
 const cacheManager = require('./cacheManager');
+const { tenantCacheKey } = require('./platform/tenantCache');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 
@@ -159,7 +160,7 @@ const genieacsApi = {
             }
 
             // Check cache first
-            const cacheKey = 'genieacs:devices';
+            const cacheKey = tenantCacheKey('genieacs:devices');
             const cachedData = cacheManager.get(cacheKey);
 
             if (cachedData) {
@@ -1064,7 +1065,7 @@ async function getDevicesCached() {
     }
 
     // Use the same cache key as getDevices method
-    const cacheKey = 'genieacs:devices';
+    const cacheKey = tenantCacheKey('genieacs:devices');
     const cached = cacheManager.get(cacheKey);
 
     if (cached) {

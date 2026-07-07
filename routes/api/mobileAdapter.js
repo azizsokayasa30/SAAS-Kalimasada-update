@@ -1541,8 +1541,10 @@ router.get('/customers/:customerId/ppp-session', verifyToken, requireTechnician,
         let session = null;
         let mikrotikSession = null;
         const findMikrotikSessionByLogin = async (pppoeLogin) => {
+            const _rt = billingManager._tenantWhere('');
+            const _rtWhere = _rt.sql ? ` WHERE tenant_id = ${parseInt(_rt.params[0], 10)}` : '';
             const routers = await new Promise((resolve, reject) => {
-                db.all('SELECT * FROM routers ORDER BY id ASC', [], (err, rows) =>
+                db.all('SELECT * FROM routers' + _rtWhere + ' ORDER BY id ASC', [], (err, rows) =>
                     err ? reject(err) : resolve(rows || [])
                 );
             });
@@ -4708,10 +4710,12 @@ router.get('/network-status', verifyToken, requireTechnician, async (req, res) =
         } = require('../../config/mikrotik');
         const authMode = await getUserAuthModeAsync();
 
+        const _rt2 = billingManager._tenantWhere('');
+        const _rt2Where = _rt2.sql ? ` WHERE tenant_id = ${parseInt(_rt2.params[0], 10)}` : '';
         const routers = await new Promise((resolve, reject) => {
             db.all(
                 `SELECT *
-                 FROM routers
+                 FROM routers${_rt2Where}
                  ORDER BY id ASC`,
                 [],
                 (err, rows) => {

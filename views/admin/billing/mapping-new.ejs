@@ -1669,6 +1669,12 @@
         let liveDataLoaded = false;
         const MAX_FLOW_ANIMATIONS = 40;
         const MAP_VIEW_STORAGE_KEY = 'kalimasada-mapping-map-view';
+        const MAPPING_TENANT_SLUG = '<%= typeof tenantSubdomain !== "undefined" ? tenantSubdomain : "" %>';
+        function mappingApiUrl(phase) {
+            const params = new URLSearchParams({ phase });
+            if (MAPPING_TENANT_SLUG) params.set('tenant', MAPPING_TENANT_SLUG);
+            return `/admin/api/mapping/new?${params.toString()}`;
+        }
         // Auto-refresh dinonaktifkan — muat ulang data lewat refresh browser atau aksi simpan yang memanggil loadNetworkData().
 
         function getSavedMapView() {
@@ -1878,7 +1884,7 @@
                 if (loadingText) loadingText.textContent = 'Memuat peta & infrastruktur...';
                 if (loadingEl) loadingEl.style.display = 'block';
 
-                const coreResponse = await fetch('/admin/api/mapping/new?phase=core');
+                const coreResponse = await fetch(mappingApiUrl('core'));
                 const coreResult = await coreResponse.json();
 
                 if (!coreResult.success) {
@@ -1898,7 +1904,7 @@
                 if (liveBadge) liveBadge.classList.remove('d-none');
                 if (liveText) liveText.textContent = 'Memuat status PPPoE...';
 
-                const liveResponse = await fetch('/admin/api/mapping/new?phase=live');
+                const liveResponse = await fetch(mappingApiUrl('live'));
                 const liveResult = await liveResponse.json();
 
                 if (liveResult.success) {

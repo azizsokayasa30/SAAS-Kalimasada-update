@@ -1,5 +1,6 @@
 const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcrypt');
+const billingManager = require('./billing');
 const { getSettingsWithCache } = require('./settingsManager');
 const logger = require('./logger');
 
@@ -1167,15 +1168,17 @@ class AgentManager {
     // ===== UTILITY METHODS =====
 
     async getAllAgents() {
+        const _t = billingManager._tenantWhere('a');
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT a.*, ab.balance 
                 FROM agents a 
                 LEFT JOIN agent_balances ab ON a.id = ab.agent_id
+                WHERE 1=1${_t.sql}
                 ORDER BY a.created_at DESC
             `;
             
-            this.db.all(sql, [], (err, rows) => {
+            this.db.all(sql, [..._t.params], (err, rows) => {
                 if (err) {
                     reject(err);
                     return;
@@ -1186,15 +1189,16 @@ class AgentManager {
     }
 
     async getAgentById(agentId) {
+        const _t = billingManager._tenantWhere('a');
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT a.*, ab.balance 
                 FROM agents a 
                 LEFT JOIN agent_balances ab ON a.id = ab.agent_id
-                WHERE a.id = ?
+                WHERE a.id = ?${_t.sql}
             `;
             
-            this.db.get(sql, [agentId], (err, row) => {
+            this.db.get(sql, [agentId, ..._t.params], (err, row) => {
                 if (err) {
                     reject(err);
                     return;

@@ -92,7 +92,13 @@
                 <div class="col-md-3 col-sm-6">
                     <a class="settings-shortcut" href="#settingsFields">
                         <strong><i class="bi bi-gear text-primary"></i> Sistem Umum</strong><br>
-                        <small>Admin, server, perusahaan, billing, pajak</small>
+                        <small>Admin, server, kontak, billing, pajak</small>
+                    </a>
+                </div>
+                <div class="col-md-3 col-sm-6">
+                    <a class="settings-shortcut" href="#billingSettingsSection">
+                        <strong><i class="bi bi-receipt text-primary"></i> Billing & Pembayaran</strong><br>
+                        <small>Rekening bank, tunai, catatan invoice</small>
                     </a>
                 </div>
                 <div class="col-md-3 col-sm-6">
@@ -111,12 +117,6 @@
                     <a class="settings-shortcut" href="#backupRestoreSection">
                         <strong><i class="bi bi-database text-warning"></i> Backup & Logs</strong><br>
                         <small>Backup, restore, dan activity logs</small>
-                    </a>
-                </div>
-                <div class="col-md-3 col-sm-6">
-                    <a class="settings-shortcut" href="/admin/settings/android-tool">
-                        <strong><i class="bi bi-phone text-success"></i> Tool Android</strong><br>
-                        <small>Build APK, .env, versi & nama aplikasi</small>
                     </a>
                 </div>
             </div>
@@ -172,76 +172,14 @@
                     </div>
                 </div>
 
-                <!-- Kolom 2: Branding, pembayaran, dan tools jaringan -->
+                <!-- Kolom 2: Billing & pembayaran (branding/logo dikelola dari Management) -->
                 <div class="col-lg-6 mb-3">
                     <div class="form-section">
-                        <h5 class="mb-3">
-                            <i class="bi bi-grid-1x2 text-primary"></i> Branding
-                        </h5>
-                        
-                        <div class="alert alert-info alert-custom mb-3">
-                            <div class="d-flex align-items-start">
-                                <i class="bi bi-info-circle-fill me-2 mt-1"></i>
-                                <div>
-                                    <strong>Pengaturan tampilan dan penagihan</strong>
-                                    <br>
-                                    <small>
-                                        Bagian ini berisi logo aplikasi, QR pembayaran tagihan, dan pengaturan billing. SMTP sudah dipindahkan ke <a href="/admin/billing/email-settings" target="_blank">Pengaturan Email</a>.
-                                    </small>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Logo Aplikasi -->
-                        <div class="mt-4">
-                            <h5 class="mb-3">
-                                <i class="bi bi-image text-success"></i> Logo Aplikasi
-                            </h5>
-                            <form id="logoUploadForm" enctype="multipart/form-data">
-                                <div class="mb-3">
-                                    <label class="form-label">Upload Logo Baru</label>
-                                    <input type="file" name="logo" accept="image/*,.svg" class="form-control" required>
-                                    <div class="form-text">Format: PNG, JPG, JPEG, GIF, BMP, WEBP, SVG. Maksimal 5MB.</div>
-                                </div>
-                                <button type="submit" class="btn btn-success btn-sm">
-                                    <i class="bi bi-upload"></i> Upload Logo
-                                </button>
-                            </form>
-                            <div class="logo-preview mt-3">
-                                <label class="form-label">Logo Saat Ini:</label>
-                                <img id="logoPreview" src="/img/<%= typeof settings !== 'undefined' && settings.logo_filename ? settings.logo_filename : 'logo.png' %>?ts=<%= Date.now() %>" alt="Logo" style="max-width:200px;max-height:120px;">
-                            </div>
-                        </div>
-
-                        <!-- QR Notifikasi Penagihan -->
-                        <div class="mt-4">
-                            <h5 class="mb-3">
-                                <i class="bi bi-qr-code text-primary"></i> QR Notifikasi Penagihan
-                            </h5>
-                            <form id="billingQrUploadForm" enctype="multipart/form-data">
-                                <div class="mb-3">
-                                    <label class="form-label">Upload QR Baru</label>
-                                    <input type="file" name="billingQr" accept="image/*" class="form-control" required>
-                                    <div class="form-text">Format: PNG, JPG, JPEG, GIF, BMP, WEBP. Maksimal 2MB.</div>
-                                </div>
-                                <button type="submit" class="btn btn-outline-primary btn-sm">
-                                    <i class="bi bi-upload"></i> Upload QR Penagihan
-                                </button>
-                            </form>
-                            <div class="logo-preview mt-3">
-                                <label class="form-label">QR Saat Ini:</label>
-                                <img id="billingQrPreview" src="/admin/settings/billing-qr?ts=<%= Date.now() %>" alt="QR Penagihan" style="max-width:200px;max-height:200px;">
-                            </div>
-                            <div class="mt-2 d-flex flex-column gap-2">
-                                <a href="/admin/settings/billing-qr" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary w-100">
-                                    Buka QR ukuran penuh
-                                </a>
-                                <small class="text-muted">QR ini digunakan sebagai lampiran saat sistem mengirim notifikasi penagihan melalui WhatsApp.</small>
-                            </div>
-                        </div>
-
                         <!-- Billing & Pembayaran -->
-                        <div class="mt-4" id="billingSettingsSection">
+                        <div id="billingSettingsSection">
+                            <h5 class="mb-3">
+                                <i class="bi bi-receipt text-primary"></i> Billing & Pembayaran
+                            </h5>
                             <div id="billingSettingsFields">
                                 <!-- Field billing dari settings.json di-render di sini oleh JS -->
                             </div>
@@ -250,6 +188,40 @@
                                 <button type="button" class="btn btn-primary" id="saveSettingsBtnBilling">
                                     <i class="bi bi-save"></i> Simpan Perubahan
                                 </button>
+                            </div>
+                        </div>
+
+                        <!-- QR Notifikasi Penagihan -->
+                        <div class="mt-4" id="billingQrSection">
+                            <h5 class="mb-3">
+                                <i class="bi bi-qr-code text-primary"></i> QR Notifikasi Penagihan
+                            </h5>
+                            <p class="text-muted small mb-3">
+                                Opsional. QR ini dilampirkan saat notifikasi tagihan WhatsApp dikirim ke pelanggan.
+                                Jika tidak diunggah, notifikasi hanya berisi teks tanpa gambar QR.
+                            </p>
+                            <form id="billingQrUploadForm" enctype="multipart/form-data">
+                                <div class="mb-3">
+                                    <label class="form-label">Upload QR Pembayaran</label>
+                                    <input type="file" name="billingQr" accept="image/*" class="form-control" required>
+                                    <div class="form-text">Format: PNG, JPG, JPEG, GIF, BMP, WEBP. Maksimal 2MB.</div>
+                                </div>
+                                <button type="submit" class="btn btn-outline-primary btn-sm">
+                                    <i class="bi bi-upload"></i> Upload QR Penagihan
+                                </button>
+                            </form>
+                            <% const hasBillingQr = typeof settings !== 'undefined' && settings.billing_qr_filename; %>
+                            <div class="logo-preview mt-3" id="billingQrPreviewWrap"<%= hasBillingQr ? '' : ' style="display:none"' %>>
+                                <label class="form-label">QR Saat Ini:</label>
+                                <img id="billingQrPreview" src="<%= hasBillingQr ? '/admin/settings/billing-qr?ts=' + Date.now() : '' %>" alt="QR Penagihan" style="max-width:200px;max-height:200px;">
+                                <div class="mt-2 d-flex flex-column gap-2">
+                                    <a href="/admin/settings/billing-qr" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary w-100">
+                                        Buka QR ukuran penuh
+                                    </a>
+                                </div>
+                            </div>
+                            <div id="billingQrEmpty" class="text-muted small mt-3"<%= hasBillingQr ? ' style="display:none"' : '' %>>
+                                <i class="bi bi-info-circle"></i> Belum ada QR diunggah.
                             </div>
                         </div>
                     </div>
@@ -728,10 +700,10 @@
                                         </div>
                                         <div class="card-body">
                                             <p class="text-muted">
-                                                Restore database dari file backup yang tersedia.
+                                                Restore database dari backup di server, atau unggah file dari komputer.
                                             </p>
                                             <div class="mb-3">
-                                                <label for="backupFile" class="form-label">Pilih File Backup:</label>
+                                                <label for="backupFile" class="form-label">Dari Backup di Server:</label>
                                                 <select class="form-select" id="backupFile">
                                                     <option value="">Pilih file backup...</option>
                                                 </select>
@@ -739,6 +711,30 @@
                                             <button type="button" class="btn btn-warning" id="restoreBackupBtn" disabled>
                                                 <i class="bi bi-upload"></i>
                                                 Restore Database
+                                            </button>
+
+                                            <hr class="my-3">
+
+                                            <div class="mb-2">
+                                                <label for="uploadDbFile" class="form-label">
+                                                    <i class="bi bi-file-earmark-arrow-up"></i>
+                                                    Upload File Backup dari Komputer:
+                                                </label>
+                                                <input type="file" class="form-control" id="uploadDbFile"
+                                                    accept=".db,.sqlite,.sqlite3">
+                                                <small class="text-muted d-block mt-1">
+                                                    Unggah file database (<code>.db</code>, <code>.sqlite</code>, <code>.sqlite3</code>).
+                                                    Setelah berhasil, file akan muncul di daftar <strong>"Dari Backup di Server"</strong> di atas untuk di-restore.
+                                                </small>
+                                            </div>
+                                            <div class="progress mb-2 d-none" id="uploadProgressWrap" style="height: 22px;">
+                                                <div class="progress-bar progress-bar-striped progress-bar-animated"
+                                                    id="uploadProgressBar" role="progressbar"
+                                                    style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                                            </div>
+                                            <button type="button" class="btn btn-primary" id="uploadBackupBtn" disabled>
+                                                <i class="bi bi-cloud-arrow-up"></i>
+                                                Upload File
                                             </button>
                                         </div>
                                     </div>
@@ -1012,7 +1008,7 @@ $(function() {
         'whatsapp_rate_limit.dailyMessageLimit',
         'whatsapp_rate_limit.enabled',
         
-        // Billing QR Filename - Dikelola via upload form
+        // Billing QR Filename - Dikelola via upload form QR penagihan
         'billing_qr_filename',
         
         // SMTP Settings - Dikelola via /admin/billing/email-settings
@@ -1060,8 +1056,13 @@ $(function() {
         'technician_numbers.1',
         'technician_numbers.2',
 
-        // Logo — upload di form perusahaan
+        // Logo & branding — dikelola dari portal Management
         'logo_filename',
+        'company_header',
+        'app_name',
+        'company_slogan',
+        'company_website',
+        'footer_info',
 
         // Isolir & suspension — dikelola di billing / routers / radius
         'isolir_profile',
@@ -1253,6 +1254,14 @@ $(function() {
             }
             flattenSetting(key, data[key]);
         });
+
+        // Pastikan field billing selalu tampil meski belum pernah disimpan tenant
+        billingFieldOrder.forEach(function(key) {
+            if (!entries.some(function(e) { return e.key === key; })) {
+                entries.push({ key: key, val: data[key] != null ? data[key] : '' });
+            }
+        });
+
         entries.sort(function(a, b) {
             const groupA = getFieldGroup(a.key);
             const groupB = getFieldGroup(b.key);
@@ -1296,11 +1305,8 @@ $(function() {
 
         const billingGroup = groups.billing;
         const billingHtml = billingGroup.items.length
-            ? '<div class="settings-group mb-0">' +
-                '<div class="settings-group-title"><i class="bi ' + billingGroup.icon + ' me-1"></i>' + billingGroup.title + '</div>' +
-                billingGroup.items.join('') +
-                '</div>'
-            : '';
+            ? billingGroup.items.join('')
+            : '<p class="text-muted small mb-0">Tidak ada field billing yang dapat ditampilkan.</p>';
         $('#billingSettingsFields').html(billingHtml);
     });
 
@@ -2013,8 +2019,100 @@ $(document).ready(function() {
     $('#backupFile').on('change', function() {
         $('#restoreBackupBtn').prop('disabled', !$(this).val());
     });
+
+    // Helper: atur tampilan progress bar upload
+    function setUploadProgress(pct, state) {
+        const bar = $('#uploadProgressBar');
+        const val = Math.max(0, Math.min(100, Math.round(pct)));
+        bar.css('width', val + '%').text(val + '%').attr('aria-valuenow', val);
+        bar.removeClass('bg-success bg-danger');
+        bar.addClass('progress-bar-striped progress-bar-animated');
+        if (state === 'success') {
+            bar.removeClass('progress-bar-animated').addClass('bg-success');
+            bar.text('Berhasil (100%)');
+        } else if (state === 'error') {
+            bar.removeClass('progress-bar-animated').addClass('bg-danger');
+            bar.text('Gagal');
+        }
+    }
+
+    // Enable/disable tombol upload berdasarkan pilihan file
+    $('#uploadDbFile').on('change', function() {
+        $('#uploadBackupBtn').prop('disabled', !(this.files && this.files.length));
+        $('#uploadProgressWrap').addClass('d-none');
+        setUploadProgress(0);
+    });
+
+    // Upload file backup dari komputer (hanya upload, tidak langsung restore)
+    $('#uploadBackupBtn').on('click', function() {
+        const input = document.getElementById('uploadDbFile');
+        const file = input && input.files && input.files[0];
+
+        if (!file) {
+            showNotification('warning', 'Pilih file database terlebih dahulu');
+            return;
+        }
+
+        const name = file.name.toLowerCase();
+        if (!(name.endsWith('.db') || name.endsWith('.sqlite') || name.endsWith('.sqlite3'))) {
+            showNotification('warning', 'Format file tidak didukung. Gunakan file .db, .sqlite, atau .sqlite3');
+            return;
+        }
+
+        const btn = $(this);
+        const originalText = btn.html();
+        btn.prop('disabled', true).html('<i class="bi bi-circle-fill mdi-spin me-2"></i>Mengunggah...');
+        $('#uploadProgressWrap').removeClass('d-none');
+        setUploadProgress(0);
+
+        const formData = new FormData();
+        formData.append('backup_file', file);
+
+        $.ajax({
+            url: '/admin/settings/upload-backup',
+            method: 'POST',
+            data: formData,
+            processData: false,
+            contentType: false,
+            xhr: function() {
+                const xhr = new window.XMLHttpRequest();
+                xhr.upload.addEventListener('progress', function(e) {
+                    if (e.lengthComputable) {
+                        setUploadProgress((e.loaded / e.total) * 100);
+                    }
+                }, false);
+                return xhr;
+            },
+            success: function(response) {
+                if (response.success) {
+                    setUploadProgress(100, 'success');
+                    showNotification('success', response.message || 'File berhasil diunggah');
+                    input.value = '';
+                    // Muat ulang daftar, lalu pilih otomatis file yang baru diunggah
+                    loadBackupFiles(function() {
+                        if (response.filename) {
+                            $('#backupFile').val(response.filename);
+                            $('#restoreBackupBtn').prop('disabled', !$('#backupFile').val());
+                        }
+                    });
+                } else {
+                    setUploadProgress(100, 'error');
+                    showNotification('danger', response.message || 'Gagal mengunggah file');
+                }
+            },
+            error: function(xhr) {
+                setUploadProgress(100, 'error');
+                const errorMsg = xhr.responseJSON?.message || 'Terjadi kesalahan saat upload';
+                showNotification('danger', errorMsg);
+            },
+            complete: function() {
+                btn.prop('disabled', true).html(originalText);
+                $('#uploadBackupBtn').prop('disabled', true);
+            }
+        });
+    });
     
-    function loadBackupFiles() {
+    function loadBackupFiles(onDone) {
         $.ajax({
             url: '/admin/settings/backups',
             method: 'GET',
@@ -2023,6 +2121,7 @@ $(document).ready(function() {
                     updateBackupTable(response.backups);
                     updateBackupSelect(response.backups);
                     updateBillingAutoBackupStatus(response.auto_backup);
+                    if (typeof onDone === 'function') onDone(response.backups || []);
                 } else {
                     showNotification('danger', 'Gagal memuat daftar backup');
                 }
@@ -2117,43 +2216,7 @@ $(document).ready(function() {
 </script>
 <script>
 $(document).ready(function() {
-    // 1. Handle Logo Upload
-    $('#logoUploadForm').on('submit', function(e) {
-        e.preventDefault();
-        
-        var formData = new FormData(this);
-        
-        $.ajax({
-            url: '/admin/settings/upload-logo',
-            type: 'POST',
-            data: formData,
-            processData: false,
-            contentType: false,
-            success: function(response) {
-                if (response.success) {
-                    // Tampilkan notifikasi sukses
-                    showNotification('success', 'Logo berhasil diupload! Halaman akan dimuat ulang...');
-                    
-                    // Tunggu 1.5 detik lalu refresh halaman
-                    setTimeout(function() {
-                        window.location.reload();
-                    }, 1500);
-                } else {
-                    showNotification('danger', response.error || 'Gagal mengupload logo');
-                }
-            },
-            error: function(xhr, status, error) {
-                console.error('Error uploading logo:', error);
-                var errorMsg = 'Terjadi kesalahan saat mengupload logo';
-                if (xhr.responseJSON && xhr.responseJSON.error) {
-                    errorMsg = xhr.responseJSON.error;
-                }
-                showNotification('danger', errorMsg);
-            }
-        });
-    });
-
-    // 1b. Handle Billing QR Upload
+    // Handle Billing QR Upload
     $('#billingQrUploadForm').on('submit', function(e) {
         e.preventDefault();
 

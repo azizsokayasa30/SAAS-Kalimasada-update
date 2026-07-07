@@ -699,6 +699,14 @@ app.use((req, res, next) => {
 
 app.use(resolveTenantMiddleware);
 
+const { attachTenantAppSettings } = require('./config/platform/tenantAppSettings');
+app.use((req, res, next) => {
+  if (req.path === '/admin' || req.path.startsWith('/admin/')) {
+    return attachTenantAppSettings(req, res, next);
+  }
+  return next();
+});
+
 // Route khusus untuk login mobile (harus sebelum semua route admin)
 app.get('/admin/login/mobile', (req, res) => {
     try {

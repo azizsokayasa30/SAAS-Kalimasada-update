@@ -1,11 +1,26 @@
 const express = require('express');
 const router = express.Router();
 const { adminAuth } = require('./adminAuth');
+const billingManager = require('../config/billing');
+const { getTenantId, hasTenantContext } = require('../config/platform/tenantContext');
+
+function tAnd(alias = '') {
+  const t = billingManager._tenantWhere(alias);
+  if (!t.sql) return '';
+  const col = alias ? `${alias}.tenant_id` : 'tenant_id';
+  return ` AND ${col} = ${parseInt(t.params[0], 10)}`;
+}
+function tWhere(alias = '') {
+  const t = billingManager._tenantWhere(alias);
+  if (!t.sql) return '';
+  const col = alias ? `${alias}.tenant_id` : 'tenant_id';
+  return ` WHERE ${col} = ${parseInt(t.params[0], 10)}`;
+}
 
 // List routers page
 router.get('/routers', adminAuth, async (req, res) => {
   try {
-    const db = require('../config/billing').db;
+    const db = billingManager.db;
     await new Promise((resolve) => db.run(`CREATE TABLE IF NOT EXISTS routers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, nas_ip TEXT NOT NULL, nas_identifier TEXT, secret TEXT, location TEXT, pop TEXT, port INTEGER, user TEXT, password TEXT, genieacs_server_id INTEGER, UNIQUE(nas_ip))`, () => resolve()));
     // Best-effort schema extension for existing installs
     db.run(`ALTER TABLE routers ADD COLUMN location TEXT`, () => {});
@@ -14,6 +29,7 @@ router.get('/routers', adminAuth, async (req, res) => {
     db.run(`ALTER TABLE routers ADD COLUMN user TEXT`, () => {});
     db.run(`ALTER TABLE routers ADD COLUMN password TEXT`, () => {});
     db.run(`ALTER TABLE routers ADD COLUMN genieacs_server_id INTEGER`, () => {});
+    db.run(`ALTER TABLE routers ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1`, () => {});
     // Create genieacs_servers table
     await new Promise((resolve) => db.run(`CREATE TABLE IF NOT EXISTS genieacs_servers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,6 +51,7 @@ router.get('/routers', adminAuth, async (req, res) => {
     db.all(`SELECT r.*, g.name as genieacs_server_name, g.url as genieacs_server_url 
             FROM routers r 
             LEFT JOIN genieacs_servers g ON r.genieacs_server_id = g.id 
+            ${tWhere('r')}
             ORDER BY r.id`, (err, rows) => {
       const routers = rows || [];
       res.render('admin/routers', { title: 'NAS (RADIUS)', routers, genieacsServers, page: 'routers' });
@@ -51,11 +68,17 @@ router.post('/routers', adminAuth, async (req, res) => {
     if (!name || !nas_ip || !user || !password) return res.json({ success: false, message: 'Nama, NAS IP, user, dan password wajib diisi' });
     const portToUse = parseInt(port || 8728);
     const genieacsServerId = genieacs_server_id ? parseInt(genieacs_server_id) : null;
-    const db = require('../config/billing').db;
-    db.run(`INSERT INTO routers (name, nas_ip, nas_identifier, location, pop, port, user, password, genieacs_server_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [name.trim(), nas_ip.trim(), (nas_identifier||'').trim(), (location||'').trim(), (pop||'').trim(), portToUse, user, password, genieacsServerId], function(err){
-      if (err) return res.json({ success: false, message: err.message });
-      res.json({ success: true, id: this.lastID });
-    });
+    const tenantId = hasTenantContext() ? getTenantId() : 1;
+    const db = billingManager.db;
+    db.run(
+      `INSERT INTO routers (name, nas_ip, nas_identifier, location, pop, port, user, password, genieacs_server_id, tenant_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [name.trim(), nas_ip.trim(), (nas_identifier||'').trim(), (location||'').trim(), (pop||'').trim(), portToUse, user, password, genieacsServerId, tenantId],
+      function(err) {
+        if (err) return res.json({ success: false, message: err.message });
+        res.json({ success: true, id: this.lastID });
+      }
+    );
   } catch (e) { res.json({ success: false, message: e.message }); }
 });
 
@@ -66,11 +89,17 @@ router.post('/routers/:id', adminAuth, async (req, res) => {
     const { name, nas_ip, nas_identifier, location, pop, port, user, password, genieacs_server_id } = req.body;
     const portToUse2 = parseInt(port || 8728);
     const genieacsServerId = genieacs_server_id ? parseInt(genieacs_server_id) : null;
-    const db = require('../config/billing').db;
-    db.run(`UPDATE routers SET name=?, nas_ip=?, nas_identifier=?, location=?, pop=?, port=?, user=?, password=?, genieacs_server_id=? WHERE id=?`, [name, nas_ip, nas_identifier, location, pop, portToUse2, user, password, genieacsServerId, id], function(err){
-      if (err) return res.json({ success: false, message: err.message });
-      res.json({ success: true });
-    });
+    const db = billingManager.db;
+    db.run(
+      `UPDATE routers SET name=?, nas_ip=?, nas_identifier=?, location=?, pop=?, port=?, user=?, password=?, genieacs_server_id=?
+       WHERE id=?${tAnd()}`,
+      [name, nas_ip, nas_identifier, location, pop, portToUse2, user, password, genieacsServerId, id],
+      function(err) {
+        if (err) return res.json({ success: false, message: err.message });
+        if (this.changes === 0) return res.json({ success: false, message: 'Router tidak ditemukan atau bukan milik tenant ini.' });
+        res.json({ success: true });
+      }
+    );
   } catch (e) { res.json({ success: false, message: e.message }); }
 });
 
@@ -78,9 +107,10 @@ router.post('/routers/:id', adminAuth, async (req, res) => {
 router.post('/routers/:id/delete', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const db = require('../config/billing').db;
-    db.run(`DELETE FROM routers WHERE id=?`, [id], function(err){
+    const db = billingManager.db;
+    db.run(`DELETE FROM routers WHERE id=?${tAnd()}`, [id], function(err) {
       if (err) return res.json({ success: false, message: err.message });
+      if (this.changes === 0) return res.json({ success: false, message: 'Router tidak ditemukan atau bukan milik tenant ini.' });
       res.json({ success: true });
     });
   } catch (e) { res.json({ success: false, message: e.message }); }
@@ -92,8 +122,8 @@ module.exports = router;
 // Tambah endpoint test koneksi Mikrotik per NAS
 router.post('/routers/:id/test', adminAuth, async (req, res) => {
   try {
-    const db = require('../config/billing').db;
-    db.get(`SELECT * FROM routers WHERE id=?`, [req.params.id], async (err, row) => {
+    const db = billingManager.db;
+    db.get(`SELECT * FROM routers WHERE id=?${tAnd()}`, [req.params.id], async (err, row) => {
       if (err) return res.json({ success: false, message: err.message });
       if (!row) return res.json({ success: false, message: 'Router tidak ditemukan' });
       try {
@@ -109,5 +139,3 @@ router.post('/routers/:id/test', adminAuth, async (req, res) => {
     res.json({ success: false, message: e.message });
   }
 });
-
-

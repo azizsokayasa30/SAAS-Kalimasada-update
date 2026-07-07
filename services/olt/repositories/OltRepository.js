@@ -76,8 +76,10 @@ class OltRepository {
     }
 
     async listOlts(filters = {}) {
+        const _t = billingManager._tenantWhere('o');
         const where = [];
-        const params = [];
+        const params = [..._t.params];
+        if (_t.sql) where.push(`1=1${_t.sql}`);
         if (filters.status) {
             where.push('o.status = ?');
             params.push(filters.status);
@@ -86,6 +88,7 @@ class OltRepository {
             where.push('LOWER(o.vendor) = LOWER(?)');
             params.push(filters.vendor);
         }
+        const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
         const rows = await this.all(
             `SELECT o.*,
                     COUNT(onu.id) AS total_onu,
@@ -97,7 +100,7 @@ class OltRepository {
              FROM olts o
              LEFT JOIN olt_api_profiles p ON p.id = o.api_profile_id
              LEFT JOIN onus onu ON onu.olt_id = o.id
-             ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+             ${whereSql}
              GROUP BY o.id
              ORDER BY o.name COLLATE NOCASE`,
             params
@@ -106,6 +109,7 @@ class OltRepository {
     }
 
     async getOltById(id) {
+        const _t = billingManager._tenantWhere('o');
         const row = await this.get(
             `SELECT o.*,
                     p.id AS profile_id, p.name AS profile_name, p.vendor AS profile_vendor,
@@ -113,8 +117,8 @@ class OltRepository {
                     p.verify_tls, p.timeout_ms, p.endpoints_json, p.parser_json, p.capabilities_json
              FROM olts o
              LEFT JOIN olt_api_profiles p ON p.id = o.api_profile_id
-             WHERE o.id = ?`,
-            [id]
+             WHERE o.id = ?${_t.sql}`,
+            [id, ..._t.params]
         );
         return this.normalizeOlt(row);
     }
@@ -503,25 +507,33 @@ class OltRepository {
     }
 
     async getDashboardStats() {
+        const _t = billingManager._tenantWhere();
+        const tLit = _t.sql ? parseInt(_t.params[0], 10) : null;
+        const tOlt = tLit ? ` AND tenant_id = ${tLit}` : '';
+        const tJoin = tLit ? ` AND olt.tenant_id = ${tLit}` : '';
         return this.get(
             `SELECT
-                (SELECT COUNT(*) FROM olts) AS total_olts,
-                (SELECT COUNT(*) FROM onus) AS total_onus,
-                (SELECT COUNT(*) FROM onus WHERE status = 'ONLINE') AS onu_online,
-                (SELECT COUNT(*) FROM onus WHERE status IN ${OFFLINE_STATUS_SQL}) AS onu_offline,
-                (SELECT COUNT(*) FROM alerts WHERE status = 'open') AS open_alerts`
+                (SELECT COUNT(*) FROM olts WHERE 1=1${tOlt}) AS total_olts,
+                (SELECT COUNT(*) FROM onus onu INNER JOIN olts olt ON onu.olt_id = olt.id WHERE 1=1${tJoin}) AS total_onus,
+                (SELECT COUNT(*) FROM onus onu INNER JOIN olts olt ON onu.olt_id = olt.id WHERE onu.status = 'ONLINE'${tJoin}) AS onu_online,
+                (SELECT COUNT(*) FROM onus onu INNER JOIN olts olt ON onu.olt_id = olt.id WHERE onu.status IN ${OFFLINE_STATUS_SQL}${tJoin}) AS onu_offline,
+                (SELECT COUNT(*) FROM alerts a INNER JOIN olts olt ON a.olt_id = olt.id WHERE a.status = 'open'${tJoin}) AS open_alerts`
         );
     }
 
     async getChartData() {
+        const _t = billingManager._tenantWhere('olt');
+        const whereOlt = _t.sql ? `WHERE 1=1${_t.sql}` : '';
         const perOlt = await this.all(
             `SELECT olt.name,
                     SUM(CASE WHEN o.status = 'ONLINE' THEN 1 ELSE 0 END) AS online,
                     SUM(CASE WHEN o.status IN ${OFFLINE_STATUS_SQL} THEN 1 ELSE 0 END) AS offline
              FROM olts olt
              LEFT JOIN onus o ON o.olt_id = olt.id
+             ${whereOlt}
              GROUP BY olt.id
-             ORDER BY olt.name COLLATE NOCASE`
+             ORDER BY olt.name COLLATE NOCASE`,
+            [..._t.params]
         );
         const trend = await this.all(
             `SELECT date(created_at) AS day,

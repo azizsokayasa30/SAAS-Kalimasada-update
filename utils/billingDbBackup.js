@@ -77,9 +77,15 @@ function shouldRunAutoBackup(intervalDays, backupDir = getBackupDir()) {
     return daysSince(latest.modified) >= interval;
 }
 
-function getAppSettings(db) {
+function getAppSettings(db, tenantId = null) {
     return new Promise((resolve) => {
-        db.all('SELECT key, value FROM app_settings', (err, rows) => {
+        let sql = 'SELECT key, value FROM app_settings';
+        const params = [];
+        if (tenantId != null) {
+            sql += ' WHERE tenant_id = ?';
+            params.push(tenantId);
+        }
+        db.all(sql, params, (err, rows) => {
             const settingsObj = {};
             if (!err && rows) {
                 rows.forEach((row) => {

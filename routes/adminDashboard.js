@@ -13,7 +13,11 @@ const { getVersionInfo, getVersionBadge } = require('../config/version-utils');
 const { getRadiusConfigValue } = require('../config/radiusConfig');
 const billingManager = require('../config/billing');
 const cacheManager = require('../config/cacheManager');
+const { resolveRequestTenantId } = require('../config/platform/tenantCache');
+const { attachTenantAppSettings } = require('../config/platform/tenantAppSettings');
 const sqlite3 = require('sqlite3').verbose();
+
+router.use(attachTenantAppSettings);
 
 const DASHBOARD_CACHE_TTL_MS = 45 * 1000;
 const EMPTY_BILLING_STATS = {
@@ -90,7 +94,7 @@ function resolveDashboardUserName(req, settings = {}) {
 }
 
 function dashboardCacheKey(req, suffix) {
-  const tenantId = req.session?.tenantId || req.tenantId || 'global';
+  const tenantId = resolveRequestTenantId(req) ?? 'global';
   return `dash:${tenantId}:${suffix}`;
 }
 
@@ -110,20 +114,25 @@ async function getCachedDashboardData(req, key, fetcher, ttl = DASHBOARD_CACHE_T
   return value;
 }
 
-function scheduleReconcilePortalPackageRequests() {
+function scheduleReconcilePortalPackageRequests(tenantId = null) {
   setImmediate(() => {
-    billingManager.reconcilePortalPackageRequestsFulfilled().catch((e) => {
+    billingManager.reconcilePortalPackageRequestsFulfilled(tenantId).catch((e) => {
       console.warn('[DASHBOARD] background reconcile:', e.message);
     });
   });
 }
 
-function loadDashboardRecentData() {
+function loadDashboardRecentData(tenantId = null) {
   return new Promise((resolve) => {
     const dbPath = resolveBestBillingDbPath();
     const db = new sqlite3.Database(dbPath);
     const now = new Date();
     const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    // Isolasi multi-tenant untuk data pelanggan/invoice (kolom tenant_id).
+    const tScope = tenantId != null;
+    const custTenantAnd = tScope ? ' AND c.tenant_id = ?' : '';
+    const custTenantWhere = tScope ? ' WHERE tenant_id = ?' : '';
+    const invTenantAnd = tScope ? ' AND i.tenant_id = ?' : '';
     const result = {
       recentCustomers: [],
       recentPaidInvoices: [],
@@ -147,9 +156,9 @@ function loadDashboardRecentData() {
     };
 
     db.all(
-      `SELECT id, name, phone, area, status, join_date FROM customers
+      `SELECT id, name, phone, area, status, join_date FROM customers${custTenantWhere}
        ORDER BY datetime(COALESCE(join_date, '1970-01-01 00:00:00')) DESC, id DESC LIMIT 5`,
-      [],
+      tScope ? [tenantId] : [],
       (err, rows) => {
         result.recentCustomers = err ? [] : (rows || []);
         done();
@@ -160,10 +169,10 @@ function loadDashboardRecentData() {
       `SELECT i.id, i.invoice_number, i.amount, i.payment_date, i.created_at,
               COALESCE(c.name, 'Pelanggan') as customer_name
        FROM invoices i LEFT JOIN customers c ON i.customer_id = c.id
-       WHERE i.status = 'paid'
+       WHERE i.status = 'paid'${invTenantAnd}
        ORDER BY datetime(COALESCE(i.payment_date, i.created_at, '1970-01-01 00:00:00')) DESC, i.id DESC
        LIMIT 5`,
-      [],
+      tScope ? [tenantId] : [],
       (err, rows) => {
         result.recentPaidInvoices = err ? [] : (rows || []);
         done();
@@ -171,20 +180,23 @@ function loadDashboardRecentData() {
     );
 
     db.get(
-      `SELECT COUNT(*) as cnt FROM customers
+      `SELECT COUNT(*) as cnt FROM customers c
        WHERE strftime('%Y-%m', COALESCE(join_date, created_at, datetime('now','localtime'))) = ?
-         AND date(COALESCE(join_date, created_at)) <= date('now','localtime')`,
-      [monthStr],
+         AND date(COALESCE(join_date, created_at)) <= date('now','localtime')${custTenantAnd}`,
+      tScope ? [monthStr, tenantId] : [monthStr],
       (err, row) => {
         result.newCustomersThisMonth = (!err && row) ? (row.cnt || 0) : 0;
         done();
       }
     );
 
+    const jobsTenantAnd = tScope ? ' AND tenant_id = ?' : '';
+    const attTenantAnd = tScope ? ' AND tenant_id = ?' : '';
+
     db.get(
       `SELECT COUNT(*) AS cnt FROM installation_jobs
-       WHERE LOWER(COALESCE(status, '')) IN ('scheduled', 'assigned', 'in_progress')`,
-      [],
+       WHERE LOWER(COALESCE(status, '')) IN ('scheduled', 'assigned', 'in_progress')${jobsTenantAnd}`,
+      tScope ? [tenantId] : [],
       (err, row) => {
         result.operationalStats.pendingInstallations = (!err && row) ? (row.cnt || 0) : 0;
         done();
@@ -193,8 +205,8 @@ function loadDashboardRecentData() {
 
     db.get(
       `SELECT COUNT(DISTINCT employee_id) AS cnt FROM employee_attendance
-       WHERE date = date('now', 'localtime') AND TRIM(COALESCE(status, '')) != ''`,
-      [],
+       WHERE date = date('now', 'localtime') AND TRIM(COALESCE(status, '')) != ''${attTenantAnd}`,
+      tScope ? [tenantId] : [],
       (err, row) => {
         result.operationalStats.employeesAttendedToday = (!err && row) ? (row.cnt || 0) : 0;
         done();
@@ -204,19 +216,21 @@ function loadDashboardRecentData() {
 }
 
 function loadDashboardTroubleSummary() {
+  const _t = billingManager._tenantWhere();
   return new Promise((resolve) => {
     const dbPath = resolveBestBillingDbPath();
     const db = new sqlite3.Database(dbPath);
     db.get(
       `SELECT COUNT(*) AS cnt FROM trouble_reports
-       WHERE LOWER(COALESCE(status, '')) IN ('open', 'pending', 'in_progress', 'baru')`,
-      [],
+       WHERE LOWER(COALESCE(status, '')) IN ('open', 'pending', 'in_progress', 'baru')${_t.sql}`,
+      [..._t.params],
       (err, countRow) => {
         const pending = (!err && countRow) ? (countRow.cnt || 0) : 0;
         db.all(
           `SELECT id, name, customer_name, status, created_at FROM trouble_reports
+           WHERE 1=1${_t.sql}
            ORDER BY datetime(COALESCE(created_at, '1970-01-01 00:00:00')) DESC LIMIT 5`,
-          [],
+          [..._t.params],
           (err2, rows) => {
             db.close();
             resolve({
@@ -239,6 +253,9 @@ function pickSidebarSettings(full = {}) {
 }
 
 function getLightSettingsForDashboard(req) {
+  if (req.tenantSettings) {
+    return pickSidebarSettings(req.tenantSettings);
+  }
   if (req.tenant?.settings) {
     return pickSidebarSettings(req.tenant.settings);
   }
@@ -246,15 +263,16 @@ function getLightSettingsForDashboard(req) {
 }
 
 async function loadDashboardOverviewData(req) {
+  const tenantId = resolveRequestTenantId(req);
   const [
     billingResult,
     portalReqResult,
     recentDataResult,
     troubleResult,
   ] = await Promise.allSettled([
-    getCachedDashboardData(req, 'billing-stats', () => withTimeout(billingManager.getBillingStats(), 12000, 'billing stats timeout')),
-    withTimeout(billingManager.listPortalPackageRequestsPending(20), 5000, 'portal requests timeout'),
-    getCachedDashboardData(req, 'recent-data', loadDashboardRecentData, 30 * 1000),
+    getCachedDashboardData(req, 'billing-stats', () => withTimeout(billingManager.getBillingStats({ tenantId }), 12000, 'billing stats timeout')),
+    withTimeout(billingManager.listPortalPackageRequestsPending(20, tenantId), 5000, 'portal requests timeout'),
+    getCachedDashboardData(req, 'recent-data', () => loadDashboardRecentData(tenantId), 30 * 1000),
     loadDashboardTroubleSummary(),
   ]);
 
@@ -285,7 +303,7 @@ async function loadDashboardOverviewData(req) {
 // GET: Dashboard admin — shell cepat; data statistik via /dashboard/api/overview (AJAX).
 router.get('/dashboard', adminAuth, (req, res) => {
   const settings = getLightSettingsForDashboard(req);
-  scheduleReconcilePortalPackageRequests();
+  scheduleReconcilePortalPackageRequests(resolveRequestTenantId(req));
 
   res.render('adminDashboard', {
     title: 'Dashboard Admin',
@@ -326,17 +344,18 @@ router.get('/dashboard/api/overview', adminAuth, async (req, res) => {
 // Halaman penuh pusat notifikasi admin
 router.get('/dashboard/notifications', adminAuth, async (req, res) => {
   try {
-    const settings = getSettingsWithCache();
+    const tenantId = resolveRequestTenantId(req);
+    const settings = req.tenantSettings || getLightSettingsForDashboard(req);
     try {
-      await billingManager.reconcilePortalPackageRequestsFulfilled();
+      await billingManager.reconcilePortalPackageRequestsFulfilled(tenantId);
     } catch (e) {
       console.warn('⚠️ [NOTIF PAGE] reconcile portal package requests:', e.message);
     }
     const lim = 200;
     const [feed, badge, portalPending] = await Promise.all([
-      billingManager.getAdminUnifiedNotificationFeed(lim),
-      billingManager.getAdminNotificationBadgeCount(),
-      billingManager.countPortalPackageRequestsPending().catch(() => 0),
+      billingManager.getAdminUnifiedNotificationFeed(lim, tenantId),
+      billingManager.getAdminNotificationBadgeCount(tenantId),
+      billingManager.countPortalPackageRequestsPending(tenantId).catch(() => 0),
     ]);
     return res.render('admin/notifications-center', {
       title: 'Pusat notifikasi',
@@ -354,16 +373,17 @@ router.get('/dashboard/notifications', adminAuth, async (req, res) => {
 
 router.get('/dashboard/api/notifications', adminAuth, async (req, res) => {
   try {
+    const tenantId = resolveRequestTenantId(req);
     try {
-      await billingManager.reconcilePortalPackageRequestsFulfilled();
+      await billingManager.reconcilePortalPackageRequestsFulfilled(tenantId);
     } catch (e) {
       console.warn('⚠️ [DASHBOARD API] reconcile portal package requests:', e.message);
     }
     const lim = Math.min(200, Math.max(10, parseInt(req.query.limit, 10) || 50));
     const [feed, badge, portalPending] = await Promise.all([
-      billingManager.getAdminUnifiedNotificationFeed(lim),
-      billingManager.getAdminNotificationBadgeCount(),
-      billingManager.countPortalPackageRequestsPending().catch(() => 0),
+      billingManager.getAdminUnifiedNotificationFeed(lim, tenantId),
+      billingManager.getAdminNotificationBadgeCount(tenantId),
+      billingManager.countPortalPackageRequestsPending(tenantId).catch(() => 0),
     ]);
     return res.json({
       success: true,

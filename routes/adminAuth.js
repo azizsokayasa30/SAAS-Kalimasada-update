@@ -23,13 +23,25 @@ function getAdminCredentials() {
 // Middleware cek login admin
 function adminAuth(req, res, next) {
   if (req.session && req.session.isAdmin) {
+    const explicitTenant =
+      req.query?.tenant ||
+      req.get('X-Tenant') ||
+      (req.body && req.body.tenant);
     if (req.tenantId && req.session.tenantId && Number(req.session.tenantId) !== Number(req.tenantId)) {
-      return req.session.destroy(() => {
-        if (req.path.startsWith('/api/') || req.headers.accept?.includes('application/json')) {
-          return res.status(403).json({ success: false, message: 'Sesi tidak valid untuk tenant ini.' });
-        }
-        return res.redirect('/login?error=tenant_session');
-      });
+      if (explicitTenant) {
+        req.session.tenantId = req.tenantId;
+        if (req.tenant?.subdomain) req.session.tenantSubdomain = req.tenant.subdomain;
+      } else {
+        return req.session.destroy(() => {
+          if (req.path.startsWith('/api/') || req.headers.accept?.includes('application/json')) {
+            return res.status(403).json({ success: false, message: 'Sesi tidak valid untuk tenant ini.' });
+          }
+          return res.redirect('/login?error=tenant_session');
+        });
+      }
+    } else if (req.tenantId) {
+      req.session.tenantId = req.tenantId;
+      if (req.tenant?.subdomain) req.session.tenantSubdomain = req.tenant.subdomain;
     }
     next();
   } else {

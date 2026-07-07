@@ -7,6 +7,7 @@
     <title>Invoice by Type - Admin Billing</title>
     <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
     <link href="/vendor/boxicons/boxicons.min.css" rel="stylesheet">
+    <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
     <!-- Admin Mobile Optimizations -->
     <link href="/css/admin-mobile.css" rel="stylesheet">
     <style>
@@ -49,7 +50,7 @@
     <div class="container-fluid">
         <div class="row">
             <!-- Sidebar -->
-            <%- include('../../partials/billing-sidebar') %>
+            <%- include('../../partials/billing-sidebar', { page: 'invoices-by-type' }) %>
 
             <!-- Main content -->
             <main class="col-md-10 ms-sm-auto col-lg-10 px-md-4 main-content">

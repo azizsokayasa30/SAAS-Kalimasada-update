@@ -37,20 +37,6 @@
             <span class="input-group-text">.<%= typeof tenantBaseDomain !== 'undefined' ? tenantBaseDomain : 'kalimasada-app.com' %></span>
           </div>
         </div>
-        <div class="col-md-6">
-          <label class="form-label">Paket Berlangganan *</label>
-          <select name="subscription_plan_id" class="form-select" required>
-            <% plans.forEach(function(p) { %>
-              <option value="<%= p.id %>" <%= tenant && Number(tenant.subscription_plan_id) === p.id ? 'selected' : '' %>>
-                <%= p.name %> — <%= p.max_customers ? p.max_customers + ' pelanggan' : 'Unlimited' %>
-              </option>
-            <% }); %>
-          </select>
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Durasi Langganan (bulan)</label>
-          <input type="number" name="subscription_months" class="form-control" min="1" max="36" value="<%= tenant && tenant.subscription_months ? tenant.subscription_months : 1 %>">
-        </div>
 
         <div class="col-12 mt-2">
           <hr class="my-2">

@@ -9,4 +9,9 @@
 // Pastikan variabel 'page' ada, kalau tidak set ke string kosong
 if (typeof page === 'undefined') { var page = ''; }
 %>
-<%- include('./admin-responsive-sidebar', { page: page, settings: typeof settings !== 'undefined' ? settings : {}, versionInfo: typeof versionInfo !== 'undefined' ? versionInfo : {} }) %>
+<%- include('./admin-responsive-sidebar', Object.assign(
+    { page: page },
+    typeof settings !== 'undefined' ? { settings: settings } : {},
+    typeof versionInfo !== 'undefined' ? { versionInfo: versionInfo } : {},
+    typeof appSettings !== 'undefined' ? { appSettings: appSettings } : {}
+)) %>

@@ -1,6 +1,15 @@
 <%
 // Force app version to a single consistent value across all pages/sidebar states.
 const FORCED_APP_VERSION = 'v5.9';
+const sidebarSettings = (typeof appSettings !== 'undefined' && appSettings.companyHeader)
+    ? { company_header: appSettings.companyHeader, logo_filename: appSettings.logoFilename || 'logo.png' }
+    : ((typeof settings !== 'undefined' && settings && settings.company_header)
+        ? settings
+        : (typeof locals !== 'undefined' && locals.settings ? locals.settings : {}));
+const sidebarCompanyHeader = sidebarSettings.company_header
+    || (typeof versionInfo !== 'undefined' && versionInfo && versionInfo.companyHeader)
+    || 'KALIMASADA';
+const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
 %>
 <!-- Global Card Color System — loads on every page that includes this sidebar -->
 <link href="/css/card-system.css?v=1" rel="stylesheet">
@@ -12,9 +21,9 @@ const FORCED_APP_VERSION = 'v5.9';
             <button class="btn btn-link p-0 me-3" type="button" id="sidebarToggle" style="color: var(--sb-primary);">
                 <i class="bi bi-list" style="font-size: 1.5rem;"></i>
             </button>
-            <img src="/img/<%= typeof settings !== 'undefined' && settings.logo_filename ? settings.logo_filename : 'logo.png' %>?ts=<%= Date.now() %>" alt="Logo" style="height: 28px; border-radius: 6px;">
+            <img src="/img/<%= sidebarLogo %>?ts=<%= Date.now() %>" alt="Logo" style="height: 28px; border-radius: 6px;">
             <div class="d-flex flex-column ms-2">
-                <span style="font-size: 14px; font-weight: 700; color: var(--sb-text);"><%= typeof settings !== 'undefined' && settings.company_header ? settings.company_header : (typeof versionInfo !== 'undefined' && versionInfo.companyHeader ? versionInfo.companyHeader : 'KALIMASADA') %></span>
+                <span style="font-size: 14px; font-weight: 700; color: var(--sb-text);"><%= sidebarCompanyHeader %></span>
                 <small style="font-size: 10px; color: var(--sb-subtle);">Admin Panel</small>
             </div>
         </div>
@@ -41,10 +50,10 @@ const FORCED_APP_VERSION = 'v5.9';
     <!-- Logo Section -->
     <div class="sb-header">
         <div class="sb-logo-icon">
-            <img id="logoImage" src="/img/<%= typeof settings !== 'undefined' && settings.logo_filename ? settings.logo_filename : 'logo.png' %>?v=<%= new Date().getTime() %>" alt="Logo" style="width: 28px; height: 28px; border-radius: 6px; object-fit: cover;">
+            <img id="logoImage" src="/img/<%= sidebarLogo %>?v=<%= new Date().getTime() %>" alt="Logo" style="width: 28px; height: 28px; border-radius: 6px; object-fit: cover;">
         </div>
         <div class="sb-brand">
-            <span class="sb-brand-name"><%= typeof versionInfo !== 'undefined' && versionInfo.companyHeader ? versionInfo.companyHeader : (typeof settings !== 'undefined' && settings.company_header ? settings.company_header : 'KALIMASADA') %></span>
+            <span class="sb-brand-name"><%= sidebarCompanyHeader %></span>
             <span class="sb-brand-tag">Admin Panel</span>
         </div>
     </div>
@@ -464,7 +473,7 @@ const FORCED_APP_VERSION = 'v5.9';
         </div>
 
         <!-- SETTINGAN -->
-        <% const settingPages = ['setting', 'android-tool', 'whatsapp-settings', 'whatsapp-monitoring', 'email-settings', 'setting-radius', 'setting-radius-clients', 'connection-settings', 'genieacs-setting', 'cache']; %>
+        <% const settingPages = ['setting', 'whatsapp-settings', 'whatsapp-monitoring', 'email-settings', 'setting-radius', 'setting-radius-clients', 'connection-settings', 'genieacs-setting', 'cache']; %>
         <% const settingExpanded = typeof page !== 'undefined' && settingPages.includes(page); %>
         <div class="sb-section">
             <div class="sb-section-title sb-collapsible"
@@ -481,10 +490,6 @@ const FORCED_APP_VERSION = 'v5.9';
                 <a href="/admin/settings" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'setting' ? 'active' : '' %>">
                     <i class="bi bi-gear"></i>
                     <span class="sb-item-text">Setting Umum</span>
-                </a>
-                <a href="/admin/settings/android-tool" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'android-tool' ? 'active' : '' %>">
-                    <i class="bi bi-phone"></i>
-                    <span class="sb-item-text">Tool Android</span>
                 </a>
                 <a href="/admin/radius" class="sb-item sb-sub <%= typeof page !== 'undefined' && (page === 'setting-radius' || page === 'setting-radius-clients') ? 'active' : '' %>">
                     <i class="bi bi-shield-check"></i>
@@ -824,6 +829,16 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Initial highlight and expansion
     updateSidebarActive(window.location.href);
+
+    // Footer global admin — konsisten di semua halaman dengan .main-content
+    const mainEl = document.querySelector('.main-content');
+    if (mainEl && !document.getElementById('km-global-footer')) {
+        const footer = document.createElement('footer');
+        footer.id = 'km-global-footer';
+        footer.className = 'km-global-footer text-center text-muted small py-3 mt-4 border-top';
+        footer.textContent = '\u00A9 ' + new Date().getFullYear() + ' PT. KALIMASADA INTI SARANA';
+        mainEl.appendChild(footer);
+    }
 });
 </script>
 
@@ -921,6 +936,12 @@ document.addEventListener('DOMContentLoaded', function () {
 .sb-version-panel { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 4px; }
 .sb-version-tag { font-size: 10px; font-weight: 600; color: #ffffff; background: #16a34a; padding: 2px 8px; border-radius: 99px; }
 .sb-version-build { font-size: 9px; color: var(--sb-subtle); }
+
+.km-global-footer {
+    color: var(--sb-subtle, #64748b) !important;
+    border-color: var(--sb-border, #e2e8f0) !important;
+    letter-spacing: 0.02em;
+}
 
 /* Hamburger */
 .sb-hamburger { display: block; position: absolute; top: 16px; right: 12px; background: transparent; color: var(--sb-subtle); border: 1px solid var(--sb-border); border-radius: var(--sb-radius); padding: 4px 8px; cursor: pointer; transition: all 150ms; z-index: 10; }

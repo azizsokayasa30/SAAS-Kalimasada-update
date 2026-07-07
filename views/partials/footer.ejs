@@ -2,49 +2,8 @@
     
     <!-- Footer -->
     <footer class="bg-light mt-5 py-4 border-top">
-        <div class="container">
-            <div class="row">
-                <div class="col-md-6">
-                    <h6 class="text-primary mb-2">
-                        <i class="bi bi-gear"></i> Billing System
-                    </h6>
-                    <p class="text-muted small mb-0">
-                        Sistem manajemen billing otomatis untuk ISP<br>
-                        © <%= new Date().getFullYear() %> JINOM-HOMENET
-                    </p>
-                </div>
-                <div class="col-md-6 text-end">
-                    <div class="text-muted small">
-                        <div><i class="bi bi-clock"></i> Jam Operasional: 08:00 - 17:00</div>
-                        <div><i class="bi bi-telephone"></i> Support: 0813-6888-8498</div>
-                        <div><i class="bi bi-whatsapp"></i> WhatsApp: 0813-6888-8498</div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Version Info Row -->
-            <div class="row mt-3">
-                <div class="col-12 text-center">
-                    <hr class="my-2">
-                    <div class="d-flex justify-content-center align-items-center gap-3">
-                        <span class="text-muted small">
-                            <i class="bi bi-tag"></i> 
-                            <%= typeof versionInfo !== 'undefined' ? versionInfo.versionName : 'Unknown Version' %>
-                        </span>
-                        <span class="badge <%= typeof versionBadge !== 'undefined' ? versionBadge.class : 'badge-secondary' %>">
-                            <%= typeof versionBadge !== 'undefined' ? versionBadge.text : 'v1.0.0' %>
-                        </span>
-                        <span class="text-muted small">
-                            <i class="bi bi-code"></i> 
-                            Build <%= typeof versionInfo !== 'undefined' ? versionInfo.buildNumber : 'Unknown' %>
-                        </span>
-                        <span class="text-muted small">
-                            <i class="bi bi-calendar"></i> 
-                            <%= typeof versionInfo !== 'undefined' ? versionInfo.versionDate : 'Unknown' %>
-                        </span>
-                    </div>
-                </div>
-            </div>
+        <div class="container text-center">
+            <p class="text-muted small mb-0">&copy; <%= new Date().getFullYear() %> PT. KALIMASADA INTI SARANA</p>
         </div>
     </footer>
 

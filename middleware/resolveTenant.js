@@ -2,7 +2,7 @@
 
 const tenantStore = require('../config/platform/tenantStore');
 const { runWithTenant, runAsCentral } = require('../config/platform/tenantContext');
-const { mergeSettings, loadTemplateDefaults } = require('../config/platform/tenantSettingsManager');
+const { mergeSettings, loadMinimalTenantDefaults } = require('../config/platform/tenantSettingsManager');
 
 const enrichedSettingsCache = new Map();
 const ENRICHED_SETTINGS_TTL_MS = 60 * 1000;
@@ -15,7 +15,7 @@ function enrichTenantSettings(tenant) {
         tenant.settings = hit.settings;
         return tenant;
     }
-    const merged = mergeSettings(loadTemplateDefaults(), tenant.settings || {});
+    const merged = mergeSettings(loadMinimalTenantDefaults(), tenant.settings || {});
     tenant.settings = merged;
     enrichedSettingsCache.set(cacheKey, { settings: merged, ts: Date.now() });
     return tenant;
@@ -130,17 +130,17 @@ function resolveTenantMiddleware(req, res, next) {
             }
         }
 
-        // Sesi admin tenant (setelah login via ?tenant=slug)
+        // IP LAN / localhost: ?tenant= / X-Tenant lebih dulu dari sesi (hindari tab tenant berbeda pakai sesi lama)
+        if (!tenant && isDirectHostAccess(req.get('host'))) {
+            tenant = await resolveTenantForDirectHost(req, headerTenant);
+        }
+
+        // Sesi admin tenant (setelah login via ?tenant=slug) — fallback bila host tidak membawa slug
         if (!tenant && req.session?.tenantSubdomain) {
             tenant = await tenantStore.getTenantBySubdomain(req.session.tenantSubdomain);
         }
         if (!tenant && req.session?.tenantId) {
             tenant = await tenantStore.getTenantById(req.session.tenantId);
-        }
-
-        // IP LAN / localhost tanpa subdomain → tenant default atau ?tenant=slug
-        if (!tenant && isDirectHostAccess(req.get('host'))) {
-            tenant = await resolveTenantForDirectHost(req, headerTenant);
         }
 
         // Fallback legacy single-tenant hanya untuk request tanpa sesi tenant

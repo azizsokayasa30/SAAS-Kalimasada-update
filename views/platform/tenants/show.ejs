@@ -29,6 +29,7 @@
     <div class="alert alert-success">
       <% if (flash.success === 'created') { %>Tenant berhasil dibuat. Subdomain otomatis diaktifkan di reverse proxy.<% } %>
       <% if (flash.success === 'updated') { %>Perubahan tenant disimpan. Reverse proxy diperbarui.<% } %>
+      <% if (flash.success === 'credentials') { %>Username &amp; password admin tenant berhasil diperbarui.<% } %>
       <% if (flash.success === 'suspended') { %>Tenant disuspend.<% } %>
       <% if (flash.success === 'activated') { %>Tenant diaktifkan kembali.<% } %>
     </div>
@@ -75,6 +76,7 @@
             <td>
               <code id="tenantAdminUser"><%= tenant.settings.admin_username %></code>
               <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-1 ms-1" onclick="navigator.clipboard.writeText(document.getElementById('tenantAdminUser').textContent.trim())">Salin</button>
+              <button type="button" class="btn btn-outline-primary btn-sm py-0 px-1 ms-1" data-bs-toggle="modal" data-bs-target="#credentialsModal"><i class="bi bi-pencil"></i> Ubah</button>
             </td>
           </tr>
           <tr>
@@ -82,6 +84,7 @@
             <td>
               <code id="tenantAdminPass"><%= tenant.settings.admin_password %></code>
               <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-1 ms-1" onclick="navigator.clipboard.writeText(document.getElementById('tenantAdminPass').textContent.trim())">Salin</button>
+              <button type="button" class="btn btn-outline-primary btn-sm py-0 px-1 ms-1" data-bs-toggle="modal" data-bs-target="#credentialsModal"><i class="bi bi-pencil"></i> Ubah</button>
             </td>
           </tr>
         </table>
@@ -110,6 +113,47 @@
     </div>
   </div>
 </main>
+
+<div class="modal fade km-modal" id="credentialsModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <form method="POST" action="/management/tenants/<%= tenant.id %>/credentials" class="modal-content" autocomplete="off">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-key me-1"></i> Ubah Kredensial Admin Tenant</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="km-subtitle small mb-3">
+          Kredensial ini dipakai admin <strong><%= tenant.name %></strong> untuk login di
+          <a href="<%= tenantLoginUrl %>" target="_blank" rel="noopener"><%= tenantHostname %></a>.
+          Perubahan langsung berlaku.
+        </p>
+        <div class="mb-3">
+          <label class="form-label">Username</label>
+          <input type="text" name="admin_username" class="form-control"
+                 value="<%= tenant.settings.admin_username %>"
+                 pattern="[a-zA-Z0-9._-]+" required
+                 placeholder="admin">
+          <small class="text-muted">Hanya huruf, angka, titik, strip, dan underscore.</small>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Password Baru</label>
+          <div class="input-group">
+            <input type="password" name="admin_password" id="credPassword" class="form-control"
+                   minlength="4" placeholder="Kosongkan bila tidak diubah">
+            <button type="button" class="btn btn-outline-secondary" id="toggleCredPassword" tabindex="-1">
+              <i class="bi bi-eye"></i>
+            </button>
+          </div>
+          <small class="text-muted">Minimal 4 karakter. Biarkan kosong untuk mempertahankan password lama.</small>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i> Simpan</button>
+      </div>
+    </form>
+  </div>
+</div>
 
 <div class="modal fade km-modal" id="suspendModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered">
@@ -153,5 +197,20 @@
   </div>
 </div>
 <% } %>
+
+<script>
+  (function () {
+    var toggle = document.getElementById('toggleCredPassword');
+    var input = document.getElementById('credPassword');
+    if (toggle && input) {
+      toggle.addEventListener('click', function () {
+        var isPw = input.type === 'password';
+        input.type = isPw ? 'text' : 'password';
+        var icon = toggle.querySelector('i');
+        if (icon) icon.className = isPw ? 'bi bi-eye-slash' : 'bi bi-eye';
+      });
+    }
+  })();
+</script>
 
 <%- include('../partials/footer') %>

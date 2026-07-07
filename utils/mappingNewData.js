@@ -1,6 +1,8 @@
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const cacheManager = require('../config/cacheManager');
+const { tenantCacheKey } = require('../config/platform/tenantCache');
+const { hasTenantContext, getTenantId } = require('../config/platform/tenantContext');
 
 const CACHE_KEYS = {
     core: 'mapping:new:core',
@@ -13,10 +15,19 @@ const CACHE_TTL = {
     pppoe: 30 * 1000
 };
 
-function invalidateMappingCache() {
-    cacheManager.delete(CACHE_KEYS.core);
-    cacheManager.delete(CACHE_KEYS.live);
-    cacheManager.delete(CACHE_KEYS.pppoe);
+function resolveMappingTenantId(tenantId = null) {
+    if (tenantId != null) return tenantId;
+    return hasTenantContext() ? getTenantId() : null;
+}
+
+function scopedMappingCacheKey(base, tenantId = null) {
+    return tenantCacheKey(base, resolveMappingTenantId(tenantId));
+}
+
+function invalidateMappingCache(tenantId = null) {
+    cacheManager.delete(scopedMappingCacheKey(CACHE_KEYS.core, tenantId));
+    cacheManager.delete(scopedMappingCacheKey(CACHE_KEYS.live, tenantId));
+    cacheManager.delete(scopedMappingCacheKey(CACHE_KEYS.pppoe, tenantId));
 }
 
 function openBillingDb() {
@@ -37,7 +48,15 @@ function dbAll(db, sql, params = []) {
     });
 }
 
-async function loadMappingDbData(db) {
+async function loadMappingDbData(db, tenantId = null) {
+    const _tId = resolveMappingTenantId(tenantId);
+    const tCust = _tId != null ? ' AND c.tenant_id = ?' : '';
+    const tOdp = _tId != null ? ' WHERE tenant_id = ?' : '';
+    const tCable = _tId != null ? ' AND c.tenant_id = ?' : '';
+    const custParams = _tId != null ? [_tId] : [];
+    const odpParams = _tId != null ? [_tId] : [];
+    const cableParams = _tId != null ? [_tId] : [];
+
     const [customers, odps, cables, backboneCables] = await Promise.all([
         dbAll(db, `
             SELECT c.id, c.name, c.phone, c.pppoe_username, c.latitude, c.longitude,
@@ -47,15 +66,15 @@ async function loadMappingDbData(db) {
             FROM customers c
             LEFT JOIN packages p ON c.package_id = p.id
             LEFT JOIN odps o ON c.odp_id = o.id
-            WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL
+            WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL${tCust}
             ORDER BY c.name
-        `),
+        `, custParams),
         dbAll(db, `
             SELECT id, name, code, latitude, longitude, address,
                    capacity, used_ports, status, installation_date, parent_odp_id
-            FROM odps
+            FROM odps${tOdp}
             ORDER BY name
-        `),
+        `, odpParams),
         dbAll(db, `
             SELECT cr.id, cr.customer_id, cr.odp_id, cr.cable_length, cr.cable_type,
                    cr.installation_date, cr.status, cr.port_number, cr.notes,
@@ -67,9 +86,9 @@ async function loadMappingDbData(db) {
             LEFT JOIN customers c ON cr.customer_id = c.id
             LEFT JOIN odps o ON cr.odp_id = o.id
             WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL
-              AND o.latitude IS NOT NULL AND o.longitude IS NOT NULL
+              AND o.latitude IS NOT NULL AND o.longitude IS NOT NULL${tCable}
             ORDER BY cr.id
-        `),
+        `, cableParams),
         dbAll(db, `
             SELECT ns.id, ns.name, ns.start_odp_id, ns.end_odp_id, ns.cable_length,
                    ns.segment_type, ns.installation_date, ns.status, ns.notes,
@@ -83,6 +102,7 @@ async function loadMappingDbData(db) {
             LEFT JOIN odps end_odp ON ns.end_odp_id = end_odp.id
             WHERE start_odp.latitude IS NOT NULL AND start_odp.longitude IS NOT NULL
               AND end_odp.latitude IS NOT NULL AND end_odp.longitude IS NOT NULL
+              ${_tId != null ? ' AND start_odp.tenant_id = ? AND end_odp.tenant_id = ?' : ''}
             UNION ALL
             SELECT oc.id + 10000 as id,
                    'Connection-' || from_odp.name || '-' || to_odp.name as name,
@@ -100,7 +120,8 @@ async function loadMappingDbData(db) {
             WHERE from_odp.latitude IS NOT NULL AND from_odp.longitude IS NOT NULL
               AND to_odp.latitude IS NOT NULL AND to_odp.longitude IS NOT NULL
               AND oc.status = 'active'
-        `)
+              ${_tId != null ? ' AND from_odp.tenant_id = ? AND to_odp.tenant_id = ?' : ''}
+        `, _tId != null ? [_tId, _tId, _tId, _tId] : [])
     ]);
 
     return { customers, odps, cables, backboneCables };
@@ -215,15 +236,16 @@ function buildMappingStatistics(customers, odps, cables, backboneCables, onuDevi
     };
 }
 
-async function getPppoeBatchCached() {
-    const cached = cacheManager.get(CACHE_KEYS.pppoe);
+async function getPppoeBatchCached(tenantId = null) {
+    const cacheKey = scopedMappingCacheKey(CACHE_KEYS.pppoe, tenantId);
+    const cached = cacheManager.get(cacheKey);
     if (cached) {
         return cached;
     }
     try {
         const { getActivePppoeLoginNamesSetWithUptimeMap } = require('../config/mikrotik');
         const batch = await getActivePppoeLoginNamesSetWithUptimeMap();
-        cacheManager.set(CACHE_KEYS.pppoe, batch, CACHE_TTL.pppoe);
+        cacheManager.set(cacheKey, batch, CACHE_TTL.pppoe);
         return batch;
     } catch (e) {
         console.warn('⚠️ PPPoE batch (mapping):', e.message || e);
@@ -247,8 +269,8 @@ function buildCorePayload(dbData) {
     };
 }
 
-async function buildLivePayload(customers) {
-    const pppoeBatch = await getPppoeBatchCached();
+async function buildLivePayload(customers, tenantId = null) {
+    const pppoeBatch = await getPppoeBatchCached(tenantId);
     const enrichedCustomers = enrichCustomersWithPppoe(customers, pppoeBatch);
 
     return {
@@ -260,6 +282,8 @@ module.exports = {
     CACHE_KEYS,
     CACHE_TTL,
     invalidateMappingCache,
+    scopedMappingCacheKey,
+    resolveMappingTenantId,
     openBillingDb,
     loadMappingDbData,
     formatCablesForFrontend,

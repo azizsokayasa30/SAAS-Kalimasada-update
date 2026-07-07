@@ -21,13 +21,20 @@ function ensureTable() {
             (err) => {
                 if (err) return reject(err);
                 db.run(`ALTER TABLE activity_logs ADD COLUMN metadata TEXT`, () => {
-                    db.run(
-                        `CREATE INDEX IF NOT EXISTS idx_activity_logs_created ON activity_logs(created_at DESC)`,
-                        () => {
-                            tableReady = true;
-                            resolve();
-                        }
-                    );
+                    db.run(`ALTER TABLE activity_logs ADD COLUMN tenant_id INTEGER`, () => {
+                        db.run(
+                            `CREATE INDEX IF NOT EXISTS idx_activity_logs_created ON activity_logs(created_at DESC)`,
+                            () => {
+                                db.run(
+                                    `CREATE INDEX IF NOT EXISTS idx_activity_logs_tenant ON activity_logs(tenant_id)`,
+                                    () => {
+                                        tableReady = true;
+                                        resolve();
+                                    }
+                                );
+                            }
+                        );
+                    });
                 });
             }
         );
@@ -46,15 +53,15 @@ function getAdminUser(req) {
     return req.session?.adminUser || req.session?.adminUsername || 'admin';
 }
 
-async function logActivity({ userType = 'admin', userId, action, description, ipAddress, metadata = null }) {
+async function logActivity({ userType = 'admin', userId, action, description, ipAddress, metadata = null, tenantId = null }) {
     if (!action || !description) return null;
     await ensureTable();
     const metadataStr = metadata && typeof metadata === 'object' ? JSON.stringify(metadata) : metadata;
     return new Promise((resolve, reject) => {
         db.run(
-            `INSERT INTO activity_logs (user_type, user_id, action, description, ip_address, metadata)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-            [userType, userId || null, action, description, ipAddress || null, metadataStr],
+            `INSERT INTO activity_logs (user_type, user_id, action, description, ip_address, metadata, tenant_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [userType, userId || null, action, description, ipAddress || null, metadataStr, tenantId],
             function onInsert(err) {
                 if (err) reject(err);
                 else resolve(this.lastID);
@@ -65,13 +72,15 @@ async function logActivity({ userType = 'admin', userId, action, description, ip
 
 async function logAdminActivity(req, action, description, metadata = null) {
     try {
+        const meta = metadata && typeof metadata === 'object' ? { ...metadata } : {};
         return await logActivity({
             userType: 'admin',
             userId: getAdminUser(req),
             action,
             description,
             ipAddress: getClientIp(req),
-            metadata
+            metadata: meta,
+            tenantId: req.tenantId ?? null
         });
     } catch (err) {
         logger.warn(`[activityLogger] Gagal mencatat log: ${err.message}`);
@@ -79,18 +88,28 @@ async function logAdminActivity(req, action, description, metadata = null) {
     }
 }
 
-async function getActivityLogs({ page = 1, limit = 50, userType = null } = {}) {
+async function getActivityLogs({ page = 1, limit = 50, userType = null, tenantId = null } = {}) {
     await ensureTable();
     const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
     const safePage = Math.max(parseInt(page, 10) || 1, 1);
     const offset = (safePage - 1) * safeLimit;
 
-    const where = userType ? 'WHERE user_type = ?' : '';
-    const params = userType ? [userType] : [];
+    const conds = [];
+    const params = [];
+    if (userType) {
+        conds.push('user_type = ?');
+        params.push(userType);
+    }
+    if (tenantId != null) {
+        const tid = Number(tenantId);
+        conds.push('(tenant_id = ? OR (? = 1 AND tenant_id IS NULL))');
+        params.push(tid, tid);
+    }
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
     const logs = await new Promise((resolve, reject) => {
         db.all(
-            `SELECT id, user_type, user_id, action, description, ip_address, metadata, created_at
+            `SELECT id, user_type, user_id, action, description, ip_address, metadata, tenant_id, created_at
              FROM activity_logs
              ${where}
              ORDER BY datetime(created_at) DESC, id DESC
@@ -115,6 +134,42 @@ async function getActivityLogs({ page = 1, limit = 50, userType = null } = {}) {
         total: totalRow?.total || 0,
         hasMore: offset + logs.length < (totalRow?.total || 0)
     };
+}
+
+function parseBackupFilenameFromLog(row) {
+    if (!row) return null;
+    if (row.metadata) {
+        try {
+            const meta = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata;
+            if (meta?.backup_file) return String(meta.backup_file).trim();
+            if (meta?.filename) return String(meta.filename).trim();
+        } catch (_) { /* ignore */ }
+    }
+    const desc = String(row.description || '');
+    const match = desc.match(/(?:Backup database|Restore database|Upload file backup):\s*(\S+)/i);
+    return match ? match[1].trim() : null;
+}
+
+/** Daftar nama file backup yang dibuat/di-restore tenant ini (dari activity log). */
+async function getTenantBackupFilenames(tenantId) {
+    await ensureTable();
+    const tid = tenantId != null ? Number(tenantId) : null;
+    const rows = await new Promise((resolve, reject) => {
+        const conds = [`action IN ('database_backup', 'database_restore')`];
+        const params = [];
+        if (tid != null) {
+            conds.push('(tenant_id = ? OR (? = 1 AND tenant_id IS NULL))');
+            params.push(tid, tid);
+        }
+        db.all(
+            `SELECT description, metadata FROM activity_logs
+             WHERE ${conds.join(' AND ')}
+             ORDER BY datetime(created_at) DESC, id DESC`,
+            params,
+            (err, result) => (err ? reject(err) : resolve(result || []))
+        );
+    });
+    return [...new Set(rows.map(parseBackupFilenameFromLog).filter(Boolean))];
 }
 
 async function clearOldActivityLogs(days = 30) {
@@ -210,6 +265,7 @@ module.exports = {
     logActivity,
     logAdminActivity,
     getActivityLogs,
+    getTenantBackupFilenames,
     clearOldActivityLogs,
     adminBillingActivityMiddleware,
     getAdminUser,

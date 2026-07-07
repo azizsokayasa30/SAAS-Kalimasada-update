@@ -66,32 +66,34 @@ class WhatsAppNotificationManager {
         return cleaned;
     }
 
-    // Helper method to get invoice image path with fallback handling
-    getInvoiceImagePath() {
-        const customFilename = getSetting('billing_qr_filename', null);
+    // Helper: billing QR image path — hanya jika diunggah di pengaturan tenant
+    async getInvoiceImagePath(tenantId = null) {
+        let customFilename = null;
 
-        const imagePaths = [];
-
-        if (customFilename) {
-            imagePaths.push(path.resolve(__dirname, '../public/img', customFilename));
-        }
-
-        imagePaths.push(
-            path.resolve(__dirname, '../public/img/tagihan.jpg'),
-            path.resolve(__dirname, '../public/img/tagihan.png'),
-            path.resolve(__dirname, '../public/img/invoice.jpg'),
-            path.resolve(__dirname, '../public/img/invoice.png'),
-            path.resolve(__dirname, '../public/img/logo.png')
-        );
-        
-        for (const imagePath of imagePaths) {
-            if (imagePath && fs.existsSync(imagePath)) {
-                logger.info(`📸 Using invoice image: ${imagePath}`);
-                return imagePath;
+        try {
+            if (tenantId) {
+                const { getFullSettingsForTenantId } = require('./platform/tenantSettingsManager');
+                const settings = await getFullSettingsForTenantId(tenantId);
+                customFilename = settings?.billing_qr_filename;
+            } else {
+                customFilename = getSetting('billing_qr_filename', null);
             }
+        } catch (err) {
+            logger.warn('⚠️ Gagal membaca billing_qr_filename:', err.message);
+            return null;
         }
 
-        logger.warn('⚠️ No invoice image found, will send text-only notification');
+        if (!customFilename || !String(customFilename).trim()) {
+            return null;
+        }
+
+        const imagePath = path.resolve(__dirname, '../public/img', customFilename);
+        if (fs.existsSync(imagePath)) {
+            logger.info(`📸 Using billing QR image: ${imagePath}`);
+            return imagePath;
+        }
+
+        logger.warn(`⚠️ Billing QR file not found: ${imagePath}, will send text-only notification`);
         return null;
     }
 
@@ -516,7 +518,7 @@ class WhatsAppNotificationManager {
             );
 
             // Attach invoice banner image if available
-            const imagePath = this.getInvoiceImagePath();
+            const imagePath = await this.getInvoiceImagePath(invoice.tenant_id || customer.tenant_id);
             return await this.sendNotification(customer.phone, message, { imagePath });
         } catch (error) {
             logger.error('Error sending invoice created notification:', error);
@@ -579,7 +581,7 @@ class WhatsAppNotificationManager {
             const tpl = this.templates[templateKey];
             const message = this.replaceTemplateVariables(tpl.template, data);
 
-            const imagePath = this.getInvoiceImagePath();
+            const imagePath = await this.getInvoiceImagePath(invoice.tenant_id || customer.tenant_id);
             return await this.sendNotification(customer.phone, message, { imagePath });
         } catch (error) {
             logger.error('Error sending due date reminder:', error);
@@ -625,7 +627,7 @@ class WhatsAppNotificationManager {
                 data
             );
 
-            const imagePath = this.getInvoiceImagePath();
+            const imagePath = await this.getInvoiceImagePath(invoice.tenant_id || member.tenant_id);
             return await this.sendNotification(member.phone, message, { imagePath });
         } catch (error) {
             logger.error('Error sending member invoice created notification:', error);
@@ -673,7 +675,7 @@ class WhatsAppNotificationManager {
             const tpl = this.templates[templateKey];
             const message = this.replaceTemplateVariables(tpl.template, data);
 
-            const imagePath = this.getInvoiceImagePath();
+            const imagePath = await this.getInvoiceImagePath(invoice.tenant_id || member.tenant_id);
             return await this.sendNotification(member.phone, message, { imagePath });
         } catch (error) {
             logger.error('Error sending member due date reminder:', error);

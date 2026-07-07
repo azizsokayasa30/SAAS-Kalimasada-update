@@ -1825,10 +1825,11 @@
     }
 
     async getPackages() {
+        const _t = this._tenantWhere();
         return new Promise((resolve, reject) => {
-            const sql = `SELECT * FROM packages WHERE is_active = 1 ORDER BY price ASC`;
+            const sql = `SELECT * FROM packages WHERE is_active = 1${_t.sql} ORDER BY price ASC`;
             
-            this.db.all(sql, [], (err, rows) => {
+            this.db.all(sql, _t.params, (err, rows) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -1839,10 +1840,11 @@
     }
 
     async getPackageById(id) {
+        const _t = this._tenantWhere();
         return new Promise((resolve, reject) => {
-            const sql = `SELECT * FROM packages WHERE id = ?`;
+            const sql = `SELECT * FROM packages WHERE id = ?${_t.sql}`;
             
-            this.db.get(sql, [id], (err, row) => {
+            this.db.get(sql, [id, ..._t.params], (err, row) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -2286,6 +2288,28 @@
     }
 
     /** WHERE + params bersama untuk invoice-list (list, count, summary). */
+    /**
+     * Klausa isolasi tenant untuk WHERE. WAJIB dipanggil SINKRON ketika membangun
+     * SQL (jangan di dalam callback sqlite — AsyncLocalStorage hilang di sana).
+     * Tanpa konteks tenant (scheduler/CLI lintas-tenant) → tidak memfilter (perilaku
+     * lama/global). `alias` = alias tabel yang punya kolom tenant_id (mis. 'i', 'c').
+     */
+    _tenantWhere(alias = '') {
+        if (!hasTenantContext()) return { sql: '', params: [] };
+        const col = alias ? `${alias}.tenant_id` : 'tenant_id';
+        return { sql: ` AND ${col} = ?`, params: [getTenantId()] };
+    }
+
+    /**
+     * Sama seperti _tenantWhere tapi mengembalikan bentuk `WHERE ...` untuk query
+     * yang belum punya klausa WHERE. Tanpa konteks tenant → kosong.
+     */
+    _tenantWhereClause(alias = '') {
+        if (!hasTenantContext()) return { sql: '', params: [] };
+        const col = alias ? `${alias}.tenant_id` : 'tenant_id';
+        return { sql: ` WHERE ${col} = ?`, params: [getTenantId()] };
+    }
+
     _buildInvoiceListFilterSql(filters = {}, flags = {}) {
         let sql = '';
         const params = [];
@@ -2295,6 +2319,10 @@
             hasCustomerId = true,
             hasInvoiceType = true
         } = flags;
+
+        // Isolasi tenant (invoices.tenant_id).
+        const _t = this._tenantWhere('i');
+        if (_t.sql) { sql += _t.sql; params.push(..._t.params); }
 
         if (filters.month) {
             sql += ` AND strftime('%Y-%m', i.created_at) = ?`;
@@ -2394,6 +2422,11 @@
      * scope: 'all' = seluruh invoice bulanan; 'collector_territory' = pool area/penugasan kolektor.
      */
     async getMonthlyTagihanTotals(month, year, options = {}) {
+        // Tangkap tenant di awal (opsi eksplisit diprioritaskan karena pemanggil bisa
+        // berada di dalam callback sqlite yang kehilangan AsyncLocalStorage).
+        const _tId = (options.tenantId != null)
+            ? options.tenantId
+            : (hasTenantContext() ? getTenantId() : null);
         const scope = options.scope === 'collector_territory' ? 'collector_territory' : 'all';
         const m = parseInt(String(month), 10);
         const y = parseInt(String(year), 10);
@@ -2418,6 +2451,9 @@
                 OR EXISTS (SELECT 1 FROM collector_assignments casm WHERE casm.customer_id = cust.id)
             )`;
         }
+        // Isolasi multi-tenant berdasar pelanggan (cust.tenant_id).
+        const _tScope = _tId != null;
+        const tenantSql = _tScope ? ' AND cust.tenant_id = ?' : '';
         const sql = `
             SELECT
                 COUNT(*) AS count_total,
@@ -2433,11 +2469,13 @@
                 WHERE DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
                   AND ${voucherExcl}
                   AND i.status IN ('paid', 'unpaid')
+                  ${tenantSql}
                   ${poolSql}
             ) sub
         `;
+        const tagihanParams = _tScope ? [startDate, endDate, _tId] : [startDate, endDate];
         return new Promise((resolve, reject) => {
-            this.db.get(sql, [startDate, endDate], (err, row) => {
+            this.db.get(sql, tagihanParams, (err, row) => {
                 if (err) reject(err);
                 else {
                     resolve({
@@ -2454,7 +2492,11 @@
     }
 
     /** Seluruh invoice belum lunas (non-voucher) — piutang aktif, semua periode. */
-    async getOutstandingUnpaidTotals() {
+    async getOutstandingUnpaidTotals(options = {}) {
+        // Prioritaskan tenantId eksplisit (pemanggil bisa di dalam callback sqlite).
+        const _tId = (options.tenantId != null)
+            ? options.tenantId
+            : (hasTenantContext() ? getTenantId() : null);
         const hasInvoiceType = await new Promise((resolve) => {
             this.db.all('PRAGMA table_info(invoices)', (err, cols) => {
                 if (err) resolve(false);
@@ -2462,13 +2504,17 @@
             });
         });
         const voucherExcl = this._sqlInvoiceExcludeVoucher(hasInvoiceType);
+        // Isolasi multi-tenant: filter piutang per tenant aktif.
+        const _tScope = _tId != null;
+        const tenantSql = _tScope ? ' AND i.tenant_id = ?' : '';
         const sql = `
             SELECT COUNT(*) AS count_unpaid, COALESCE(SUM(amount), 0) AS total_unpaid
             FROM invoices i
-            WHERE i.status = 'unpaid' AND ${voucherExcl}
+            WHERE i.status = 'unpaid' AND ${voucherExcl}${tenantSql}
         `;
+        const outstandingParams = _tScope ? [_tId] : [];
         return new Promise((resolve, reject) => {
-            this.db.get(sql, [], (err, row) => {
+            this.db.get(sql, outstandingParams, (err, row) => {
                 if (err) reject(err);
                 else {
                     resolve({
@@ -2628,6 +2674,7 @@ ${year && month ? `
     }
 
     async getCustomers(options = {}) {
+        const _t = this._tenantWhere('c');
         return new Promise(async (resolve, reject) => {
             let whereClause = '';
             const params = [];
@@ -2641,6 +2688,11 @@ ${year && month ? `
                 const endDate = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
                 whereClause = ` WHERE ${this._customerJoinDateExpr('c')} >= date(?) AND ${this._customerJoinDateExpr('c')} < date(?)`;
                 params.push(startDate, endDate);
+            }
+            // Isolasi tenant (customers.tenant_id).
+            if (_t.sql) {
+                whereClause = whereClause ? whereClause + _t.sql : ' WHERE c.tenant_id = ?';
+                params.push(..._t.params);
             }
 
             const sql = `
@@ -2747,7 +2799,7 @@ ${year && month ? `
         return `date(COALESCE(${alias}.join_date, ${alias}.created_at))`;
     }
 
-    async getCustomerStatsByMonth(month, year, filters = {}) {
+    async getCustomerStatsByMonth(month, year, filters = {}, options = {}) {
         const m = parseInt(String(month), 10);
         const y = parseInt(String(year), 10);
         const cjd = (a) => this._customerJoinDateExpr(a);
@@ -2784,10 +2836,21 @@ ${year && month ? `
             filterParams.push(filters.collector_id, filters.collector_id);
         }
 
+        // Isolasi tenant — prioritaskan tenantId eksplisit (hilang di callback sqlite / tanpa ALS).
+        const _tId = (options.tenantId != null)
+            ? Number(options.tenantId)
+            : (hasTenantContext() ? Number(getTenantId()) : null);
+        const tLit = Number.isFinite(_tId) && _tId > 0 ? _tId : null;
+        const tenantC = tLit ? ` AND c.tenant_id = ${tLit}` : '';
+        const tenantSub = tLit ? ` AND c_sub.tenant_id = ${tLit}` : '';
+        const tenantSum = tLit ? ` AND c_sum.tenant_id = ${tLit}` : '';
+        const invTenantSql = tLit ? ` AND i.tenant_id = ${tLit}` : '';
+        if (tenantC) filterWhere += tenantC;
+
         const fjSub = filterJoins.replace(/ ca/g, ' ca_sub').replace(/ cra/g, ' cra_sub').replace(/ c\./g, ' c_sub.');
-        const fwSub = filterWhere.replace(/c\./g, 'c_sub.');
+        let fwSub = filterWhere.replace(/c\./g, 'c_sub.') + tenantSub;
         const fjSum = filterJoins.replace(/ ca/g, ' ca_sum').replace(/ cra/g, ' cra_sum').replace(/ c\./g, ' c_sum.');
-        const fwSum = filterWhere.replace(/c\./g, 'c_sum.');
+        let fwSum = filterWhere.replace(/c\./g, 'c_sum.') + tenantSum;
 
         const hasInvoiceType = await new Promise((resolve) => {
             this.db.all('PRAGMA table_info(invoices)', (err, cols) => {
@@ -2810,6 +2873,7 @@ ${year && month ? `
                   ${extraInvoiceWhere}
                   ${extraCustomerWhere}
                   ${fwSub}
+                  ${invTenantSql}
             ) sub
         )`;
 
@@ -2849,6 +2913,7 @@ ${year && month ? `
                     AND i.status IN ('paid', 'unpaid')
                     AND ${voucherExcl}
                     ${fwSub}
+                    ${invTenantSql}
                 ) as total_tagihan,
                 (
                     SELECT COUNT(DISTINCT i.id) 
@@ -2859,6 +2924,7 @@ ${year && month ? `
                     AND i.status = 'paid'
                     AND ${voucherExcl}
                     ${fwSub}
+                    ${invTenantSql}
                 ) as lunas,
                 (
                     SELECT COUNT(DISTINCT i.id) 
@@ -2869,9 +2935,10 @@ ${year && month ? `
                     AND i.status = 'unpaid'
                     AND ${voucherExcl}
                     ${fwSub}
+                    ${invTenantSql}
                 ) as belum_lunas,
                 ${packageNominalSub()} AS total_nominal,
-                ${invoiceNominalSub("AND i.status IN ('paid', 'unpaid')", " AND c_sub.status IN ('active', 'suspended', 'isolir')")} AS aktif_nominal,
+                ${packageNominalSub(" AND c_sum.status IN ('active', 'suspended', 'isolir')")} AS aktif_nominal,
                 ${packageNominalSub(" AND c_sum.status = 'inactive'")} AS nonaktif_nominal,
                 ${invoiceNominalSub("AND i.status IN ('paid', 'unpaid')")} AS total_tagihan_nominal,
                 ${invoiceNominalSub("AND i.status = 'paid'")} AS lunas_nominal,
@@ -2889,7 +2956,7 @@ ${year && month ? `
             startDate, endDateLast, ...filterParams,
             startDate, endDateLast, ...filterParams,
             cohortEnd, ...filterParams,
-            ...nominalBaseParams,
+            cohortEnd, ...filterParams,
             cohortEnd, ...filterParams,
             ...nominalBaseParams,
             ...nominalBaseParams,
@@ -3232,16 +3299,17 @@ ${year && month ? `
     }
 
     async getCustomerByUsername(username) {
+        const _t = this._tenantWhere('c');
         return new Promise((resolve, reject) => {
             // Cari di kedua kolom: username dan pppoe_username
             const sql = `
                 SELECT c.*, p.name as package_name, p.price as package_price, p.speed as package_speed, p.image as package_image, p.tax_rate, p.pppoe_profile as package_pppoe_profile
                 FROM customers c 
                 LEFT JOIN packages p ON c.package_id = p.id 
-                WHERE c.username = ? OR c.pppoe_username = ?
+                WHERE (c.username = ? OR c.pppoe_username = ?)${_t.sql}
             `;
             
-            this.db.get(sql, [username, username], (err, row) => {
+            this.db.get(sql, [username, username, ..._t.params], (err, row) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -3257,6 +3325,7 @@ ${year && month ? `
 
     // Search customers by name, phone, username, PPPoE, atau ID pelanggan (6 digit)
     async searchCustomers(searchTerm) {
+        const _t = this._tenantWhere('c');
         return new Promise((resolve, reject) => {
             const searchPattern = `%${searchTerm}%`;
 
@@ -3267,15 +3336,15 @@ ${year && month ? `
                        p.name AS package_name
                 FROM customers c
                 LEFT JOIN packages p ON c.package_id = p.id
-                WHERE c.name LIKE ? OR c.phone LIKE ? OR c.username LIKE ? OR c.pppoe_username LIKE ?
-                   OR (c.customer_id IS NOT NULL AND TRIM(CAST(c.customer_id AS TEXT)) != '' AND CAST(c.customer_id AS TEXT) LIKE ?)
+                WHERE (c.name LIKE ? OR c.phone LIKE ? OR c.username LIKE ? OR c.pppoe_username LIKE ?
+                   OR (c.customer_id IS NOT NULL AND TRIM(CAST(c.customer_id AS TEXT)) != '' AND CAST(c.customer_id AS TEXT) LIKE ?))${_t.sql}
                 ORDER BY c.name ASC
                 LIMIT 20
             `;
 
             this.db.all(
                 sql,
-                [searchPattern, searchPattern, searchPattern, searchPattern, searchPattern],
+                [searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, ..._t.params],
                 (err, rows) => {
                     if (err) {
                         reject(err);
@@ -3289,15 +3358,16 @@ ${year && month ? `
 
     // Get customer by ID
     async getCustomerById(id) {
+        const _t = this._tenantWhere('c');
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT c.*, p.name as package_name, p.speed, p.price, p.image as package_image, p.tax_rate
                 FROM customers c
                 LEFT JOIN packages p ON c.package_id = p.id
-                WHERE c.id = ?
+                WHERE c.id = ?${_t.sql}
             `;
             
-            this.db.get(sql, [id], (err, row) => {
+            this.db.get(sql, [id, ..._t.params], (err, row) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -3309,15 +3379,16 @@ ${year && month ? `
 
     // Get customer by customer_id (6 digit ID)
     async getCustomerByCustomerId(customerId) {
+        const _t = this._tenantWhere('c');
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT c.*, p.name as package_name, p.price as package_price, p.speed as package_speed, p.image as package_image, p.tax_rate
                 FROM customers c
                 LEFT JOIN packages p ON c.package_id = p.id
-                WHERE c.customer_id = ?
+                WHERE c.customer_id = ?${_t.sql}
             `;
             
-            this.db.get(sql, [customerId], (err, row) => {
+            this.db.get(sql, [customerId, ..._t.params], (err, row) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -3328,6 +3399,7 @@ ${year && month ? `
     }
 
     async getCustomerByPhone(phone) {
+        const _t = this._tenantWhere('c');
         return new Promise((resolve, reject) => {
             try {
                 const variants = this.getIndonesianPhoneLookupVariants(phone);
@@ -3354,10 +3426,10 @@ ${year && month ? `
                        END as payment_status
                 FROM customers c 
                 LEFT JOIN packages p ON c.package_id = p.id 
-                WHERE c.phone IN (${placeholders})
+                WHERE c.phone IN (${placeholders})${_t.sql}
             `;
 
-                this.db.get(sql, variants, (err, row) => {
+                this.db.get(sql, [...variants, ..._t.params], (err, row) => {
                     if (err) {
                         reject(err);
                     } else {
@@ -4033,6 +4105,8 @@ ${year && month ? `
     }
 
     async getInvoices(customerUsername = null, limit = null, offset = null) {
+        // Tangkap konteks tenant SINKRON (hilang di dalam callback sqlite).
+        const _t = this._tenantWhere('i');
         return new Promise((resolve, reject) => {
             // Check if renewal_type and fix_date columns exist
             this.db.all("PRAGMA table_info(customers)", (pragmaErr, customerColumns) => {
@@ -4076,7 +4150,9 @@ ${year && month ? `
                     sql += ` WHERE 1=1`;
                     
                     const params = [];
-                    
+
+                    if (_t.sql) { sql += _t.sql; params.push(..._t.params); }
+
                     if (customerUsername) {
                         sql += ` AND (c.username = ? OR m.hotspot_username = ?)`;
                         params.push(customerUsername, customerUsername);
@@ -4278,6 +4354,7 @@ ${year && month ? `
     }
 
     async getUnpaidInvoices() {
+        const _t = this._tenantWhere('i');
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT i.*, c.username, c.name as customer_name, c.phone as customer_phone,
@@ -4285,11 +4362,11 @@ ${year && month ? `
                 FROM invoices i
                 JOIN customers c ON i.customer_id = c.id
                 JOIN packages p ON i.package_id = p.id
-                WHERE i.status = 'unpaid'
+                WHERE i.status = 'unpaid'${_t.sql}
                 ORDER BY i.due_date ASC, i.created_at DESC
             `;
 
-            this.db.all(sql, [], (err, rows) => {
+            this.db.all(sql, _t.params, (err, rows) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -4300,6 +4377,7 @@ ${year && month ? `
     }
 
     async getPaidInvoices() {
+        const _t = this._tenantWhere('i');
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT i.*, c.username, c.name as customer_name, c.phone as customer_phone,
@@ -4309,11 +4387,11 @@ ${year && month ? `
                 JOIN customers c ON i.customer_id = c.id
                 JOIN packages p ON i.package_id = p.id
                 LEFT JOIN payments pay ON i.id = pay.invoice_id
-                WHERE i.status = 'paid'
+                WHERE i.status = 'paid'${_t.sql}
                 ORDER BY i.payment_date DESC, i.created_at DESC
             `;
 
-            this.db.all(sql, [], (err, rows) => {
+            this.db.all(sql, _t.params, (err, rows) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -4335,7 +4413,10 @@ ${year && month ? `
             
             let sql = 'SELECT COUNT(*) as count FROM invoices i WHERE DATE(i.created_at) >= ?';
             const params = [currentMonthStartStr];
-            
+
+            const _t = this._tenantWhere('i');
+            if (_t.sql) { sql += _t.sql; params.push(..._t.params); }
+
             if (customerUsername) {
                 sql += ' AND EXISTS (SELECT 1 FROM customers c WHERE c.id = i.customer_id AND c.username = ?)';
                 params.push(customerUsername);
@@ -4435,6 +4516,34 @@ ${year && month ? `
         const startStr = `${y}-${String(m + 1).padStart(2, '0')}-01`;
         const endStr = new Date(y, m + 1, 0).toISOString().split('T')[0];
         return { startStr, endStr };
+    }
+
+    /** Bulan terakhir yang punya invoice tagihan (default ringkasan jika bulan berjalan masih kosong). */
+    async getLatestInvoiceActivityMonth(options = {}) {
+        const _tId = (options.tenantId != null)
+            ? options.tenantId
+            : (hasTenantContext() ? getTenantId() : null);
+        let sql = `
+            SELECT
+                CAST(strftime('%Y', i.created_at) AS INTEGER) AS y,
+                CAST(strftime('%m', i.created_at) AS INTEGER) AS m,
+                COUNT(*) AS c
+            FROM invoices i
+            WHERE i.status IN ('paid', 'unpaid')
+        `;
+        const params = [];
+        if (_tId != null) {
+            sql += ' AND i.tenant_id = ?';
+            params.push(_tId);
+        }
+        sql += ` GROUP BY y, m ORDER BY y DESC, m DESC LIMIT 1`;
+        return new Promise((resolve, reject) => {
+            this.db.get(sql, params, (err, row) => {
+                if (err) reject(err);
+                else if (!row || !row.y || !row.m) resolve(null);
+                else resolve({ year: Number(row.y), month: Number(row.m), count: Number(row.c) || 0 });
+            });
+        });
     }
 
     /** Pelanggan aktif — tanpa JOIN berat / RADIUS (untuk bulk auto invoice). */
@@ -4551,6 +4660,8 @@ ${year && month ? `
     }
 
     async getInvoiceById(id) {
+        // Tangkap konteks tenant SINKRON (hilang di dalam callback sqlite).
+        const _t = this._tenantWhere('i');
         return new Promise((resolve, reject) => {
             // Check if members table exists
             this.db.all("SELECT name FROM sqlite_master WHERE type='table' AND name='members'", (memberTableErr, memberTables) => {
@@ -4570,9 +4681,9 @@ ${year && month ? `
                 if (hasMembersTable) {
                     sql += ` LEFT JOIN member_packages mp ON (i.member_id IS NOT NULL AND i.package_id = mp.id)`;
                 }
-                sql += ` WHERE i.id = ?`;
-                
-                this.db.get(sql, [id], (err, row) => {
+                sql += ` WHERE i.id = ?${_t.sql}`;
+
+                this.db.get(sql, [id, ..._t.params], (err, row) => {
                     if (err) {
                         reject(err);
                     } else {
@@ -5104,8 +5215,9 @@ ${year && month ? `
     }
 
     async getCollectorById(collectorId) {
+        const _t = this._tenantWhere();
         return new Promise((resolve, reject) => {
-            this.db.get('SELECT * FROM collectors WHERE id = ?', [collectorId], (err, row) => {
+            this.db.get('SELECT * FROM collectors WHERE id = ?' + _t.sql, [collectorId, ..._t.params], (err, row) => {
                 if (err) reject(err);
                 else resolve(row);
             });
@@ -5653,6 +5765,7 @@ ${year && month ? `
     }
 
     async getPayments(invoiceId = null) {
+        const _t = this._tenantWhere('p');
         return new Promise((resolve, reject) => {
             let sql = `
                 SELECT 
@@ -5670,10 +5783,10 @@ ${year && month ? `
             `;
             
             const params = [];
-            if (invoiceId) {
-                sql += ` WHERE p.invoice_id = ?`;
-                params.push(invoiceId);
-            }
+            const conds = [];
+            if (_t.sql) { conds.push('p.tenant_id = ?'); params.push(..._t.params); }
+            if (invoiceId) { conds.push('p.invoice_id = ?'); params.push(invoiceId); }
+            if (conds.length) sql += ' WHERE ' + conds.join(' AND ');
             
             sql += ` ORDER BY p.payment_date DESC`;
             
@@ -5806,6 +5919,8 @@ ${year && month ? `
             WHERE 1=1
         `;
         const params = [];
+        const _t = this._tenantWhere('p');
+        if (_t.sql) { sql += _t.sql; params.push(..._t.params); }
         if (filters.from) {
             sql += ` AND date(p.payment_date) >= date(?)`;
             params.push(filters.from);
@@ -6037,15 +6152,16 @@ ${year && month ? `
     }
 
     async getAllCollectors() {
+        const _t = this._tenantWhere();
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT id, name, phone, status
                 FROM collectors
-                WHERE status = 'active'
+                WHERE status = 'active'${_t.sql}
                 ORDER BY name ASC
             `;
             
-            this.db.all(sql, [], (err, rows) => {
+            this.db.all(sql, _t.params, (err, rows) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -6056,6 +6172,7 @@ ${year && month ? `
     }
 
     async getPaymentById(id) {
+        const _t = this._tenantWhere('p');
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT 
@@ -6069,10 +6186,10 @@ ${year && month ? `
                 JOIN invoices i ON p.invoice_id = i.id
                 JOIN customers c ON i.customer_id = c.id
                 LEFT JOIN collectors col ON p.collector_id = col.id
-                WHERE p.id = ?
+                WHERE p.id = ?${_t.sql}
             `;
             
-            this.db.get(sql, [id], (err, row) => {
+            this.db.get(sql, [id, ..._t.params], (err, row) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -6406,7 +6523,14 @@ ${year && month ? `
         });
     }
 
-    async getBillingStats() {
+    async getBillingStats(options = {}) {
+        // PENTING: tangkap konteks tenant SEKARANG (sinkron), sebelum masuk callback
+        // sqlite. AsyncLocalStorage hilang di dalam callback native sqlite, jadi bila
+        // hasTenantContext() dipanggil di dalam callback hasilnya selalu false.
+        const _tId = (options.tenantId != null)
+            ? options.tenantId
+            : (hasTenantContext() ? getTenantId() : null);
+        const _tScope = _tId != null;
         return new Promise((resolve, reject) => {
             // Get current month date range
             const currentDate = new Date();
@@ -6438,57 +6562,68 @@ ${year && month ? `
                     // Use conditional logic based on column existence
                     let sql;
                     let params;
-                    
+
+                    // Isolasi multi-tenant: filter customers/invoices berdasar tenant aktif.
+                    // (_tScope/_tId ditangkap di awal method, sebelum callback sqlite.)
+                    const tCustW = _tScope ? ' WHERE tenant_id = ?' : '';   // subquery customers tanpa WHERE lain
+                    const tCustA = _tScope ? ' AND tenant_id = ?' : '';      // subquery customers dgn WHERE lain
+                    const tInvA = _tScope ? ' AND tenant_id = ?' : '';       // subquery invoices (semua sudah punya WHERE)
+                    const ms = currentMonthStartStr + ' 00:00:00';
+                    // Bangun params sesuai urutan '?' pada SQL (created_at & tenant_id berselang-seling).
+                    const buildStatsParams = () => {
+                        const P = [];
+                        const addT = () => { if (_tScope) P.push(_tId); };
+                        addT();               // total_customers
+                        addT();               // active_customers
+                        P.push(ms); addT();   // monthly_invoices
+                        addT();               // voucher_invoices
+                        P.push(ms); addT();   // paid_monthly_invoices
+                        P.push(ms); addT();   // unpaid_monthly_invoices
+                        addT();               // paid_voucher_invoices
+                        addT();               // unpaid_voucher_invoices
+                        P.push(ms); addT();   // monthly_revenue
+                        addT();               // voucher_revenue
+                        P.push(ms); addT();   // monthly_unpaid
+                        addT();               // voucher_unpaid
+                        return P;
+                    };
+
                     if (hasInvoiceType) {
                         // Query dengan invoice_type column - OPTIMASI: gunakan created_at >= ? instead of DATE(created_at) untuk bisa pakai index
                         sql = `
                             SELECT 
-                                (SELECT COUNT(*) FROM customers) as total_customers,
-                                (SELECT COUNT(*) FROM customers WHERE status IN ('active', 'suspended', 'isolir')) as active_customers,
-                                (SELECT COUNT(*) FROM invoices WHERE created_at >= ?) as monthly_invoices,
-                                (SELECT COUNT(*) FROM invoices WHERE invoice_type = 'voucher') as voucher_invoices,
-                                (SELECT COUNT(*) FROM invoices WHERE created_at >= ? AND status = 'paid') as paid_monthly_invoices,
-                                (SELECT COUNT(*) FROM invoices WHERE created_at >= ? AND status = 'unpaid' AND (invoice_type != 'voucher' OR invoice_type IS NULL)) as unpaid_monthly_invoices,
-                                (SELECT COUNT(*) FROM invoices WHERE invoice_type = 'voucher' AND status = 'paid') as paid_voucher_invoices,
-                                (SELECT COUNT(*) FROM invoices WHERE invoice_type = 'voucher' AND status = 'unpaid') as unpaid_voucher_invoices,
-                                (SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE created_at >= ? AND status = 'paid' AND (invoice_type != 'voucher' OR invoice_type IS NULL)) as monthly_revenue,
-                                (SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE invoice_type = 'voucher' AND status = 'paid') as voucher_revenue,
-                                (SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE created_at >= ? AND status = 'unpaid') as monthly_unpaid,
-                                (SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE invoice_type = 'voucher' AND status = 'unpaid') as voucher_unpaid
+                                (SELECT COUNT(*) FROM customers${tCustW}) as total_customers,
+                                (SELECT COUNT(*) FROM customers WHERE status IN ('active', 'suspended', 'isolir')${tCustA}) as active_customers,
+                                (SELECT COUNT(*) FROM invoices WHERE created_at >= ?${tInvA}) as monthly_invoices,
+                                (SELECT COUNT(*) FROM invoices WHERE invoice_type = 'voucher'${tInvA}) as voucher_invoices,
+                                (SELECT COUNT(*) FROM invoices WHERE created_at >= ? AND status = 'paid'${tInvA}) as paid_monthly_invoices,
+                                (SELECT COUNT(*) FROM invoices WHERE created_at >= ? AND status = 'unpaid' AND (invoice_type != 'voucher' OR invoice_type IS NULL)${tInvA}) as unpaid_monthly_invoices,
+                                (SELECT COUNT(*) FROM invoices WHERE invoice_type = 'voucher' AND status = 'paid'${tInvA}) as paid_voucher_invoices,
+                                (SELECT COUNT(*) FROM invoices WHERE invoice_type = 'voucher' AND status = 'unpaid'${tInvA}) as unpaid_voucher_invoices,
+                                (SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE created_at >= ? AND status = 'paid' AND (invoice_type != 'voucher' OR invoice_type IS NULL)${tInvA}) as monthly_revenue,
+                                (SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE invoice_type = 'voucher' AND status = 'paid'${tInvA}) as voucher_revenue,
+                                (SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE created_at >= ? AND status = 'unpaid'${tInvA}) as monthly_unpaid,
+                                (SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE invoice_type = 'voucher' AND status = 'unpaid'${tInvA}) as voucher_unpaid
                         `;
-                        // Gunakan timestamp dengan waktu 00:00:00 untuk comparison
-                        params = [
-                            currentMonthStartStr + ' 00:00:00',
-                            currentMonthStartStr + ' 00:00:00',
-                            currentMonthStartStr + ' 00:00:00',
-                            currentMonthStartStr + ' 00:00:00',
-                            currentMonthStartStr + ' 00:00:00'
-                        ];
+                        params = buildStatsParams();
                     } else {
                         // Fallback query tanpa invoice_type (identify voucher by invoice_number pattern) - OPTIMASI: gunakan created_at >= ? instead of DATE()
                         sql = `
                             SELECT 
-                                (SELECT COUNT(*) FROM customers) as total_customers,
-                                (SELECT COUNT(*) FROM customers WHERE status IN ('active', 'suspended', 'isolir')) as active_customers,
-                                (SELECT COUNT(*) FROM invoices WHERE created_at >= ?) as monthly_invoices,
-                                (SELECT COUNT(*) FROM invoices WHERE invoice_number LIKE 'INV-VCR-%' OR notes LIKE 'Voucher Hotspot%') as voucher_invoices,
-                                (SELECT COUNT(*) FROM invoices WHERE created_at >= ? AND status = 'paid') as paid_monthly_invoices,
-                                (SELECT COUNT(*) FROM invoices WHERE created_at >= ? AND status = 'unpaid' AND invoice_number NOT LIKE 'INV-VCR-%' AND notes NOT LIKE 'Voucher Hotspot%') as unpaid_monthly_invoices,
-                                (SELECT COUNT(*) FROM invoices WHERE (invoice_number LIKE 'INV-VCR-%' OR notes LIKE 'Voucher Hotspot%') AND status = 'paid') as paid_voucher_invoices,
-                                (SELECT COUNT(*) FROM invoices WHERE (invoice_number LIKE 'INV-VCR-%' OR notes LIKE 'Voucher Hotspot%') AND status = 'unpaid') as unpaid_voucher_invoices,
-                                (SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE created_at >= ? AND status = 'paid' AND invoice_number NOT LIKE 'INV-VCR-%' AND notes NOT LIKE 'Voucher Hotspot%') as monthly_revenue,
-                                (SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE (invoice_number LIKE 'INV-VCR-%' OR notes LIKE 'Voucher Hotspot%') AND status = 'paid') as voucher_revenue,
-                                (SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE created_at >= ? AND status = 'unpaid') as monthly_unpaid,
-                                (SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE (invoice_number LIKE 'INV-VCR-%' OR notes LIKE 'Voucher Hotspot%') AND status = 'unpaid') as voucher_unpaid
+                                (SELECT COUNT(*) FROM customers${tCustW}) as total_customers,
+                                (SELECT COUNT(*) FROM customers WHERE status IN ('active', 'suspended', 'isolir')${tCustA}) as active_customers,
+                                (SELECT COUNT(*) FROM invoices WHERE created_at >= ?${tInvA}) as monthly_invoices,
+                                (SELECT COUNT(*) FROM invoices WHERE (invoice_number LIKE 'INV-VCR-%' OR notes LIKE 'Voucher Hotspot%')${tInvA}) as voucher_invoices,
+                                (SELECT COUNT(*) FROM invoices WHERE created_at >= ? AND status = 'paid'${tInvA}) as paid_monthly_invoices,
+                                (SELECT COUNT(*) FROM invoices WHERE created_at >= ? AND status = 'unpaid' AND invoice_number NOT LIKE 'INV-VCR-%' AND notes NOT LIKE 'Voucher Hotspot%'${tInvA}) as unpaid_monthly_invoices,
+                                (SELECT COUNT(*) FROM invoices WHERE (invoice_number LIKE 'INV-VCR-%' OR notes LIKE 'Voucher Hotspot%') AND status = 'paid'${tInvA}) as paid_voucher_invoices,
+                                (SELECT COUNT(*) FROM invoices WHERE (invoice_number LIKE 'INV-VCR-%' OR notes LIKE 'Voucher Hotspot%') AND status = 'unpaid'${tInvA}) as unpaid_voucher_invoices,
+                                (SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE created_at >= ? AND status = 'paid' AND invoice_number NOT LIKE 'INV-VCR-%' AND notes NOT LIKE 'Voucher Hotspot%'${tInvA}) as monthly_revenue,
+                                (SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE (invoice_number LIKE 'INV-VCR-%' OR notes LIKE 'Voucher Hotspot%') AND status = 'paid'${tInvA}) as voucher_revenue,
+                                (SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE created_at >= ? AND status = 'unpaid'${tInvA}) as monthly_unpaid,
+                                (SELECT COALESCE(SUM(amount), 0) FROM invoices WHERE (invoice_number LIKE 'INV-VCR-%' OR notes LIKE 'Voucher Hotspot%') AND status = 'unpaid'${tInvA}) as voucher_unpaid
                         `;
-                        // Gunakan timestamp dengan waktu 00:00:00 untuk comparison
-                        params = [
-                            currentMonthStartStr + ' 00:00:00',
-                            currentMonthStartStr + ' 00:00:00',
-                            currentMonthStartStr + ' 00:00:00',
-                            currentMonthStartStr + ' 00:00:00',
-                            currentMonthStartStr + ' 00:00:00'
-                        ];
+                        params = buildStatsParams();
                     }
                     
                     this.db.get(sql, params, (err, row) => {
@@ -6573,7 +6708,8 @@ ${year && month ? `
                                 try {
                                     const mNum = currentMonth + 1;
                                     const mt = await this.getMonthlyTagihanTotals(mNum, currentYear, {
-                                        scope: 'all'
+                                        scope: 'all',
+                                        tenantId: _tId
                                     });
                                     stats.monthly_total_tagihan = mt.total_tagihan;
                                     stats.monthly_invoice_count_canonical = mt.count_total;
@@ -6584,7 +6720,7 @@ ${year && month ? `
                                     /** Selaras kartu dashboard: unpaid bulan ini (bukan seluruh piutang). */
                                     stats.monthly_unpaid = mt.total_belum_lunas;
                                     stats.unpaid_monthly_invoices = mt.count_belum_lunas;
-                                    const piutang = await this.getOutstandingUnpaidTotals();
+                                    const piutang = await this.getOutstandingUnpaidTotals({ tenantId: _tId });
                                     stats.outstanding_unpaid_total = piutang.total_unpaid;
                                     stats.outstanding_unpaid_count = piutang.count_unpaid;
                                 } catch (tagErr) {
@@ -6657,18 +6793,19 @@ ${year && month ? `
 
     // Fungsi untuk mendapatkan invoice berdasarkan type
     async getInvoicesByType(invoiceType = 'monthly') {
+        const _t = this._tenantWhere('i');
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT i.*, c.username as customer_username, c.name as customer_name, c.phone as customer_phone, c.address as customer_address,
                        p.name as package_name, p.speed as package_speed
                 FROM invoices i
-                LEFT JOIN customers c ON i.customer_id = c.id
-                LEFT JOIN packages p ON i.package_id = p.id
-                WHERE i.invoice_type = ?
+                LEFT JOIN customers c ON i.customer_id = c.id AND c.tenant_id = i.tenant_id
+                LEFT JOIN packages p ON i.package_id = p.id AND p.tenant_id = i.tenant_id
+                WHERE i.invoice_type = ?${_t.sql}
                 ORDER BY i.created_at DESC
             `;
             
-            this.db.all(sql, [invoiceType], (err, rows) => {
+            this.db.all(sql, [invoiceType, ..._t.params], (err, rows) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -6680,6 +6817,7 @@ ${year && month ? `
 
     // Fungsi untuk mendapatkan statistik berdasarkan invoice type
     async getInvoiceStatsByType(invoiceType = 'monthly') {
+        const _t = this._tenantWhere();
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT 
@@ -6689,10 +6827,10 @@ ${year && month ? `
                     COALESCE(SUM(CASE WHEN status = 'paid' THEN amount ELSE 0 END), 0) as total_revenue,
                     COALESCE(SUM(CASE WHEN status = 'unpaid' THEN amount ELSE 0 END), 0) as total_unpaid
                 FROM invoices 
-                WHERE invoice_type = ?
+                WHERE invoice_type = ?${_t.sql}
             `;
             
-            this.db.get(sql, [invoiceType], (err, row) => {
+            this.db.get(sql, [invoiceType, ..._t.params], (err, row) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -7032,8 +7170,9 @@ ${year && month ? `
 
     // Get all collectors
     async getAllCollectors() {
+        const _t = this._tenantWhere();
         return new Promise((resolve, reject) => {
-            this.db.all('SELECT * FROM collectors WHERE status = "active"', (err, rows) => {
+            this.db.all('SELECT * FROM collectors WHERE status = "active"' + _t.sql, _t.params, (err, rows) => {
                 if (err) reject(err);
                 else resolve(rows || []);
             });
@@ -7042,9 +7181,10 @@ ${year && month ? `
 
     // Mobile dashboard specific methods
     async getTotalCustomers() {
+        const _t = this._tenantWhereClause();
         return new Promise((resolve, reject) => {
-            const sql = `SELECT COUNT(*) as count FROM customers`;
-            this.db.get(sql, [], (err, row) => {
+            const sql = `SELECT COUNT(*) as count FROM customers${_t.sql}`;
+            this.db.get(sql, _t.params, (err, row) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -7055,9 +7195,10 @@ ${year && month ? `
     }
 
     async getTotalInvoices() {
+        const _t = this._tenantWhereClause();
         return new Promise((resolve, reject) => {
-            const sql = `SELECT COUNT(*) as count FROM invoices`;
-            this.db.get(sql, [], (err, row) => {
+            const sql = `SELECT COUNT(*) as count FROM invoices${_t.sql}`;
+            this.db.get(sql, _t.params, (err, row) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -7068,9 +7209,10 @@ ${year && month ? `
     }
 
     async getTotalRevenue() {
+        const _t = this._tenantWhere();
         return new Promise((resolve, reject) => {
-            const sql = `SELECT SUM(amount) as total FROM invoices WHERE status = 'paid'`;
-            this.db.get(sql, [], (err, row) => {
+            const sql = `SELECT SUM(amount) as total FROM invoices WHERE status = 'paid'${_t.sql}`;
+            this.db.get(sql, _t.params, (err, row) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -7081,9 +7223,10 @@ ${year && month ? `
     }
 
     async getPendingPayments() {
+        const _t = this._tenantWhere();
         return new Promise((resolve, reject) => {
-            const sql = `SELECT COUNT(*) as count FROM invoices WHERE status = 'unpaid'`;
-            this.db.get(sql, [], (err, row) => {
+            const sql = `SELECT COUNT(*) as count FROM invoices WHERE status = 'unpaid'${_t.sql}`;
+            this.db.get(sql, _t.params, (err, row) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -7094,13 +7237,15 @@ ${year && month ? `
     }
 
     async getReportsStats() {
+        // Tangkap konteks tenant SINKRON untuk seluruh subquery.
+        const _t = this._tenantWhere();
         return new Promise((resolve, reject) => {
             try {
                 // Get all stats in parallel with error handling for each query
                 Promise.all([
                     // Active customers
                     new Promise((res, rej) => {
-                        this.db.get(`SELECT COUNT(*) as count FROM customers WHERE status IN ('active', 'suspended', 'isolir')`, [], (err, row) => {
+                        this.db.get(`SELECT COUNT(*) as count FROM customers WHERE status IN ('active', 'suspended', 'isolir')${_t.sql}`, _t.params, (err, row) => {
                             if (err) {
                                 console.error('Error getting active customers:', err);
                                 res(0); // Return 0 on error instead of rejecting
@@ -7111,7 +7256,7 @@ ${year && month ? `
                     }),
                     // Inactive customers
                     new Promise((res, rej) => {
-                        this.db.get(`SELECT COUNT(*) as count FROM customers WHERE status = 'inactive'`, [], (err, row) => {
+                        this.db.get(`SELECT COUNT(*) as count FROM customers WHERE status = 'inactive'${_t.sql}`, _t.params, (err, row) => {
                             if (err) {
                                 console.error('Error getting inactive customers:', err);
                                 res(0);
@@ -7125,8 +7270,8 @@ ${year && month ? `
                         this.db.get(`
                             SELECT COUNT(*) as count 
                             FROM customers 
-                            WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', 'localtime')
-                        `, [], (err, row) => {
+                            WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', 'localtime')${_t.sql}
+                        `, _t.params, (err, row) => {
                             if (err) {
                                 console.error('Error getting new customers this month:', err);
                                 res(0);
@@ -7140,8 +7285,8 @@ ${year && month ? `
                         this.db.get(`
                             SELECT COUNT(*) as count 
                             FROM invoices 
-                            WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', 'localtime')
-                        `, [], (err, row) => {
+                            WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', 'localtime')${_t.sql}
+                        `, _t.params, (err, row) => {
                             if (err) {
                                 console.error('Error getting invoices this month:', err);
                                 res(0);
@@ -7152,7 +7297,7 @@ ${year && month ? `
                     }),
                     // Paid invoices
                     new Promise((res, rej) => {
-                        this.db.get(`SELECT COUNT(*) as count FROM invoices WHERE status = 'paid'`, [], (err, row) => {
+                        this.db.get(`SELECT COUNT(*) as count FROM invoices WHERE status = 'paid'${_t.sql}`, _t.params, (err, row) => {
                             if (err) {
                                 console.error('Error getting paid invoices:', err);
                                 res(0);
@@ -7163,7 +7308,7 @@ ${year && month ? `
                     }),
                     // Unpaid invoices
                     new Promise((res, rej) => {
-                        this.db.get(`SELECT COUNT(*) as count FROM invoices WHERE status = 'unpaid'`, [], (err, row) => {
+                        this.db.get(`SELECT COUNT(*) as count FROM invoices WHERE status = 'unpaid'${_t.sql}`, _t.params, (err, row) => {
                             if (err) {
                                 console.error('Error getting unpaid invoices:', err);
                                 res(0);
@@ -7174,7 +7319,7 @@ ${year && month ? `
                     }),
                     // Successful payments
                     new Promise((res, rej) => {
-                        this.db.get(`SELECT COUNT(*) as count FROM payments WHERE status = 'completed'`, [], (err, row) => {
+                        this.db.get(`SELECT COUNT(*) as count FROM payments WHERE status = 'completed'${_t.sql}`, _t.params, (err, row) => {
                             if (err) {
                                 console.error('Error getting successful payments:', err);
                                 res(0);
@@ -7185,7 +7330,7 @@ ${year && month ? `
                     }),
                     // Failed payments
                     new Promise((res, rej) => {
-                        this.db.get(`SELECT COUNT(*) as count FROM payments WHERE status = 'failed'`, [], (err, row) => {
+                        this.db.get(`SELECT COUNT(*) as count FROM payments WHERE status = 'failed'${_t.sql}`, _t.params, (err, row) => {
                             if (err) {
                                 console.error('Error getting failed payments:', err);
                                 res(0);
@@ -8032,7 +8177,20 @@ async handlePaymentWebhook(payload, gateway) {
     });
     }
 
-    async getFinancialReport(startDate, endDate, type = 'all') {
+    async getFinancialReport(startDate, endDate, type = 'all', options = {}) {
+        const { getTenantId, hasTenantContext } = require('./platform/tenantContext');
+        const tenantId = options.tenantId != null
+            ? options.tenantId
+            : (hasTenantContext() ? getTenantId() : null);
+        const tLit = tenantId;
+        const tF = (a) => (tLit ? ` AND ${a}.tenant_id = ${tLit}` : '');
+        const tPay = tF('p') + tF('i') + tF('c') + tF('col');
+        const tPayM = tF('p') + tF('i') + tF('m') + tF('col');
+        const tInc = tF('inc');
+        const tGi = tF('gi');
+        const tExp = tF('e');
+        const reportOpts = { tenantId };
+
         return new Promise((resolve, reject) => {
             try {
                 let sql = '';
@@ -8070,7 +8228,7 @@ async handlePaymentWebhook(payload, gateway) {
                         LEFT JOIN collectors col ON p.collector_id = col.id
                         WHERE DATE(p.payment_date) BETWEEN ? AND ?
                         AND p.payment_type IN ('direct', 'collector', 'online', 'manual')
-                        AND i.customer_id IS NOT NULL
+                        AND i.customer_id IS NOT NULL${tPay}
                         
                         UNION ALL
                         
@@ -8103,7 +8261,7 @@ async handlePaymentWebhook(payload, gateway) {
                         LEFT JOIN collectors col ON p.collector_id = col.id
                         WHERE DATE(p.payment_date) BETWEEN ? AND ?
                         AND p.payment_type IN ('direct', 'collector', 'online', 'manual')
-                        AND i.member_id IS NOT NULL
+                        AND i.member_id IS NOT NULL${tPayM}
                         
                         UNION ALL
                         
@@ -8121,7 +8279,7 @@ async handlePaymentWebhook(payload, gateway) {
                             '' as collector_name,
                             0 as commission_amount
                         FROM income inc
-                        WHERE DATE(inc.income_date) BETWEEN ? AND ?
+                        WHERE DATE(inc.income_date) BETWEEN ? AND ?${tInc}
                         
                         UNION ALL
                         
@@ -8139,7 +8297,7 @@ async handlePaymentWebhook(payload, gateway) {
                             '' as collector_name,
                             0 as commission_amount
                         FROM goods_invoices gi
-                        WHERE DATE(gi.payment_date) BETWEEN ? AND ?
+                        WHERE DATE(gi.payment_date) BETWEEN ? AND ?${tGi}
                         AND gi.status = 'paid'
                         
                         ORDER BY date DESC
@@ -8162,7 +8320,7 @@ async handlePaymentWebhook(payload, gateway) {
                             '' as collector_name,
                             0 as commission_amount
                         FROM expenses e
-                        WHERE DATE(e.expense_date) BETWEEN ? AND ?
+                        WHERE DATE(e.expense_date) BETWEEN ? AND ?${tExp}
                         ORDER BY e.expense_date DESC
                     `;
                     params.push(startDate, endDate);
@@ -8198,7 +8356,7 @@ async handlePaymentWebhook(payload, gateway) {
                         LEFT JOIN collectors col ON p.collector_id = col.id
                         WHERE DATE(p.payment_date) BETWEEN ? AND ?
                         AND p.payment_type IN ('direct', 'collector', 'online', 'manual')
-                        AND i.customer_id IS NOT NULL
+                        AND i.customer_id IS NOT NULL${tPay}
                         
                         UNION ALL
                         
@@ -8231,7 +8389,7 @@ async handlePaymentWebhook(payload, gateway) {
                         LEFT JOIN collectors col ON p.collector_id = col.id
                         WHERE DATE(p.payment_date) BETWEEN ? AND ?
                         AND p.payment_type IN ('direct', 'collector', 'online', 'manual')
-                        AND i.member_id IS NOT NULL
+                        AND i.member_id IS NOT NULL${tPayM}
                         
                         UNION ALL
                         
@@ -8249,7 +8407,7 @@ async handlePaymentWebhook(payload, gateway) {
                             '' as collector_name,
                             0 as commission_amount
                         FROM income inc
-                        WHERE DATE(inc.income_date) BETWEEN ? AND ?
+                        WHERE DATE(inc.income_date) BETWEEN ? AND ?${tInc}
                         
                         UNION ALL
                         
@@ -8267,7 +8425,7 @@ async handlePaymentWebhook(payload, gateway) {
                             '' as collector_name,
                             0 as commission_amount
                         FROM goods_invoices gi
-                        WHERE DATE(gi.payment_date) BETWEEN ? AND ?
+                        WHERE DATE(gi.payment_date) BETWEEN ? AND ?${tGi}
                         AND gi.status = 'paid'
                         
                         UNION ALL
@@ -8286,7 +8444,7 @@ async handlePaymentWebhook(payload, gateway) {
                             '' as collector_name,
                             0 as commission_amount
                         FROM expenses e
-                        WHERE DATE(e.expense_date) BETWEEN ? AND ?
+                        WHERE DATE(e.expense_date) BETWEEN ? AND ?${tExp}
                         
                         ORDER BY date DESC
                     `;
@@ -8308,7 +8466,7 @@ async handlePaymentWebhook(payload, gateway) {
                             };
                             
                             if (type !== 'expense') {
-                                const voucherInvoices = await this.getVoucherInvoices(startDate, endDate);
+                                const voucherInvoices = await this.getVoucherInvoices(startDate, endDate, reportOpts);
                                 const voucherStats = this.calculateVoucherStats(voucherInvoices);
                                 
                                 voucherSummary = {
@@ -8355,7 +8513,7 @@ async handlePaymentWebhook(payload, gateway) {
                                 }, {});
                             
                             // Calculate profit and loss details
-                            const profitLossData = await this.calculateProfitLoss(startDate, endDate);
+                            const profitLossData = await this.calculateProfitLoss(startDate, endDate, reportOpts);
                             
                             const result = {
                                 transactions,
@@ -8406,18 +8564,21 @@ async handlePaymentWebhook(payload, gateway) {
         });
     }
 
-    async getExpenses(startDate = null, endDate = null) {
+    async getExpenses(startDate = null, endDate = null, options = {}) {
         setImmediate(() => {
             this._syncExpenseCategoryAliases().catch(() => {});
         });
+        const { getTenantId, hasTenantContext } = require('./platform/tenantContext');
+        const tenantId = options.tenantId != null
+            ? options.tenantId
+            : (hasTenantContext() ? getTenantId() : null);
         return new Promise((resolve, reject) => {
             let sql = 'SELECT * FROM expenses';
             const params = [];
-            
-            if (startDate && endDate) {
-                sql += ' WHERE expense_date BETWEEN ? AND ?';
-                params.push(startDate, endDate);
-            }
+            const conds = [];
+            if (tenantId != null) { conds.push('tenant_id = ?'); params.push(tenantId); }
+            if (startDate && endDate) { conds.push('expense_date BETWEEN ? AND ?'); params.push(startDate, endDate); }
+            if (conds.length) sql += ' WHERE ' + conds.join(' AND ');
             
             sql += ' ORDER BY expense_date DESC';
             
@@ -8439,21 +8600,26 @@ async handlePaymentWebhook(payload, gateway) {
         const catType = type === 'income' ? 'income' : 'expense';
         const table = catType === 'income' ? 'income' : 'expenses';
         const dateCol = catType === 'income' ? 'income_date' : 'expense_date';
+        const _t = this._tenantWhere();
+        const tLit = _t.sql ? parseInt(_t.params[0], 10) : null;
 
         const categories = await new Promise((resolve, reject) => {
-            this.db.all(
-                'SELECT name FROM finance_categories WHERE type = ? ORDER BY name COLLATE NOCASE',
-                [catType],
-                (err, rows) => (err ? reject(err) : resolve((rows || []).map((r) => r.name)))
-            );
+            let catSql = 'SELECT name FROM finance_categories WHERE type = ?';
+            const catParams = [catType];
+            if (tLit) { catSql += ' AND tenant_id = ?'; catParams.push(tLit); }
+            catSql += ' ORDER BY name COLLATE NOCASE';
+            this.db.all(catSql, catParams, (err, rows) => (err ? reject(err) : resolve((rows || []).map((r) => r.name))));
         });
 
         let aggSql = `SELECT category, SUM(amount) as total, COUNT(*) as cnt FROM ${table}`;
         const params = [];
+        const conds = [];
+        if (tLit) conds.push(`tenant_id = ${tLit}`);
         if (startDate && endDate) {
-            aggSql += ` WHERE ${dateCol} BETWEEN ? AND ?`;
+            conds.push(`${dateCol} BETWEEN ? AND ?`);
             params.push(startDate, endDate);
         }
+        if (conds.length) aggSql += ` WHERE ${conds.join(' AND ')}`;
         aggSql += ' GROUP BY category';
 
         const aggregates = await new Promise((resolve, reject) => {
@@ -8506,15 +8672,16 @@ async handlePaymentWebhook(payload, gateway) {
     }
 
     async updateExpense(id, expenseData) {
+        const _t = this._tenantWhere();
         return new Promise((resolve, reject) => {
             const { amount, category, account_expenses, expense_date, payment_method, notes } = expenseData;
             
-            const sql = `UPDATE expenses SET description = ?, amount = ?, category = ?, account_expenses = ?, expense_date = ?, payment_method = ?, notes = ?, updated_at = datetime('now','localtime') WHERE id = ?`;
+            const sql = `UPDATE expenses SET description = ?, amount = ?, category = ?, account_expenses = ?, expense_date = ?, payment_method = ?, notes = ?, updated_at = datetime('now','localtime') WHERE id = ?${_t.sql}`;
             
             // Description dibuat dari account_expenses jika ada, atau dari category
             const description = account_expenses || category || '';
             
-            this.db.run(sql, [description, amount, category, account_expenses || null, expense_date, payment_method || null, notes || null, id], function(err) {
+            this.db.run(sql, [description, amount, category, account_expenses || null, expense_date, payment_method || null, notes || null, id, ..._t.params], function(err) {
                 if (err) {
                     reject(err);
                 } else {
@@ -8525,10 +8692,11 @@ async handlePaymentWebhook(payload, gateway) {
     }
 
     async deleteExpense(id) {
+        const _t = this._tenantWhere();
         return new Promise((resolve, reject) => {
-            const sql = 'DELETE FROM expenses WHERE id = ?';
+            const sql = `DELETE FROM expenses WHERE id = ?${_t.sql}`;
             
-            this.db.run(sql, [id], function(err) {
+            this.db.run(sql, [id, ..._t.params], function(err) {
                 if (err) {
                     reject(err);
                 } else {
@@ -8539,18 +8707,28 @@ async handlePaymentWebhook(payload, gateway) {
     }
 
     // Method untuk menghitung data laba rugi dengan rincian
-    async calculateProfitLoss(startDate, endDate) {
+    async calculateProfitLoss(startDate, endDate, options = {}) {
+        const { getTenantId, hasTenantContext } = require('./platform/tenantContext');
+        const tenantId = options.tenantId != null
+            ? options.tenantId
+            : (hasTenantContext() ? getTenantId() : null);
+        const tLit = tenantId;
+        const tF = (a) => (tLit ? ` AND ${a}.tenant_id = ${tLit}` : '');
+        const tPay = tF('p') + tF('i');
+        const tPayM = tF('p') + tF('i');
+        const scopeOpts = { tenantId };
+
         return new Promise(async (resolve, reject) => {
             try {
-                // 2. Pendapatan Voucher (tidak bergantung pada invoice_type)
-                const voucherInvoices = await this.getVoucherInvoices(startDate, endDate);
+                const voucherInvoices = await this.getVoucherInvoices(startDate, endDate, scopeOpts);
                 const voucherStats = this.calculateVoucherStats(voucherInvoices);
                 
                 // 3. Pendapatan dari Invoice Penjualan (Goods Invoices)
                 let goodsInvoiceTotal = 0;
                 try {
                     const goodsInvoices = await new Promise((res, rej) => {
-                        this.db.all(`SELECT SUM(total_amount) as total FROM goods_invoices WHERE status = 'paid' AND DATE(payment_date) BETWEEN ? AND ?`, [startDate, endDate], (err, row) => {
+                        const tGi = scopeOpts.tenantId != null ? ` AND tenant_id = ${scopeOpts.tenantId}` : '';
+                        this.db.all(`SELECT SUM(total_amount) as total FROM goods_invoices WHERE status = 'paid' AND DATE(payment_date) BETWEEN ? AND ?${tGi}`, [startDate, endDate], (err, row) => {
                             if (err) res([{ total: 0 }]); else res(row);
                         });
                     });
@@ -8560,7 +8738,7 @@ async handlePaymentWebhook(payload, gateway) {
                 }
 
                 // 4. Pendapatan lain-lain dari Manajemen Pendapatan
-                const incomes = await this.getIncomes(startDate, endDate);
+                const incomes = await this.getIncomes(startDate, endDate, scopeOpts);
                 const otherIncomeTotal = incomes.reduce((sum, inc) => sum + (inc.amount || 0), 0);
                 
                 // Group incomes by category
@@ -8574,7 +8752,7 @@ async handlePaymentWebhook(payload, gateway) {
                 }, {});
 
                 // 5. Pengeluaran dengan rincian
-                const expenses = await this.getExpenses(startDate, endDate);
+                const expenses = await this.getExpenses(startDate, endDate, scopeOpts);
                 
                 // Group expenses by category and account_expenses
                 const expensesByCategory = expenses.reduce((acc, exp) => {
@@ -8620,7 +8798,7 @@ async handlePaymentWebhook(payload, gateway) {
                                 AND p.payment_type IN ('direct', 'collector', 'online', 'manual')
                                 AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)
                                 AND i.invoice_number NOT LIKE 'VCHR-%'
-                                AND i.customer_id IS NOT NULL
+                                AND i.customer_id IS NOT NULL${tPay}
                                 AND i.member_id IS NULL
                             `;
                             memberPaymentSql = `
@@ -8631,7 +8809,7 @@ async handlePaymentWebhook(payload, gateway) {
                                 AND p.payment_type IN ('direct', 'collector', 'online', 'manual')
                                 AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)
                                 AND i.invoice_number NOT LIKE 'VCHR-%'
-                                AND i.member_id IS NOT NULL
+                                AND i.member_id IS NOT NULL${tPayM}
                                 AND i.customer_id IS NULL
                             `;
                         } else {
@@ -8643,7 +8821,7 @@ async handlePaymentWebhook(payload, gateway) {
                                 WHERE DATE(p.payment_date) BETWEEN ? AND ?
                                 AND p.payment_type IN ('direct', 'collector', 'online', 'manual')
                                 AND i.invoice_number NOT LIKE 'VCHR-%'
-                                AND i.customer_id IS NOT NULL
+                                AND i.customer_id IS NOT NULL${tPay}
                                 AND i.member_id IS NULL
                             `;
                             memberPaymentSql = `
@@ -8653,7 +8831,7 @@ async handlePaymentWebhook(payload, gateway) {
                                 WHERE DATE(p.payment_date) BETWEEN ? AND ?
                                 AND p.payment_type IN ('direct', 'collector', 'online', 'manual')
                                 AND i.invoice_number NOT LIKE 'VCHR-%'
-                                AND i.member_id IS NOT NULL
+                                AND i.member_id IS NOT NULL${tPayM}
                                 AND i.customer_id IS NULL
                             `;
                         }
@@ -9099,19 +9277,22 @@ async handlePaymentWebhook(payload, gateway) {
         });
     }
 
-    async getIncomes(startDate = null, endDate = null) {
+    async getIncomes(startDate = null, endDate = null, options = {}) {
         setImmediate(() => {
             this.backfillIncomeFromRemittanceReceipts().catch(() => {});
         });
         await this._ensureIncomeSourceColumns();
+        const { getTenantId, hasTenantContext } = require('./platform/tenantContext');
+        const tenantId = options.tenantId != null
+            ? options.tenantId
+            : (hasTenantContext() ? getTenantId() : null);
         return new Promise((resolve, reject) => {
             let sql = 'SELECT * FROM income';
             const params = [];
-            
-            if (startDate && endDate) {
-                sql += ' WHERE income_date BETWEEN ? AND ?';
-                params.push(startDate, endDate);
-            }
+            const conds = [];
+            if (tenantId != null) { conds.push('tenant_id = ?'); params.push(tenantId); }
+            if (startDate && endDate) { conds.push('income_date BETWEEN ? AND ?'); params.push(startDate, endDate); }
+            if (conds.length) sql += ' WHERE ' + conds.join(' AND ');
             
             sql += ' ORDER BY income_date DESC';
             
@@ -9126,12 +9307,13 @@ async handlePaymentWebhook(payload, gateway) {
     }
 
     async updateIncome(id, incomeData) {
+        const _t = this._tenantWhere();
         return new Promise((resolve, reject) => {
             const { description, amount, category, income_date, payment_method, notes } = incomeData;
             
-            const sql = `UPDATE income SET description = ?, amount = ?, category = ?, income_date = ?, payment_method = ?, notes = ?, updated_at = datetime('now','localtime') WHERE id = ?`;
+            const sql = `UPDATE income SET description = ?, amount = ?, category = ?, income_date = ?, payment_method = ?, notes = ?, updated_at = datetime('now','localtime') WHERE id = ?${_t.sql}`;
             
-            this.db.run(sql, [description, amount, category, income_date, payment_method, notes, id], function(err) {
+            this.db.run(sql, [description, amount, category, income_date, payment_method, notes, id, ..._t.params], function(err) {
                 if (err) {
                     reject(err);
                 } else {
@@ -9142,10 +9324,11 @@ async handlePaymentWebhook(payload, gateway) {
     }
 
     async deleteIncome(id) {
+        const _t = this._tenantWhere();
         return new Promise((resolve, reject) => {
-            const sql = 'DELETE FROM income WHERE id = ?';
+            const sql = `DELETE FROM income WHERE id = ?${_t.sql}`;
             
-            this.db.run(sql, [id], function(err) {
+            this.db.run(sql, [id, ..._t.params], function(err) {
                 if (err) {
                     reject(err);
                 } else {
@@ -9244,15 +9427,17 @@ async handlePaymentWebhook(payload, gateway) {
     // Method untuk mendapatkan kolektor dengan pending amounts dan statistik (untuk remittance)
     async getCollectorsWithPendingAmounts(month = null, year = null) {
         await this._ensureRemittanceNetAppliedColumn();
+        const _tCol = this._tenantWhere();
         const collectors = await new Promise((resolve, reject) => {
             this.db.all(
-                `SELECT id, name, phone, commission_rate FROM collectors WHERE status = 'active' ORDER BY name`,
-                [],
+                `SELECT id, name, phone, commission_rate FROM collectors WHERE status = 'active'${_tCol.sql} ORDER BY name`,
+                [..._tCol.params],
                 (err, rows) => (err ? reject(err) : resolve(rows || []))
             );
         });
         let dateWhere = '';
         const payParams = [];
+        const _tPay = this._tenantWhere('p');
         if (month && String(month) === 'all' && year) {
             dateWhere = ` AND strftime('%Y', p.payment_date) = ?`;
             payParams.push(String(year));
@@ -9268,8 +9453,8 @@ async handlePaymentWebhook(payload, gateway) {
                         COALESCE(i.amount, 0) as invoice_amount
                  FROM payments p
                  INNER JOIN invoices i ON i.id = p.invoice_id
-                 WHERE p.payment_type = 'collector' ${dateWhere}`,
-                payParams,
+                 WHERE p.payment_type = 'collector' ${dateWhere}${_tPay.sql}`,
+                [...payParams, ..._tPay.params],
                 (err, rows) => (err ? reject(err) : resolve(rows || []))
             );
         });
@@ -9352,6 +9537,9 @@ async handlePaymentWebhook(payload, gateway) {
             collectorId != null && Number.isFinite(parseInt(String(collectorId), 10))
                 ? `AND c.id = ${parseInt(String(collectorId), 10)}`
                 : '';
+        const _tC = this._tenantWhere('c');
+        const tLit = _tC.sql ? parseInt(_tC.params[0], 10) : null;
+        const custTenant = tLit ? ` AND cust.tenant_id = ${tLit}` : '';
         const invSubFrom = `
                            FROM invoices i
                            JOIN customers cust ON i.customer_id = cust.id
@@ -9361,32 +9549,32 @@ async handlePaymentWebhook(payload, gateway) {
                        (
                            SELECT COALESCE(SUM(i.amount), 0)
                            ${invSubFrom}
-                           WHERE (${invDate})
+                           WHERE (${invDate})${custTenant}
                        ) as total_tagihan_area,
                        (
                            SELECT COUNT(i.id)
                            ${invSubFrom}
-                           WHERE (${invDate})
+                           WHERE (${invDate})${custTenant}
                        ) as count_tagihan_area,
                        (
                            SELECT COALESCE(SUM(i.amount), 0)
                            ${invSubFrom}
-                           WHERE i.status = 'paid' AND (${invDate})
+                           WHERE i.status = 'paid' AND (${invDate})${custTenant}
                        ) as total_lunas_area,
                        (
                            SELECT COUNT(i.id)
                            ${invSubFrom}
-                           WHERE i.status = 'paid' AND (${invDate})
+                           WHERE i.status = 'paid' AND (${invDate})${custTenant}
                        ) as count_lunas_area,
                        (
                            SELECT COALESCE(SUM(i.amount), 0)
                            ${invSubFrom}
-                           WHERE i.status = 'unpaid' AND (${invDate})
+                           WHERE i.status = 'unpaid' AND (${invDate})${custTenant}
                        ) as total_belum_lunas_amount,
                        (
                            SELECT COUNT(i.id)
                            ${invSubFrom}
-                           WHERE i.status = 'unpaid' AND (${invDate})
+                           WHERE i.status = 'unpaid' AND (${invDate})${custTenant}
                        ) as total_belum_lunas_count,
                        (
                            SELECT COUNT(*)
@@ -9401,12 +9589,12 @@ async handlePaymentWebhook(payload, gateway) {
                 LEFT JOIN collector_payments cp ON c.id = cp.collector_id
                     AND cp.status = 'completed'
                     ${useRange ? cpExtra : ''}
-                WHERE c.status = 'active' ${colFilter}
+                WHERE c.status = 'active' ${colFilter}${_tC.sql}
                 GROUP BY c.id
                 ORDER BY c.name
             `;
         const list = await new Promise((resolve, reject) => {
-            this.db.all(sql, [], (err, rows) => (err ? reject(err) : resolve(rows || [])));
+            this.db.all(sql, [..._tC.params], (err, rows) => (err ? reject(err) : resolve(rows || [])));
         });
         let summary = {
             total_tagihan: 0,
@@ -9558,6 +9746,12 @@ async handlePaymentWebhook(payload, gateway) {
             where += alias + '.collector_id = ?';
             params.push(cid);
         }
+        const _tC = this._tenantWhere('c');
+        if (_tC.sql) {
+            where += where ? ' AND ' : ' WHERE ';
+            where += 'c.tenant_id = ?';
+            params.push(_tC.params[0]);
+        }
         return { where, params, useRange, month: m, year: y };
     }
 
@@ -9584,6 +9778,7 @@ async handlePaymentWebhook(payload, gateway) {
             conf.collector_id,
             'r'
         );
+        const joinWhere = where ? where.replace(/^ WHERE /, ' AND ') : '';
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT 
@@ -9597,7 +9792,7 @@ async handlePaymentWebhook(payload, gateway) {
                     c.name as collector_name
                 FROM collector_remittance_receipts r
                 JOIN collectors c ON c.id = r.collector_id
-                ${where}
+                WHERE 1=1${joinWhere}
                 ORDER BY datetime(COALESCE(r.received_at, r.created_at)) DESC, r.id DESC
                 LIMIT ?
             `;
@@ -9615,14 +9810,15 @@ async handlePaymentWebhook(payload, gateway) {
         const id = parseInt(String(receiptId), 10);
         if (!Number.isFinite(id) || id <= 0) return null;
         return new Promise((resolve, reject) => {
+            const _tC = this._tenantWhere('c');
             this.db.get(
                 `SELECT r.id, r.collector_id, r.amount_net as amount, r.payment_method, r.notes,
                         r.received_at, r.created_at, r.updated_at, r.payment_id,
                         c.name as collector_name
                  FROM collector_remittance_receipts r
                  JOIN collectors c ON c.id = r.collector_id
-                 WHERE r.id = ?`,
-                [id],
+                 WHERE r.id = ?${_tC.sql}`,
+                [id, ..._tC.params],
                 (err, row) => (err ? reject(err) : resolve(row || null))
             );
         });
@@ -9848,6 +10044,7 @@ async handlePaymentWebhook(payload, gateway) {
                 });
             });
 
+        const _tP = this._tenantWhere('p');
         const rowsAll = await dbAll(
             `SELECT p.id, p.invoice_id, p.amount, p.commission_amount, p.payment_method, p.reference_number, p.notes, p.payment_date,
                     COALESCE(p.remittance_net_applied, 0) as remittance_net_applied,
@@ -9856,9 +10053,9 @@ async handlePaymentWebhook(payload, gateway) {
              INNER JOIN invoices i ON i.id = p.invoice_id
              WHERE p.collector_id = ?
                AND p.payment_type = 'collector'
-               AND ${sqlCollectorCashRemittancePending('p')}
+               AND ${sqlCollectorCashRemittancePending('p')}${_tP.sql}
              ORDER BY datetime(COALESCE(p.payment_date, '1970-01-01')) ASC, p.id ASC`,
-            [collectorIdNum]
+            [collectorIdNum, ..._tP.params]
         );
         const rows = (rowsAll || []).filter(
             (r) =>
@@ -10092,17 +10289,20 @@ async handlePaymentWebhook(payload, gateway) {
                 ? Number(payment_id)
                 : null;
         const self = this;
+        const { getTenantId, hasTenantContext } = require('./platform/tenantContext');
+        const tenantId = hasTenantContext() ? getTenantId() : 1;
         return new Promise((resolve, reject) => {
             this.db.run(
-                `INSERT INTO collector_remittance_receipts (collector_id, amount_net, payment_method, notes, received_at, payment_id)
-                 VALUES (?, ?, ?, ?, ?, ?)`,
+                `INSERT INTO collector_remittance_receipts (collector_id, amount_net, payment_method, notes, received_at, payment_id, tenant_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)`,
                 [
                     collector_id,
                     Number(amount_net) || 0,
                     payment_method != null ? String(payment_method) : '',
                     notes != null ? String(notes) : '',
                     received_at || new Date().toISOString(),
-                    pid
+                    pid,
+                    tenantId
                 ],
                 function (err) {
                     if (err) return reject(err);
@@ -10277,6 +10477,7 @@ async handlePaymentWebhook(payload, gateway) {
 
     // Fungsi untuk mendapatkan statistik laporan keuangan PPPoE
     async getPPPoEReportStats(startDate, endDate) {
+        const _t = this._tenantWhere();
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT 
@@ -10289,10 +10490,10 @@ async handlePaymentWebhook(payload, gateway) {
                     COUNT(DISTINCT CASE WHEN status = 'paid' THEN customer_id ELSE NULL END) as paid_customers
                 FROM invoices
                 WHERE (invoice_type != 'voucher' OR invoice_type IS NULL)
-                AND DATE(created_at) >= ? AND DATE(created_at) <= ?
+                AND DATE(created_at) >= ? AND DATE(created_at) <= ?${_t.sql}
             `;
             
-            this.db.get(sql, [startDate, endDate], (err, row) => {
+            this.db.get(sql, [startDate, endDate, ..._t.params], (err, row) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -10312,10 +10513,14 @@ async handlePaymentWebhook(payload, gateway) {
 
     // Fungsi untuk mendapatkan daftar voucher revenue dengan filter tanggal
     // Menggunakan tabel voucher_revenue (bukan invoices), karena invoice hanya untuk pelanggan PPPoE
-    async getVoucherInvoices(startDate, endDate) {
+    async getVoucherInvoices(startDate, endDate, options = {}) {
+        const { getTenantId, hasTenantContext } = require('./platform/tenantContext');
+        const tenantId = options.tenantId != null
+            ? options.tenantId
+            : (hasTenantContext() ? getTenantId() : null);
         return new Promise(async (resolve, reject) => {
             try {
-                logger.info(`getVoucherInvoices called: startDate=${startDate}, endDate=${endDate}`);
+                logger.info(`getVoucherInvoices called: startDate=${startDate}, endDate=${endDate}, tenantId=${tenantId}`);
                 
                 // Dapatkan semua voucher revenue dari billing.db
                 let sql = `
@@ -10335,6 +10540,10 @@ async handlePaymentWebhook(payload, gateway) {
                 `;
                 
                 const params = [startDate, endDate];
+                if (tenantId != null) {
+                    sql += ' AND tenant_id = ?';
+                    params.push(tenantId);
+                }
                 
                 sql += ` ORDER BY created_at DESC`;
                 
@@ -10447,6 +10656,7 @@ async handlePaymentWebhook(payload, gateway) {
 
     // Fungsi untuk mendapatkan daftar invoice PPPoE dengan filter tanggal
     async getPPPoEInvoices(startDate, endDate, status = null) {
+        const _tI = this._tenantWhere('i');
         return new Promise((resolve, reject) => {
             let sql = `
                 SELECT 
@@ -10460,10 +10670,10 @@ async handlePaymentWebhook(payload, gateway) {
                 LEFT JOIN customers c ON i.customer_id = c.id
                 LEFT JOIN packages p ON i.package_id = p.id
                 WHERE (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)
-                AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
+                AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?${_tI.sql}
             `;
             
-            const params = [startDate, endDate];
+            const params = [startDate, endDate, ..._tI.params];
             
             if (status) {
                 sql += ` AND i.status = ?`;
@@ -11105,17 +11315,20 @@ billingManager.insertPortalPackageRequest = function (row) {
     });
 };
 
-billingManager.listPortalPackageRequestsPending = function (limit = 20) {
+billingManager.listPortalPackageRequestsPending = function (limit = 20, tenantId = null) {
+    const _tId = tenantId != null ? tenantId : (hasTenantContext() ? getTenantId() : null);
     const lim = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
     return new Promise((resolve, reject) => {
+        const tenantJoin = _tId != null ? ' INNER JOIN customers c ON c.id = r.customer_id AND c.tenant_id = ?' : '';
         const sql = `
             SELECT r.*, datetime(r.created_at) as created_at_sort
-            FROM customer_portal_package_requests r
+            FROM customer_portal_package_requests r${tenantJoin}
             WHERE COALESCE(r.status, 'pending') = 'pending'
             ORDER BY datetime(r.created_at) DESC
             LIMIT ?
         `;
-        this.db.all(sql, [lim], (err, rows) => {
+        const params = _tId != null ? [_tId, lim] : [lim];
+        this.db.all(sql, params, (err, rows) => {
             if (err) {
                 if (String(err.message || '').includes('no such table')) {
                     return resolve([]);
@@ -11128,11 +11341,15 @@ billingManager.listPortalPackageRequestsPending = function (limit = 20) {
 };
 
 /** Jumlah baris permintaan ubah paket portal yang masih pending (setelah reconcile di route lain). */
-billingManager.countPortalPackageRequestsPending = function () {
+billingManager.countPortalPackageRequestsPending = function (tenantId = null) {
+    const _tId = tenantId != null ? tenantId : (hasTenantContext() ? getTenantId() : null);
     return new Promise((resolve, reject) => {
+        const tenantJoin = _tId != null ? ' INNER JOIN customers c ON c.id = r.customer_id AND c.tenant_id = ?' : '';
+        const sql = `SELECT COUNT(*) AS n FROM customer_portal_package_requests r${tenantJoin} WHERE COALESCE(r.status, 'pending') = 'pending'`;
+        const params = _tId != null ? [_tId] : [];
         this.db.get(
-            `SELECT COUNT(*) AS n FROM customer_portal_package_requests WHERE COALESCE(status, 'pending') = 'pending'`,
-            [],
+            sql,
+            params,
             (err, row) => {
                 if (err) {
                     if (String(err.message || '').includes('no such table')) return resolve(0);
@@ -11145,7 +11362,8 @@ billingManager.countPortalPackageRequestsPending = function () {
 };
 
 /** Tandai permintaan ubah paket selesai jika paket pelanggan sudah sesuai target (nama atau kecepatan). */
-billingManager.reconcilePortalPackageRequestsFulfilled = async function () {
+billingManager.reconcilePortalPackageRequestsFulfilled = async function (tenantId = null) {
+    const _tId = tenantId != null ? tenantId : (hasTenantContext() ? getTenantId() : null);
     const normName = (s) =>
         String(s || '')
             .toLowerCase()
@@ -11157,11 +11375,14 @@ billingManager.reconcilePortalPackageRequestsFulfilled = async function () {
     };
 
     const rows = await new Promise((resolve, reject) => {
+        const tenantJoin = _tId != null ? ' INNER JOIN customers c ON c.id = r.customer_id AND c.tenant_id = ?' : '';
+        const sql = `SELECT r.id, r.customer_id, r.target_package_name, r.target_speed
+             FROM customer_portal_package_requests r${tenantJoin}
+             WHERE COALESCE(r.status, 'pending') = 'pending'`;
+        const params = _tId != null ? [_tId] : [];
         this.db.all(
-            `SELECT id, customer_id, target_package_name, target_speed
-             FROM customer_portal_package_requests
-             WHERE COALESCE(status, 'pending') = 'pending'`,
-            [],
+            sql,
+            params,
             (err, r) => {
                 if (err) {
                     if (String(err.message || '').includes('no such table')) return resolve([]);
@@ -11214,10 +11435,11 @@ billingManager.reconcilePortalPackageRequestsFulfilled = async function () {
 };
 
 /** Jumlah badge pusat notifikasi admin: teknisi (belum dibaca) + kolektor (isolir/lunas saja) + portal (paket + laporan gangguan: telepon cocok atau customer_id). */
-billingManager.getAdminNotificationBadgeCount = function () {
-    const countOne = (sql) =>
+billingManager.getAdminNotificationBadgeCount = function (tenantId = null) {
+    const _tId = tenantId != null ? tenantId : (hasTenantContext() ? getTenantId() : null);
+    const countOne = (sql, params = []) =>
         new Promise((resolve) => {
-            this.db.get(sql, [], (err, row) => {
+            this.db.get(sql, params, (err, row) => {
                 if (err) {
                     if (String(err.message || '').includes('no such table')) return resolve(0);
                     return resolve(0);
@@ -11232,20 +11454,36 @@ billingManager.getAdminNotificationBadgeCount = function () {
                (LENGTH(TRIM(COALESCE(c.phone,''))) > 5 AND ${troubleJoinPhoneMatch})
                OR (COALESCE(tr.customer_id, 0) > 0 AND CAST(tr.customer_id AS INTEGER) = CAST(c.id AS INTEGER))
              )`;
+    const tTech = _tId != null ? ' AND t.tenant_id = ?' : '';
+    const tColl = _tId != null ? ' AND col.tenant_id = ?' : '';
+    const tPortal = _tId != null ? ' AND c.tenant_id = ?' : '';
+    const tTrouble = _tId != null ? ' AND c.tenant_id = ?' : '';
+    const p = _tId != null ? [_tId] : [];
     return Promise.all([
-        countOne(`SELECT COUNT(*) AS n FROM technician_field_notifications WHERE read_at IS NULL`),
         countOne(
-            `SELECT COUNT(*) AS n FROM collector_field_notifications
-             WHERE read_at IS NULL
-               AND UPPER(TRIM(COALESCE(kind,''))) IN ('ISOLIR','INVOICE_PAID')`
+            `SELECT COUNT(*) AS n FROM technician_field_notifications n
+             INNER JOIN technicians t ON t.id = n.technician_id
+             WHERE n.read_at IS NULL${tTech}`,
+            p
         ),
         countOne(
-            `SELECT COUNT(*) AS n FROM customer_portal_package_requests WHERE COALESCE(status, 'pending') = 'pending'`
+            `SELECT COUNT(*) AS n FROM collector_field_notifications n
+             INNER JOIN collectors col ON col.id = n.collector_id
+             WHERE n.read_at IS NULL
+               AND UPPER(TRIM(COALESCE(n.kind,''))) IN ('ISOLIR','INVOICE_PAID')${tColl}`,
+            p
+        ),
+        countOne(
+            `SELECT COUNT(*) AS n FROM customer_portal_package_requests r
+             INNER JOIN customers c ON c.id = r.customer_id
+             WHERE COALESCE(r.status, 'pending') = 'pending'${tPortal}`,
+            p
         ),
         countOne(
             `SELECT COUNT(*) AS n FROM trouble_reports tr
              INNER JOIN customers c ON ${troubleCustomerJoin}
-             WHERE LOWER(COALESCE(tr.status,'')) IN ('open','in_progress')`
+             WHERE LOWER(COALESCE(tr.status,'')) IN ('open','in_progress')${tTrouble}`,
+            p
         ),
     ]).then((parts) => parts.reduce((a, b) => a + b, 0));
 };
@@ -11254,7 +11492,8 @@ billingManager.getAdminNotificationBadgeCount = function () {
  * Feed notifikasi terpusat admin (disaring): pekerjaan teknisi; pelanggan lunas & isolir (kolektor);
  * permintaan paket + laporan gangguan (nomor telepon cocok **atau** `trouble_reports.customer_id` = pelanggan).
  */
-billingManager.getAdminUnifiedNotificationFeed = function (limit = 40) {
+billingManager.getAdminUnifiedNotificationFeed = function (limit = 40, tenantId = null) {
+    const _tId = tenantId != null ? tenantId : (hasTenantContext() ? getTenantId() : null);
     const lim = Math.min(200, Math.max(10, parseInt(limit, 10) || 40));
     const chunk = Math.max(15, Math.ceil(lim * 0.28));
     const db = this.db;
@@ -11264,6 +11503,14 @@ billingManager.getAdminUnifiedNotificationFeed = function (limit = 40) {
                (LENGTH(TRIM(COALESCE(c.phone,''))) > 5 AND ${troubleJoinPhoneMatch})
                OR (COALESCE(tr.customer_id, 0) > 0 AND CAST(tr.customer_id AS INTEGER) = CAST(c.id AS INTEGER))
              )`;
+    const tTech = _tId != null ? ' AND t.tenant_id = ?' : '';
+    const tColl = _tId != null ? ' AND c.tenant_id = ?' : '';
+    const tPortal = _tId != null ? ' AND cust.tenant_id = ?' : '';
+    const tTrouble = _tId != null ? ' AND c.tenant_id = ?' : '';
+    const pTech = _tId != null ? [_tId, chunk] : [chunk];
+    const pColl = _tId != null ? [_tId, chunk] : [chunk];
+    const pPortal = _tId != null ? [_tId, chunk] : [chunk];
+    const pTrouble = _tId != null ? [_tId, chunk] : [chunk];
 
     const safeAll = (sql, params) =>
         new Promise((res, rej) => {
@@ -11287,10 +11534,10 @@ billingManager.getAdminUnifiedNotificationFeed = function (limit = 40) {
                    NULL AS tr_category, NULL AS tr_created
             FROM technician_field_notifications n
             LEFT JOIN technicians t ON t.id = n.technician_id
-            WHERE n.read_at IS NULL
+            WHERE n.read_at IS NULL${tTech}
             ORDER BY datetime(n.created_at) DESC
             LIMIT ?`,
-            [chunk]
+            pTech
         ),
         safeAll(
             `
@@ -11303,10 +11550,10 @@ billingManager.getAdminUnifiedNotificationFeed = function (limit = 40) {
             FROM collector_field_notifications n
             LEFT JOIN collectors c ON c.id = n.collector_id
             WHERE n.read_at IS NULL
-              AND UPPER(TRIM(COALESCE(n.kind,''))) IN ('ISOLIR','INVOICE_PAID')
+              AND UPPER(TRIM(COALESCE(n.kind,''))) IN ('ISOLIR','INVOICE_PAID')${tColl}
             ORDER BY datetime(n.created_at) DESC
             LIMIT ?`,
-            [chunk]
+            pColl
         ),
         safeAll(
             `
@@ -11322,10 +11569,11 @@ billingManager.getAdminUnifiedNotificationFeed = function (limit = 40) {
                    r.target_price_rupiah AS tgt_price, r.note AS portal_note,
                    NULL AS tr_location, NULL AS tr_desc_full, NULL AS tr_status, NULL AS tr_category, NULL AS tr_created
             FROM customer_portal_package_requests r
-            WHERE COALESCE(r.status, 'pending') = 'pending'
+            INNER JOIN customers cust ON cust.id = r.customer_id
+            WHERE COALESCE(r.status, 'pending') = 'pending'${tPortal}
             ORDER BY datetime(r.created_at) DESC
             LIMIT ?`,
-            [chunk]
+            pPortal
         ),
         safeAll(
             `
@@ -11342,10 +11590,10 @@ billingManager.getAdminUnifiedNotificationFeed = function (limit = 40) {
                    tr.category AS tr_category, tr.created_at AS tr_created
             FROM trouble_reports tr
             INNER JOIN customers c ON ${troubleCustomerJoin}
-            WHERE LOWER(COALESCE(tr.status,'')) IN ('open','in_progress')
+            WHERE LOWER(COALESCE(tr.status,'')) IN ('open','in_progress')${tTrouble}
             ORDER BY datetime(COALESCE(tr.updated_at, tr.created_at)) DESC
             LIMIT ?`,
-            [chunk]
+            pTrouble
         ),
     ])
         .then(([techRows, colRows, portalRows, troubleRows]) => {

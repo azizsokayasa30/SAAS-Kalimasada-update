@@ -1,8 +1,25 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const logger = require('./logger');
+const billingManager = require('./billing');
+const { getTenantId, hasTenantContext } = require('./platform/tenantContext');
 const { getSetting, getLocalTimestamp } = require('./settingsManager');
 const { sendMessage, setSock } = require('./sendMessage');
+
+function _tWhere(alias = '') {
+    const t = billingManager._tenantWhere(alias);
+    if (!t.sql) return { sql: '', params: [] };
+    const col = alias ? `${alias}.tenant_id` : 'tenant_id';
+    return { sql: ` AND ${col} = ?`, params: [...t.params] };
+}
+
+function _parseNotes(raw) {
+    try {
+        return JSON.parse(raw || '[]');
+    } catch (_) {
+        return [];
+    }
+}
 
 // Database helper
 const dbPath = path.join(__dirname, '../data/billing.db');
@@ -52,6 +69,7 @@ function formatIndonesianDateTime(date = new Date()) {
 
 // Mendapatkan semua laporan gangguan
 async function getAllTroubleReports() {
+  const _t = _tWhere('tr');
   return new Promise((resolve, reject) => {
     const db = getDB();
     db.all(`
@@ -59,27 +77,29 @@ async function getAllTroubleReports() {
       FROM trouble_reports tr
       LEFT JOIN technicians t
         ON CAST(tr.assigned_technician_id AS TEXT) = CAST(t.id AS TEXT)
+      WHERE 1=1${_t.sql}
       ORDER BY tr.created_at DESC
-    `, [], (err, rows) => {
+    `, [..._t.params], (err, rows) => {
       db.close();
       if (err) {
         logger.error(`Gagal membaca laporan gangguan: ${err.message}`);
         return reject(err);
       }
-      resolve(rows.map(r => ({...r, notes: JSON.parse(r.notes || '[]')})));
+      resolve(rows.map(r => ({...r, notes: _parseNotes(r.notes)})));
     });
   });
 }
 
 // Mendapatkan laporan gangguan berdasarkan ID
 async function getTroubleReportById(id) {
+  const _t = _tWhere();
   return new Promise((resolve, reject) => {
     const db = getDB();
-    db.get("SELECT * FROM trouble_reports WHERE id = ?", [id], (err, row) => {
+    db.get(`SELECT * FROM trouble_reports WHERE id = ?${_t.sql}`, [id, ..._t.params], (err, row) => {
       db.close();
       if (err) return reject(err);
       if (row) {
-        row.notes = JSON.parse(row.notes || '[]');
+        row.notes = _parseNotes(row.notes);
       }
       resolve(row || null);
     });
@@ -88,12 +108,13 @@ async function getTroubleReportById(id) {
 
 // Mendapatkan laporan gangguan berdasarkan nomor pelanggan
 async function getTroubleReportsByPhone(phone) {
+  const _t = _tWhere();
   return new Promise((resolve, reject) => {
     const db = getDB();
-    db.all("SELECT * FROM trouble_reports WHERE phone = ? ORDER BY created_at DESC", [phone], (err, rows) => {
+    db.all(`SELECT * FROM trouble_reports WHERE phone = ?${_t.sql} ORDER BY created_at DESC`, [phone, ..._t.params], (err, rows) => {
       db.close();
       if (err) return reject(err);
-      resolve(rows.map(r => ({...r, notes: JSON.parse(r.notes || '[]')})));
+      resolve(rows.map(r => ({...r, notes: _parseNotes(r.notes)})));
     });
   });
 }
@@ -113,10 +134,11 @@ async function createTroubleReport(reportData) {
     const sql = `
       INSERT INTO trouble_reports (
         id, status, created_at, updated_at, name, phone, location, 
-        category, description, assigned_technician_id, priority, notes, customer_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        category, description, assigned_technician_id, priority, notes, customer_id, tenant_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
     
+    const tenantId = hasTenantContext() ? getTenantId() : 1;
     const params = [
       id,
       'open',
@@ -130,7 +152,8 @@ async function createTroubleReport(reportData) {
       reportData.assigned_technician_id || reportData.assignedTechnicianId,
       reportData.priority || 'Normal',
       JSON.stringify([]),
-      customerIdSql
+      customerIdSql,
+      tenantId
     ];
 
     db.run(sql, params, async function(err) {
@@ -188,10 +211,10 @@ async function updateTroubleReportStatus(id, status, notes, technicalData = {}, 
     const sql = `
       UPDATE trouble_reports 
       SET status = ?, notes = ?, updated_at = ?, odp = ?, sn = ?, signal_level = ?
-      WHERE id = ?
+      WHERE id = ?${_tWhere().sql}
     `;
-    
-    db.run(sql, [status, JSON.stringify(updatedNotes), now, odp, sn, signal_level, id], async function(err) {
+    const _tw = _tWhere();
+    db.run(sql, [status, JSON.stringify(updatedNotes), now, odp, sn, signal_level, id, ..._tw.params], async function(err) {
       db.close();
       if (err) {
         logger.error(`Gagal mengupdate status laporan gangguan: ${err.message}`);
@@ -257,13 +280,14 @@ async function updateTroubleReportAssignment(id, assignedTechnicianId, adminNote
       });
     }
 
+    const _tw = _tWhere();
     const sql = `
       UPDATE trouble_reports
       SET assigned_technician_id = ?, notes = ?, updated_at = ?
-      WHERE id = ?
+      WHERE id = ?${_tw.sql}
     `;
 
-    db.run(sql, [newAssignId, JSON.stringify(updatedNotes), now, id], function (err) {
+    db.run(sql, [newAssignId, JSON.stringify(updatedNotes), now, id, ..._tw.params], function (err) {
       db.close();
       if (err) {
         logger.error(`Gagal mengubah penugasan teknisi: ${err.message}`);
@@ -284,9 +308,10 @@ async function updateTroubleReportAssignment(id, assignedTechnicianId, adminNote
 
 // Menghapus laporan gangguan
 async function deleteTroubleReport(id) {
+  const _tw = _tWhere();
   return new Promise((resolve, reject) => {
     const db = getDB();
-    db.run("DELETE FROM trouble_reports WHERE id = ?", [id], function(err) {
+    db.run(`DELETE FROM trouble_reports WHERE id = ?${_tw.sql}`, [id, ..._tw.params], function(err) {
       db.close();
       if (err) {
         logger.error(`Gagal menghapus laporan gangguan: ${err.message}`);

@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const tenantStore = require('./tenantStore');
+const { loadMinimalTenantDefaults } = require('./tenantMinimalDefaults');
 
 const TEMPLATE_PATH = path.join(__dirname, '../../settings.server.template.json');
 
@@ -52,8 +53,8 @@ function buildTenantOverrides(tenant) {
 
 async function getFullSettingsForTenantId(tenantId) {
     const tenant = await tenantStore.getTenantById(tenantId);
-    if (!tenant) return loadTemplateDefaults();
-    return mergeSettings(loadTemplateDefaults(), {
+    if (!tenant) return loadMinimalTenantDefaults();
+    return mergeSettings(loadMinimalTenantDefaults(), {
         ...buildTenantOverrides(tenant),
         ...(tenant.settings || {}),
     });
@@ -63,7 +64,7 @@ async function saveFullSettingsForTenantId(tenantId, updates) {
     const tenant = await tenantStore.getTenantById(tenantId);
     if (!tenant) throw new Error('Tenant tidak ditemukan');
 
-    const current = mergeSettings(loadTemplateDefaults(), tenant.settings || {});
+    const current = mergeSettings(loadMinimalTenantDefaults(), tenant.settings || {});
     const merged = mergeSettings(current, updates);
 
     // Simpan hanya key yang berbeda dari template + kredensial admin (hemat kolom JSON)
@@ -83,19 +84,42 @@ async function saveFullSettingsForTenantId(tenantId, updates) {
 }
 
 function seedSettingsForNewTenant(tenant) {
-    const merged = mergeSettings(loadTemplateDefaults(), {
-        ...buildTenantOverrides(tenant),
-        admin_username: 'admin',
-        admin_password: tenant.settings?.admin_password || tenant.admin_password,
-    });
-    return merged;
+    const adminUsername = tenant.settings?.admin_username
+        || tenant.admin_username
+        || 'admin';
+    const adminPassword = tenant.settings?.admin_password
+        || tenant.admin_password;
+    return {
+        company_header: tenant.name,
+        company_name: tenant.name,
+        app_name: tenant.name,
+        contact_phone: tenant.owner_phone || '',
+        contact_whatsapp: tenant.owner_phone || '',
+        footer_info: `© ${new Date().getFullYear()} ${tenant.name}`,
+        admin_username: adminUsername,
+        admin_password: adminPassword,
+        timezone: 'Asia/Jakarta',
+        user_auth_mode: 'mikrotik',
+        server_port: String(process.env.PORT || '3003'),
+    };
+}
+
+/** Reset pengaturan tenant ke seed awal (branding + kredensial admin saja). */
+async function resetTenantSettingsToSeed(tenantId) {
+    const tenant = await tenantStore.getTenantById(tenantId);
+    if (!tenant) throw new Error('Tenant tidak ditemukan.');
+    const seeded = seedSettingsForNewTenant(tenant);
+    await tenantStore.updateTenantSettings(tenantId, seeded);
+    return seeded;
 }
 
 module.exports = {
     loadTemplateDefaults,
+    loadMinimalTenantDefaults,
     mergeSettings,
     getFullSettingsForTenantId,
     saveFullSettingsForTenantId,
     seedSettingsForNewTenant,
+    resetTenantSettingsToSeed,
     buildTenantOverrides,
 };
