@@ -269,8 +269,25 @@ function resolveCustomerAreaLabel(c) {
 }
 
 /** Baris pelanggan untuk pencarian tag lokasi (teknisi / field ops). */
+function customerRowHasLocationTag(row) {
+    const safe = row || {};
+    const lat =
+        safe.latitude != null && safe.latitude !== '' ? parseFloat(safe.latitude) : NaN;
+    const lng =
+        safe.longitude != null && safe.longitude !== '' ? parseFloat(safe.longitude) : NaN;
+    return Number.isFinite(lat) && Number.isFinite(lng);
+}
+
 function mapTagSearchCustomerRow(r) {
     const safe = sqliteJsonSafeRow(r || {});
+    const latitude =
+        safe.latitude != null && safe.latitude !== '' && !Number.isNaN(Number(safe.latitude))
+            ? parseFloat(safe.latitude)
+            : null;
+    const longitude =
+        safe.longitude != null && safe.longitude !== '' && !Number.isNaN(Number(safe.longitude))
+            ? parseFloat(safe.longitude)
+            : null;
     return {
         id: safe.id,
         package_id:
@@ -291,7 +308,9 @@ function mapTagSearchCustomerRow(r) {
         area_id:
             safe.area_id != null && safe.area_id !== '' && !Number.isNaN(Number(safe.area_id))
                 ? Number(safe.area_id)
-                : null
+                : null,
+        latitude,
+        longitude
     };
 }
 
@@ -341,18 +360,37 @@ function collectorCustomerIsIsolir(c) {
         .trim() === 'suspended';
 }
 
+function collectorCustomerIsInactive(c) {
+    return String(c.status || '')
+        .toLowerCase()
+        .trim() === 'inactive';
+}
+
 /**
- * Sama dengan filter "Belum Lunas" di admin getCustomersPaginated (mode default, tanpa filter bulan):
- * ada invoice unpaid ATAU belum pernah ada invoice paid.
+ * Belum bayar (kolektor): punya tagihan unpaid/overdue di periode.
+ * Exclude: nonaktif, pelanggan baru (belum pernah/punya no_invoice).
  */
 function matchesAdminBelumLunasFromPaymentStatus(c) {
+    if (collectorCustomerIsInactive(c)) return false;
+    if (matchesCollectorPelangganBaru(c)) return false;
     const ps = c.payment_status || '';
-    return ps === 'unpaid' || ps === 'overdue' || ps === 'no_invoice';
+    return ps === 'unpaid' || ps === 'overdue';
 }
 
 /** Sama dengan filter "Lunas" di admin: tidak ada unpaid & pernah paid (direfleksikan di CASE SQL sebagai 'paid'). */
 function matchesAdminLunasFromPaymentStatus(c) {
+    if (collectorCustomerIsInactive(c)) return false;
     return (c.payment_status || '') === 'paid';
+}
+
+/**
+ * Pelanggan baru: belum pernah punya tagihan (lifetime no_invoice).
+ * Nonaktif dikecualikan. Badge "Baru" tetap tampil meski belum ada invoice.
+ */
+function matchesCollectorPelangganBaru(c) {
+    if (collectorCustomerIsInactive(c)) return false;
+    const life = c.lifetime_payment_status || c.payment_status || '';
+    return life === 'no_invoice';
 }
 
 /** Join date jatuh di bulan kalender berjalan (sesuai filter "baru" admin / pelanggan baru bulan ini). */
@@ -370,12 +408,34 @@ function joinDateThisCalendarMonth(c) {
 }
 
 /**
+ * Pelanggan aktif (kolektor): bukan nonaktif dan bukan baru —
+ * yaitu yang sudah/ pernah punya tagihan (atau isolir dengan riwayat tagihan).
+ */
+function matchesCollectorPelangganAktif(c) {
+    if (collectorCustomerIsInactive(c)) return false;
+    if (matchesCollectorPelangganBaru(c)) return false;
+    return true;
+}
+
+/**
  * Filter daftar kolektor: pool = area + assignment kolektor (getCollectorCustomers).
  * Semua = seluruh pelanggan di pool (seperti admin /customers, dibatasi area tim).
- * unpaid = Belum Lunas admin; paid = Lunas admin; baru = belum punya invoice (no_invoice).
+ * unpaid = Belum bayar (punya tagihan unpaid, exclude nonaktif & baru);
+ * paid = Lunas; baru = no_invoice; total = aktif + nonaktif + baru.
  */
 function filterCollectorCustomersForMobile(allMappedCustomers, statusFilter, q, areaFilter) {
-    const validFilters = new Set(['paid', 'unpaid', 'overdue', 'no_invoice', 'isolir', 'baru']);
+    const validFilters = new Set([
+        'paid',
+        'unpaid',
+        'overdue',
+        'no_invoice',
+        'isolir',
+        'baru',
+        'nonaktif',
+        'inactive',
+        'aktif',
+        'total'
+    ]);
     const sf = (statusFilter || '').toString().toLowerCase();
     const qLower = (q || '').toString().trim().toLowerCase();
     const areaLow = (areaFilter || '').toString().trim().toLowerCase();
@@ -383,14 +443,28 @@ function filterCollectorCustomersForMobile(allMappedCustomers, statusFilter, q, 
 
     if (sf === 'isolir') {
         customers = customers.filter((c) => collectorCustomerIsIsolir(c));
+    } else if (sf === 'nonaktif' || sf === 'inactive') {
+        customers = customers.filter((c) => collectorCustomerIsInactive(c));
     } else if (sf === 'baru') {
-        customers = customers.filter((c) => (c.payment_status || '') === 'no_invoice');
+        customers = customers.filter((c) => matchesCollectorPelangganBaru(c));
+    } else if (sf === 'aktif') {
+        customers = customers.filter((c) => matchesCollectorPelangganAktif(c));
+    } else if (sf === 'total') {
+        // Total = aktif + nonaktif + baru (seluruh pool kolektor)
+        customers = customers.filter(
+            (c) =>
+                matchesCollectorPelangganAktif(c) ||
+                matchesCollectorPelangganBaru(c) ||
+                collectorCustomerIsInactive(c)
+        );
     } else if (sf === 'unpaid') {
         customers = customers.filter((c) => matchesAdminBelumLunasFromPaymentStatus(c));
     } else if (sf === 'paid') {
         customers = customers.filter((c) => matchesAdminLunasFromPaymentStatus(c));
     } else if (validFilters.has(sf) && sf !== '') {
-        customers = customers.filter((c) => (c.payment_status || '') === sf);
+        customers = customers.filter(
+            (c) => !collectorCustomerIsInactive(c) && (c.payment_status || '') === sf
+        );
     }
     // sf === '' (Semua): tidak filter status / pembayaran
 
@@ -422,6 +496,24 @@ function filterCollectorCustomersForMobile(allMappedCustomers, statusFilter, q, 
         });
     }
     return customers;
+}
+
+/** Normalisasi query month/year kolektor (dukung month=all / 0 = satu tahun). */
+function parseCollectorPeriodQuery(req) {
+    const rawMonth = req.query.month != null && req.query.month !== '' ? String(req.query.month) : null;
+    const rawYear = req.query.year != null && req.query.year !== '' ? String(req.query.year) : null;
+    if (!rawMonth && !rawYear) {
+        return { month: null, year: null };
+    }
+    const year = rawYear || String(new Date().getFullYear());
+    if (rawMonth === 'all' || rawMonth === '0') {
+        return { month: 'all', year };
+    }
+    const m = parseInt(rawMonth, 10);
+    if (Number.isFinite(m) && m >= 1 && m <= 12) {
+        return { month: String(m), year };
+    }
+    return { month: null, year };
 }
 
 /** Angka aman untuk JSON (hindari BigInt / nilai aneh dari SQLite). */
@@ -641,7 +733,27 @@ function backfillInstallationJobCustomerId(jobId, customerId) {
     });
 }
 
-const { resolveEmployeePhotoPath, buildPhotoUrl } = require('../../utils/technicianEmployeePhoto');
+const {
+    resolveEmployeePhotoPath,
+    buildPhotoUrl,
+    saveTechnicianProfilePhotoFromBase64,
+    saveCollectorProfilePhotoFromBase64,
+    unlinkPhotoIfExists,
+    pickTechnicianPhotoPath,
+} = require('../../utils/technicianEmployeePhoto');
+
+function ensureCollectorsPhotoColumn(cb) {
+    db.all('PRAGMA table_info(collectors)', [], (err, cols) => {
+        if (err || !Array.isArray(cols)) return cb(err || new Error('schema collectors gagal'));
+        const names = new Set(cols.map((c) => String(c.name || '').toLowerCase()));
+        if (names.has('photo_path')) return cb(null, 'photo_path');
+        if (names.has('foto_path')) return cb(null, 'foto_path');
+        db.run('ALTER TABLE collectors ADD COLUMN photo_path TEXT', (alterErr) => {
+            if (alterErr) return cb(alterErr);
+            cb(null, 'photo_path');
+        });
+    });
+}
 
 /** Tanpa auth — untuk cek deploy / reverse proxy (GET …/health) */
 router.get('/health', (req, res) => {
@@ -660,7 +772,7 @@ router.get('/app-info', verifyToken, allowFieldOps, async (req, res) => {
                 tenant_display_name: tenant?.name || tenantName,
                 logo_filename: getSetting('logo_filename', 'logo.png'),
                 company_slogan: getSetting('company_slogan', ''),
-                main_interface: getSetting('main_interface', 'ether1-ISP'),
+                main_interface: getSetting('main_interface', 'SFP+1'),
                 server_time: getLocalTimestamp()
             }
         });
@@ -673,7 +785,7 @@ router.get('/app-info', verifyToken, allowFieldOps, async (req, res) => {
                 tenant_display_name: 'Default Tenant',
                 logo_filename: getSetting('logo_filename', 'logo.png'),
                 company_slogan: getSetting('company_slogan', ''),
-                main_interface: getSetting('main_interface', 'ether1-ISP'),
+                main_interface: getSetting('main_interface', 'SFP+1'),
                 server_time: getLocalTimestamp()
             }
         });
@@ -1210,6 +1322,7 @@ router.get('/customers', verifyToken, allowFieldOps, async (req, res) => {
     const adminFilter = (req.query.admin_filter && String(req.query.admin_filter).trim().toLowerCase()) || '';
     const connectionFilter = (req.query.connection && String(req.query.connection).trim().toLowerCase()) || '';
     const area = (req.query.area && String(req.query.area).trim()) || '';
+    const locationStatus = (req.query.location_status && String(req.query.location_status).trim().toLowerCase()) || '';
     const now = new Date();
     const filterYear = Math.max(2000, parseInt(req.query.year, 10) || now.getFullYear());
     const allYear = String(req.query.month || '').toLowerCase() === 'all' || String(req.query.month || '') === '0';
@@ -1223,7 +1336,8 @@ router.get('/customers', verifyToken, allowFieldOps, async (req, res) => {
     let activePppoeLoginSet = new Set();
     try {
         const { getActivePppoeLoginNamesSet } = require('../../config/mikrotik');
-        activePppoeLoginSet = await getActivePppoeLoginNamesSet();
+        // Cache + maxWait: list pelanggan tidak boleh menunggu reconnect MikroTik yang down.
+        activePppoeLoginSet = await getActivePppoeLoginNamesSet({ maxWaitMs: 800 });
     } catch (e) {
         logger.warn('[mobile-adapter] customers PPPoE active set:', e.message || e);
     }
@@ -1350,6 +1464,11 @@ router.get('/customers', verifyToken, allowFieldOps, async (req, res) => {
         where += " AND LOWER(COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, '')) = LOWER(?)";
         params.push(area);
     }
+    if (locationStatus === 'tagged') {
+        where += ' AND c.latitude IS NOT NULL AND c.longitude IS NOT NULL';
+    } else if (locationStatus === 'untagged') {
+        where += ' AND (c.latitude IS NULL OR c.longitude IS NULL)';
+    }
 
     const connectionSummaryWhere = where;
     const connectionSummaryBaseParams = params.slice();
@@ -1436,64 +1555,56 @@ router.get('/customers', verifyToken, allowFieldOps, async (req, res) => {
     `;
     params.push(limit, offset);
 
-    db.get(summarySql, summaryParams, (summaryErr, summaryRow) => {
-        if (summaryErr) {
-            logger.error('[mobile-adapter] customers summary:', summaryErr);
-            return res.status(500).json({ success: false, message: 'Gagal memuat ringkasan pelanggan' });
-        }
+    try {
+        const [summaryRow, connectionSummaryRow, rows] = await Promise.all([
+            dbGetP(summarySql, summaryParams),
+            dbGetP(connectionSummarySql, connectionSummaryParams),
+            dbAllP(sql, params),
+        ]);
 
-        db.get(connectionSummarySql, connectionSummaryParams, (connectionSummaryErr, connectionSummaryRow) => {
-            if (connectionSummaryErr) {
-                logger.error('[mobile-adapter] customers connection summary:', connectionSummaryErr);
-                return res.status(500).json({ success: false, message: 'Gagal memuat ringkasan koneksi pelanggan' });
-            }
-
-            db.all(sql, params, (err, rows) => {
-            if (err) {
-                logger.error('[mobile-adapter] customers:', err);
-                return res.status(500).json({ success: false, message: 'Gagal memuat pelanggan' });
-            }
-            attachAreaNamesFromMaster(rows || [], (areaErr, enriched) => {
-                if (areaErr) {
-                    logger.error('[mobile-adapter] customers area:', areaErr);
-                    return res.status(500).json({ success: false, message: areaErr.message });
-                }
-                const list = (enriched || []).map((r) => {
-                    const safe = sqliteJsonSafeRow(r);
-                    const login = String(safe.pppoe_username || safe.username || '').trim().toLowerCase();
-                    return {
-                        ...safe,
-                        area: resolveCustomerAreaLabel(safe),
-                        pppoe_active: login ? activePppoeLoginSet.has(login) : false,
-                        ip_address: safe.pppoe_username ? 'PPPoE' : 'DHCP/Dynamic'
-                    };
-                });
-                const totalCount = summaryRow ? parseInt(summaryRow.total_count, 10) || 0 : 0;
-                const connectionTotal = connectionSummaryRow ? parseInt(connectionSummaryRow.total_count, 10) || 0 : 0;
-                const connectionOnline = connectionSummaryRow ? parseInt(connectionSummaryRow.online_count, 10) || 0 : 0;
-                res.json({
-                    success: true,
-                    data: list,
-                    pagination: {
-                        page,
-                        limit,
-                        total: totalCount,
-                        hasMore: offset + list.length < totalCount
-                    },
-                    summary: {
-                        total_count: totalCount,
-                        total_amount: summaryRow ? Number(summaryRow.total_amount) || 0 : 0
-                    },
-                    connection_summary: {
-                        total: connectionTotal,
-                        online: connectionOnline,
-                        offline: Math.max(0, connectionTotal - connectionOnline)
-                    }
-                });
+        const enriched = await new Promise((resolve, reject) => {
+            attachAreaNamesFromMaster(rows || [], (areaErr, result) => {
+                if (areaErr) reject(areaErr);
+                else resolve(result || []);
             });
         });
+
+        const list = (enriched || []).map((r) => {
+            const safe = sqliteJsonSafeRow(r);
+            const login = String(safe.pppoe_username || safe.username || '').trim().toLowerCase();
+            return {
+                ...safe,
+                area: resolveCustomerAreaLabel(safe),
+                pppoe_active: login ? activePppoeLoginSet.has(login) : false,
+                ip_address: safe.pppoe_username ? 'PPPoE' : 'DHCP/Dynamic'
+            };
         });
-    });
+        const totalCount = summaryRow ? parseInt(summaryRow.total_count, 10) || 0 : 0;
+        const connectionTotal = connectionSummaryRow ? parseInt(connectionSummaryRow.total_count, 10) || 0 : 0;
+        const connectionOnline = connectionSummaryRow ? parseInt(connectionSummaryRow.online_count, 10) || 0 : 0;
+        return res.json({
+            success: true,
+            data: list,
+            pagination: {
+                page,
+                limit,
+                total: totalCount,
+                hasMore: offset + list.length < totalCount
+            },
+            summary: {
+                total_count: totalCount,
+                total_amount: summaryRow ? Number(summaryRow.total_amount) || 0 : 0
+            },
+            connection_summary: {
+                total: connectionTotal,
+                online: connectionOnline,
+                offline: Math.max(0, connectionTotal - connectionOnline)
+            }
+        });
+    } catch (err) {
+        logger.error('[mobile-adapter] customers:', err);
+        return res.status(500).json({ success: false, message: 'Gagal memuat pelanggan' });
+    }
 });
 
 router.get('/customers/:customerId/ppp-session', verifyToken, requireTechnician, async (req, res) => {
@@ -1757,6 +1868,56 @@ router.patch('/customers/:customerId/package', verifyToken, allowFieldOps, async
     }
 });
 
+router.get('/customers/location-summary', verifyToken, allowFieldOps, async (req, res) => {
+    const role = req.user && req.user.role;
+    try {
+        if (role === 'collector') {
+            const collectorId = parseCollectorId(req);
+            if (!collectorId) {
+                return res.status(400).json({ success: false, message: 'ID kolektor tidak valid' });
+            }
+            const list = await billingManager.getCollectorCustomers(collectorId);
+            let tagged = 0;
+            let untagged = 0;
+            for (const row of list || []) {
+                if (customerRowHasLocationTag(row)) tagged += 1;
+                else untagged += 1;
+            }
+            return res.json({
+                success: true,
+                data: { tagged, untagged, total: tagged + untagged }
+            });
+        }
+
+        const params = [];
+        let where = '1=1';
+        if (hasTenantContext()) {
+            where += ' AND c.tenant_id = ?';
+            params.push(getTenantId());
+        }
+        const summarySql = `
+            SELECT
+                SUM(CASE WHEN c.latitude IS NOT NULL AND c.longitude IS NOT NULL THEN 1 ELSE 0 END) AS tagged,
+                SUM(CASE WHEN c.latitude IS NULL OR c.longitude IS NULL THEN 1 ELSE 0 END) AS untagged,
+                COUNT(*) AS total
+            FROM customers c
+            WHERE ${where}
+        `;
+        db.get(summarySql, params, (err, row) => {
+            if (err) {
+                return res.status(500).json({ success: false, message: err.message });
+            }
+            const tagged = Number(row && row.tagged) || 0;
+            const untagged = Number(row && row.untagged) || 0;
+            const total = Number(row && row.total) || tagged + untagged;
+            res.json({ success: true, data: { tagged, untagged, total } });
+        });
+    } catch (error) {
+        logger.error('[mobile-adapter] customers/location-summary', error);
+        res.status(500).json({ success: false, message: error.message || 'Gagal memuat ringkasan tag' });
+    }
+});
+
 router.get('/customers/search', verifyToken, allowFieldOps, (req, res) => {
     const q = (req.query.q && String(req.query.q).trim()) || '';
     if (q.length < 1) {
@@ -1772,6 +1933,7 @@ router.get('/customers/search', verifyToken, allowFieldOps, (req, res) => {
     }
     db.all(
         `SELECT c.id, c.customer_id, c.name, c.phone, c.email, c.status, c.address, c.area_id,
+                c.latitude, c.longitude,
                 c.package_id, p.name AS package_name,
                 COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, ar.kode_area, '') AS area,
                 ar.nama_area AS nama_area
@@ -1913,24 +2075,41 @@ router.put('/customers/:customerId/location', verifyToken, allowFieldOps, (req, 
         );
     };
 
-    if (odpRaw === undefined || odpRaw === null || String(odpRaw).trim() === '') {
-        return runLocationUpdate(null);
-    }
-
-    const odpKey = String(odpRaw).trim();
-    db.get(
-        'SELECT id FROM odps WHERE id = ? OR code = ? OR name = ? LIMIT 1',
-        [odpKey, odpKey, odpKey],
-        (eOdp, odpRow) => {
-            if (eOdp) {
-                return res.status(500).json({ success: false, message: eOdp.message });
-            }
-            if (!odpRow) {
-                return res.status(400).json({ success: false, message: 'ODP tidak ditemukan' });
-            }
-            runLocationUpdate(odpRow.id);
+    const proceedWithOdp = () => {
+        if (odpRaw === undefined || odpRaw === null || String(odpRaw).trim() === '') {
+            return runLocationUpdate(null);
         }
-    );
+        const odpKey = String(odpRaw).trim();
+        db.get(
+            'SELECT id FROM odps WHERE id = ? OR code = ? OR name = ? LIMIT 1',
+            [odpKey, odpKey, odpKey],
+            (eOdp, odpRow) => {
+                if (eOdp) {
+                    return res.status(500).json({ success: false, message: eOdp.message });
+                }
+                if (!odpRow) {
+                    return res.status(400).json({ success: false, message: 'ODP tidak ditemukan' });
+                }
+                runLocationUpdate(odpRow.id);
+            }
+        );
+    };
+
+    db.get('SELECT latitude, longitude FROM customers WHERE id = ?', [id], (err, row) => {
+        if (err) {
+            return res.status(500).json({ success: false, message: err.message });
+        }
+        if (!row) {
+            return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+        }
+        if (customerRowHasLocationTag(row)) {
+            return res.status(409).json({
+                success: false,
+                message: 'Pelanggan sudah punya tag lokasi'
+            });
+        }
+        proceedWithOdp();
+    });
 });
 
 // --- Profil teknisi (sinkron dengan data web / tabel technicians) ---
@@ -1997,6 +2176,118 @@ router.get('/me', verifyToken, requireTechnician, (req, res) => {
                 return finalize(null);
             }
             return finalize(empRow || null);
+        });
+    });
+});
+
+router.post('/me/photo', verifyToken, requireTechnician, (req, res) => {
+    const techId = parseTechnicianId(req);
+    if (!techId) {
+        return res.status(400).json({ success: false, message: 'ID teknisi tidak valid' });
+    }
+    const body = req.body || {};
+    const photoB64 = body.photo_base64 != null ? String(body.photo_base64).trim() : '';
+    if (!photoB64) {
+        return res.status(400).json({ success: false, message: 'Foto wajib diisi' });
+    }
+
+    let saved;
+    try {
+        saved = saveTechnicianProfilePhotoFromBase64(photoB64);
+    } catch (e) {
+        return res.status(400).json({
+            success: false,
+            message: e && e.message ? e.message : 'Gagal memproses foto',
+        });
+    }
+
+    const ensureTechnicianPhotoColumn = (cb) => {
+        db.all('PRAGMA table_info(technicians)', [], (err, cols) => {
+            if (err || !Array.isArray(cols)) return cb(err || new Error('schema technicians gagal'));
+            const names = new Set(cols.map((c) => String(c.name || '').toLowerCase()));
+            if (names.has('foto_path')) return cb(null, 'foto_path');
+            if (names.has('photo_path')) return cb(null, 'photo_path');
+            db.run('ALTER TABLE technicians ADD COLUMN foto_path TEXT', (alterErr) => {
+                if (alterErr && !String(alterErr.message || '').toLowerCase().includes('duplicate')) {
+                    return cb(alterErr);
+                }
+                cb(null, 'foto_path');
+            });
+        });
+    };
+
+    ensureTechnicianPhotoColumn((colErr, photoCol) => {
+        if (colErr) {
+            unlinkPhotoIfExists(saved.relPath);
+            logger.error('[mobile-adapter] /me/photo schema', colErr);
+            return res.status(500).json({ success: false, message: 'Gagal menyiapkan kolom foto teknisi' });
+        }
+
+        db.get(`SELECT id, name, phone, ${photoCol} AS old_photo FROM technicians WHERE id = ?`, [techId], (getErr, techRow) => {
+            if (getErr || !techRow) {
+                unlinkPhotoIfExists(saved.relPath);
+                return res.status(getErr ? 500 : 404).json({
+                    success: false,
+                    message: getErr ? getErr.message : 'Profil teknisi tidak ditemukan',
+                });
+            }
+
+            db.run(
+                `UPDATE technicians SET ${photoCol} = ? WHERE id = ?`,
+                [saved.relPath, techId],
+                function (upErr) {
+                    if (upErr) {
+                        unlinkPhotoIfExists(saved.relPath);
+                        logger.error('[mobile-adapter] /me/photo technicians', upErr);
+                        return res.status(500).json({ success: false, message: upErr.message || 'Gagal menyimpan foto' });
+                    }
+
+                    if (techRow.old_photo && String(techRow.old_photo) !== saved.relPath) {
+                        unlinkPhotoIfExists(String(techRow.old_photo));
+                    }
+
+                    const variants = phoneVariantsForEmployeeLookup(
+                        req.user.phone || req.user.username || techRow.phone || ''
+                    );
+                    const finishOk = () =>
+                        res.json({
+                            success: true,
+                            message: 'Foto profil berhasil diperbarui',
+                            data: { photo_url: buildPhotoUrl(saved.relPath) },
+                        });
+
+                    if (!variants.length) return finishOk();
+
+                    const ph = variants.map(() => '?').join(',');
+                    db.get(
+                        `SELECT id, foto_path FROM employees
+                         WHERE (status IS NULL OR LOWER(TRIM(status)) = 'aktif')
+                           AND TRIM(no_hp) IN (${ph})
+                         LIMIT 1`,
+                        variants,
+                        (empErr, empRow) => {
+                            if (empErr || !empRow || !empRow.id) {
+                                if (empErr) {
+                                    logger.warn('[mobile-adapter] /me/photo employee lookup:', empErr.message);
+                                }
+                                return finishOk();
+                            }
+                            db.run(
+                                `UPDATE employees SET foto_path = ?, updated_at = datetime('now','localtime') WHERE id = ?`,
+                                [saved.relPath, empRow.id],
+                                (empUpErr) => {
+                                    if (empUpErr) {
+                                        logger.warn('[mobile-adapter] /me/photo employee update:', empUpErr.message);
+                                    } else if (empRow.foto_path && String(empRow.foto_path) !== saved.relPath) {
+                                        unlinkPhotoIfExists(String(empRow.foto_path));
+                                    }
+                                    return finishOk();
+                                }
+                            );
+                        }
+                    );
+                }
+            );
         });
     });
 });
@@ -4705,10 +4996,13 @@ router.get('/network-status', verifyToken, requireTechnician, async (req, res) =
     try {
         const {
             getUserAuthModeAsync,
-            getMikrotikConnectionForRouter,
-            getResourceInfoForRouter
+            getMikrotikConnectionForRouter
         } = require('../../config/mikrotik');
         const authMode = await getUserAuthModeAsync();
+        // Preferensi dari query / settings — akan di-resolve ke nama nyata di MikroTik.
+        const preferredInterface = String(
+            req.query.interface || getSetting('main_interface', 'SFP+1') || 'SFP+1'
+        ).trim();
 
         const _rt2 = billingManager._tenantWhere('');
         const _rt2Where = _rt2.sql ? ` WHERE tenant_id = ${parseInt(_rt2.params[0], 10)}` : '';
@@ -4729,11 +5023,124 @@ router.get('/network-status', verifyToken, requireTechnician, async (req, res) =
             ? routers
             : [{ id: 'default', name: 'Mikrotik Default', nas_ip: null, nas_identifier: null }];
 
+        const bitsToMbps = (bits) => {
+            const n = Number(bits);
+            if (!Number.isFinite(n) || n <= 0) return 0;
+            return parseFloat((n / 1000000).toFixed(2));
+        };
+
+        const normalizeIfaceKey = (name) =>
+            String(name || '')
+                .trim()
+                .toLowerCase()
+                .replace(/\s+/g, '')
+                .replace(/sfp-sfpplus/g, 'sfp+')
+                .replace(/sfpplus/g, 'sfp+');
+
+        /** Alias umum setting lama → nama nyata RouterOS (CRS/x86 sering SFP+1). */
+        const ifaceAliasCandidates = (preferred) => {
+            const p = String(preferred || '').trim();
+            const key = normalizeIfaceKey(p);
+            const out = [];
+            const add = (v) => {
+                if (v && !out.includes(v)) out.push(v);
+            };
+            add(p);
+            if (key === 'ether1-isp' || key === 'ether1' || key.includes('isp') && key.includes('ether1')) {
+                add('SFP+1');
+                add('sfp-sfpplus1');
+                add('ether1');
+            }
+            if (key === 'sfp-sfpplus1' || key === 'sfp+1' || key === 'sfpplus1') {
+                add('SFP+1');
+                add('sfp-sfpplus1');
+                add('sfpplus1');
+            }
+            if (key === 'sfp-sfpplus2' || key === 'sfp+2' || key === 'sfpplus2') {
+                add('SFP+2');
+                add('sfp-sfpplus2');
+            }
+            return out;
+        };
+
+        const resolveExistingInterface = async (conn, preferred) => {
+            let names = [];
+            try {
+                const ifaces = await conn.write('/interface/print');
+                names = (Array.isArray(ifaces) ? ifaces : [])
+                    .map((i) => (i && i.name != null ? String(i.name).trim() : ''))
+                    .filter((n) => n && !n.startsWith('<'));
+            } catch (e) {
+                logger.warn('[mobile-adapter] network-status interface list:', e.message || e);
+                return preferred;
+            }
+            if (!names.length) return preferred;
+
+            const byKey = new Map();
+            for (const n of names) byKey.set(normalizeIfaceKey(n), n);
+
+            for (const cand of ifaceAliasCandidates(preferred)) {
+                const hit = byKey.get(normalizeIfaceKey(cand));
+                if (hit) return hit;
+            }
+
+            // Fallback: interface fisik SFP/ether (bukan vlan/pppoe/bridge) dengan preferensi SFP+
+            const physical = names.filter((n) => {
+                const k = n.toLowerCase();
+                return (
+                    k.startsWith('sfp') ||
+                    /^ether\d+/i.test(n)
+                );
+            });
+            const sfp = physical.find((n) => /^sfp\+/i.test(n) || /^sfp-sfpplus/i.test(n));
+            return sfp || physical[0] || preferred;
+        };
+
+        const readMainInterfaceMbps = async (conn, preferredIface) => {
+            if (!conn) return { rx_mbps: 0, tx_mbps: 0, interface: preferredIface || null };
+            const resolved = await resolveExistingInterface(conn, preferredIface);
+            const tryNames = [...new Set([resolved, ...ifaceAliasCandidates(preferredIface)])];
+            let lastError = null;
+            for (const ifaceName of tryNames) {
+                try {
+                    const monitor = await conn.write('/interface/monitor-traffic', [
+                        `=interface=${ifaceName}`,
+                        '=once='
+                    ]);
+                    const m = monitor && monitor[0] ? monitor[0] : null;
+                    if (!m) continue;
+                    return {
+                        rx_mbps: bitsToMbps(m['rx-bits-per-second']),
+                        tx_mbps: bitsToMbps(m['tx-bits-per-second']),
+                        interface: ifaceName
+                    };
+                } catch (e) {
+                    lastError = e;
+                }
+            }
+            logger.warn(
+                `[mobile-adapter] network-status traffic ${preferredIface}→${resolved}:`,
+                (lastError && lastError.message) || lastError || 'no data'
+            );
+            return {
+                rx_mbps: 0,
+                tx_mbps: 0,
+                interface: resolved || preferredIface,
+                error: lastError ? lastError.message || String(lastError) : 'Interface tidak terbaca'
+            };
+        };
+
         const routerStats = await Promise.all(
             routerRows.map(async (r) => {
                 const name = r.name || r.nas_identifier || r.nas_ip || `Router ${r.id}`;
                 try {
-                    const conn = await getMikrotikConnectionForRouter(r);
+                    const connPromise = getMikrotikConnectionForRouter(r);
+                    const conn = await Promise.race([
+                        connPromise,
+                        new Promise((_, reject) =>
+                            setTimeout(() => reject(new Error('network-status connect timeout')), 1500)
+                        ),
+                    ]);
                     if (!conn) {
                         return {
                             id: r.id,
@@ -4742,27 +5149,29 @@ router.get('/network-status', verifyToken, requireTechnician, async (req, res) =
                             offline: 0,
                             total: 0,
                             status: 'offline',
+                            main_interface: preferredInterface,
+                            rx_mbps: 0,
+                            tx_mbps: 0,
                             error: 'Koneksi router gagal'
                         };
                     }
-                    const [actives, secrets, resourceInfo] = await Promise.all([
+                    const [actives, secrets, traffic] = await Promise.all([
                         conn.write('/ppp/active/print'),
                         conn.write('/ppp/secret/print'),
-                        getResourceInfoForRouter(r)
+                        readMainInterfaceMbps(conn, preferredInterface)
                     ]);
                     const activeCount = Array.isArray(actives) ? actives.length : 0;
                     const totalSecrets = Array.isArray(secrets) ? secrets.length : 0;
-                    const traffic = resourceInfo && resourceInfo.success && resourceInfo.data
-                        ? resourceInfo.data
-                        : null;
                     return {
                         id: r.id,
                         name,
                         active: activeCount,
                         offline: Math.max(totalSecrets - activeCount, 0),
                         total: totalSecrets,
-                        rx_mbps: Number(traffic && traffic.totalNetworkInMbps) || 0,
-                        tx_mbps: Number(traffic && traffic.totalNetworkOutMbps) || 0,
+                        main_interface: traffic.interface || preferredInterface,
+                        // Mbps rate interface utama saja (sama rumus web: bits/s / 1e6)
+                        rx_mbps: Number(traffic.rx_mbps) || 0,
+                        tx_mbps: Number(traffic.tx_mbps) || 0,
                         status: 'online'
                     };
                 } catch (e) {
@@ -4773,6 +5182,9 @@ router.get('/network-status', verifyToken, requireTechnician, async (req, res) =
                         active: 0,
                         offline: 0,
                         total: 0,
+                        main_interface: preferredInterface,
+                        rx_mbps: 0,
+                        tx_mbps: 0,
                         status: 'offline',
                         error: (e && e.message) ? e.message : 'Router tidak merespons'
                     };
@@ -4790,10 +5202,15 @@ router.get('/network-status', verifyToken, requireTechnician, async (req, res) =
             { active: 0, offline: 0, total: 0 }
         );
 
+        const resolvedMain =
+            (routerStats.find((r) => r.status === 'online' && r.main_interface) || {}).main_interface ||
+            preferredInterface;
+
         return res.json({
             success: true,
             mode: 'mikrotik',
             auth_mode: authMode,
+            main_interface: resolvedMain,
             summary,
             routers: routerStats
         });
@@ -5175,16 +5592,19 @@ router.get('/collector/overview', verifyToken, requireCollector, async (req, res
     if (!collectorId) {
         return res.status(400).json({ success: false, message: 'ID kolektor tidak valid' });
     }
-    const month = req.query.month != null && req.query.month !== '' ? String(req.query.month) : null;
-    const year = req.query.year != null && req.query.year !== '' ? String(req.query.year) : null;
+    const { month, year } = parseCollectorPeriodQuery(req);
     try {
         const [collector, dashboardStats, allMappedCustomers] = await Promise.all([
             billingManager.getCollectorById(collectorId),
             billingManager.getCollectorDashboardStats(collectorId, month, year),
-            billingManager.getCollectorCustomers(collectorId)
+            billingManager.getCollectorCustomers(collectorId, month, year)
         ]);
         const list = allMappedCustomers || [];
-        const totalPelangganAktif = list.length;
+        const baruCount = list.filter((c) => matchesCollectorPelangganBaru(c)).length;
+        const aktifCount = list.filter((c) => matchesCollectorPelangganAktif(c)).length;
+        const nonaktifCount = list.filter((c) => collectorCustomerIsInactive(c)).length;
+        // Total = aktif + nonaktif + baru
+        const totalPelangganAktif = aktifCount + nonaktifCount + baruCount;
         const belumBayarCount = list.filter((c) => matchesAdminBelumLunasFromPaymentStatus(c)).length;
         const lunasCount = list.filter((c) => matchesAdminLunasFromPaymentStatus(c)).length;
         const isolirCount = list.filter((c) => collectorCustomerIsIsolir(c)).length;
@@ -5196,7 +5616,9 @@ router.get('/collector/overview', verifyToken, requireCollector, async (req, res
                 name: c.name,
                 address: c.address || '-',
                 amount: Math.round(parseFloat(c.package_price || 0)),
-                payment_status: c.payment_status
+                payment_status: c.payment_status,
+                lifetime_payment_status: c.lifetime_payment_status || c.payment_status,
+                status: c.status
             }));
 
         const targetMonth = Math.round(parseFloat(dashboardStats.tagihan?.total || 0));
@@ -5228,9 +5650,12 @@ router.get('/collector/overview', verifyToken, requireCollector, async (req, res
                 statistics: sanitizeCollectorDashboardStats(dashboardStats),
                 fieldUi: {
                     totalPelangganAktif,
+                    aktifCount,
+                    baruCount,
                     belumBayarCount,
                     lunasCount,
                     isolirCount,
+                    nonaktifCount,
                     priorityCustomers,
                     targetMonth,
                     terkumpul,
@@ -5281,9 +5706,16 @@ router.get('/collector/customers', verifyToken, requireCollector, async (req, re
     const statusFilter = (req.query.status || '').toString().toLowerCase();
     const q = (req.query.q || '').toString();
     const areaFilter = (req.query.area || '').toString();
+    const locationStatus = (req.query.location_status || '').toString().toLowerCase();
+    const { month, year } = parseCollectorPeriodQuery(req);
     try {
-        const allMappedCustomers = await billingManager.getCollectorCustomers(collectorId);
-        const rows = filterCollectorCustomersForMobile(allMappedCustomers, statusFilter, q, areaFilter);
+        const allMappedCustomers = await billingManager.getCollectorCustomers(collectorId, month, year);
+        let rows = filterCollectorCustomersForMobile(allMappedCustomers, statusFilter, q, areaFilter);
+        if (locationStatus === 'tagged') {
+            rows = rows.filter((c) => customerRowHasLocationTag(c));
+        } else if (locationStatus === 'untagged') {
+            rows = rows.filter((c) => !customerRowHasLocationTag(c));
+        }
         const data = rows.map((c) => ({
             id: c.id,
             customer_id: c.customer_id != null && c.customer_id !== '' ? String(c.customer_id) : null,
@@ -5299,6 +5731,7 @@ router.get('/collector/customers', verifyToken, requireCollector, async (req, re
             email: c.email || '',
             status: c.status,
             payment_status: c.payment_status,
+            lifetime_payment_status: c.lifetime_payment_status || c.payment_status,
             package_price: Math.round(parseFloat(c.package_price || 0)),
             package_name: c.package_name || '',
             latitude:
@@ -5331,10 +5764,11 @@ router.get('/collector/settlement', verifyToken, requireCollector, async (req, r
     if (!collectorId) {
         return res.status(400).json({ success: false, message: 'ID kolektor tidak valid' });
     }
+    const { month, year } = parseCollectorPeriodQuery(req);
     try {
         const [payments, dashboardStats] = await Promise.all([
-            billingManager.getCollectorAllPayments(collectorId),
-            billingManager.getCollectorDashboardStats(collectorId)
+            billingManager.getCollectorAllPayments(collectorId, month, year),
+            billingManager.getCollectorDashboardStats(collectorId, month, year)
         ]);
         const s = dashboardStats.setoran || {};
         const sudahSetor = Math.round(parseFloat(s.sudah_setor || 0));
@@ -5362,9 +5796,13 @@ router.get('/collector/me', verifyToken, requireCollector, async (req, res) => {
         return res.status(400).json({ success: false, message: 'ID kolektor tidak valid' });
     }
     try {
+        const photoCol = await new Promise((resolve, reject) => {
+            ensureCollectorsPhotoColumn((err, col) => (err ? reject(err) : resolve(col)));
+        });
         const row = await new Promise((resolve, reject) => {
             db.get(
-                'SELECT id, name, phone, email, address, commission_rate, status, created_at FROM collectors WHERE id = ?',
+                `SELECT id, name, phone, email, address, commission_rate, status, created_at, ${photoCol} AS photo_path
+                 FROM collectors WHERE id = ?`,
                 [collectorId],
                 (err, r) => (err ? reject(err) : resolve(r))
             );
@@ -5389,10 +5827,14 @@ router.get('/collector/me', verifyToken, requireCollector, async (req, res) => {
         const paidDistinct = parseInt(statsSafe.lunas?.count || 0, 10) || 0;
         const successRate = tagCount > 0 ? Math.min(100, Math.round((paidDistinct / tagCount) * 100)) : 0;
         const totalCollections = (allPayments || []).filter((p) => p.status === 'completed').length;
+        const photoRel = pickTechnicianPhotoPath(row);
+        const payload = { ...row };
+        delete payload.photo_path;
+        if (photoRel) payload.photo_url = buildPhotoUrl(photoRel);
         res.json({
             success: true,
             data: {
-                ...row,
+                ...payload,
                 profileStats: {
                     successRate,
                     totalCollections,
@@ -5404,6 +5846,66 @@ router.get('/collector/me', verifyToken, requireCollector, async (req, res) => {
         logger.error('[mobile-adapter] collector/me', error);
         res.status(500).json({ success: false, message: error.message || 'Gagal memuat' });
     }
+});
+
+router.post('/collector/me/photo', verifyToken, requireCollector, (req, res) => {
+    const collectorId = parseCollectorId(req);
+    if (!collectorId) {
+        return res.status(400).json({ success: false, message: 'ID kolektor tidak valid' });
+    }
+    const body = req.body || {};
+    const photoB64 = body.photo_base64 != null ? String(body.photo_base64).trim() : '';
+    if (!photoB64) {
+        return res.status(400).json({ success: false, message: 'Foto wajib diisi' });
+    }
+
+    let saved;
+    try {
+        saved = saveCollectorProfilePhotoFromBase64(photoB64);
+    } catch (e) {
+        return res.status(400).json({
+            success: false,
+            message: e && e.message ? e.message : 'Gagal memproses foto'
+        });
+    }
+
+    ensureCollectorsPhotoColumn((colErr, photoCol) => {
+        if (colErr) {
+            logger.error('[mobile-adapter] collector/me/photo schema', colErr);
+            return res.status(500).json({ success: false, message: colErr.message || 'Gagal skema' });
+        }
+        db.get(
+            `SELECT id, ${photoCol} AS old_photo FROM collectors WHERE id = ?`,
+            [collectorId],
+            (getErr, colRow) => {
+                if (getErr) {
+                    logger.error('[mobile-adapter] collector/me/photo get', getErr);
+                    return res.status(500).json({ success: false, message: getErr.message });
+                }
+                if (!colRow) {
+                    return res.status(404).json({ success: false, message: 'Kolektor tidak ditemukan' });
+                }
+                db.run(
+                    `UPDATE collectors SET ${photoCol} = ?, updated_at = datetime('now','localtime') WHERE id = ?`,
+                    [saved.relPath, collectorId],
+                    (upErr) => {
+                        if (upErr) {
+                            logger.error('[mobile-adapter] collector/me/photo update', upErr);
+                            return res.status(500).json({ success: false, message: upErr.message });
+                        }
+                        if (colRow.old_photo && String(colRow.old_photo) !== saved.relPath) {
+                            unlinkPhotoIfExists(String(colRow.old_photo));
+                        }
+                        res.json({
+                            success: true,
+                            message: 'Foto profil berhasil diperbarui',
+                            data: { photo_url: buildPhotoUrl(saved.relPath) }
+                        });
+                    }
+                );
+            }
+        );
+    });
 });
 
 router.put('/collector/me', verifyToken, requireCollector, async (req, res) => {

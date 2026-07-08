@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../store/auth_provider.dart';
+import '../widgets/logout_confirm_dialog.dart';
 import 'app_update_screen.dart';
 import 'technician_profile_edit_screen.dart';
 
@@ -36,28 +37,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  void _showLogoutDialog(BuildContext context, AuthProvider auth) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Logout'),
-        content: const Text('Are you sure you want to logout?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              Navigator.pop(context); // close settings
-              auth.logout();
-            },
-            child: const Text('Logout', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
+  Future<void> _showLogoutDialog(BuildContext context, AuthProvider auth) async {
+    final ok = await confirmLogout(
+      context,
+      title: 'Logout',
+      message: 'Yakin ingin keluar dari aplikasi?',
+      confirmLabel: 'Logout',
     );
+    if (!ok || !context.mounted) return;
+    Navigator.pop(context); // close settings
+    await auth.logout();
   }
 
   @override

@@ -388,6 +388,8 @@ class _CollectorCustomerDetailPanelState
     final phone = _phoneDisplay;
     final addr = row['address']?.toString() ?? '';
     final ps = row['payment_status']?.toString() ?? '';
+    final lifePs =
+        row['lifetime_payment_status']?.toString() ?? ps;
     final st = row['status']?.toString().toLowerCase() ?? '';
     final price = _coerceNum(row['package_price'])?.round() ?? 0;
     final pkg = row['package_name']?.toString() ?? '';
@@ -412,9 +414,11 @@ class _CollectorCustomerDetailPanelState
 
     final cid = _customerId;
     final isIsolir = st == 'suspended';
-    final isPaid = ps == 'paid';
-    final isUnpaidLike =
-        ps == 'unpaid' || ps == 'overdue' || ps == 'no_invoice';
+    final isInactive = st == 'inactive';
+    final isPaid = ps == 'paid' || (ps == 'no_invoice' && lifePs == 'paid');
+    final isLifetimeNew = lifePs == 'no_invoice';
+    // Belum bayar = punya tagihan unpaid/overdue; bukan baru / nonaktif.
+    final isUnpaidLike = !isInactive && !isLifetimeNew && (ps == 'unpaid' || ps == 'overdue');
     final hasUnpaidInvoiceInHistory =
         !_loadingDetail &&
         _history.any((inv) {
@@ -424,22 +428,27 @@ class _CollectorCustomerDetailPanelState
     // Terisolir tetap bisa ditagih bila ada tunggakan (ringkasan atau riwayat faktur).
     final showTagih =
         cid != null &&
+        !isInactive &&
         !isPaid &&
         (isUnpaidLike || (isIsolir && hasUnpaidInvoiceInHistory));
-    final showResi = !isIsolir && isPaid;
+    final showResi = !isIsolir && !isInactive && isPaid;
 
     late String badge;
     late Color badgeBg;
     late Color badgeFg;
-    if (isIsolir) {
+    if (isInactive) {
+      badge = 'Nonaktif';
+      badgeBg = const Color(0xFFE8E8E8);
+      badgeFg = const Color(0xFF5F5F5F);
+    } else if (isIsolir) {
       badge = 'Isolir';
       badgeBg = FieldCollectorColors.errorContainer;
       badgeFg = FieldCollectorColors.onErrorContainer;
-    } else if (isPaid) {
+    } else if (ps == 'paid' || (ps == 'no_invoice' && lifePs == 'paid')) {
       badge = 'Lunas';
       badgeBg = const Color(0xFFD3F5D6);
       badgeFg = const Color(0xFF0D5A16);
-    } else if (ps == 'no_invoice') {
+    } else if (isLifetimeNew) {
       badge = 'Baru';
       badgeBg = const Color(0xFFD4E3FF);
       badgeFg = const Color(0xFF001C3A);

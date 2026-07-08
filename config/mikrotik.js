@@ -1137,12 +1137,24 @@ async function collectMikrotikPppActiveUptimeByLoginMap() {
     return uptimeByLogin;
 }
 
+/** Cache singkat agar list pelanggan / network-map tidak menunggu reconnect MikroTik tiap request. */
+const ACTIVE_PPPOE_CACHE_TTL_MS = 30000;
+let _activePppoeCache = null;
+let _activePppoeInflight = null;
+
+function cloneActivePppoeResult(result) {
+    return {
+        names: new Set(result.names || []),
+        uptimeByLogin: { ...(result.uptimeByLogin || {}) },
+    };
+}
+
 /**
  * Sekali panggil: himpunan login online (RADIUS radacct ATAU nama di /ppp/active) + uptime tampilan **hanya dari MikroTik /ppp/active**
  * (sama flow sumber uptime seperti GET customers/:id/ppp-session).
  * Dipakai mobile-adapter network-map (tanpa N+1 per pelanggan).
  */
-async function getActivePppoeLoginNamesSetWithUptimeMap() {
+async function fetchActivePppoeLoginNamesSetWithUptimeMapUncached() {
     const set = new Set();
     const authMode = await getUserAuthModeAsync();
 
@@ -1179,24 +1191,94 @@ async function getActivePppoeLoginNamesSetWithUptimeMap() {
         }
         return { names: set, uptimeByLogin };
     }
-    for (const r of routers) {
-        try {
-            const conn = await getMikrotikConnectionForRouter(r);
-            const active = await conn.write('/ppp/active/print');
-            for (const row of active || []) mergeRow(row);
-        } catch (e) {
-            logger.warn(`[getActivePppoeLoginNamesSetWithUptimeMap] router ${r.name}: ${e.message}`);
-        }
-    }
+    // Parallel per router — router down tidak ditunggu berantai.
+    await Promise.all(
+        routers.map(async (r) => {
+            try {
+                const conn = await getMikrotikConnectionForRouter(r);
+                const active = await conn.write('/ppp/active/print');
+                for (const row of active || []) mergeRow(row);
+            } catch (e) {
+                logger.warn(`[getActivePppoeLoginNamesSetWithUptimeMap] router ${r.name}: ${e.message}`);
+            }
+        })
+    );
     return { names: set, uptimeByLogin };
+}
+
+async function getActivePppoeLoginNamesSetWithUptimeMap(options = {}) {
+    const ttlMs = Number.isFinite(options.ttlMs) ? options.ttlMs : ACTIVE_PPPOE_CACHE_TTL_MS;
+    const forceRefresh = options.forceRefresh === true;
+    const maxWaitMs = Number.isFinite(options.maxWaitMs) ? options.maxWaitMs : 1200;
+    const now = Date.now();
+
+    if (
+        !forceRefresh &&
+        _activePppoeCache &&
+        now - _activePppoeCache.at < ttlMs
+    ) {
+        return cloneActivePppoeResult(_activePppoeCache.value);
+    }
+
+    const emptyResult = () => ({ names: new Set(), uptimeByLogin: Object.create(null) });
+
+    const awaitWithBudget = async (promise) => {
+        if (_activePppoeCache && !forceRefresh) {
+            return cloneActivePppoeResult(_activePppoeCache.value);
+        }
+        try {
+            const value = await Promise.race([
+                promise,
+                new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('active-pppoe-cache-wait-timeout')), maxWaitMs)
+                ),
+            ]);
+            return cloneActivePppoeResult(value);
+        } catch (e) {
+            if (e && e.message === 'active-pppoe-cache-wait-timeout') {
+                if (_activePppoeCache) {
+                    return cloneActivePppoeResult(_activePppoeCache.value);
+                }
+                return emptyResult();
+            }
+            if (_activePppoeCache) {
+                return cloneActivePppoeResult(_activePppoeCache.value);
+            }
+            throw e;
+        }
+    };
+
+    if (_activePppoeInflight) {
+        return awaitWithBudget(_activePppoeInflight);
+    }
+
+    _activePppoeInflight = (async () => {
+        try {
+            const value = await fetchActivePppoeLoginNamesSetWithUptimeMapUncached();
+            _activePppoeCache = { at: Date.now(), value };
+            return value;
+        } catch (e) {
+            if (_activePppoeCache) {
+                logger.warn(
+                    `[getActivePppoeLoginNamesSetWithUptimeMap] refresh failed, using stale cache: ${e.message}`
+                );
+                return _activePppoeCache.value;
+            }
+            throw e;
+        } finally {
+            _activePppoeInflight = null;
+        }
+    })();
+
+    return awaitWithBudget(_activePppoeInflight);
 }
 
 /**
  * Sekali panggil: himpunan nama login PPPoE yang sedang online (semua NAS / RADIUS).
  * Dipakai mobile-adapter network-map agar tidak memanggil getPppoeLoginOnlineStatus per pelanggan (sangat berat).
  */
-async function getActivePppoeLoginNamesSet() {
-    const { names } = await getActivePppoeLoginNamesSetWithUptimeMap();
+async function getActivePppoeLoginNamesSet(options = {}) {
+    const { names } = await getActivePppoeLoginNamesSetWithUptimeMap(options);
     return names;
 }
 

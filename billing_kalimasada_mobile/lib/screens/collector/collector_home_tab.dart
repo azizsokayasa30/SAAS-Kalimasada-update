@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import '../../services/api_client.dart';
+import '../../store/auth_provider.dart';
 import '../../store/collector_provider.dart';
 import '../../theme/collector_colors.dart';
 import '../../utils/collector_debug_log.dart';
@@ -9,6 +11,28 @@ import '../tag_customer_location_screen.dart';
 String _rupiah(num? v) {
   final n = (v ?? 0).round();
   return 'Rp ${NumberFormat.decimalPattern('id_ID').format(n)}';
+}
+
+String _tenantName(BuildContext context) {
+  const keys = [
+    'tenant_name',
+    'tenantName',
+    'company_header',
+    'companyHeader',
+    'company',
+    'business_name',
+    'tenant',
+  ];
+  final authUser = context.read<AuthProvider>().user;
+  for (final key in keys) {
+    final value = authUser?[key]?.toString().trim() ?? '';
+    if (value.isNotEmpty) return value;
+  }
+  final slug = ApiClient.apiTenant?.trim();
+  if (slug != null && slug.isNotEmpty) {
+    return slug[0].toUpperCase() + slug.substring(1);
+  }
+  return 'Billing Kalimasada';
 }
 
 const _kMonthShortId = [
@@ -96,7 +120,7 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                 FilledButton(
                   onPressed: () => context
                       .read<CollectorProvider>()
-                      .fetchOverview(month: _month, year: _year),
+                      .setPeriodAndRefresh(month: _month, year: _year),
                   child: const Text('Coba lagi'),
                 ),
               ],
@@ -114,22 +138,24 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
         .take(2)
         .join()
         .toUpperCase();
-    final area = field?['areaLabel']?.toString() ?? '';
+    final tenantName = _tenantName(context);
     final displayDate = field?['displayDate']?.toString() ?? '';
     final target = (field?['targetMonth'] as num?)?.toInt() ?? 0;
     final terkumpul = (field?['terkumpul'] as num?)?.toInt() ?? 0;
     final pct = (field?['progressPct'] as num?)?.toInt() ?? 0;
     final sisa = (field?['sisaTarget'] as num?)?.toInt() ?? 0;
     final totalPlg = (field?['totalPelangganAktif'] as num?)?.toInt() ?? 0;
+    final baru = (field?['baruCount'] as num?)?.toInt() ?? 0;
     final blm = (field?['belumBayarCount'] as num?)?.toInt() ?? 0;
     final lunas = (field?['lunasCount'] as num?)?.toInt() ?? 0;
     final isolir = (field?['isolirCount'] as num?)?.toInt() ?? 0;
+    final nonaktif = (field?['nonaktifCount'] as num?)?.toInt() ?? 0;
 
     return ColoredBox(
       color: FieldCollectorColors.dashboardCanvas,
       child: RefreshIndicator(
         color: FieldCollectorColors.primaryContainer,
-        onRefresh: () => context.read<CollectorProvider>().fetchOverview(
+        onRefresh: () => context.read<CollectorProvider>().setPeriodAndRefresh(
           month: _month,
           year: _year,
         ),
@@ -184,7 +210,7 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                           displayDate,
                         ),
                         const SizedBox(height: 6),
-                        _rowIconWelcome(Icons.location_on_rounded, area),
+                        _rowIconWelcome(Icons.apartment_rounded, tenantName),
                       ],
                     ),
                   ),
@@ -484,7 +510,10 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                           onPressed: () async {
                             await context
                                 .read<CollectorProvider>()
-                                .fetchOverview(month: _month, year: _year);
+                                .setPeriodAndRefresh(
+                                  month: _month,
+                                  year: _year,
+                                );
                           },
                           child: const Text('Terapkan'),
                         ),
@@ -568,9 +597,11 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
             _summaryGrid(
               context,
               totalPlg,
+              baru,
               blm,
               lunas,
               isolir,
+              nonaktif,
               widget.onOpenCustomersList,
             ),
             const SizedBox(height: 22),
@@ -670,9 +701,11 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
   Widget _summaryGrid(
     BuildContext context,
     int total,
+    int baru,
     int blm,
     int lunas,
     int isolir,
+    int nonaktif,
     void Function(String status)? onOpenCustomersList,
   ) {
     const statH = 56.0;
@@ -764,37 +797,53 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
       );
     }
 
-    return Column(
+    // Kiri: Total → Baru → Nonaktif | Kanan: Lunas → Belum lunas → Isolir
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        statTile(
-          bg: FieldCollectorColors.statTotalBg,
-          iconBg: FieldCollectorColors.statTotalIcon,
-          iconFg: Colors.white,
-          valueColor: FieldCollectorColors.statTotalIcon,
-          icon: Icons.groups_2_rounded,
-          label: 'Total pelanggan',
-          value: '$total',
-          filterStatus: '',
-        ),
-        const SizedBox(height: 10),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: statTile(
-                bg: FieldCollectorColors.statBelumBg,
-                iconBg: FieldCollectorColors.statBelumIcon,
+        Expanded(
+          child: Column(
+            children: [
+              statTile(
+                bg: FieldCollectorColors.statTotalBg,
+                iconBg: FieldCollectorColors.statTotalIcon,
                 iconFg: Colors.white,
-                valueColor: FieldCollectorColors.statBelumIcon,
-                icon: Icons.pending_actions_rounded,
-                label: 'Belum bayar',
-                value: '$blm',
-                filterStatus: 'unpaid',
+                valueColor: FieldCollectorColors.statTotalIcon,
+                icon: Icons.groups_2_rounded,
+                label: 'Total',
+                value: '$total',
+                filterStatus: 'total',
               ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: statTile(
+              const SizedBox(height: 10),
+              statTile(
+                bg: FieldCollectorColors.statBaruBg,
+                iconBg: FieldCollectorColors.statBaruIcon,
+                iconFg: Colors.white,
+                valueColor: FieldCollectorColors.statBaruIcon,
+                icon: Icons.person_add_alt_1_rounded,
+                label: 'Baru',
+                value: '$baru',
+                filterStatus: 'baru',
+              ),
+              const SizedBox(height: 10),
+              statTile(
+                bg: FieldCollectorColors.statNonaktifBg,
+                iconBg: FieldCollectorColors.statNonaktifIcon,
+                iconFg: Colors.white,
+                valueColor: FieldCollectorColors.statNonaktifIcon,
+                icon: Icons.person_off_rounded,
+                label: 'Nonaktif',
+                value: '$nonaktif',
+                filterStatus: 'nonaktif',
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            children: [
+              statTile(
                 bg: FieldCollectorColors.statLunasBg,
                 iconBg: FieldCollectorColors.statLunasIcon,
                 iconFg: Colors.white,
@@ -804,19 +853,30 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                 value: '$lunas',
                 filterStatus: 'paid',
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        statTile(
-          bg: FieldCollectorColors.statIsolirBg,
-          iconBg: FieldCollectorColors.statIsolirIcon,
-          iconFg: Colors.white,
-          valueColor: FieldCollectorColors.statIsolirIcon,
-          icon: Icons.wifi_off_rounded,
-          label: 'Terisolir',
-          value: '$isolir',
-          filterStatus: 'isolir',
+              const SizedBox(height: 10),
+              statTile(
+                bg: FieldCollectorColors.statBelumBg,
+                iconBg: FieldCollectorColors.statBelumIcon,
+                iconFg: Colors.white,
+                valueColor: FieldCollectorColors.statBelumIcon,
+                icon: Icons.pending_actions_rounded,
+                label: 'Belum lunas',
+                value: '$blm',
+                filterStatus: 'unpaid',
+              ),
+              const SizedBox(height: 10),
+              statTile(
+                bg: FieldCollectorColors.statIsolirBg,
+                iconBg: FieldCollectorColors.statIsolirIcon,
+                iconFg: Colors.white,
+                valueColor: FieldCollectorColors.statIsolirIcon,
+                icon: Icons.wifi_off_rounded,
+                label: 'Isolir',
+                value: '$isolir',
+                filterStatus: 'isolir',
+              ),
+            ],
+          ),
         ),
       ],
     );

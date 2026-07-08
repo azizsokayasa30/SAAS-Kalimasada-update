@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../store/auth_provider.dart';
 import '../../store/customer_provider.dart';
+import '../../widgets/logout_confirm_dialog.dart';
 import '../app_update_screen.dart';
 
 class AdminMoreScreen extends StatefulWidget {
@@ -142,32 +143,16 @@ class _AdminMoreScreenState extends State<AdminMoreScreen> {
     );
   }
 
-  void _showLogoutDialog(BuildContext context, AuthProvider auth) {
-    showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.white,
-        title: const Text('Logout'),
-        content: const Text('Keluar dari aplikasi admin?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Batal'),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              auth.logout();
-            },
-            style: FilledButton.styleFrom(
-              backgroundColor: _danger,
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('Logout'),
-          ),
-        ],
-      ),
+  Future<void> _showLogoutDialog(BuildContext context, AuthProvider auth) async {
+    final ok = await confirmLogout(
+      context,
+      title: 'Logout',
+      message: 'Keluar dari aplikasi admin?',
+      confirmLabel: 'Logout',
     );
+    if (ok && context.mounted) {
+      await auth.logout();
+    }
   }
 
   @override

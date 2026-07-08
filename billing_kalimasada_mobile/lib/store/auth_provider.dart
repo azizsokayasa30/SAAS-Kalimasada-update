@@ -6,6 +6,7 @@ import '../services/api_client.dart';
 import '../services/biometric_auth_service.dart';
 import '../services/credential_storage.dart';
 import '../services/session_service.dart';
+import '../services/tenant_storage.dart';
 
 class AuthProvider extends ChangeNotifier {
   bool _isInitialized = false;
@@ -35,6 +36,7 @@ class AuthProvider extends ChangeNotifier {
         const Duration(seconds: 12),
       );
       _token = prefs.getString('token');
+      ApiClient.setAuthToken(_token);
       _role = prefs.getString('role');
 
       final userStr = prefs.getString('user');
@@ -86,6 +88,7 @@ class AuthProvider extends ChangeNotifier {
   Future<void> login(
     String phone,
     String password, {
+    String? tenant,
     bool rememberPassword = false,
     bool enableBiometric = false,
   }) async {
@@ -95,9 +98,20 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
+      final tenantSlug = tenant?.trim().toLowerCase();
+      if (tenantSlug == null || tenantSlug.isEmpty) {
+        _error = 'Kode tenant wajib diisi (mis. default, skynet)';
+        return;
+      }
+
+      await TenantStorage.save(tenantSlug);
+      // Pastikan X-Tenant ikut di request login (runtime tenant).
+      ApiClient.setRuntimeTenant(tenantSlug);
+
       final response = await ApiClient.post('/api/auth/login', {
-        'username': phone,
+        'username': phone.trim(),
         'password': password,
+        'tenant': tenantSlug,
       });
 
       if (response.statusCode == 200) {
@@ -106,24 +120,27 @@ class AuthProvider extends ChangeNotifier {
           _token = data['token'];
           _user = data['user'];
           _role = _user?['role'];
+          ApiClient.setAuthToken(_token);
 
           final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('token', _token!);
-          await prefs.setString('role', _role ?? '');
-          await prefs.setString('user', jsonEncode(_user));
-
-          await SessionService.markSessionValid();
+          // Persist session di background — UI tidak perlu menunggu disk I/O.
+          unawaited(() async {
+            await prefs.setString('token', _token!);
+            await prefs.setString('role', _role ?? '');
+            await prefs.setString('user', jsonEncode(_user));
+            await SessionService.markSessionValid();
+            if (rememberPassword) {
+              await CredentialStorage.saveCredentials(
+                username: phone,
+                password: password,
+                enableBiometric: enableBiometric,
+                tenant: tenantSlug,
+              );
+            } else {
+              await CredentialStorage.clearCredentials();
+            }
+          }());
           _scheduleMidnightLogout();
-
-          if (rememberPassword) {
-            await CredentialStorage.saveCredentials(
-              username: phone,
-              password: password,
-              enableBiometric: enableBiometric,
-            );
-          } else {
-            await CredentialStorage.clearCredentials();
-          }
         } else {
           _error = data['message'] ?? 'Login gagal';
         }
@@ -153,6 +170,10 @@ class AuthProvider extends ChangeNotifier {
       return;
     }
 
+    if (creds.tenant != null && creds.tenant!.trim().isNotEmpty) {
+      await TenantStorage.save(creds.tenant);
+    }
+
     final authResult = await BiometricAuthService.authenticate();
     if (!authResult.ok) {
       _error = authResult.error ?? 'Sidik jari gagal atau dibatalkan';
@@ -163,6 +184,7 @@ class AuthProvider extends ChangeNotifier {
     await login(
       creds.username!,
       creds.password!,
+      tenant: creds.tenant ?? ApiClient.apiTenant,
       rememberPassword: true,
       enableBiometric: true,
     );
@@ -215,6 +237,37 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  /// Upload foto profil teknisi (JPEG/PNG base64) ke backend.
+  Future<String?> updateTechnicianPhotoBase64(String photoBase64) async {
+    if (_role != 'technician' || _token == null) {
+      return 'Akun teknisi tidak aktif';
+    }
+    final payload = photoBase64.trim();
+    if (payload.isEmpty) return 'Foto wajib diisi';
+    try {
+      final response = await ApiClient.post('/api/mobile-adapter/me/photo', {
+        'photo_base64': payload,
+      });
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        final photoUrl = data is Map && data['data'] is Map
+            ? (data['data'] as Map)['photo_url']?.toString()
+            : null;
+        if (photoUrl != null && photoUrl.trim().isNotEmpty && _user != null) {
+          _user = {..._user!, 'photo_url': photoUrl};
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('user', jsonEncode(_user));
+          notifyListeners();
+        }
+        await refreshTechnicianProfile();
+        return null;
+      }
+      return data['message']?.toString() ?? 'Gagal mengunggah foto';
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
   Future<void> logout({bool sessionExpired = false, bool clearSavedCredentials = false}) async {
     _midnightLogoutTimer?.cancel();
     _midnightLogoutTimer = null;
@@ -223,6 +276,7 @@ class AuthProvider extends ChangeNotifier {
     _role = null;
     _user = null;
     _sessionExpiredMessage = sessionExpired;
+    ApiClient.setAuthToken(null);
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('token');

@@ -3,9 +3,35 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
+import 'api_origin_cache.dart';
+
 class ApiClient {
   /// Batas waktu request agar UI tidak menggantung jika server tidak terjangkau dari HP.
   static const Duration requestTimeout = Duration(seconds: 45);
+
+  static String? _runtimeTenant;
+  static String? _workingOrigin;
+  /// Token di memori — hindari SharedPreferences di setiap request.
+  static String? _memoryToken;
+
+  static void setAuthToken(String? token) {
+    final t = token?.trim();
+    _memoryToken = (t == null || t.isEmpty) ? null : t;
+  }
+
+  static String? get memoryToken => _memoryToken;
+
+  static Future<String?> _resolveToken() async {
+    if (_memoryToken != null && _memoryToken!.isNotEmpty) {
+      return _memoryToken;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token');
+    if (token != null && token.isNotEmpty) {
+      _memoryToken = token;
+    }
+    return token;
+  }
 
   static const List<String> _baseUrlEnvKeys = [
     'API_URL',
@@ -20,41 +46,106 @@ class ApiClient {
     'TENANT',
   ];
 
-  /// Prioritas: API_URL → BILLING_API_URL → API_BASE_URL (tanpa slash akhir).
-  /// Contoh: `http://192.168.1.10:3000` atau `https://billing.domain.com`
-  static String? get _configuredBaseUrl {
-    for (final key in _baseUrlEnvKeys) {
-      final v = dotenv.env[key]?.trim();
-      if (v != null && v.isNotEmpty) {
-        return v;
+  static String? _readEnvValue(String key) {
+    final direct = dotenv.env[key]?.trim();
+    if (direct != null && direct.isNotEmpty) return direct;
+    for (final entry in dotenv.env.entries) {
+      final normalizedKey = entry.key.replaceAll('\ufeff', '').trim();
+      if (normalizedKey == key) {
+        final v = entry.value.trim();
+        if (v.isNotEmpty) return v;
       }
     }
     return null;
   }
 
-  static String get _baseUrl {
-    String base = _configuredBaseUrl ?? 'http://192.168.0.200:2002';
+  /// Origin dari `.env` saja (tanpa cache / default).
+  static String? get configuredOrigin {
+    for (final key in _baseUrlEnvKeys) {
+      final v = _readEnvValue(key);
+      if (v != null && v.isNotEmpty) {
+        return _normalizeOrigin(v);
+      }
+    }
+    return null;
+  }
+
+  static String? get _configuredBaseUrl => configuredOrigin;
+
+  static String normalizeOrigin(String raw) => _normalizeOrigin(raw);
+
+  static String _normalizeOrigin(String raw) {
+    var base = raw.trim();
+    if (base.isEmpty) return base;
+
+    // Bersihkan sampah dari autofill / salah ketik di HP (mis. ?# di akhir).
+    base = base.split('#').first.trim();
+    final q = base.indexOf('?');
+    if (q >= 0) base = base.substring(0, q).trim();
+    base = base.replaceAll(RegExp(r'/+$'), '');
+
+    if (!base.startsWith('http://') && !base.startsWith('https://')) {
+      base = 'http://$base';
+    }
+
     final parsed = Uri.tryParse(base);
     if (parsed != null && parsed.hasScheme && parsed.host.isNotEmpty) {
-      base = parsed.replace(path: '', query: '', fragment: '').toString();
+      final defaultPort = parsed.scheme == 'https' ? 443 : 80;
+      final port = parsed.hasPort ? parsed.port : defaultPort;
+      final omitPort =
+          (parsed.scheme == 'http' && port == 80) ||
+          (parsed.scheme == 'https' && port == 443);
+      final portSuffix = omitPort ? '' : ':$port';
+      return '${parsed.scheme}://${parsed.host}$portSuffix';
     }
-    while (base.endsWith('/')) {
-      base = base.substring(0, base.length - 1);
-    }
+
     return base;
   }
 
-  /// Tenant dipakai saat debug lewat IP/LAN, karena server tidak bisa membaca subdomain.
-  static String? get apiTenant {
+  static void setWorkingOrigin(String? origin) {
+    final normalized = origin == null ? null : _normalizeOrigin(origin);
+    _workingOrigin =
+        (normalized == null || normalized.isEmpty) ? null : normalized;
+  }
+
+  static String get _baseUrl {
+    final base = _workingOrigin ??
+        _configuredBaseUrl ??
+        ApiOriginCache.memory ??
+        'http://127.0.0.1:3003';
+    return _normalizeOrigin(base);
+  }
+
+  /// Tenant dari pilihan user di login (prioritas tertinggi).
+  static void setRuntimeTenant(String? tenant) {
+    final normalized = tenant?.trim().toLowerCase();
+    _runtimeTenant =
+        (normalized == null || normalized.isEmpty) ? null : normalized;
+  }
+
+  static String? get runtimeTenant => _runtimeTenant;
+
+  /// Tenant dari `.env` atau query `?tenant=` di API_URL.
+  static String? get envTenant {
     for (final key in _tenantEnvKeys) {
-      final v = dotenv.env[key]?.trim();
+      final v = _readEnvValue(key);
       if (v != null && v.isNotEmpty) {
-        return v;
+        return v.toLowerCase();
       }
     }
     final configured = _configuredBaseUrl;
     if (configured == null) return null;
-    return Uri.tryParse(configured)?.queryParameters['tenant']?.trim();
+    final fromQuery = Uri.tryParse(configured)?.queryParameters['tenant']?.trim();
+    if (fromQuery == null || fromQuery.isEmpty) return null;
+    return fromQuery.toLowerCase();
+  }
+
+  /// Tenant efektif: pilihan login → `.env` → query API_URL.
+  static String? get apiTenant {
+    if (_runtimeTenant != null && _runtimeTenant!.isNotEmpty) {
+      return _runtimeTenant;
+    }
+    return envTenant;
   }
 
   static Map<String, String> get tenantHeaders {
@@ -82,13 +173,12 @@ class ApiClient {
   }
 
   static Future<Map<String, String>> _getHeaders() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token');
+    final token = await _resolveToken();
     return {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
       ...tenantHeaders,
-      if (token != null) 'Authorization': 'Bearer $token',
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
     };
   }
 
@@ -149,8 +239,7 @@ class ApiClient {
     String endpoint, {
     String accept = 'application/pdf',
   }) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token');
+    final token = await _resolveToken();
     final uri = _uri(endpoint);
     final response = await http
         .get(
@@ -158,7 +247,8 @@ class ApiClient {
           headers: {
             'Accept': accept,
             ...tenantHeaders,
-            if (token != null) 'Authorization': 'Bearer $token',
+            if (token != null && token.isNotEmpty)
+              'Authorization': 'Bearer $token',
           },
         )
         .timeout(requestTimeout);
@@ -182,8 +272,7 @@ class ApiClient {
     Map<String, String> fields, {
     List<http.MultipartFile> files = const [],
   }) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token');
+    final token = await _resolveToken();
     final uri = _uri(endpoint);
     final req = http.MultipartRequest('POST', uri);
     req.headers['Accept'] = 'application/json';

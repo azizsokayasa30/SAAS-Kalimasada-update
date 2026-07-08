@@ -18,7 +18,7 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
   static const Color _text = Color(0xFF0B1C30);
   static const Color _subtleText = Color(0xFF494453);
   static const _trafficRouterName = 'Dell-R630-SKYNET';
-  static const _trafficInterface = 'sfp-sfpplus1';
+  static const _defaultTrafficInterface = 'SFP+1';
 
   Timer? _timer;
   late final AnimationController _blinkController;
@@ -32,6 +32,7 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
   int _total = 0;
   DateTime? _lastUpdatedAt;
   Map<String, dynamic>? _interfaceTraffic;
+  String _trafficInterface = _defaultTrafficInterface;
   List<Map<String, dynamic>> _routers = [];
   final Map<String, List<_TrafficPoint>> _trafficHistory = {};
 
@@ -90,43 +91,42 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
     return int.tryParse('${value ?? ''}') ?? 0;
   }
 
-  num _numAt(Map<String, dynamic>? map, String key) {
-    final value = map?[key];
-    if (value is num) return value;
-    return num.tryParse('${value ?? ''}') ?? 0;
+  /// Parse ke Mbps — selaras web: bits/s ÷ 1e6 (hindari double-convert).
+  ({double rx, double tx}) _mbpsPair(dynamic rxRaw, dynamic txRaw) {
+    double asMbps(dynamic raw) {
+      final n = raw is num ? raw.toDouble() : double.tryParse('$raw') ?? 0;
+      if (n <= 0) return 0;
+      if (n >= 10000) return n / 1000000;
+      return n;
+    }
+
+    return (rx: asMbps(rxRaw), tx: asMbps(txRaw));
   }
 
   ({double rx, double tx}) _trafficFromMainInterface() {
-    final rxMbps = _numAt(_interfaceTraffic, 'rx_mbps');
-    final txMbps = _numAt(_interfaceTraffic, 'tx_mbps');
-    if (rxMbps > 0 || txMbps > 0) {
-      return (rx: rxMbps.toDouble(), tx: txMbps.toDouble());
+    if (_interfaceTraffic != null) {
+      final pair = _mbpsPair(
+        _interfaceTraffic!['rx_mbps'] ?? _interfaceTraffic!['rx'],
+        _interfaceTraffic!['tx_mbps'] ?? _interfaceTraffic!['tx'],
+      );
+      if (pair.rx > 0 || pair.tx > 0) return pair;
     }
-
-    final rxBits = _numAt(_interfaceTraffic, 'rx');
-    final txBits = _numAt(_interfaceTraffic, 'tx');
-    if (rxBits <= 0 && txBits <= 0) return (rx: 0, tx: 0);
-    return (rx: rxBits / 1000000, tx: txBits / 1000000);
+    return (rx: 0, tx: 0);
   }
 
   ({double rx, double tx}) _trafficFromRouter(Map<String, dynamic> router) {
-    final rx = router['rx_mbps'] is num
-        ? (router['rx_mbps'] as num).toDouble()
-        : double.tryParse('${router['rx_mbps'] ?? ''}') ?? 0;
-    final tx = router['tx_mbps'] is num
-        ? (router['tx_mbps'] as num).toDouble()
-        : double.tryParse('${router['tx_mbps'] ?? ''}') ?? 0;
-    return (rx: rx, tx: tx);
+    return _mbpsPair(router['rx_mbps'], router['tx_mbps']);
   }
 
   ({double rx, double tx}) _trafficForRouter(
     Map<String, dynamic> router, {
     required bool useMainInterface,
   }) {
-    final interfaceTraffic = _trafficFromMainInterface();
-    if (useMainInterface &&
-        (interfaceTraffic.rx > 0 || interfaceTraffic.tx > 0)) {
-      return interfaceTraffic;
+    if (useMainInterface) {
+      final interfaceTraffic = _trafficFromMainInterface();
+      if (interfaceTraffic.rx > 0 || interfaceTraffic.tx > 0) {
+        return interfaceTraffic;
+      }
     }
     return _trafficFromRouter(router);
   }
@@ -148,11 +148,37 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
     return value == null || value.isEmpty ? null : value;
   }
 
+  Future<void> _loadMainInterfaceName() async {
+    try {
+      final response = await ApiClient.get('/api/mobile-adapter/app-info');
+      if (response.statusCode != 200) return;
+      final body = ApiClient.decodeJsonObject(
+        response,
+        debugLabel: 'network/app-info',
+      );
+      if (!ApiClient.jsonSuccess(body['success'])) return;
+      final data = body['data'];
+      if (data is! Map) return;
+      final iface = data['main_interface']?.toString().trim();
+      if (iface != null && iface.isNotEmpty) {
+        _trafficInterface = iface;
+      }
+    } catch (_) {
+      // Pakai default / main_interface dari network-status.
+    }
+  }
+
   Future<Map<String, dynamic>?> _fetchMainInterfaceTraffic({
     List<Map<String, dynamic>> routers = const [],
+    Map<String, dynamic>? status,
   }) async {
     try {
-      final interfaceParam = Uri.encodeComponent(_trafficInterface);
+      final ifaceFromStatus = status?['main_interface']?.toString().trim();
+      if (ifaceFromStatus != null && ifaceFromStatus.isNotEmpty) {
+        _trafficInterface = ifaceFromStatus;
+      }
+      final iface = _trafficInterface;
+      final interfaceParam = Uri.encodeComponent(iface);
       final routerId = _mainRouterId(routers);
       if (routerId != null) {
         final response = await ApiClient.get(
@@ -165,12 +191,36 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
           );
           final data = body['data'];
           if (ApiClient.jsonSuccess(body['success']) && data is Map) {
+            final map = Map<String, dynamic>.from(data);
+            final pair = _mbpsPair(map['rxMbps'], map['txMbps']);
             return {
-              'interface': data['interface'] ?? _trafficInterface,
-              'rx_mbps': _numAt(Map<String, dynamic>.from(data), 'rxMbps'),
-              'tx_mbps': _numAt(Map<String, dynamic>.from(data), 'txMbps'),
+              'interface': map['interface'] ?? iface,
+              'rx_mbps': pair.rx,
+              'tx_mbps': pair.tx,
             };
           }
+        }
+      }
+
+      // Fallback: traffic dari network-status (sudah Mbps interface utama).
+      if (routers.isNotEmpty) {
+        final main = routers.firstWhere((item) {
+          final names = [
+            item['name'],
+            item['nas_identifier'],
+            item['router_name'],
+          ].map((value) => value?.toString().toLowerCase() ?? '');
+          return names.any(
+            (value) => value.contains(_trafficRouterName.toLowerCase()),
+          );
+        }, orElse: () => routers.first);
+        final pair = _trafficFromRouter(main);
+        if (pair.rx > 0 || pair.tx > 0) {
+          return {
+            'interface': main['main_interface'] ?? iface,
+            'rx_mbps': pair.rx,
+            'tx_mbps': pair.tx,
+          };
         }
       }
 
@@ -182,7 +232,13 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
         response,
         debugLabel: 'dashboard/traffic',
       );
-      return ApiClient.jsonSuccess(body['success']) ? body : null;
+      if (!ApiClient.jsonSuccess(body['success'])) return null;
+      final pair = _mbpsPair(body['rx'], body['tx']);
+      return {
+        'interface': body['interface'] ?? iface,
+        'rx_mbps': pair.rx,
+        'tx_mbps': pair.tx,
+      };
     } catch (_) {
       return null;
     }
@@ -200,6 +256,9 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
       setState(() => _refreshing = true);
     }
     try {
+      if (_trafficInterface == _defaultTrafficInterface) {
+        await _loadMainInterfaceName();
+      }
       final response = await ApiClient.get(
         '/api/mobile-adapter/network-status',
       );
@@ -216,15 +275,35 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
                     .map((e) => Map<String, dynamic>.from(e))
                     .toList()
               : <Map<String, dynamic>>[];
+          final statusMain = data['main_interface']?.toString().trim();
+          if (statusMain != null && statusMain.isNotEmpty) {
+            _trafficInterface = statusMain;
+          }
           final interfaceTraffic = await _fetchMainInterfaceTraffic(
             routers: routers,
+            status: data,
           );
           if (!mounted) return;
-          if (interfaceTraffic != null) _interfaceTraffic = interfaceTraffic;
+          if (interfaceTraffic != null) {
+            _interfaceTraffic = interfaceTraffic;
+            final iface = interfaceTraffic['interface']?.toString().trim();
+            if (iface != null && iface.isNotEmpty) _trafficInterface = iface;
+          }
           for (var i = 0; i < routers.length; i++) {
             final r = routers[i];
             final rid = '${r['id'] ?? r['name'] ?? 'router'}';
-            final traffic = _trafficForRouter(r, useMainInterface: i == 0);
+            final isMain =
+                i == 0 ||
+                [
+                  r['name'],
+                  r['nas_identifier'],
+                  r['router_name'],
+                ].any(
+                  (v) => (v?.toString().toLowerCase() ?? '').contains(
+                    _trafficRouterName.toLowerCase(),
+                  ),
+                );
+            final traffic = _trafficForRouter(r, useMainInterface: isMain);
             final list = _trafficHistory.putIfAbsent(
               rid,
               () => <_TrafficPoint>[],
@@ -562,12 +641,28 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
     final status = (router['status'] ?? '').toString().toLowerCase();
     final isOnline = status == 'online';
     final routerIndex = _routers.indexOf(router);
+    final isMainRouter =
+        [
+          router['name'],
+          router['nas_identifier'],
+          router['router_name'],
+        ].any(
+          (v) => (v?.toString().toLowerCase() ?? '').contains(
+            _trafficRouterName.toLowerCase(),
+          ),
+        ) ||
+        routerIndex <= 0;
     final traffic = _trafficForRouter(
       router,
-      useMainInterface: routerIndex <= 0,
+      useMainInterface: isMainRouter,
     );
     final rxMbps = traffic.rx;
     final txMbps = traffic.tx;
+    final ifaceLabel = isMainRouter
+        ? (_interfaceTraffic?['interface']?.toString() ??
+              router['main_interface']?.toString() ??
+              _trafficInterface)
+        : (router['main_interface']?.toString() ?? _trafficInterface);
     final dotColor = isOnline
         ? const Color(0xFF10B981)
         : const Color(0xFFBA1A1A);
@@ -690,6 +785,18 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
             ],
           ),
           const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'Interface: $ifaceLabel',
+              style: const TextStyle(
+                color: _subtleText,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
           Row(
             children: [
               Expanded(

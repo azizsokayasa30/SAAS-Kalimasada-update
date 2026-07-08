@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../services/api_client.dart';
+import '../utils/customer_location_tag_utils.dart';
 
 /// Pencarian pelanggan untuk layar Tag Lokasi (teknisi & kolektor) dengan label area.
 class TagCustomerSearchService {
@@ -78,7 +79,11 @@ class TagCustomerSearchService {
       if (merged.isNotEmpty) hits = merged;
     }
 
-    return hits.map((h) => enrichRow(h, areaById)).toList();
+    hits = sortTagSearchHits(
+      hits.map((h) => enrichRow(h, areaById)).toList(),
+    );
+
+    return hits;
   }
 
   static Future<List<Map<String, dynamic>>> _fetchList(String path) async {

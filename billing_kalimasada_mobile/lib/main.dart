@@ -11,6 +11,11 @@ import 'store/collector_provider.dart';
 import 'store/collector_notification_provider.dart';
 import 'screens/customer_list_screen.dart';
 import 'navigation/root_navigator.dart';
+import 'services/tenant_storage.dart';
+import 'services/api_origin_cache.dart';
+import 'services/api_origin_resolver.dart';
+import 'services/api_client.dart';
+import 'services/server_settings.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,6 +26,20 @@ Future<void> main() async {
   } catch (e) {
     print('dotenv load skipped: $e');
   }
+  await ApiOriginCache.initialize();
+  var cachedOrigin = ApiOriginCache.memory;
+  if (cachedOrigin != null &&
+      (cachedOrigin.contains('?') ||
+          cachedOrigin.contains('#') ||
+          !ApiOriginResolver.isOriginAllowedOnPlatform(cachedOrigin))) {
+    await ApiOriginCache.clear();
+    cachedOrigin = null;
+  }
+  await ServerSettings.initialize();
+  if (ServerSettings.override == null) {
+    ApiClient.setWorkingOrigin(ApiOriginCache.memory);
+  }
+  await TenantStorage.initialize();
 
   runApp(
     MultiProvider(

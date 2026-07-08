@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../../store/collector_provider.dart';
 import '../../theme/collector_colors.dart';
+import 'collector_invoice_receipt_screen.dart';
 
 String _rupiah(num? v) {
   final n = (v ?? 0).round();
@@ -39,7 +40,11 @@ class _CollectorSettlementTabState extends State<CollectorSettlementTab> with Au
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<CollectorProvider>().fetchSettlement();
+      final col = context.read<CollectorProvider>();
+      col.fetchSettlement(
+        month: col.overviewMonth,
+        year: col.overviewYear,
+      );
     });
   }
 
@@ -66,7 +71,13 @@ class _CollectorSettlementTabState extends State<CollectorSettlementTab> with Au
           children: [
             Text(c.settlementError ?? '', textAlign: TextAlign.center),
             TextButton(
-              onPressed: () => context.read<CollectorProvider>().fetchSettlement(),
+              onPressed: () {
+                final col = context.read<CollectorProvider>();
+                col.fetchSettlement(
+                  month: col.overviewMonth,
+                  year: col.overviewYear,
+                );
+              },
               child: const Text('Coba lagi'),
             ),
           ],
@@ -76,7 +87,13 @@ class _CollectorSettlementTabState extends State<CollectorSettlementTab> with Au
 
     return RefreshIndicator(
       color: FieldCollectorColors.primaryContainer,
-      onRefresh: () => context.read<CollectorProvider>().fetchSettlement(),
+      onRefresh: () {
+        final col = context.read<CollectorProvider>();
+        return col.fetchSettlement(
+          month: col.overviewMonth,
+          year: col.overviewYear,
+        );
+      },
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -190,9 +207,25 @@ class _CollectorSettlementTabState extends State<CollectorSettlementTab> with Au
                 when = DateFormat('dd/MM/yyyy HH:mm').format(d);
               } catch (_) {}
             }
+            final customerId = (_coerceNum(p['customer_id']) ?? 0).toInt();
+            final invoiceId = _coerceNum(p['invoice_id'])?.toInt();
+            final canOpenReceipt = customerId > 0;
+
             return Card(
               margin: const EdgeInsets.only(bottom: 8),
               child: ListTile(
+                onTap: canOpenReceipt
+                    ? () {
+                        Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => CollectorInvoiceReceiptScreen(
+                              customerId: customerId,
+                              invoiceId: invoiceId,
+                            ),
+                          ),
+                        );
+                      }
+                    : null,
                 leading: CircleAvatar(
                   backgroundColor: done ? FieldCollectorColors.secondaryContainer : const Color(0xFFE7E8E9),
                   child: Icon(done ? Icons.check : Icons.schedule, color: done ? FieldCollectorColors.onSecondaryContainer : FieldCollectorColors.onSurfaceVariant),
@@ -203,16 +236,18 @@ class _CollectorSettlementTabState extends State<CollectorSettlementTab> with Au
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
-                trailing: Text(
-                  isTransfer ? 'Kantor' : (done ? 'Selesai' : 'Pending'),
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    color: isTransfer
-                        ? FieldCollectorColors.primaryContainer
-                        : (done ? FieldCollectorColors.onSecondaryContainer : FieldCollectorColors.onSurfaceVariant),
-                  ),
-                ),
+                trailing: canOpenReceipt
+                    ? const Icon(Icons.chevron_right_rounded, color: FieldCollectorColors.onSurfaceVariant)
+                    : Text(
+                        isTransfer ? 'Kantor' : (done ? 'Selesai' : 'Pending'),
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: isTransfer
+                              ? FieldCollectorColors.primaryContainer
+                              : (done ? FieldCollectorColors.onSecondaryContainer : FieldCollectorColors.onSurfaceVariant),
+                        ),
+                      ),
               ),
             );
           }),

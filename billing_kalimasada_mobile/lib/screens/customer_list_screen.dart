@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import '../store/auth_provider.dart';
 import '../store/customer_provider.dart';
 import '../store/task_provider.dart';
 import 'customer_detail_screen.dart';
@@ -74,6 +75,7 @@ class _CustomerListScreenState extends State<CustomerListScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final provider = context.read<CustomerProvider>();
+      // Area filter: lazy / parallel, jangan blok list.
       provider.fetchAreaOptions();
       provider.fetchCustomers(
         refresh: true,
@@ -84,7 +86,10 @@ class _CustomerListScreenState extends State<CustomerListScreen>
         month: widget.filterMonth,
         year: widget.filterYear,
       );
-      provider.fetchDashboardStats();
+      // Skip ulang fetch dashboard jika stats sudah ada dari tab sebelumnya.
+      if (provider.stats.isEmpty) {
+        provider.fetchDashboardStats();
+      }
     });
   }
 
@@ -514,15 +519,21 @@ class _CustomerListScreenState extends State<CustomerListScreen>
           );
         },
       ),
-      bottomNavigationBar: Consumer<CustomerProvider>(
-        builder: (context, provider, _) => SafeArea(
-          top: false,
-          child: Container(
-            color: _bgBackground,
-            padding: const EdgeInsets.fromLTRB(0, 4, 0, 8),
-            child: _buildBottomTotalCard(provider),
-          ),
-        ),
+      bottomNavigationBar: Consumer2<CustomerProvider, AuthProvider>(
+        builder: (context, provider, auth, _) {
+          final hideFinance = auth.role == 'technician';
+          return SafeArea(
+            top: false,
+            child: Container(
+              color: _bgBackground,
+              padding: const EdgeInsets.fromLTRB(0, 4, 0, 8),
+              child: _buildBottomTotalCard(
+                provider,
+                hideFinance: hideFinance,
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -532,6 +543,7 @@ class _CustomerListScreenState extends State<CustomerListScreen>
     CustomerProvider provider, {
     required Set<int> openTroubleCustomerIds,
   }) {
+    final hideFinance = context.watch<AuthProvider>().role == 'technician';
     if (provider.loading && provider.customers.isEmpty) {
       return _scrollableRefreshBody(
         Padding(
@@ -667,7 +679,7 @@ class _CustomerListScreenState extends State<CustomerListScreen>
                 children: [
                   Container(
                     width: 6,
-                    height: 94,
+                    height: hideFinance ? 72 : 94,
                     decoration: BoxDecoration(
                       color: statusColor,
                       borderRadius: BorderRadius.circular(4),
@@ -704,18 +716,20 @@ class _CustomerListScreenState extends State<CustomerListScreen>
                         _infoRow(Icons.phone, 'Nomor HP', customer['phone']),
                         const SizedBox(height: 3),
                         _infoRow(Icons.map_outlined, 'Area', area),
-                        const SizedBox(height: 6),
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: [
-                            _invoicePill(invoiceStatus, invoiceColor),
-                            _amountPill(
-                              _money.format(invoiceAmount),
-                              invoiceColor,
-                            ),
-                          ],
-                        ),
+                        if (!hideFinance) ...[
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              _invoicePill(invoiceStatus, invoiceColor),
+                              _amountPill(
+                                _money.format(invoiceAmount),
+                                invoiceColor,
+                              ),
+                            ],
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -724,26 +738,28 @@ class _CustomerListScreenState extends State<CustomerListScreen>
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       _connectionBadge(isConnectionOnline),
-                      const SizedBox(height: 16),
-                      Text(
-                        _money.format(packageAmount),
-                        textAlign: TextAlign.end,
-                        style: TextStyle(
-                          color: _textOnBackground,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w900,
+                      if (!hideFinance) ...[
+                        const SizedBox(height: 16),
+                        Text(
+                          _money.format(packageAmount),
+                          textAlign: TextAlign.end,
+                          style: TextStyle(
+                            color: _textOnBackground,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w900,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Paket',
-                        textAlign: TextAlign.end,
-                        style: TextStyle(
-                          color: _textOnSurfaceVariant,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
+                        const SizedBox(height: 2),
+                        Text(
+                          'Paket',
+                          textAlign: TextAlign.end,
+                          style: TextStyle(
+                            color: _textOnSurfaceVariant,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
-                      ),
+                      ],
                       const SizedBox(height: 11),
                       Icon(Icons.chevron_right, size: 20, color: _outline),
                     ],
@@ -757,7 +773,10 @@ class _CustomerListScreenState extends State<CustomerListScreen>
     );
   }
 
-  Widget _buildBottomTotalCard(CustomerProvider provider) {
+  Widget _buildBottomTotalCard(
+    CustomerProvider provider, {
+    required bool hideFinance,
+  }) {
     final loadedAmount = provider.customers.fold<num>(
       0,
       (sum, customer) => sum + _customerPackageAmount(customer),
@@ -802,19 +821,21 @@ class _CustomerListScreenState extends State<CustomerListScreen>
           Expanded(
             child: _bottomTotalItem(label: 'Jumlah', value: '$count pelanggan'),
           ),
-          Container(
-            width: 1,
-            height: 32,
-            color: Colors.white.withValues(alpha: 0.22),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: _bottomTotalItem(
-              label: 'Nominal',
-              value: _money.format(totalAmount),
-              alignEnd: true,
+          if (!hideFinance) ...[
+            Container(
+              width: 1,
+              height: 32,
+              color: Colors.white.withValues(alpha: 0.22),
             ),
-          ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _bottomTotalItem(
+                label: 'Nominal',
+                value: _money.format(totalAmount),
+                alignEnd: true,
+              ),
+            ),
+          ],
         ],
       ),
     );

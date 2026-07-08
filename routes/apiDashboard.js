@@ -161,7 +161,7 @@ router.get('/dashboard/interfaces', async (req, res) => {
 router.get('/dashboard/interface-traffic', async (req, res) => {
   try {
     const routerId = parseInt(req.query.router_id);
-    const interfaceName = req.query.interface;
+    let interfaceName = String(req.query.interface || '').trim();
     
     if (!routerId || !interfaceName) {
       return res.json({ success: false, message: 'router_id dan interface diperlukan' });
@@ -182,12 +182,49 @@ router.get('/dashboard/interface-traffic', async (req, res) => {
 
     // Get interface traffic rate using getMikrotikConnectionForRouter
     const { getMikrotikConnectionForRouter } = require('../config/mikrotik');
-    const { RouterOSAPI } = require('node-routeros');
     
     try {
       const conn = await getMikrotikConnectionForRouter(router);
       if (!conn) {
         return res.json({ success: false, message: 'Gagal koneksi ke router', data: null });
+      }
+
+      const normalizeIfaceKey = (name) =>
+        String(name || '')
+          .trim()
+          .toLowerCase()
+          .replace(/\s+/g, '')
+          .replace(/sfp-sfpplus/g, 'sfp+')
+          .replace(/sfpplus/g, 'sfp+');
+
+      // Resolve nama settings lama (ether1-ISP / sfp-sfpplus1) ke nama nyata di MikroTik (SFP+1).
+      try {
+        const ifaces = await conn.write('/interface/print');
+        const names = (Array.isArray(ifaces) ? ifaces : [])
+          .map((i) => (i && i.name != null ? String(i.name).trim() : ''))
+          .filter((n) => n && !n.startsWith('<'));
+        const byKey = new Map(names.map((n) => [normalizeIfaceKey(n), n]));
+        const candidates = [interfaceName];
+        const key = normalizeIfaceKey(interfaceName);
+        if (key.includes('ether1') || key === 'ether1-isp') {
+          candidates.push('SFP+1', 'sfp-sfpplus1', 'ether1');
+        }
+        if (key === 'sfp-sfpplus1' || key === 'sfp+1') {
+          candidates.push('SFP+1', 'sfp-sfpplus1');
+        }
+        for (const cand of candidates) {
+          const hit = byKey.get(normalizeIfaceKey(cand));
+          if (hit) {
+            interfaceName = hit;
+            break;
+          }
+        }
+        if (!byKey.has(normalizeIfaceKey(interfaceName))) {
+          const sfp = names.find((n) => /^sfp\+/i.test(n));
+          if (sfp) interfaceName = sfp;
+        }
+      } catch (_) {
+        // lanjut coba nama asli
       }
 
       const monitor = await conn.write('/interface/monitor-traffic', [

@@ -37,12 +37,24 @@ class CollectorPaymentStatusBadgeStyle {
   }
 }
 
-/// `isIsolirAccount`: status akun suspended — tampil sebagai Isolir.
+/// Prioritas: Nonaktif → Isolir → Lunas (periode) → Baru (belum pernah invoice)
+/// → Belum bayar (unpaid periode) → Lunas (historis, tidak ada tagihan periode).
 CollectorPaymentStatusBadgeStyle collectorPaymentBadgeFor({
   required bool isIsolirAccount,
   required String paymentStatus,
+  bool isInactiveAccount = false,
+  String? lifetimePaymentStatus,
 }) {
+  if (isInactiveAccount) {
+    return CollectorPaymentStatusBadgeStyle(
+      label: 'Nonaktif',
+      background: const Color(0xFFE8E8E8),
+      foreground: const Color(0xFF5F5F5F),
+      border: const Color(0xFF9E9E9E).withValues(alpha: 0.45),
+    );
+  }
   final ps = paymentStatus.toLowerCase();
+  final life = (lifetimePaymentStatus ?? paymentStatus).toLowerCase();
   if (isIsolirAccount) {
     return CollectorPaymentStatusBadgeStyle(
       label: 'Isolir',
@@ -59,12 +71,30 @@ CollectorPaymentStatusBadgeStyle collectorPaymentBadgeFor({
       border: FieldCollectorColors.statLunasIcon.withValues(alpha: 0.35),
     );
   }
-  if (ps == 'no_invoice') {
+  // "Baru" = belumpunya tagihan sama sekali (lifetime), tetap tampil meski filter bulan aktif.
+  if (life == 'no_invoice') {
     return CollectorPaymentStatusBadgeStyle(
       label: 'Baru',
       background: FieldCollectorColors.statTotalBg,
       foreground: FieldCollectorColors.statTotalIcon,
       border: FieldCollectorColors.statTotalIcon.withValues(alpha: 0.35),
+    );
+  }
+  if (ps == 'unpaid' || ps == 'overdue') {
+    return CollectorPaymentStatusBadgeStyle(
+      label: 'Belum bayar',
+      background: FieldCollectorColors.statBelumBg,
+      foreground: FieldCollectorColors.statBelumIcon,
+      border: FieldCollectorColors.statBelumIcon.withValues(alpha: 0.35),
+    );
+  }
+  // Periode tanpa tagihan, tetapi pernah lunas di periode lain.
+  if (life == 'paid') {
+    return CollectorPaymentStatusBadgeStyle(
+      label: 'Lunas',
+      background: FieldCollectorColors.statLunasBg,
+      foreground: FieldCollectorColors.statLunasIcon,
+      border: FieldCollectorColors.statLunasIcon.withValues(alpha: 0.35),
     );
   }
   return CollectorPaymentStatusBadgeStyle(
@@ -79,10 +109,15 @@ CollectorPaymentStatusBadgeStyle collectorPaymentBadgeFor({
 Color collectorPaymentAmountHeadlineColor({
   required bool isIsolirAccount,
   required String paymentStatus,
+  bool isInactiveAccount = false,
+  String? lifetimePaymentStatus,
 }) {
+  if (isInactiveAccount) return FieldCollectorColors.onSurfaceVariant;
   if (isIsolirAccount) return FieldCollectorColors.onSurface;
   final ps = paymentStatus.toLowerCase();
+  final life = (lifetimePaymentStatus ?? paymentStatus).toLowerCase();
   if (ps == 'paid') return FieldCollectorColors.onSurfaceVariant;
+  if (life == 'no_invoice') return FieldCollectorColors.onSurfaceVariant;
   if (ps == 'overdue') return FieldCollectorColors.summaryOverdue;
   return FieldCollectorColors.onSurface;
 }

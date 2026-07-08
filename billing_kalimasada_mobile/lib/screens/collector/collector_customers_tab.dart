@@ -128,9 +128,10 @@ class _CollectorCustomersTabState extends State<CollectorCustomersTab> with Auto
             padding: const EdgeInsets.symmetric(horizontal: 12),
             children: [
               _chip('Semua', '', _status, _setFilter),
-              _chip('Belum bayar', 'unpaid', _status, _setFilter),
+              _chip('Belum lunas', 'unpaid', _status, _setFilter),
               _chip('Lunas', 'paid', _status, _setFilter),
               _chip('Isolir', 'isolir', _status, _setFilter),
+              _chip('Nonaktif', 'nonaktif', _status, _setFilter),
               _chip('Baru', 'baru', _status, _setFilter),
             ],
           ),
@@ -257,31 +258,39 @@ class _CustomerTile extends StatelessWidget {
     final name = row['name']?.toString() ?? '';
     final addr = row['address']?.toString() ?? '';
     final ps = row['payment_status']?.toString() ?? '';
-    final st = row['status']?.toString() ?? '';
+    final lifePs = row['lifetime_payment_status']?.toString() ?? ps;
+    final st = row['status']?.toString().toLowerCase() ?? '';
     final price = _coerceNum(row['package_price'])?.round() ?? 0;
 
     Color stripe = const Color(0xFFBA1A1A);
     String badge = 'Belum bayar';
     Color badgeBg = FieldCollectorColors.errorContainer;
     Color badgeFg = FieldCollectorColors.onErrorContainer;
-    if (st == 'suspended') {
+    if (st == 'inactive') {
+      stripe = const Color(0xFF9E9E9E);
+      badge = 'Nonaktif';
+      badgeBg = const Color(0xFFE8E8E8);
+      badgeFg = const Color(0xFF5F5F5F);
+    } else if (st == 'suspended') {
       stripe = const Color(0xFFFDB69A);
       badge = 'Isolir';
       badgeBg = FieldCollectorColors.tertiaryFixed;
       badgeFg = FieldCollectorColors.onTertiaryFixed;
-    } else if (ps == 'paid') {
+    } else if (ps == 'paid' || (ps == 'no_invoice' && lifePs == 'paid')) {
       stripe = FieldCollectorColors.onSecondaryContainer;
       badge = 'Lunas';
       badgeBg = FieldCollectorColors.secondaryContainer;
       badgeFg = FieldCollectorColors.onSecondaryContainer;
-    } else if (ps == 'no_invoice') {
+    } else if (lifePs == 'no_invoice') {
       stripe = FieldCollectorColors.primaryFixedDim;
       badge = 'Baru';
       badgeBg = const Color(0xFFD4E3FF);
       badgeFg = const Color(0xFF001C3A);
     }
 
-    final labelTag = ps == 'overdue' ? 'Tunggakan' : (ps == 'no_invoice' ? 'Estimasi' : 'Tagihan');
+    final labelTag = ps == 'overdue'
+        ? 'Tunggakan'
+        : (lifePs == 'no_invoice' ? 'Estimasi' : 'Tagihan');
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),

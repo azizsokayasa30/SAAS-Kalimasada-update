@@ -12,6 +12,12 @@ class NotificationsScreen extends StatefulWidget {
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
+  static const _primary = Color(0xFF2563EB);
+  static const _primarySoft = Color(0xFFEFF6FF);
+  static const _bg = Color(0xFFF1F5F9);
+  static const _textMain = Color(0xFF0F172A);
+  static const _textMuted = Color(0xFF64748B);
+
   @override
   void initState() {
     super.initState();
@@ -35,13 +41,26 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   IconData _iconForKind(String? kind) {
     switch ((kind ?? '').toUpperCase()) {
       case 'INSTALL':
-        return Icons.engineering;
+        return Icons.engineering_rounded;
       case 'TR':
         return Icons.build_circle_outlined;
       case 'LEAVE':
-        return Icons.event_note;
+        return Icons.event_note_rounded;
       default:
-        return Icons.notifications_outlined;
+        return Icons.notifications_rounded;
+    }
+  }
+
+  Color _accentForKind(String? kind) {
+    switch ((kind ?? '').toUpperCase()) {
+      case 'INSTALL':
+        return const Color(0xFF2563EB);
+      case 'TR':
+        return const Color(0xFFEA580C);
+      case 'LEAVE':
+        return const Color(0xFF7C3AED);
+      default:
+        return _primary;
     }
   }
 
@@ -114,19 +133,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    const bgBackground = Color(0xFFFCF8FF);
-    const textOnSurface = Color(0xFF19163F);
-    const textOnSurfaceVariant = Color(0xFF474551);
-
     return Scaffold(
-      backgroundColor: bgBackground,
+      backgroundColor: _bg,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF2563EB),
+        backgroundColor: _primary,
         foregroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
@@ -156,16 +171,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             ),
           ),
         ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(color: const Color(0xFFE2E8F0), height: 1),
-        ),
       ),
       body: Consumer<NotificationProvider>(
         builder: (context, notif, _) {
           if (notif.loading && notif.items.isEmpty) {
             return const Center(
-              child: CircularProgressIndicator(color: Color(0xFF070038)),
+              child: CircularProgressIndicator(color: _primary),
             );
           }
           if (notif.error != null && notif.items.isEmpty) {
@@ -179,6 +190,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     const SizedBox(height: 16),
                     FilledButton(
                       onPressed: () => notif.fetchNotifications(),
+                      style: FilledButton.styleFrom(backgroundColor: _primary),
                       child: const Text('Coba lagi'),
                     ),
                   ],
@@ -187,19 +199,48 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             );
           }
           if (notif.items.isEmpty) {
-            return const Center(
-              child: Text(
-                'Belum ada notifikasi tugas.',
-                style: TextStyle(color: textOnSurfaceVariant, fontSize: 16),
+            return Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 72,
+                    height: 72,
+                    decoration: BoxDecoration(
+                      color: _primarySoft,
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    child: const Icon(
+                      Icons.notifications_none_rounded,
+                      size: 36,
+                      color: _primary,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Belum ada notifikasi',
+                    style: TextStyle(
+                      color: _textMain,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Notifikasi tugas baru akan muncul di sini.',
+                    style: TextStyle(color: _textMuted, fontSize: 14),
+                  ),
+                ],
               ),
             );
           }
           return RefreshIndicator(
-            color: const Color(0xFF070038),
+            color: _primary,
             onRefresh: () => notif.fetchNotifications(),
-            child: ListView.builder(
-              padding: const EdgeInsets.all(20),
+            child: ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
               itemCount: notif.items.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 12),
               itemBuilder: (context, index) {
                 final item = notif.items[index];
                 final unread = item['unread'] == true;
@@ -207,113 +248,139 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 final body = item['body']?.toString() ?? '';
                 final created = item['created_at']?.toString();
                 final kind = item['kind']?.toString();
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(8),
-                      onTap: () => _openTaskFromNotification(item),
-                      child: Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFFC8C4D3)),
-                          boxShadow: unread
-                              ? const [
-                                  BoxShadow(
-                                    color: Colors.black12,
-                                    blurRadius: 4,
-                                    offset: Offset(0, 2),
-                                  ),
-                                ]
-                              : null,
+                final accent = _accentForKind(kind);
+
+                return Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(20),
+                    onTap: () => _openTaskFromNotification(item),
+                    child: Ink(
+                      decoration: BoxDecoration(
+                        color: unread ? _primarySoft : Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: unread
+                              ? accent.withValues(alpha: 0.28)
+                              : const Color(0xFFE2E8F0),
                         ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF0F172A).withValues(
+                              alpha: unread ? 0.07 : 0.04,
+                            ),
+                            blurRadius: 14,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            if (unread)
-                              Container(
-                                width: 8,
-                                height: 8,
-                                margin: const EdgeInsets.only(
-                                  top: 20,
-                                  right: 8,
+                            Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                Container(
+                                  width: 48,
+                                  height: 48,
+                                  decoration: BoxDecoration(
+                                    color: accent.withValues(
+                                      alpha: unread ? 0.16 : 0.10,
+                                    ),
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: Icon(
+                                    _iconForKind(kind),
+                                    color: accent,
+                                    size: 24,
+                                  ),
                                 ),
-                                decoration: const BoxDecoration(
-                                  color: Color(0xFF070038),
-                                  shape: BoxShape.circle,
-                                ),
-                              )
-                            else
-                              const SizedBox(width: 16),
-                            Container(
-                              width: 48,
-                              height: 48,
-                              decoration: BoxDecoration(
-                                color: unread
-                                    ? const Color(
-                                        0xFF1B0C6B,
-                                      ).withValues(alpha: 0.15)
-                                    : const Color(0xFFE4DFFF),
-                                shape: BoxShape.circle,
-                              ),
-                              child: Icon(
-                                _iconForKind(kind),
-                                color: unread
-                                    ? const Color(0xFF1B0C6B)
-                                    : textOnSurfaceVariant,
-                              ),
+                                if (unread)
+                                  Positioned(
+                                    right: -2,
+                                    top: -2,
+                                    child: Container(
+                                      width: 12,
+                                      height: 12,
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFEF4444),
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                          color: Colors.white,
+                                          width: 2,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ),
-                            const SizedBox(width: 16),
+                            const SizedBox(width: 14),
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Expanded(
                                         child: Text(
                                           title,
-                                          style: const TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.bold,
-                                            color: textOnSurface,
+                                          style: TextStyle(
+                                            fontSize: 15,
+                                            fontWeight: unread
+                                                ? FontWeight.w800
+                                                : FontWeight.w700,
+                                            color: _textMain,
+                                            height: 1.25,
                                           ),
+                                          maxLines: 2,
                                           overflow: TextOverflow.ellipsis,
                                         ),
                                       ),
+                                      const SizedBox(width: 8),
                                       Text(
                                         _relativeTime(created),
                                         style: const TextStyle(
-                                          fontSize: 12,
-                                          color: textOnSurfaceVariant,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: _textMuted,
                                         ),
                                       ),
                                     ],
                                   ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    body,
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: textOnSurfaceVariant,
+                                  if (body.isNotEmpty) ...[
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      body,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        color: _textMuted,
+                                        height: 1.35,
+                                      ),
+                                      maxLines: 3,
+                                      overflow: TextOverflow.ellipsis,
                                     ),
-                                    maxLines: 3,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    _hintForKind(kind),
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: const Color(
-                                        0xFF1B0C6B,
-                                      ).withValues(alpha: 0.85),
-                                      fontWeight: FontWeight.w600,
+                                  ],
+                                  const SizedBox(height: 10),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 5,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: accent.withValues(alpha: 0.10),
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                    child: Text(
+                                      _hintForKind(kind),
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: accent,
+                                        fontWeight: FontWeight.w700,
+                                      ),
                                     ),
                                   ),
                                 ],

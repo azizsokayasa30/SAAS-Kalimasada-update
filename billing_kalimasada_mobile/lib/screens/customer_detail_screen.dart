@@ -149,7 +149,15 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     super.initState();
     customer = Map<String, dynamic>.from(widget.customer);
     _loadPppSession();
-    _loadPaymentHistory();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final role = context.read<AuthProvider>().role;
+      if (role == 'technician') {
+        setState(() => _paymentHistoryLoading = false);
+        return;
+      }
+      _loadPaymentHistory();
+    });
   }
 
   List<Map<String, dynamic>> _mapList(dynamic raw) {
@@ -1237,15 +1245,17 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               ),
             ),
 
-            const SizedBox(height: 14),
-            _buildPaymentHistorySection(
-              bgSurfaceContainerLowest,
-              bgSurfaceContainer,
-              outlineVariant,
-              textOnBackground,
-              textOnSurfaceVariant,
-              surfaceTint,
-            ),
+            if (!isTechnician) ...[
+              const SizedBox(height: 14),
+              _buildPaymentHistorySection(
+                bgSurfaceContainerLowest,
+                bgSurfaceContainer,
+                outlineVariant,
+                textOnBackground,
+                textOnSurfaceVariant,
+                surfaceTint,
+              ),
+            ],
 
             const SizedBox(height: 28), // Padding
           ],

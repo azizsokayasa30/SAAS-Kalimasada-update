@@ -250,6 +250,14 @@ class CustomerProvider extends ChangeNotifier {
         final data = jsonDecode(response.body);
         return data['success'] == true;
       }
+      if (response.statusCode == 409) {
+        try {
+          final data = jsonDecode(response.body);
+          debugPrint(
+            'UPDATE LOCATION CONFLICT: ${data['message']?.toString() ?? response.body}',
+          );
+        } catch (_) {}
+      }
       return false;
     } catch (e) {
       debugPrint('UPDATE LOCATION ERROR: $e');

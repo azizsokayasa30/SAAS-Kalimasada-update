@@ -19,12 +19,33 @@ function collectorCustomerIsIsolir(c) {
         .trim() === 'suspended';
 }
 
+function collectorCustomerIsInactive(c) {
+    return String(c.status || '')
+        .toLowerCase()
+        .trim() === 'inactive';
+}
+
+function matchesCollectorPelangganBaru(c) {
+    if (collectorCustomerIsInactive(c)) return false;
+    const life = c.lifetime_payment_status || c.payment_status || '';
+    return life === 'no_invoice';
+}
+
+function matchesCollectorPelangganAktif(c) {
+    if (collectorCustomerIsInactive(c)) return false;
+    if (matchesCollectorPelangganBaru(c)) return false;
+    return true;
+}
+
 function matchesAdminBelumLunasFromPaymentStatus(c) {
+    if (collectorCustomerIsInactive(c)) return false;
+    if (matchesCollectorPelangganBaru(c)) return false;
     const ps = c.payment_status || '';
-    return ps === 'unpaid' || ps === 'overdue' || ps === 'no_invoice';
+    return ps === 'unpaid' || ps === 'overdue';
 }
 
 function matchesAdminLunasFromPaymentStatus(c) {
+    if (collectorCustomerIsInactive(c)) return false;
     return (c.payment_status || '') === 'paid';
 }
 
@@ -281,20 +302,31 @@ router.get('/customers', collectorAuth, async (req, res) => {
         const collector = req.collector;
         const allMappedCustomers = await billingManager.getCollectorCustomers(collector.id);
         const statusFilter = (req.query.status || '').toString().toLowerCase();
-        const validFilters = new Set(['paid', 'unpaid', 'overdue', 'no_invoice', 'isolir', 'baru']);
+        const validFilters = new Set(['paid', 'unpaid', 'overdue', 'no_invoice', 'isolir', 'baru', 'nonaktif', 'inactive', 'aktif', 'total']);
         const q = (req.query.q || '').toString().trim().toLowerCase();
 
         let customers = allMappedCustomers || [];
         if (statusFilter === 'isolir') {
             customers = customers.filter(c => collectorCustomerIsIsolir(c));
+        } else if (statusFilter === 'nonaktif' || statusFilter === 'inactive') {
+            customers = customers.filter(c => collectorCustomerIsInactive(c));
         } else if (statusFilter === 'baru') {
-            customers = customers.filter(c => (c.payment_status || '') === 'no_invoice');
+            customers = customers.filter(c => matchesCollectorPelangganBaru(c));
+        } else if (statusFilter === 'aktif') {
+            customers = customers.filter(c => matchesCollectorPelangganAktif(c));
+        } else if (statusFilter === 'total') {
+            customers = customers.filter(
+                c =>
+                    matchesCollectorPelangganAktif(c) ||
+                    matchesCollectorPelangganBaru(c) ||
+                    collectorCustomerIsInactive(c)
+            );
         } else if (statusFilter === 'unpaid') {
             customers = customers.filter(c => matchesAdminBelumLunasFromPaymentStatus(c));
         } else if (statusFilter === 'paid') {
             customers = customers.filter(c => matchesAdminLunasFromPaymentStatus(c));
         } else if (validFilters.has(statusFilter) && statusFilter !== '') {
-            customers = customers.filter(c => (c.payment_status || '') === statusFilter);
+            customers = customers.filter(c => !collectorCustomerIsInactive(c) && (c.payment_status || '') === statusFilter);
         }
 
         if (q) {

@@ -10,6 +10,7 @@ import '../../store/auth_provider.dart';
 import 'admin_customer_overview_screen.dart';
 import 'admin_finance_screen.dart';
 import 'admin_warehouse_screen.dart';
+import '../tag_customer_location_screen.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   final void Function(int index)? onNavigateToTab;
@@ -26,8 +27,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   static const _primarySoft = Color(0xFFEAF2FF);
   static const _bg = Color(0xFFF6F7FA);
   static const _trafficRouterName = 'Dell-R630-SKYNET';
-  static const _defaultTrafficInterface = 'sfp-sfpplus1';
-  static const _trafficInterfaceLabel = 'sfp+1';
+  /// Fallback jika app-info / settings belum tersedia — selaras default backend.
+  static const _defaultTrafficInterface = 'SFP+1';
 
   final _moneyFull = NumberFormat.currency(
     locale: 'id_ID',
@@ -46,7 +47,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   Map<String, dynamic>? _adminOverview;
   Map<String, dynamic>? _networkStatus;
   Map<String, dynamic>? _interfaceTraffic;
-  final String _trafficInterface = _defaultTrafficInterface;
+  String _trafficInterface = _defaultTrafficInterface;
   Timer? _networkTimer;
   Timer? _clockTimer;
   bool _networkRequestInFlight = false;
@@ -77,8 +78,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   void _startNetworkPolling() {
     _networkTimer?.cancel();
+    // Polling lebih jarang — MikroTik down tidak boleh spam request tiap 5 detik.
     _networkTimer = Timer.periodic(
-      const Duration(seconds: 5),
+      const Duration(seconds: 20),
       (_) => _refreshNetworkStatus(),
     );
   }
@@ -87,17 +89,26 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     if (_networkRequestInFlight) return;
     _networkRequestInFlight = true;
     try {
-      final results = await Future.wait<Map<String, dynamic>?>([
-        _fetchNetworkStatus(<String>[]),
-        _fetchMainInterfaceTraffic(<String>[]),
-      ]);
-      final interfaceTraffic =
-          await _fetchMainInterfaceTraffic(<String>[], status: results[0]) ??
-          results[1];
-      if (!mounted || results.every((item) => item == null)) return;
+      final status = await _fetchNetworkStatus(<String>[]);
+      if (status != null) {
+        final fromStatus = status['main_interface']?.toString().trim();
+        if (fromStatus != null && fromStatus.isNotEmpty) {
+          _trafficInterface = fromStatus;
+        }
+      }
+      final interfaceTraffic = await _fetchMainInterfaceTraffic(
+        <String>[],
+        status: status ?? _networkStatus,
+      );
+      if (!mounted) return;
+      if (status == null && interfaceTraffic == null) return;
       setState(() {
-        if (results[0] != null) _networkStatus = results[0];
-        if (interfaceTraffic != null) _interfaceTraffic = interfaceTraffic;
+        if (status != null) _networkStatus = status;
+        if (interfaceTraffic != null) {
+          _interfaceTraffic = interfaceTraffic;
+          final iface = interfaceTraffic['interface']?.toString().trim();
+          if (iface != null && iface.isNotEmpty) _trafficInterface = iface;
+        }
         _rememberTraffic(_currentTraffic());
       });
     } finally {
@@ -117,32 +128,30 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     });
 
     final errors = <String>[];
-    final appInfo = await _fetchAppInfo(errors);
-    _applyAppInfo(appInfo);
 
-    final results = await Future.wait<Map<String, dynamic>?>([
+    // Critical path dulu: app-info + stats + overview. Network/traffic deferred
+    // agar dashboard tidak menunggu timeout MikroTik.
+    final critical = await Future.wait<Map<String, dynamic>?>([
+      _fetchAppInfo(errors),
       _fetchDashboardStats(errors),
       _fetchAdminOverview(errors),
-      _fetchNetworkStatus(errors),
-      _fetchMainInterfaceTraffic(errors),
     ]);
-    final interfaceTraffic =
-        await _fetchMainInterfaceTraffic(errors, status: results[2]) ??
-        results[3];
 
     if (!mounted) return;
+    _applyAppInfo(critical[0]);
     setState(() {
-      _dashboardStats = results[0];
-      _adminOverview = results[1];
-      _networkStatus = results[2];
-      _interfaceTraffic = interfaceTraffic;
-      _rememberTraffic(_currentTraffic());
-      _error = results.every((item) => item == null) && errors.isNotEmpty
+      _dashboardStats = critical[1];
+      _adminOverview = critical[2];
+      _error =
+          critical[1] == null && critical[2] == null && errors.isNotEmpty
           ? errors.first
           : null;
       _loading = false;
       _refreshing = false;
     });
+
+    // Non-blocking: status jaringan & traffic setelah UI sudah bisa dipakai.
+    unawaited(_refreshNetworkStatus());
   }
 
   Future<Map<String, dynamic>?> _fetchDashboardStats(
@@ -238,12 +247,30 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     return null;
   }
 
+  /// Parse rate ke Mbps — sama rumus web: bits/s ÷ 1_000_000.
+  /// Hindari dobel-konversi jika nilai sudah Mbps dari API.
+  ({double rx, double tx}) _mbpsPair(dynamic rxRaw, dynamic txRaw) {
+    double asMbps(dynamic raw) {
+      final n = raw is num ? raw.toDouble() : double.tryParse('$raw') ?? 0;
+      if (n <= 0) return 0;
+      // Threshold: nilai bps mentah biasanya >> 10_000 (≥ 0.01 Mbps).
+      if (n >= 10000) return n / 1000000;
+      return n;
+    }
+
+    return (rx: asMbps(rxRaw), tx: asMbps(txRaw));
+  }
+
   Future<Map<String, dynamic>?> _fetchMainInterfaceTraffic(
     List<String> errors, {
     Map<String, dynamic>? status,
   }) async {
     try {
-      final interfaceParam = Uri.encodeComponent(_trafficInterface);
+      final iface =
+          (status?['main_interface']?.toString().trim().isNotEmpty == true)
+          ? status!['main_interface'].toString().trim()
+          : _trafficInterface;
+      final interfaceParam = Uri.encodeComponent(iface);
       final routerId = _mainRouterId(status ?? _networkStatus);
       if (routerId != null) {
         final response = await ApiClient.get(
@@ -256,38 +283,70 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           );
           final data = body['data'];
           if (ApiClient.jsonSuccess(body['success']) && data is Map) {
+            final map = Map<String, dynamic>.from(data);
+            final pair = _mbpsPair(map['rxMbps'], map['txMbps']);
             return {
-              'interface': data['interface'] ?? _trafficInterface,
-              'rx_mbps': _numAt(Map<String, dynamic>.from(data), 'rxMbps'),
-              'tx_mbps': _numAt(Map<String, dynamic>.from(data), 'txMbps'),
+              'interface': map['interface'] ?? iface,
+              'rx_mbps': pair.rx,
+              'tx_mbps': pair.tx,
             };
           }
         }
       }
 
+      // Fallback: rate interface utama dari network-status (sudah Mbps).
+      final fromStatus = _trafficFromNetworkStatusRouter(status ?? _networkStatus);
+      if (fromStatus.rx > 0 || fromStatus.tx > 0) {
+        return {
+          'interface': iface,
+          'rx_mbps': fromStatus.rx,
+          'tx_mbps': fromStatus.tx,
+        };
+      }
+
       final response = await ApiClient.get(
         '/api/dashboard/traffic?interface=$interfaceParam',
       );
-      if (response.statusCode != 200) {
-        errors.add(
-          'Traffic interface utama belum tersedia (HTTP ${response.statusCode}).',
-        );
-        return null;
-      }
+      if (response.statusCode != 200) return null;
       final body = ApiClient.decodeJsonObject(
         response,
         debugLabel: 'dashboard/traffic',
       );
-      if (ApiClient.jsonSuccess(body['success'])) return body;
-      errors.add(
-        body['message']?.toString() ?? 'Traffic interface utama gagal',
-      );
+      if (!ApiClient.jsonSuccess(body['success'])) return null;
+      final pair = _mbpsPair(body['rx'], body['tx']);
+      return {
+        'interface': body['interface'] ?? iface,
+        'rx_mbps': pair.rx,
+        'tx_mbps': pair.tx,
+      };
     } on FormatException {
-      errors.add('Respons traffic interface utama dari backend tidak valid.');
+      // Traffic optional untuk first paint.
     } catch (_) {
-      errors.add('Traffic interface utama backend tidak dapat dihubungi.');
+      // Traffic optional untuk first paint.
     }
     return null;
+  }
+
+  ({double rx, double tx}) _trafficFromNetworkStatusRouter(
+    Map<String, dynamic>? status,
+  ) {
+    final routersRaw = status?['routers'];
+    if (routersRaw is! List || routersRaw.isEmpty) return (rx: 0, tx: 0);
+    final main = routersRaw.cast<dynamic>().firstWhere((item) {
+      if (item is! Map) return false;
+      final names = [
+        item['name'],
+        item['nas_identifier'],
+        item['router_name'],
+      ].map((value) => value?.toString().toLowerCase() ?? '');
+      return names.any(
+        (value) => value.contains(_trafficRouterName.toLowerCase()),
+      );
+    }, orElse: () => routersRaw.first);
+    if (main is! Map) return (rx: 0, tx: 0);
+    final m = Map<String, dynamic>.from(main);
+    final pair = _mbpsPair(m['rx_mbps'], m['tx_mbps']);
+    return (rx: pair.rx, tx: pair.tx);
   }
 
   String? _mainRouterId(Map<String, dynamic>? status) {
@@ -333,6 +392,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     if (tenant != null && tenant.isNotEmpty) _tenantName = tenant;
     final logo = info['logo_filename']?.toString().trim();
     if (logo != null && logo.isNotEmpty) _logoFilename = logo;
+    final iface = info['main_interface']?.toString().trim();
+    if (iface != null && iface.isNotEmpty) _trafficInterface = iface;
   }
 
   num _numAt(Map<String, dynamic>? map, String key) {
@@ -367,19 +428,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   ({num rx, num tx}) _trafficFromMainInterface() {
-    final rxMbps = _numAt(_interfaceTraffic, 'rx_mbps');
-    final txMbps = _numAt(_interfaceTraffic, 'tx_mbps');
-    if (rxMbps > 0 || txMbps > 0) return (rx: rxMbps, tx: txMbps);
-
-    final rxBits = _numAt(_interfaceTraffic, 'rx');
-    final txBits = _numAt(_interfaceTraffic, 'tx');
-    if (rxBits <= 0 && txBits <= 0) return (rx: 0, tx: 0);
-    return (rx: rxBits / 1000000, tx: txBits / 1000000);
+    if (_interfaceTraffic != null) {
+      final pair = _mbpsPair(
+        _interfaceTraffic!['rx_mbps'] ?? _interfaceTraffic!['rx'],
+        _interfaceTraffic!['tx_mbps'] ?? _interfaceTraffic!['tx'],
+      );
+      if (pair.rx > 0 || pair.tx > 0) return (rx: pair.rx, tx: pair.tx);
+    }
+    final fromStatus = _trafficFromNetworkStatusRouter(_networkStatus);
+    return (rx: fromStatus.rx, tx: fromStatus.tx);
   }
 
   ({num rx, num tx}) _currentTraffic() {
-    final interfaceTraffic = _trafficFromMainInterface();
-    return interfaceTraffic;
+    return _trafficFromMainInterface();
   }
 
   void _rememberTraffic(({num rx, num tx}) traffic) {
@@ -433,13 +494,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   String _trafficInterfaceName() {
     final interface = _interfaceTraffic?['interface']?.toString().trim();
-    final activeInterface = interface != null && interface.isNotEmpty
-        ? interface
-        : _trafficInterface;
-    if (activeInterface == _defaultTrafficInterface) {
-      return _trafficInterfaceLabel;
-    }
-    return activeInterface;
+    if (interface != null && interface.isNotEmpty) return interface;
+    return _trafficInterface;
   }
 
   @override
@@ -715,6 +771,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (_) => const AdminWarehouseScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                  _AdminDrawerMenuItem(
+                    label: 'Tag Pelanggan',
+                    icon: Icons.person_pin_circle_rounded,
+                    color: const Color(0xFF0EA5E9),
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const TagCustomerLocationScreen(),
                         ),
                       );
                     },

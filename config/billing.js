@@ -2569,43 +2569,87 @@
     async getCollectorCustomers(collectorId, month = null, year = null) {
         const hasAreas = await this._hasAreasReferenceTable();
         const areaRowMatch = this._sqlCustomerMatchesCollectorAreaRow(hasAreas, 'cra');
+        const isYearRange = String(month) === 'all' || String(month) === '0';
+        const hasYear = year != null && String(year).trim() !== '';
+        const hasMonth = month != null && String(month).trim() !== '' && !isYearRange;
+        const lifetimePaymentStatusSql = `
+                       CASE 
+                           WHEN EXISTS (
+                               SELECT 1 FROM invoices i 
+                               WHERE i.customer_id = c.id 
+                               AND i.status = 'unpaid'
+                           ) THEN 'unpaid'
+                           WHEN EXISTS (
+                               SELECT 1 FROM invoices i 
+                               WHERE i.customer_id = c.id 
+                               AND i.status = 'paid'
+                           ) THEN 'paid'
+                           ELSE 'no_invoice'
+                       END as lifetime_payment_status`;
+        let periodPaymentStatusSql;
+        if (hasYear && isYearRange) {
+            const y = String(year);
+            periodPaymentStatusSql = `
+                       CASE 
+                           WHEN EXISTS (
+                               SELECT 1 FROM invoices i 
+                               WHERE i.customer_id = c.id 
+                               AND strftime('%Y', i.created_at) = '${y}' 
+                               AND i.status = 'unpaid'
+                           ) THEN 'unpaid'
+                           WHEN EXISTS (
+                               SELECT 1 FROM invoices i 
+                               WHERE i.customer_id = c.id 
+                               AND strftime('%Y', i.created_at) = '${y}' 
+                               AND i.status = 'paid'
+                           ) THEN 'paid'
+                           ELSE 'no_invoice'
+                       END as payment_status`;
+        } else if (hasYear && hasMonth) {
+            const m = String(month).padStart(2, '0');
+            const y = String(year);
+            periodPaymentStatusSql = `
+                       CASE 
+                           WHEN EXISTS (
+                               SELECT 1 FROM invoices i 
+                               WHERE i.customer_id = c.id 
+                               AND strftime('%m', i.created_at) = '${m}' 
+                               AND strftime('%Y', i.created_at) = '${y}' 
+                               AND i.status = 'unpaid'
+                           ) THEN 'unpaid'
+                           WHEN EXISTS (
+                               SELECT 1 FROM invoices i 
+                               WHERE i.customer_id = c.id 
+                               AND strftime('%m', i.created_at) = '${m}' 
+                               AND strftime('%Y', i.created_at) = '${y}' 
+                               AND i.status = 'paid'
+                           ) THEN 'paid'
+                           ELSE 'no_invoice'
+                       END as payment_status`;
+        } else {
+            periodPaymentStatusSql = `
+                       CASE 
+                           WHEN EXISTS (
+                               SELECT 1 FROM invoices i 
+                               WHERE i.customer_id = c.id 
+                               AND i.status = 'unpaid'
+                           ) THEN 'unpaid'
+                           WHEN EXISTS (
+                               SELECT 1 FROM invoices i 
+                               WHERE i.customer_id = c.id 
+                               AND i.status = 'paid'
+                           ) THEN 'paid'
+                           ELSE 'no_invoice'
+                       END as payment_status`;
+        }
         return new Promise(async (resolve, reject) => {
             // Kita gabungkan customer yang di-mapping area-nya DAN yang di-mapping manual
             const sql = `
                 SELECT DISTINCT c.*, p.name as package_name, p.price as package_price, p.image as package_image, p.tax_rate,
                        c.latitude, c.longitude,
                        r.name as router_name,
-${year && month ? `
-                       CASE 
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND strftime('%m', i.created_at) = '${String(month).padStart(2, '0')}' 
-                               AND strftime('%Y', i.created_at) = '${String(year)}' 
-                               AND i.status = 'unpaid'
-                           ) THEN 'unpaid'
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND strftime('%m', i.created_at) = '${String(month).padStart(2, '0')}' 
-                               AND strftime('%Y', i.created_at) = '${String(year)}' 
-                               AND i.status = 'paid'
-                           ) THEN 'paid'
-                           ELSE 'no_invoice'
-                       END as payment_status` : `
-                       CASE 
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid'
-                           ) THEN 'unpaid'
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'paid'
-                           ) THEN 'paid'
-                           ELSE 'no_invoice'
-                       END as payment_status`}
+${periodPaymentStatusSql},
+${lifetimePaymentStatusSql}
                 FROM customers c 
                 LEFT JOIN packages p ON c.package_id = p.id
                 LEFT JOIN customer_router_map m ON m.customer_id = c.id
@@ -5592,11 +5636,21 @@ ${year && month ? `
         });
     }
 
-    async getCollectorAllPayments(collectorId) {
+    async getCollectorAllPayments(collectorId, month = null, year = null) {
         return new Promise((resolve, reject) => {
             // Riwayat dari `payments` (bukan `collector_payments`): baris log kolektor
             // di collector_payments tidak dihapus saat admin membatalkan pembayaran,
             // sedangkan baris payments dihapus — supaya riwayat app kolektor selaras.
+            const isYearRange = String(month) === 'all' || String(month) === '0';
+            const hasYear = year != null && String(year).trim() !== '';
+            const hasMonth = month != null && String(month).trim() !== '' && !isYearRange;
+            let periodSql = '';
+            if (hasYear && isYearRange) {
+                periodSql = ` AND strftime('%Y', COALESCE(p.payment_date, datetime('now','localtime'))) = '${String(year)}'`;
+            } else if (hasYear && hasMonth) {
+                periodSql = ` AND strftime('%m', COALESCE(p.payment_date, datetime('now','localtime'))) = '${String(month).padStart(2, '0')}'
+                  AND strftime('%Y', COALESCE(p.payment_date, datetime('now','localtime'))) = '${String(year)}'`;
+            }
             this.db.all(
                 `
                 SELECT
@@ -5618,6 +5672,7 @@ ${year && month ? `
                 LEFT JOIN customers c ON c.id = i.customer_id
                 WHERE p.collector_id = ?
                   AND IFNULL(p.payment_type, 'collector') = 'collector'
+                  ${periodSql}
                 ORDER BY collected_at DESC
             `,
                 [collectorId],

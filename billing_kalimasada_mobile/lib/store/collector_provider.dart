@@ -27,7 +27,7 @@ class CollectorProvider extends ChangeNotifier {
   bool _settlementLoading = false;
   bool _meLoading = false;
 
-  /// Query terakhir yang sukses untuk overview (dipakai ulang saat refresh / pindah tab).
+  /// Periode aktif (dashboard) — dipakai overview, pelanggan, dan setoran.
   int? _overviewMonth;
   int? _overviewYear;
 
@@ -53,6 +53,35 @@ class CollectorProvider extends ChangeNotifier {
   int? get overviewMonth => _overviewMonth;
   int? get overviewYear => _overviewYear;
 
+  List<String> _periodQueryParts({int? month, int? year}) {
+    final m = month ?? _overviewMonth;
+    final y = year ?? _overviewYear;
+    final q = <String>[];
+    if (m != null) q.add(m == 0 ? 'month=all' : 'month=$m');
+    if (y != null) q.add('year=$y');
+    return q;
+  }
+
+  Future<void> setPeriodAndRefresh({
+    required int month,
+    required int year,
+  }) async {
+    _overviewMonth = month;
+    _overviewYear = year;
+    notifyListeners();
+    await Future.wait([
+      fetchOverview(month: month, year: year),
+      fetchSettlement(month: month, year: year),
+      fetchCustomers(
+        status: _lastCustomersFetchStatus,
+        q: _lastCustomersFetchQ,
+        area: _lastCustomersFetchArea,
+        month: month,
+        year: year,
+      ),
+    ]);
+  }
+
   Future<void> fetchOverview({int? month, int? year}) async {
     _overviewLoading = true;
     _overviewError = null;
@@ -60,9 +89,7 @@ class CollectorProvider extends ChangeNotifier {
     try {
       final m = month ?? _overviewMonth;
       final y = year ?? _overviewYear;
-      final q = <String>[];
-      if (m != null) q.add(m == 0 ? 'month=all' : 'month=$m');
-      if (y != null) q.add('year=$y');
+      final q = _periodQueryParts(month: m, year: y);
       final path =
           '/api/mobile-adapter/collector/overview${q.isEmpty ? '' : '?${q.join('&')}'}';
       final r = await ApiClient.get(path);
@@ -111,6 +138,8 @@ class CollectorProvider extends ChangeNotifier {
     String status = '',
     String q = '',
     String area = '',
+    int? month,
+    int? year,
   }) async {
     _customersLoading = true;
     _customersError = null;
@@ -124,6 +153,7 @@ class CollectorProvider extends ChangeNotifier {
       if (area.trim().isNotEmpty) {
         params.add('area=${Uri.encodeComponent(area.trim())}');
       }
+      params.addAll(_periodQueryParts(month: month, year: year));
       final path =
           '/api/mobile-adapter/collector/customers${params.isEmpty ? '' : '?${params.join('&')}'}';
       final r = await ApiClient.get(path);
@@ -158,12 +188,15 @@ class CollectorProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> fetchSettlement() async {
+  Future<void> fetchSettlement({int? month, int? year}) async {
     _settlementLoading = true;
     _settlementError = null;
     notifyListeners();
     try {
-      final r = await ApiClient.get('/api/mobile-adapter/collector/settlement');
+      final q = _periodQueryParts(month: month, year: year);
+      final path =
+          '/api/mobile-adapter/collector/settlement${q.isEmpty ? '' : '?${q.join('&')}'}';
+      final r = await ApiClient.get(path);
       final body = ApiClient.decodeJsonObject(
         r,
         debugLabel: 'collector/settlement',
@@ -304,6 +337,35 @@ class CollectorProvider extends ChangeNotifier {
     } finally {
       _meLoading = false;
       notifyListeners();
+    }
+  }
+
+  /// Upload foto profil kolektor (JPEG/PNG base64) ke backend.
+  Future<String?> updateCollectorPhotoBase64(String photoBase64) async {
+    final payload = photoBase64.trim();
+    if (payload.isEmpty) return 'Foto wajib diisi';
+    try {
+      final r = await ApiClient.post('/api/mobile-adapter/collector/me/photo', {
+        'photo_base64': payload,
+      });
+      final body = ApiClient.decodeJsonObject(
+        r,
+        debugLabel: 'collector/me/photo',
+      );
+      if (r.statusCode == 200 && body['success'] == true) {
+        final photoUrl = body['data'] is Map
+            ? (body['data'] as Map)['photo_url']?.toString()
+            : null;
+        if (photoUrl != null && photoUrl.trim().isNotEmpty && _me != null) {
+          _me = {..._me!, 'photo_url': photoUrl};
+          notifyListeners();
+        }
+        await fetchMe();
+        return null;
+      }
+      return body['message']?.toString() ?? 'Gagal mengunggah foto';
+    } catch (e) {
+      return e.toString();
     }
   }
 

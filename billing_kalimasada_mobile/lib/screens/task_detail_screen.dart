@@ -258,228 +258,156 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
       return;
     }
 
-    final ctrl = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-
-    await showDialog<void>(
+    final reason = await showDialog<String>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogCtx) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          title: const Text('Tandai pending'),
-          content: SingleChildScrollView(
-            child: Form(
-              key: formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'Jelaskan alasan penundaan. Teks ini dikirim ke admin billing (catatan job / riwayat tiket).',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey.shade700,
-                      height: 1.35,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: ctrl,
-                    maxLines: 4,
-                    minLines: 3,
-                    textCapitalization: TextCapitalization.sentences,
-                    decoration: InputDecoration(
-                      hintText:
-                          'Contoh: Menunggu ONT dari gudang / pelanggan tidak di lokasi …',
-                      alignLabelWithHint: true,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: BorderSide(color: Colors.grey.shade400),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: const BorderSide(
-                          color: Color(0xFFDC2626),
-                          width: 1.5,
-                        ),
-                      ),
-                    ),
-                    validator: (v) {
-                      final t = v?.trim() ?? '';
-                      if (t.length < 8) return 'Minimal 8 karakter';
-                      return null;
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogCtx),
-              child: const Text('Batal'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFDC2626),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              onPressed: () async {
-                if (!(formKey.currentState?.validate() ?? false)) return;
-                final reason = ctrl.text.trim();
-                Navigator.pop(dialogCtx);
-                setState(() => _busy = true);
-                final ok = await tasks.updateTaskStatus(
-                  id,
-                  type,
-                  'pending',
-                  pendingReason: reason,
-                );
-                if (!mounted) return;
-                setState(() => _busy = false);
-                if (ok) {
-                  messenger.showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Pending tersimpan. Admin dapat melihat alasan di web.',
-                      ),
-                    ),
-                  );
-                  Navigator.pop(context);
-                } else {
-                  messenger.showSnackBar(
-                    const SnackBar(
-                      content: Text('Gagal menyimpan pending. Coba lagi.'),
-                    ),
-                  );
-                }
-              },
-              child: const Text('Kirim ke admin'),
-            ),
-          ],
-        );
-      },
+      builder: (dialogCtx) => const _PendingReasonDialog(),
     );
-    ctrl.dispose();
+    if (!mounted || reason == null || reason.trim().isEmpty) return;
+
+    _timer?.cancel();
+    _ensureSpin(false);
+    setState(() => _busy = true);
+    final ok = await tasks.updateTaskStatus(
+      id,
+      type,
+      'pending',
+      pendingReason: reason.trim(),
+    );
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (ok) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Pending tersimpan. Admin dapat melihat alasan di web.',
+          ),
+        ),
+      );
+      if (mounted) Navigator.of(context).pop();
+    } else {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Gagal menyimpan pending. Coba lagi.')),
+      );
+      if (mounted) _syncTimerFromTask();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    const bg = Color(0xFFF8FAFC);
+    const primary = Color(0xFF2563EB);
+    const text = Color(0xFF0F172A);
+    const muted = Color(0xFF64748B);
+    const border = Color(0xFFE2E8F0);
     final durLabel = _workActive ? _formatDuration(_elapsed) : '00:00';
 
     return Scaffold(
-      backgroundColor: const Color(0xFFFCF8FF),
+      backgroundColor: bg,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF2563EB),
+        backgroundColor: primary,
         foregroundColor: Colors.white,
         elevation: 0,
-        shape: const Border(
-          bottom: BorderSide(color: Colors.white24, width: 1),
-        ),
+        scrolledUnderElevation: 0,
         title: const Text(
-          'Eksekusi Tugas',
+          'Detail Tugas',
           style: TextStyle(
-            fontSize: 22,
-            fontWeight: FontWeight.w600,
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
             color: Colors.white,
           ),
         ),
         centerTitle: true,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
+          icon: const Icon(Icons.arrow_back_rounded),
           onPressed: () => Navigator.pop(context),
         ),
-        actions: [
-          IconButton(icon: const Icon(Icons.more_vert), onPressed: () {}),
-        ],
       ),
       body: Stack(
         children: [
           SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 140),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 150),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Container(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF1B0C6B),
-                    borderRadius: BorderRadius.circular(8),
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: _workActive
+                          ? const [Color(0xFF059669), Color(0xFF047857)]
+                          : const [Color(0xFF2563EB), Color(0xFF1D4ED8)],
+                    ),
+                    borderRadius: BorderRadius.circular(22),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.05),
-                        blurRadius: 4,
-                        offset: const Offset(0, 1),
+                        color: (_workActive ? const Color(0xFF059669) : primary)
+                            .withValues(alpha: 0.28),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
                       ),
                     ],
                   ),
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'DURASI',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.5,
-                              color: Color(0xCC857ED9),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'DURASI KERJA',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.8,
+                                color: Colors.white.withValues(alpha: 0.72),
+                              ),
                             ),
-                          ),
-                          Text(
-                            durLabel,
-                            style: const TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 2,
-                              color: Colors.white,
+                            const SizedBox(height: 4),
+                            Text(
+                              durLabel,
+                              style: const TextStyle(
+                                fontSize: 32,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 1.2,
+                                color: Colors.white,
+                                height: 1.05,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 12,
-                          vertical: 6,
+                          vertical: 8,
                         ),
                         decoration: BoxDecoration(
-                          color: _workActive
-                              ? const Color(0xFF14532D).withValues(alpha: 0.35)
-                              : const Color(0xFF5A53AB).withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(20),
+                          color: Colors.white.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.22),
+                          ),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(
                               _workActive
-                                  ? Icons.play_circle_filled
-                                  : Icons.sync,
-                              size: 14,
-                              color: _workActive
-                                  ? const Color(0xFFB8F5C8)
-                                  : const Color(0xFFE4DFFF),
+                                  ? Icons.play_circle_fill_rounded
+                                  : Icons.hourglass_top_rounded,
+                              size: 16,
+                              color: Colors.white,
                             ),
-                            const SizedBox(width: 8),
+                            const SizedBox(width: 6),
                             Text(
                               _workActive ? 'Dalam proses' : 'Menunggu',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: _workActive
-                                    ? const Color(0xFFB8F5C8)
-                                    : const Color(0xFFE4DFFF),
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white,
                               ),
                             ),
                           ],
@@ -488,66 +416,47 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                     ],
                   ),
                 ),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFC8C4D3)),
-                  ),
+                const SizedBox(height: 14),
+                _freshCard(
+                  border: border,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: const [
-                          Icon(
-                            Icons.person,
-                            size: 20,
-                            color: Color(0xFF787582),
-                          ),
-                          SizedBox(width: 8),
-                          Text(
-                            'Detail Pelanggan',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF19163F),
-                            ),
-                          ),
-                        ],
+                      _sectionHeader(
+                        Icons.person_rounded,
+                        'Detail Pelanggan',
+                        primary,
+                        text,
                       ),
-                      const SizedBox(height: 8),
-                      const Divider(color: Color(0xFFC8C4D3)),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 12),
                       _buildDetailRow(
                         'Nama',
                         _task['customer']?.toString() ?? '-',
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 10),
                       _buildDetailRow(
                         _isTr ? 'ID Tiket' : 'ID Tugas',
                         _task['id']?.toString() ?? '-',
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 10),
                       _buildDetailRow(
                         'Alamat',
                         _task['address']?.toString() ?? '-',
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
                       Row(
                         children: [
                           Expanded(
                             child: _GradientActionChip(
-                              borderRadius: 22,
+                              borderRadius: 16,
                               gradient: const LinearGradient(
                                 begin: Alignment.topLeft,
                                 end: Alignment.bottomRight,
-                                colors: [Color(0xFF25D366), Color(0xFF128C7E)],
+                                colors: [Color(0xFF22C55E), Color(0xFF16A34A)],
                               ),
                               shadow: const Color(
-                                0xFF25D366,
-                              ).withValues(alpha: 0.35),
+                                0xFF22C55E,
+                              ).withValues(alpha: 0.28),
                               onTap: () async {
                                 final phone = _task['phone']?.toString();
                                 if (phone != null && phone.isNotEmpty) {
@@ -604,15 +513,15 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                           const SizedBox(width: 10),
                           Expanded(
                             child: _GradientActionChip(
-                              borderRadius: 22,
+                              borderRadius: 16,
                               gradient: const LinearGradient(
                                 begin: Alignment.topLeft,
                                 end: Alignment.bottomRight,
-                                colors: [Color(0xFF5C9EFF), Color(0xFF1A56DB)],
+                                colors: [Color(0xFF3B82F6), Color(0xFF2563EB)],
                               ),
                               shadow: const Color(
-                                0xFF4285F4,
-                              ).withValues(alpha: 0.35),
+                                0xFF3B82F6,
+                              ).withValues(alpha: 0.28),
                               onTap: () async {
                                 final coord = _customerCoordinate();
                                 if (coord != null) {
@@ -674,168 +583,74 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                     ],
                   ),
                 ),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFFC8C4D3)),
-                  ),
+                const SizedBox(height: 14),
+                _freshCard(
+                  border: border,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: const [
-                          Icon(Icons.build, size: 20, color: Color(0xFF787582)),
-                          SizedBox(width: 8),
-                          Text(
-                            'Status Teknis',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF19163F),
-                            ),
-                          ),
-                        ],
+                      _sectionHeader(
+                        Icons.build_rounded,
+                        'Status Teknis',
+                        primary,
+                        text,
                       ),
-                      const SizedBox(height: 8),
-                      const Divider(color: Color(0xFFC8C4D3)),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 12),
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          SizedBox(
-                            width: 108,
-                            child: Container(
-                              padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF0EBFF),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    _isTr ? 'Tipe' : 'Job ID',
-                                    style: const TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w700,
-                                      letterSpacing: 0.4,
-                                      color: Color(0xFF474551),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    _isTr
-                                        ? (_task['title']?.toString() ?? '-')
-                                        : '#${_task['id']?.toString() ?? '-'}',
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                      color: Color(0xFF19163F),
-                                    ),
-                                    maxLines: 3,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  if (!_isTr &&
-                                      _taskStr('job_number').isNotEmpty) ...[
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      _taskStr('job_number'),
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        color: Colors.grey.shade700,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ],
-                                ],
-                              ),
+                          Expanded(
+                            child: _infoMiniCard(
+                              label: _isTr ? 'Tipe' : 'Job ID',
+                              value: _isTr
+                                  ? (_task['title']?.toString() ?? '-')
+                                  : '#${_task['id']?.toString() ?? '-'}',
+                              subtitle:
+                                  !_isTr && _taskStr('job_number').isNotEmpty
+                                  ? _taskStr('job_number')
+                                  : null,
                             ),
                           ),
                           const SizedBox(width: 10),
                           Expanded(
-                            child: Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF0EBFF),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    'Prioritas',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w700,
-                                      letterSpacing: 0.5,
-                                      color: Color(0xFF474551),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Row(
-                                    children: [
-                                      const Icon(
-                                        Icons.priority_high,
-                                        size: 16,
-                                        color: Color(0xFFBA1A1A),
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Expanded(
-                                        child: Text(
-                                          _task['priority']?.toString() ?? '-',
-                                          style: const TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w500,
-                                            color: Color(0xFFBA1A1A),
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
-                              ),
+                            child: _infoMiniCard(
+                              label: 'Prioritas',
+                              value: _task['priority']?.toString() ?? '-',
+                              valueColor: const Color(0xFFDC2626),
+                              icon: Icons.priority_high_rounded,
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
                       if (_isInstall) ...[
-                        const Text(
-                          'Detail PPPOE',
+                        Text(
+                          'Detail PPPoE',
                           style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.3,
-                            color: Color(0xFF474551),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                            color: muted,
+                            letterSpacing: 0.2,
                           ),
                         ),
                         const SizedBox(height: 8),
                         Container(
                           width: double.infinity,
-                          padding: const EdgeInsets.fromLTRB(16, 18, 16, 18),
+                          padding: const EdgeInsets.fromLTRB(14, 14, 10, 14),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFF0EBFF),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: const Color(
-                                0xFFC8C4D3,
-                              ).withValues(alpha: 0.6),
-                            ),
+                            color: const Color(0xFFEFF6FF),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: const Color(0xFFBFDBFE)),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Username PPPoE (login RADIUS / MikroTik)',
+                                'Username PPPoE',
                                 style: TextStyle(
                                   fontSize: 12,
-                                  color: Colors.grey.shade800,
-                                  fontWeight: FontWeight.w600,
+                                  color: Colors.blueGrey.shade700,
+                                  fontWeight: FontWeight.w700,
                                 ),
                               ),
                               const SizedBox(height: 6),
@@ -849,10 +664,10 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                                           : '— Belum ada di data pelanggan (pastikan job terhubung ke pelanggan & PPPoE terisi di admin, atau nomor HP job sama dengan data pelanggan).',
                                       style: TextStyle(
                                         fontSize: _pppoeUserDisplay().isNotEmpty
-                                            ? 18
+                                            ? 17
                                             : 13,
-                                        fontWeight: FontWeight.w700,
-                                        color: const Color(0xFF19163F),
+                                        fontWeight: FontWeight.w800,
+                                        color: text,
                                         height: 1.35,
                                       ),
                                     ),
@@ -866,24 +681,23 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                                         'Username PPPoE',
                                       ),
                                       icon: const Icon(
-                                        Icons.copy_outlined,
-                                        size: 22,
-                                        color: Color(0xFF474551),
+                                        Icons.copy_rounded,
+                                        size: 20,
+                                        color: muted,
                                       ),
                                     ),
                                 ],
                               ),
-                              const SizedBox(height: 16),
+                              const SizedBox(height: 12),
                               Row(
-                                crossAxisAlignment: CrossAxisAlignment.center,
                                 children: [
                                   Expanded(
                                     child: Text(
                                       'Password PPPoE',
                                       style: TextStyle(
                                         fontSize: 12,
-                                        color: Colors.grey.shade800,
-                                        fontWeight: FontWeight.w600,
+                                        color: Colors.blueGrey.shade700,
+                                        fontWeight: FontWeight.w700,
                                       ),
                                     ),
                                   ),
@@ -896,9 +710,9 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                                         'Password PPPoE',
                                       ),
                                       icon: const Icon(
-                                        Icons.copy_outlined,
-                                        size: 22,
-                                        color: Color(0xFF474551),
+                                        Icons.copy_rounded,
+                                        size: 20,
+                                        color: muted,
                                       ),
                                     ),
                                   IconButton(
@@ -915,13 +729,12 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                                       _pppoeObscure
                                           ? Icons.visibility_outlined
                                           : Icons.visibility_off_outlined,
-                                      size: 22,
+                                      size: 20,
                                     ),
-                                    color: const Color(0xFF474551),
+                                    color: muted,
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 4),
                               SelectableText(
                                 _pppoePassRaw() == null
                                     ? kTechnicianPppoePasswordEmptyHint
@@ -931,14 +744,14 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                                 style: _pppoePassRaw() == null
                                     ? TextStyle(
                                         fontSize: 13,
-                                        fontWeight: FontWeight.w400,
+                                        fontWeight: FontWeight.w500,
                                         height: 1.35,
-                                        color: Colors.grey.shade700,
+                                        color: Colors.blueGrey.shade600,
                                       )
                                     : TextStyle(
-                                        fontSize: 17,
-                                        fontWeight: FontWeight.w600,
-                                        color: const Color(0xFF19163F),
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w700,
+                                        color: text,
                                         letterSpacing: _pppoeObscure ? 1.2 : 0,
                                       ),
                               ),
@@ -946,28 +759,30 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                           ),
                         ),
                       ] else ...[
-                        const Text(
+                        Text(
                           'Catatan Diagnosa',
                           style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.5,
-                            color: Color(0xFF474551),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                            color: muted,
                           ),
                         ),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 8),
                         Container(
                           width: double.infinity,
-                          padding: const EdgeInsets.all(12),
+                          padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFF0EBFF),
-                            borderRadius: BorderRadius.circular(4),
+                            color: const Color(0xFFEFF6FF),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: const Color(0xFFBFDBFE)),
                           ),
                           child: Text(
                             _task['description']?.toString() ?? '-',
                             style: const TextStyle(
                               fontSize: 14,
-                              color: Color(0xFF19163F),
+                              height: 1.4,
+                              fontWeight: FontWeight.w600,
+                              color: text,
                             ),
                           ),
                         ),
@@ -983,117 +798,248 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
             right: 0,
             bottom: 0,
             child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: const BoxDecoration(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+              decoration: BoxDecoration(
                 color: Colors.white,
-                border: Border(top: BorderSide(color: Color(0xFFC8C4D3))),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _SmoothActionButton(
-                    enabled: !_busy,
-                    onTap: () async {
-                      if (_isTr) {
-                        if (_workActive) {
-                          _openJobExecution(context);
-                        } else {
-                          await _onKerjakanTr(context);
-                        }
-                      } else {
-                        await _onKerjakanInstall(context);
-                      }
-                    },
-                    borderRadius: 18,
-                    gradient: _workActive
-                        ? const LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [Color(0xFF047857), Color(0xFF065F46)],
-                          )
-                        : const LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [Color(0xFF16A34A), Color(0xFF15803D)],
-                          ),
-                    shadowColor: const Color(0xFF16A34A),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        if (_workActive) ...[
-                          const Icon(
-                            Icons.lock_outline_rounded,
-                            size: 20,
-                            color: Colors.white,
-                          ),
-                          const SizedBox(width: 8),
-                          RotationTransition(
-                            turns: _spinCtrl,
-                            child: const Icon(
-                              Icons.settings_rounded,
-                              size: 22,
-                              color: Colors.white,
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                        ] else
-                          const Icon(
-                            Icons.play_arrow_rounded,
-                            size: 26,
-                            color: Colors.white,
-                          ),
-                        Text(
-                          (_isTr || _isInstall)
-                              ? (_workActive ? 'Sedang dikerjakan' : 'Kerjakan')
-                              : 'Kerjakan',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                            letterSpacing: 0.2,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  _SmoothActionButton(
-                    enabled: !_busy,
-                    onTap: () async {
-                      await _showPendingReasonDialog();
-                    },
-                    borderRadius: 18,
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [Color(0xFFEF4444), Color(0xFFB91C1C)],
-                    ),
-                    shadowColor: const Color(0xFFDC2626),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(
-                          Icons.pause_circle_outline_rounded,
-                          size: 22,
-                          color: Colors.white,
-                        ),
-                        const SizedBox(width: 8),
-                        const Text(
-                          'Pending',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                            letterSpacing: 0.2,
-                          ),
-                        ),
-                      ],
-                    ),
+                border: const Border(top: BorderSide(color: border)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.05),
+                    blurRadius: 16,
+                    offset: const Offset(0, -4),
                   ),
                 ],
               ),
+              child: SafeArea(
+                top: false,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _SmoothActionButton(
+                      enabled: !_busy,
+                      onTap: () async {
+                        if (_isTr) {
+                          if (_workActive) {
+                            _openJobExecution(context);
+                          } else {
+                            await _onKerjakanTr(context);
+                          }
+                        } else {
+                          await _onKerjakanInstall(context);
+                        }
+                      },
+                      borderRadius: 16,
+                      gradient: _workActive
+                          ? const LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [Color(0xFF059669), Color(0xFF047857)],
+                            )
+                          : const LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [Color(0xFF22C55E), Color(0xFF16A34A)],
+                            ),
+                      shadowColor: const Color(0xFF16A34A),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          if (_workActive) ...[
+                            const Icon(
+                              Icons.lock_outline_rounded,
+                              size: 20,
+                              color: Colors.white,
+                            ),
+                            const SizedBox(width: 8),
+                            RotationTransition(
+                              turns: _spinCtrl,
+                              child: const Icon(
+                                Icons.settings_rounded,
+                                size: 22,
+                                color: Colors.white,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                          ] else
+                            const Icon(
+                              Icons.play_arrow_rounded,
+                              size: 26,
+                              color: Colors.white,
+                            ),
+                          Text(
+                            (_isTr || _isInstall)
+                                ? (_workActive
+                                      ? 'Sedang dikerjakan'
+                                      : 'Kerjakan')
+                                : 'Kerjakan',
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white,
+                              letterSpacing: 0.2,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    _SmoothActionButton(
+                      enabled: !_busy,
+                      onTap: () async {
+                        await _showPendingReasonDialog();
+                      },
+                      borderRadius: 16,
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFFEF4444), Color(0xFFDC2626)],
+                      ),
+                      shadowColor: const Color(0xFFEF4444),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.pause_circle_outline_rounded,
+                            size: 22,
+                            color: Colors.white,
+                          ),
+                          SizedBox(width: 8),
+                          Text(
+                            'Pending',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white,
+                              letterSpacing: 0.2,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _freshCard({required Color border, required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: border),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF0F172A).withValues(alpha: 0.04),
+            blurRadius: 14,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
+
+  Widget _sectionHeader(
+    IconData icon,
+    String title,
+    Color iconColor,
+    Color textColor,
+  ) {
+    return Row(
+      children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: iconColor.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(icon, size: 20, color: iconColor),
+        ),
+        const SizedBox(width: 10),
+        Text(
+          title,
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: textColor,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _infoMiniCard({
+    required String label,
+    required String value,
+    String? subtitle,
+    Color? valueColor,
+    IconData? icon,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEFF6FF),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFDBEAFE)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.4,
+              color: Color(0xFF64748B),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              if (icon != null) ...[
+                Icon(
+                  icon,
+                  size: 16,
+                  color: valueColor ?? const Color(0xFF0F172A),
+                ),
+                const SizedBox(width: 4),
+              ],
+              Expanded(
+                child: Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: valueColor ?? const Color(0xFF0F172A),
+                  ),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          if (subtitle != null && subtitle.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              style: const TextStyle(
+                fontSize: 11,
+                color: Color(0xFF64748B),
+                fontWeight: FontWeight.w600,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
         ],
       ),
     );
@@ -1104,28 +1050,28 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          label,
+          label.toUpperCase(),
           style: const TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
             letterSpacing: 0.5,
-            color: Color(0xFF474551),
+            color: Color(0xFF64748B),
           ),
         ),
-        const SizedBox(height: 2),
+        const SizedBox(height: 3),
         Text(
           value,
           style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w500,
-            color: Color(0xFF19163F),
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF0F172A),
+            height: 1.3,
           ),
         ),
       ],
     );
   }
 }
-
 /// Tombol Hubungi / Peta: gradien + sudut sangat membulat.
 class _GradientActionChip extends StatelessWidget {
   const _GradientActionChip({
@@ -1244,6 +1190,155 @@ class _SmoothActionButton extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _PendingReasonDialog extends StatefulWidget {
+  const _PendingReasonDialog();
+
+  @override
+  State<_PendingReasonDialog> createState() => _PendingReasonDialogState();
+}
+
+class _PendingReasonDialogState extends State<_PendingReasonDialog> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      title: const Text(
+        'Tandai pending',
+        style: TextStyle(
+          color: Color(0xFF0F172A),
+          fontWeight: FontWeight.w800,
+          fontSize: 18,
+        ),
+      ),
+      content: SingleChildScrollView(
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Jelaskan alasan penundaan. Teks ini dikirim ke admin billing (catatan job / riwayat tiket).',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Color(0xFF475569),
+                  height: 1.35,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _ctrl,
+                maxLines: 4,
+                minLines: 3,
+                textCapitalization: TextCapitalization.sentences,
+                style: const TextStyle(
+                  color: Color(0xFF0F172A),
+                  fontWeight: FontWeight.w600,
+                ),
+                cursorColor: const Color(0xFF2563EB),
+                decoration: InputDecoration(
+                  filled: true,
+                  fillColor: const Color(0xFFF8FAFC),
+                  hintText:
+                      'Contoh: Menunggu ONT dari gudang / pelanggan tidak di lokasi …',
+                  hintStyle: const TextStyle(
+                    color: Color(0xFF94A3B8),
+                    fontWeight: FontWeight.w500,
+                  ),
+                  alignLabelWithHint: true,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(
+                      color: Color(0xFF2563EB),
+                      width: 1.5,
+                    ),
+                  ),
+                  errorBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(color: Color(0xFFEF4444)),
+                  ),
+                  focusedErrorBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: const BorderSide(
+                      color: Color(0xFFEF4444),
+                      width: 1.5,
+                    ),
+                  ),
+                  errorStyle: const TextStyle(
+                    color: Color(0xFFEF4444),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                validator: (v) {
+                  final t = v?.trim() ?? '';
+                  if (t.length < 8) return 'Minimal 8 karakter';
+                  return null;
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+      actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text(
+            'Batal',
+            style: TextStyle(
+              color: Color(0xFF64748B),
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFFEF4444),
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+          onPressed: () {
+            if (!(_formKey.currentState?.validate() ?? false)) return;
+            Navigator.pop(context, _ctrl.text.trim());
+          },
+          child: const Text(
+            'Kirim ke admin',
+            style: TextStyle(fontWeight: FontWeight.w800),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -8,10 +8,15 @@ import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
 import '../services/api_client.dart';
+import '../services/tag_customer_location_service.dart';
 import '../services/tag_customer_search_service.dart';
 import '../store/auth_provider.dart';
 import '../store/customer_provider.dart';
+import '../utils/customer_location_tag_utils.dart';
 import '../widgets/customer_home_map_marker.dart';
+import '../widgets/customer_location_tag_badge.dart';
+import '../widgets/tag_location_summary_cards.dart';
+import 'tagged_customer_list_screen.dart';
 
 /// Tag lokasi pelanggan (GPS); ODP opsional — menyimpan lewat [CustomerProvider.updateLocation].
 class TagCustomerLocationScreen extends StatefulWidget {
@@ -45,6 +50,10 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
   Map<int, String> _areaById = {};
   Future<void>? _areaNamesFuture;
 
+  int _taggedCount = 0;
+  int _untaggedCount = 0;
+  bool _summaryLoading = true;
+
   late final AnimationController _gpsPulseController;
 
   static const LatLng _defaultLocation = LatLng(-7.404620, 109.724536);
@@ -58,6 +67,47 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
     )..repeat();
     _loadOdps();
     _areaNamesFuture = _loadAreaNames();
+    _loadSummary();
+  }
+
+  Future<void> _loadSummary() async {
+    setState(() => _summaryLoading = true);
+    try {
+      final summary = await TagCustomerLocationService.fetchLocationSummary();
+      if (!mounted) return;
+      setState(() {
+        _taggedCount = summary['tagged'] ?? 0;
+        _untaggedCount = summary['untagged'] ?? 0;
+        _summaryLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _summaryLoading = false);
+    }
+  }
+
+  Future<void> _openUntaggedList() async {
+    final picked = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            const TaggedCustomerListScreen(locationStatus: 'untagged'),
+      ),
+    );
+    if (picked != null && mounted) {
+      _pickCustomer(picked);
+    }
+    _loadSummary();
+  }
+
+  Future<void> _openTaggedList() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const TaggedCustomerListScreen(locationStatus: 'tagged'),
+      ),
+    );
+    _loadSummary();
   }
 
   Future<void> _loadAreaNames() async {
@@ -167,6 +217,15 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
   }
 
   void _pickCustomer(Map<String, dynamic> row) {
+    if (customerHasLocationTag(row)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Pelanggan sudah punya tag lokasi'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
     final name = row['name']?.toString() ?? '';
     setState(() {
       _selectedCustomer = row;
@@ -321,6 +380,15 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
       );
       return;
     }
+    if (customerHasLocationTag(cust)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Pelanggan sudah punya tag lokasi'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
     if (_selectedLocation == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -347,6 +415,7 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
             backgroundColor: Colors.green,
           ),
         );
+        _loadSummary();
         Navigator.pop(context, true);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -585,71 +654,91 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
                           final area = _customerAreaLabel(row);
                           final phone = row['phone']?.toString() ?? '';
                           final cid = row['customer_id']?.toString() ?? '';
+                          final isTagged = customerHasLocationTag(row);
                           final contactLine = [
                             phone,
                             cid,
                           ].where((s) => s.isNotEmpty).join(' · ');
-                          return InkWell(
-                            onTap: () => _pickCustomer(row),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 10,
-                              ),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.center,
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          name,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            color: textOnSurface,
-                                            fontWeight: FontWeight.w600,
-                                            fontSize: 15,
-                                          ),
-                                        ),
-                                        if (contactLine.isNotEmpty) ...[
-                                          const SizedBox(height: 2),
+                          return Opacity(
+                            opacity: isTagged ? 0.55 : 1,
+                            child: InkWell(
+                              onTap: () => _pickCustomer(row),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 10,
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    if (isTagged) ...[
+                                      const Icon(
+                                        Icons.lock_outline,
+                                        size: 16,
+                                        color: textOnSurfaceVariant,
+                                      ),
+                                      const SizedBox(width: 8),
+                                    ],
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
                                           Text(
-                                            contactLine,
+                                            name,
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                             style: const TextStyle(
-                                              fontSize: 12,
-                                              color: textOnSurfaceVariant,
+                                              color: textOnSurface,
+                                              fontWeight: FontWeight.w600,
+                                              fontSize: 15,
+                                            ),
+                                          ),
+                                          if (contactLine.isNotEmpty) ...[
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              contactLine,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                color: textOnSurfaceVariant,
+                                              ),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
+                                      children: [
+                                        CustomerLocationTagBadge(row: row),
+                                        if (area.isNotEmpty) ...[
+                                          const SizedBox(height: 6),
+                                          ConstrainedBox(
+                                            constraints: const BoxConstraints(
+                                              maxWidth: 112,
+                                            ),
+                                            child: Text(
+                                              area,
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              textAlign: TextAlign.right,
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w600,
+                                                color: primary,
+                                                height: 1.25,
+                                              ),
                                             ),
                                           ),
                                         ],
                                       ],
                                     ),
-                                  ),
-                                  if (area.isNotEmpty) ...[
-                                    const SizedBox(width: 10),
-                                    ConstrainedBox(
-                                      constraints: const BoxConstraints(
-                                        maxWidth: 112,
-                                      ),
-                                      child: Text(
-                                        area,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        textAlign: TextAlign.right,
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                          color: primary,
-                                          height: 1.25,
-                                        ),
-                                      ),
-                                    ),
                                   ],
-                                ],
+                                ),
                               ),
                             ),
                           );
@@ -776,6 +865,14 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
                               ),
                             ),
                     ),
+                  ),
+                  const SizedBox(height: 16),
+                  TagLocationSummaryCards(
+                    tagged: _taggedCount,
+                    untagged: _untaggedCount,
+                    loading: _summaryLoading,
+                    onTapUntagged: _openUntaggedList,
+                    onTapTagged: _openTaggedList,
                   ),
                 ],
               ),

@@ -348,9 +348,10 @@ class _CollectorCustomersScreenState extends State<CollectorCustomersScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 12),
               children: [
                 _FilterChip(label: 'Semua', value: '', current: _status, onTap: _setFilter),
-                _FilterChip(label: 'Belum Bayar', value: 'unpaid', current: _status, onTap: _setFilter),
+                _FilterChip(label: 'Belum Lunas', value: 'unpaid', current: _status, onTap: _setFilter),
                 _FilterChip(label: 'Lunas', value: 'paid', current: _status, onTap: _setFilter),
                 _FilterChip(label: 'Isolir', value: 'isolir', current: _status, onTap: _setFilter),
+                _FilterChip(label: 'Nonaktif', value: 'nonaktif', current: _status, onTap: _setFilter),
                 _FilterChip(label: 'Baru', value: 'baru', current: _status, onTap: _setFilter),
               ],
             ),
@@ -478,6 +479,7 @@ class _CustomerCard extends StatelessWidget {
     final name = row['name']?.toString() ?? '';
     final addr = row['address']?.toString() ?? '';
     final ps = row['payment_status']?.toString() ?? '';
+    final lifePs = row['lifetime_payment_status']?.toString() ?? ps;
     final st = row['status']?.toString().toLowerCase() ?? '';
     final price = _coerceNum(row['package_price'])?.round() ?? 0;
     final custId = row['customer_id']?.toString();
@@ -487,11 +489,22 @@ class _CustomerCard extends StatelessWidget {
         : (username.isNotEmpty ? 'ID: $username' : 'ID: ${row['id']}');
 
     final isIsolir = st == 'suspended';
+    final isInactive = st == 'inactive';
     final areaStr = (row['area']?.toString() ?? '').trim();
     final areaDisplay = areaStr.isEmpty ? '—' : areaStr;
 
-    final badgeStyle = collectorPaymentBadgeFor(isIsolirAccount: isIsolir, paymentStatus: ps);
-    final amountColor = collectorPaymentAmountHeadlineColor(isIsolirAccount: isIsolir, paymentStatus: ps);
+    final badgeStyle = collectorPaymentBadgeFor(
+      isIsolirAccount: isIsolir,
+      isInactiveAccount: isInactive,
+      paymentStatus: ps,
+      lifetimePaymentStatus: lifePs,
+    );
+    final amountColor = collectorPaymentAmountHeadlineColor(
+      isIsolirAccount: isIsolir,
+      isInactiveAccount: isInactive,
+      paymentStatus: ps,
+      lifetimePaymentStatus: lifePs,
+    );
 
     return Material(
       color: Colors.transparent,

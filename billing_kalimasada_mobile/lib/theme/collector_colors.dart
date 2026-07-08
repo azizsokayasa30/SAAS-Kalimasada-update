@@ -58,6 +58,10 @@ class FieldCollectorColors {
   static const Color statLunasIcon = Color(0xFF2E7D32);
   static const Color statIsolirBg = Color(0xFFF1E8FF);
   static const Color statIsolirIcon = Color(0xFF7B1FA2);
+  static const Color statNonaktifBg = Color(0xFFF0F0F0);
+  static const Color statNonaktifIcon = Color(0xFF616161);
+  static const Color statBaruBg = Color(0xFFE0F7FA);
+  static const Color statBaruIcon = Color(0xFF00838F);
   /// Aksi cepat.
   static const Color dashActionA = Color(0xFF3949AB);
   static const Color dashActionB = Color(0xFF5C6BC0);

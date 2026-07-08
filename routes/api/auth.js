@@ -5,6 +5,8 @@ const bcrypt = require('bcrypt');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const { getSetting } = require('../../config/settingsManager');
+const { getTenantSetting } = require('../../config/platform/tenantSettings');
+const { getTenant, hasTenantContext } = require('../../config/platform/tenantContext');
 const logger = require('../../config/logger');
 const billingManager = require('../../config/billing');
 const AgentManager = require('../../config/agentManager');
@@ -127,18 +129,37 @@ router.post('/request-otp', async (req, res) => {
 router.post('/login', async (req, res) => {
     const { username, password, otp, phone, role } = req.body;
     
-    // 1. Check Admin (Settings based)
+    // 1. Check Admin — gunakan settings tenant (sama seperti /login web),
+    // bukan settings.json global, supaya password per-tenant (mis. tenant1) valid.
     if (!role || role === 'admin') {
-        const adminUsername = getSetting('admin_username', 'admin');
-        const adminPassword = getSetting('admin_password', 'admin');
-        
-        if (username === adminUsername && password === adminPassword) {
-            const token = jwt.sign(
-                { id: 'admin', username: adminUsername, role: 'admin' }, 
-                JWT_SECRET, 
-                { expiresIn: '24h' }
-            );
-            return res.json({ success: true, token, user: { id: 'admin', username: adminUsername, role: 'admin' } });
+        const adminUsername = String(getTenantSetting('admin_username', 'admin') || 'admin').trim();
+        const adminPassword = String(getTenantSetting('admin_password', 'admin') || 'admin').trim();
+        const inputUser = String(username || '').trim();
+        const inputPass = String(password || '').trim();
+
+        if (inputUser === adminUsername && inputPass === adminPassword) {
+            const tenant = hasTenantContext() ? getTenant() : (req.tenant || null);
+            const tokenPayload = {
+                id: 'admin',
+                username: adminUsername,
+                role: 'admin',
+            };
+            if (tenant?.id) {
+                tokenPayload.tenantId = tenant.id;
+                tokenPayload.tenant = tenant.subdomain;
+            }
+            const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '24h' });
+            return res.json({
+                success: true,
+                token,
+                user: {
+                    id: 'admin',
+                    username: adminUsername,
+                    role: 'admin',
+                    tenant: tenant?.subdomain || null,
+                    tenantId: tenant?.id || null,
+                },
+            });
         }
     }
 
@@ -158,7 +179,18 @@ router.post('/login', async (req, res) => {
                     JWT_SECRET, 
                     { expiresIn: '24h' }
                 );
-                return res.json({ success: true, token, user: { id: collector.id, name: collector.name, role: 'collector' } });
+                const userPayload = {
+                    id: collector.id,
+                    name: collector.name,
+                    role: 'collector',
+                    phone: collector.phone,
+                    email: collector.email || null
+                };
+                const photoRel = collector.photo_path || collector.foto_path || null;
+                if (photoRel) {
+                    userPayload.photo_url = buildPhotoUrl(String(photoRel));
+                }
+                return res.json({ success: true, token, user: userPayload });
             }
         }
 

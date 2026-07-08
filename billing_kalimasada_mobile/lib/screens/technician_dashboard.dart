@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import '../services/api_client.dart';
 import '../store/auth_provider.dart';
 import '../store/customer_provider.dart';
 import '../store/task_provider.dart';
@@ -45,10 +46,14 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      // Critical first paint: stats + tasks. Week performance deferred.
+      // Notifications sudah di-_TechnicianTabs.
       context.read<CustomerProvider>().fetchDashboardStats();
       context.read<TaskProvider>().fetchTasks();
-      context.read<TaskProvider>().fetchWeekPerformance();
-      context.read<NotificationProvider>().fetchNotifications(silent: true);
+      Future<void>.delayed(const Duration(milliseconds: 350), () {
+        if (!mounted) return;
+        context.read<TaskProvider>().fetchWeekPerformance();
+      });
     });
   }
 
@@ -119,9 +124,7 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
         auth.user?['name'] ??
         auth.user?['username'] ??
         (isAdmin ? 'Admin' : 'Teknisi');
-    final displayArea = isAdmin
-        ? 'Dashboard Admin'
-        : (auth.user?['area_coverage'] ?? 'Indonesia');
+    final displayTenant = _resolveTenantName(auth.user);
 
     return Scaffold(
       backgroundColor: bgBackground,
@@ -205,7 +208,7 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
                                   ),
                                 ),
                                 Text(
-                                  displayArea,
+                                  displayTenant,
                                   style: const TextStyle(
                                     color: inversePrimary,
                                     fontSize: 14,
@@ -248,34 +251,44 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
                                         ),
                                         if (c > 0)
                                           Positioned(
-                                            right: 4,
-                                            top: 4,
+                                            right: 2,
+                                            top: 2,
                                             child: Container(
                                               padding:
                                                   const EdgeInsets.symmetric(
-                                                    horizontal: 5,
+                                                    horizontal: 6,
                                                     vertical: 2,
                                                   ),
                                               decoration: BoxDecoration(
-                                                color: const Color(0xFFBA1A1A),
+                                                color: const Color(0xFFEF4444),
                                                 borderRadius:
-                                                    BorderRadius.circular(10),
+                                                    BorderRadius.circular(999),
                                                 border: Border.all(
-                                                  color: Colors.white
-                                                      .withValues(alpha: 0.3),
+                                                  color: Colors.white,
+                                                  width: 1.5,
                                                 ),
+                                                boxShadow: [
+                                                  BoxShadow(
+                                                    color: const Color(
+                                                      0xFFEF4444,
+                                                    ).withValues(alpha: 0.45),
+                                                    blurRadius: 6,
+                                                    offset: const Offset(0, 2),
+                                                  ),
+                                                ],
                                               ),
                                               constraints: const BoxConstraints(
-                                                minWidth: 18,
-                                                minHeight: 18,
+                                                minWidth: 20,
+                                                minHeight: 20,
                                               ),
+                                              alignment: Alignment.center,
                                               child: Text(
                                                 c > 99 ? '99+' : '$c',
                                                 textAlign: TextAlign.center,
                                                 style: const TextStyle(
                                                   color: Colors.white,
                                                   fontSize: 10,
-                                                  fontWeight: FontWeight.w700,
+                                                  fontWeight: FontWeight.w800,
                                                   height: 1.1,
                                                 ),
                                               ),
@@ -351,7 +364,7 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
                     _buildTugasAktifHeroCard(
                       context: context,
                       activeTasks: activeTasks,
-                      accentBlue: const Color(0xFFC4B5FD),
+                      accentBlue: const Color(0xFFBFDBFE),
                       textOnPrimary: textOnPrimary,
                       pulseOpacity: _pulseOpacity,
                     ),
@@ -360,11 +373,18 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
                       children: [
                         Expanded(
                           child: _buildPelangganMiniCard(
-                            icon: Icons.groups_outlined,
-                            iconBg: const Color(0xFFE8EAED),
-                            iconColor: const Color(0xFF5F6368),
+                            icon: Icons.groups_rounded,
+                            iconBg: const Color(0xFFDBEAFE),
+                            iconColor: primaryColor,
                             value: numFmt.format(totalPlg),
                             label: 'TOTAL PELANGGAN',
+                            valueColor: const Color(0xFF1E3A8A),
+                            labelColor: const Color(0xFF3B82F6),
+                            gradientColors: const [
+                              Color(0xFFEFF6FF),
+                              Color(0xFFDBEAFE),
+                            ],
+                            borderColor: const Color(0xFFBFDBFE),
                             onTap: () {
                               if (widget.onNavigateToTab != null) {
                                 widget.onNavigateToTab!(1);
@@ -383,11 +403,18 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
                         const SizedBox(width: 12),
                         Expanded(
                           child: _buildPelangganMiniCard(
-                            icon: Icons.wifi,
-                            iconBg: const Color(0xFF66DF75),
-                            iconColor: Colors.black87,
+                            icon: Icons.wifi_rounded,
+                            iconBg: const Color(0xFFD1FAE5),
+                            iconColor: const Color(0xFF059669),
                             value: numFmt.format(activePlg),
                             label: 'AKTIF',
+                            valueColor: const Color(0xFF065F46),
+                            labelColor: const Color(0xFF10B981),
+                            gradientColors: const [
+                              Color(0xFFECFDF5),
+                              Color(0xFFD1FAE5),
+                            ],
+                            borderColor: const Color(0xFFA7F3D0),
                             onTap: () {
                               if (widget.onNavigateToTab != null) {
                                 widget.onNavigateToTab!(1);
@@ -679,6 +706,27 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
     );
   }
 
+  String _resolveTenantName(Map<String, dynamic>? user) {
+    const keys = [
+      'tenant_name',
+      'tenantName',
+      'company_header',
+      'companyHeader',
+      'company',
+      'business_name',
+      'tenant',
+    ];
+    for (final key in keys) {
+      final value = user?[key]?.toString().trim() ?? '';
+      if (value.isNotEmpty) return value;
+    }
+    final slug = ApiClient.apiTenant?.trim();
+    if (slug != null && slug.isNotEmpty) {
+      return slug[0].toUpperCase() + slug.substring(1);
+    }
+    return 'Billing Kalimasada';
+  }
+
   Widget _buildTugasAktifHeroCard({
     required BuildContext context,
     required int activeTasks,
@@ -710,11 +758,11 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
               gradient: const LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [Color(0xFF3D2B6E), Color(0xFF1E1038)],
+                colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)],
               ),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF12082A).withValues(alpha: 0.55),
+                  color: const Color(0xFF2563EB).withValues(alpha: 0.35),
                   blurRadius: 18,
                   offset: const Offset(0, 8),
                 ),
@@ -725,6 +773,18 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
               child: Stack(
                 clipBehavior: Clip.hardEdge,
                 children: [
+                  Positioned(
+                    right: -20,
+                    top: -30,
+                    child: Container(
+                      width: 120,
+                      height: 120,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white.withValues(alpha: 0.08),
+                      ),
+                    ),
+                  ),
                   Positioned(
                     right: 4,
                     top: 0,
@@ -780,7 +840,7 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
                                     fontWeight: FontWeight.w700,
                                     letterSpacing: 0.7,
                                     color: textOnPrimary.withValues(
-                                      alpha: 0.55,
+                                      alpha: 0.7,
                                     ),
                                   ),
                                 ),
@@ -843,7 +903,7 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
                           ),
                         ),
                         Material(
-                          color: const Color(0xFF12082A),
+                          color: Colors.white.withValues(alpha: 0.18),
                           shape: const CircleBorder(),
                           child: InkWell(
                             customBorder: const CircleBorder(),
@@ -876,6 +936,10 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
     required Color iconColor,
     required String value,
     required String label,
+    required Color valueColor,
+    required Color labelColor,
+    required List<Color> gradientColors,
+    required Color borderColor,
     VoidCallback? onTap,
   }) {
     return Material(
@@ -885,14 +949,18 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
         borderRadius: BorderRadius.circular(14),
         child: Ink(
           decoration: BoxDecoration(
-            color: const Color(0xFFF3F4F6),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: gradientColors,
+            ),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: const Color(0xFFE0E2E6)),
+            border: Border.all(color: borderColor),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
+                color: borderColor.withValues(alpha: 0.35),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
               ),
             ],
           ),
@@ -921,23 +989,23 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
                   const SizedBox(height: 8),
                   Text(
                     value,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 21,
                       fontWeight: FontWeight.w800,
                       height: 1.05,
-                      color: Color(0xFF191C1D),
+                      color: valueColor,
                       letterSpacing: -0.5,
                     ),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     label,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 9,
                       fontWeight: FontWeight.w700,
                       height: 1.1,
                       letterSpacing: 0.5,
-                      color: Color(0xFF5F6368),
+                      color: labelColor,
                     ),
                   ),
                 ],

@@ -7,6 +7,7 @@ class CredentialStorage {
   static const _keyBiometric = 'biometric_login_enabled';
   static const _secureUsername = 'saved_username';
   static const _securePassword = 'saved_password';
+  static const _secureTenant = 'saved_tenant';
 
   static const _storage = FlutterSecureStorage();
 
@@ -30,12 +31,16 @@ class CredentialStorage {
     required String username,
     required String password,
     required bool enableBiometric,
+    String? tenant,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keyRemember, true);
     await prefs.setBool(_keyBiometric, enableBiometric);
     await _storage.write(key: _secureUsername, value: username);
     await _storage.write(key: _securePassword, value: password);
+    if (tenant != null && tenant.trim().isNotEmpty) {
+      await _storage.write(key: _secureTenant, value: tenant.trim().toLowerCase());
+    }
   }
 
   static Future<void> clearCredentials() async {
@@ -44,14 +49,17 @@ class CredentialStorage {
     await prefs.setBool(_keyBiometric, false);
     await _storage.delete(key: _secureUsername);
     await _storage.delete(key: _securePassword);
+    await _storage.delete(key: _secureTenant);
   }
 
-  static Future<({String? username, String? password})> readCredentials() async {
+  static Future<({String? username, String? password, String? tenant})>
+      readCredentials() async {
     if (!await rememberCredentials) {
-      return (username: null, password: null);
+      return (username: null, password: null, tenant: null);
     }
     final username = await _storage.read(key: _secureUsername);
     final password = await _storage.read(key: _securePassword);
-    return (username: username, password: password);
+    final tenant = await _storage.read(key: _secureTenant);
+    return (username: username, password: password, tenant: tenant);
   }
 }

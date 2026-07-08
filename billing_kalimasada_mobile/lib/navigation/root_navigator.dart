@@ -22,11 +22,11 @@ import '../utils/collector_debug_log.dart';
 import '../screens/technician_profile_screen.dart';
 import '../screens/task_list_screen.dart';
 import '../screens/network_menu_screen.dart';
-import '../screens/network_map_screen.dart';
 import '../screens/admin/admin_dashboard_screen.dart';
 import '../screens/admin/admin_customer_overview_screen.dart';
 import '../screens/admin/admin_more_screen.dart';
 import '../widgets/app_update_dialog.dart';
+import '../widgets/exit_confirm_scope.dart';
 
 class RootNavigator extends StatefulWidget {
   const RootNavigator({super.key});
@@ -79,7 +79,7 @@ class _RootNavigatorState extends State<RootNavigator>
     }
 
     if (auth.token == null) {
-      return const LoginScreen();
+      return const ExitConfirmScope(child: LoginScreen());
     }
 
     if (auth.role == 'technician') {
@@ -181,39 +181,42 @@ class _TechnicianTabsState extends State<_TechnicianTabs> {
         onNavigateToTab: _navigateToTab,
         initialTaskTypeFilter: _taskListInitialFilter,
       ),
-      const NetworkMapScreen(),
+      const NetworkMenuScreen(),
       const TechnicianProfileScreen(),
     ];
 
-    return Scaffold(
-      body: screens[_currentIndex],
-      // We will implement the custom bottom nav bar matching Stitch design inside the Scaffold's bottomNavigationBar
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: const Color(0xFFF9F8FC).withValues(alpha: 0.9),
-          border: const Border(top: BorderSide(color: Color(0x4DC8C4D3))),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x0D000000),
-              offset: Offset(0, -10),
-              blurRadius: 20,
-              spreadRadius: -5,
-            ),
-          ],
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-        ),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                _buildNavItem(0, Icons.home, 'Dashboard'),
-                _buildNavItem(1, Icons.group, 'Pelanggan'),
-                _buildNavItem(2, Icons.assignment, 'Tugas'),
-                _buildNavItem(3, Icons.wifi, 'Jaringan'),
-                _buildNavItem(4, Icons.account_circle, 'Profil'),
-              ],
+    return ExitConfirmScope(
+      currentTabIndex: _currentIndex,
+      onGoHomeTab: () => _navigateToTab(0),
+      child: Scaffold(
+        body: screens[_currentIndex],
+        bottomNavigationBar: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFFF9F8FC).withValues(alpha: 0.9),
+            border: const Border(top: BorderSide(color: Color(0x4DC8C4D3))),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x0D000000),
+                offset: Offset(0, -10),
+                blurRadius: 20,
+                spreadRadius: -5,
+              ),
+            ],
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  _buildNavItem(0, Icons.home, 'Dashboard'),
+                  _buildNavItem(1, Icons.group, 'Pelanggan'),
+                  _buildNavItem(2, Icons.assignment, 'Tugas'),
+                  _buildNavItem(3, Icons.router_rounded, 'Jaringan'),
+                  _buildNavItem(4, Icons.account_circle, 'Profil'),
+                ],
+              ),
             ),
           ),
         ),
@@ -296,14 +299,19 @@ class _CollectorTabsState extends State<_CollectorTabs> {
 
   Future<void> _syncAll() async {
     final col = context.read<CollectorProvider>();
+    final now = DateTime.now();
+    final month = col.overviewMonth ?? now.month;
+    final year = col.overviewYear ?? now.year;
     await Future.wait([
-      col.fetchOverview(),
-      col.fetchSettlement(),
+      col.fetchOverview(month: month, year: year),
+      col.fetchSettlement(month: month, year: year),
       col.fetchMe(),
       col.fetchCustomers(
         status: col.lastCustomersFetchStatus,
         q: col.lastCustomersFetchQ,
         area: col.lastCustomersFetchArea,
+        month: month,
+        year: year,
       ),
     ]);
   }
@@ -348,15 +356,20 @@ class _CollectorTabsState extends State<_CollectorTabs> {
   void _onNavTap(int i) {
     setState(() => _currentIndex = i);
     final col = context.read<CollectorProvider>();
-    if (i == 0) col.fetchOverview();
+    final now = DateTime.now();
+    final month = col.overviewMonth ?? now.month;
+    final year = col.overviewYear ?? now.year;
+    if (i == 0) col.fetchOverview(month: month, year: year);
     if (i == 1) {
       col.fetchCustomers(
         status: col.lastCustomersFetchStatus,
         q: col.lastCustomersFetchQ,
         area: col.lastCustomersFetchArea,
+        month: month,
+        year: year,
       );
     }
-    if (i == 2) col.fetchSettlement();
+    if (i == 2) col.fetchSettlement(month: month, year: year);
     if (i == 3) col.fetchMe();
   }
 
@@ -382,15 +395,18 @@ class _CollectorTabsState extends State<_CollectorTabs> {
     );
 
     // ThemeData lengkap (bukan hanya colorScheme) agar FilterChip/M3 tidak null di runtime.
-    return Theme(
-      data: ThemeData.light(useMaterial3: true).copyWith(
-        scaffoldBackgroundColor: bg,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF001F3F),
-          brightness: Brightness.light,
+    return ExitConfirmScope(
+      currentTabIndex: _currentIndex,
+      onGoHomeTab: () => _onNavTap(0),
+      child: Theme(
+        data: ThemeData.light(useMaterial3: true).copyWith(
+          scaffoldBackgroundColor: bg,
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF001F3F),
+            brightness: Brightness.light,
+          ),
         ),
-      ),
-      child: Scaffold(
+        child: Scaffold(
         backgroundColor: bg,
         // Tab Pelanggan = layar penuh seperti teknisi (CustomerListScreen punya AppBar sendiri).
         appBar: _currentIndex == 1
@@ -495,6 +511,7 @@ class _CollectorTabsState extends State<_CollectorTabs> {
             ),
           ),
         ),
+      ),
       ),
     );
   }
@@ -687,59 +704,63 @@ class _AdminTabsState extends State<_AdminTabs> {
       const AdminMoreScreen(),
     ];
 
-    return Scaffold(
-      body: screens[_currentIndex],
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          border: const Border(top: BorderSide(color: Color(0xFFE7ECF5))),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x140F172A),
-              offset: Offset(0, -8),
-              blurRadius: 22,
-              spreadRadius: -10,
-            ),
-          ],
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
-        ),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                _buildAdminNavItem(
-                  0,
-                  Icons.home_rounded,
-                  'Beranda',
-                  const Color(0xFF2563EB),
-                ),
-                _buildAdminNavItem(
-                  1,
-                  Icons.groups_rounded,
-                  'Pelanggan',
-                  const Color(0xFF14B8A6),
-                ),
-                _buildAdminNavItem(
-                  2,
-                  Icons.confirmation_number_rounded,
-                  'Tugas',
-                  const Color(0xFF2563EB),
-                ),
-                _buildAdminNavItem(
-                  3,
-                  Icons.router_rounded,
-                  'Jaringan',
-                  const Color(0xFF8B5CF6),
-                ),
-                _buildAdminNavItem(
-                  4,
-                  Icons.menu_rounded,
-                  'Lainnya',
-                  const Color(0xFF64748B),
-                ),
-              ],
+    return ExitConfirmScope(
+      currentTabIndex: _currentIndex,
+      onGoHomeTab: () => _navigateToTab(0),
+      child: Scaffold(
+        body: screens[_currentIndex],
+        bottomNavigationBar: Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: const Border(top: BorderSide(color: Color(0xFFE7ECF5))),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x140F172A),
+                offset: Offset(0, -8),
+                blurRadius: 22,
+                spreadRadius: -10,
+              ),
+            ],
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+          ),
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  _buildAdminNavItem(
+                    0,
+                    Icons.home_rounded,
+                    'Beranda',
+                    const Color(0xFF2563EB),
+                  ),
+                  _buildAdminNavItem(
+                    1,
+                    Icons.groups_rounded,
+                    'Pelanggan',
+                    const Color(0xFF14B8A6),
+                  ),
+                  _buildAdminNavItem(
+                    2,
+                    Icons.confirmation_number_rounded,
+                    'Tugas',
+                    const Color(0xFF2563EB),
+                  ),
+                  _buildAdminNavItem(
+                    3,
+                    Icons.router_rounded,
+                    'Jaringan',
+                    const Color(0xFF8B5CF6),
+                  ),
+                  _buildAdminNavItem(
+                    4,
+                    Icons.menu_rounded,
+                    'Lainnya',
+                    const Color(0xFF64748B),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
