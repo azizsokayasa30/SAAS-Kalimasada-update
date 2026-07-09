@@ -1,0 +1,99 @@
+<div class="km-card km-master-backup-card mt-4" id="backup-restore">
+  <div class="km-master-backup-card__head">
+    <div>
+      <h3 class="km-master-backup-card__title"><i class="bi bi-cloud-arrow-up me-2"></i>Backup &amp; Restore Tenant</h3>
+      <p class="km-subtitle mb-0">Cadangkan data registry tenant (profil, owner, kredensial admin) — siap untuk impor massal via Excel</p>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+      <a href="/management/tenants/backup/excel" class="btn btn-outline-secondary btn-sm px-3" title="Unduh daftar tenant saat ini sebagai Excel">
+        <i class="bi bi-file-earmark-excel me-1"></i> Export Excel
+      </a>
+      <a href="/management/tenants/backup/template" class="btn btn-outline-secondary btn-sm px-3" title="Template kosong untuk isi banyak tenant">
+        <i class="bi bi-file-earmark-plus me-1"></i> Template Excel
+      </a>
+      <a href="/management/tenants/backup/download" class="btn btn-km-primary btn-sm px-3">
+        <i class="bi bi-download me-1"></i> Backup JSON
+      </a>
+    </div>
+  </div>
+  <div class="row g-4 km-master-backup-card__body">
+    <div class="col-lg-5">
+      <div class="km-form-section km-form-section--flat h-100 mb-4 mb-lg-0">
+        <h6 class="km-form-section__title mb-2"><i class="bi bi-file-earmark-spreadsheet me-1"></i> Import dari Excel</h6>
+        <p class="text-muted small mb-3">Unggah file Excel (.xlsx) berisi banyak tenant sekaligus. Gunakan template di atas untuk format kolom.</p>
+        <form method="POST" action="/management/tenants/backup/import-excel" enctype="multipart/form-data">
+          <div class="mb-3">
+            <input type="file" name="excel_file" class="form-control form-control-sm" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Mode import</label>
+            <select name="mode" class="form-select form-select-sm">
+              <option value="create_only">Baru saja (skip subdomain yang sudah ada)</option>
+              <option value="merge">Gabung (buat baru + perbarui yang cocok)</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-outline-success btn-sm px-3" onclick="return confirm('Import Excel akan membuat/memperbarui tenant. Lanjutkan?')">
+            <i class="bi bi-upload me-1"></i> Import Excel
+          </button>
+        </form>
+      </div>
+      <div class="km-form-section km-form-section--flat h-100">
+        <h6 class="km-form-section__title mb-2"><i class="bi bi-arrow-counterclockwise me-1"></i> Restore dari JSON</h6>
+        <p class="text-muted small mb-3">Unggah file backup JSON untuk mengembalikan registry tenant.</p>
+        <form method="POST" action="/management/tenants/backup/restore" enctype="multipart/form-data">
+          <div class="mb-3">
+            <input type="file" name="backup_file" class="form-control form-control-sm" accept=".json,application/json" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small fw-semibold">Mode restore</label>
+            <select name="mode" class="form-select form-select-sm">
+              <option value="create_only">Baru saja (skip subdomain yang sudah ada)</option>
+              <option value="merge">Gabung (buat baru + perbarui yang cocok)</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-outline-primary btn-sm px-3" onclick="return confirm('Restore akan mengubah registry tenant. Cadangan otomatis dibuat sebelum restore. Lanjutkan?')">
+            <i class="bi bi-upload me-1"></i> Restore JSON
+          </button>
+        </form>
+      </div>
+    </div>
+    <div class="col-lg-7">
+      <h6 class="km-form-section__title mb-2"><i class="bi bi-clock-history me-1"></i> Riwayat Backup Server</h6>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover align-middle mb-0 km-tenant-table">
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Ukuran</th>
+              <th>Tanggal</th>
+              <th class="text-end">Aksi</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% if (!backups || !backups.length) { %>
+              <tr><td colspan="4" class="text-center py-3 text-muted">Belum ada backup tersimpan di server.</td></tr>
+            <% } %>
+            <% (backups || []).forEach(function(b) { %>
+              <tr>
+                <td><code class="small"><%= b.filename %></code></td>
+                <td class="text-muted small"><%= (b.size / 1024).toFixed(1) %> KB</td>
+                <td class="text-muted small"><%= new Date(b.created_at).toLocaleString('id-ID') %></td>
+                <td class="text-end">
+                  <a href="/management/tenants/backup/file/<%= encodeURIComponent(b.filename) %>" class="btn btn-sm btn-outline-secondary" title="Unduh">
+                    <i class="bi bi-download"></i>
+                  </a>
+                  <form method="POST" action="/management/tenants/backup/restore/<%= encodeURIComponent(b.filename) %>" class="d-inline">
+                    <input type="hidden" name="mode" value="merge">
+                    <button type="submit" class="btn btn-sm btn-outline-success" title="Restore" onclick="return confirm('Restore dari <%= b.filename %>? Cadangan otomatis dibuat sebelum restore.')">
+                      <i class="bi bi-arrow-counterclockwise"></i>
+                    </button>
+                  </form>
+                </td>
+              </tr>
+            <% }); %>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>

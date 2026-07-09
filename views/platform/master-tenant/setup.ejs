@@ -1,0 +1,41 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active: 'master-tenant', adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Setup Master Tenant</h2>
+      <p class="km-subtitle">Buat satu tenant parent untuk memantau semua tenant child (read-only)</p>
+    </div>
+  </div>
+
+  <% if (error) { %>
+    <div class="alert alert-danger"><%= error %></div>
+  <% } %>
+
+  <div class="km-card" style="max-width: 560px;">
+    <form method="POST" action="/management/master-tenant/setup">
+      <div class="mb-3">
+        <label class="form-label">Nama Master Tenant</label>
+        <input type="text" name="name" class="form-control" required placeholder="Kalimasada Master">
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Nama Owner</label>
+        <input type="text" name="owner_name" class="form-control" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Email Owner</label>
+        <input type="email" name="owner_email" class="form-control" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Telepon Owner</label>
+        <input type="text" name="owner_phone" class="form-control" required>
+      </div>
+      <p class="km-subtitle small mb-3">
+        Master tenant tidak digunakan untuk login billing. Semua tenant operasional otomatis menjadi child.
+      </p>
+      <button type="submit" class="btn btn-km-primary">Buat Master Tenant</button>
+    </form>
+  </div>
+</main>
+
+<%- include('../partials/footer') %>

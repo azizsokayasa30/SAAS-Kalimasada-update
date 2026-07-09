@@ -1,0 +1,81 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active, adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Invoice <%= invoice.invoice_number %></h2>
+      <p class="km-subtitle"><%= invoice.tenant_name %> · <%= invoice.period_start %> — <%= invoice.period_end %></p>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a href="/management/finance/invoices" class="btn btn-outline-secondary btn-sm">← Daftar</a>
+      <a href="/management/finance/invoices/<%= invoice.id %>/print" target="_blank" class="btn btn-outline-primary btn-sm"><i class="bi bi-printer me-1"></i> Cetak</a>
+    </div>
+  </div>
+
+  <%- include('_nav', { financeSection }) %>
+
+  <% if (flash && flash.success === 'created') { %><div class="alert alert-success">Invoice berhasil dibuat.</div><% } %>
+  <% if (flash && flash.success === 'updated') { %><div class="alert alert-success">Status invoice diperbarui.</div><% } %>
+  <% if (flash && flash.success === 'restored') { %><div class="alert alert-success">Backup finance berhasil di-restore.</div><% } %>
+  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+
+  <div class="row g-3 mb-4">
+    <div class="col-md-3"><div class="km-stat"><div class="label">Gross Koleksi</div><div class="value"><%= formatRupiah(invoice.gross_amount) %></div></div></div>
+    <div class="col-md-3"><div class="km-stat"><div class="label">PPN</div><div class="value text-muted"><%= formatRupiah(invoice.tax_amount) %></div></div></div>
+    <div class="col-md-3"><div class="km-stat"><div class="label">BHP USO + Fee</div><div class="value text-warning"><%= formatRupiah(Number(invoice.bhp_uso_amount) + Number(invoice.management_fee_amount)) %></div></div></div>
+    <div class="col-md-3"><div class="km-stat"><div class="label">Net ke Tenant</div><div class="value text-success"><%= formatRupiah(invoice.net_amount) %></div></div></div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-7">
+      <div class="km-card">
+        <h5 class="mb-3">Rincian Invoice</h5>
+        <table class="table table-sm mb-0">
+          <thead><tr><th>Deskripsi</th><th class="text-end">Jumlah</th></tr></thead>
+          <tbody>
+            <% invoice.items.forEach(function(item) { %>
+              <tr>
+                <td><%= item.description %></td>
+                <td class="text-end"><%= formatRupiah(item.amount) %></td>
+              </tr>
+            <% }); %>
+            <tr class="fw-bold border-top">
+              <td>Net ke Pemilik Tenant</td>
+              <td class="text-end text-success"><%= formatRupiah(invoice.net_amount) %></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="col-lg-5">
+      <div class="km-card mb-3">
+        <h5 class="mb-3">Pemilik Tenant</h5>
+        <table class="table table-sm mb-0">
+          <tr><td>Nama</td><td><%= invoice.owner_name || invoice.ownerSnapshot.owner_name %></td></tr>
+          <tr><td>Email</td><td><%= invoice.owner_email || invoice.ownerSnapshot.owner_email || '-' %></td></tr>
+          <tr><td>WhatsApp</td><td><%= invoice.owner_phone || invoice.ownerSnapshot.owner_phone || '-' %></td></tr>
+        </table>
+      </div>
+      <div class="km-card">
+        <h5 class="mb-3">Status</h5>
+        <p>Status saat ini: <span class="badge <%= invoice.status === 'paid' ? 'bg-success' : invoice.status === 'sent' ? 'bg-primary' : 'bg-secondary' %>"><%= invoice.status %></span></p>
+        <form method="POST" action="/management/finance/invoices/<%= invoice.id %>/status" class="d-flex gap-2 flex-wrap mb-2">
+          <select name="status" class="form-select form-select-sm" style="max-width: 140px;">
+            <option value="draft" <%= invoice.status === 'draft' ? 'selected' : '' %>>Draft</option>
+            <option value="sent" <%= invoice.status === 'sent' ? 'selected' : '' %>>Terkirim</option>
+            <option value="paid" <%= invoice.status === 'paid' ? 'selected' : '' %>>Lunas</option>
+          </select>
+          <button type="submit" class="btn btn-km-primary btn-sm">Update</button>
+        </form>
+        <% if (invoice.status === 'draft') { %>
+        <form method="POST" action="/management/finance/invoices/<%= invoice.id %>/delete" onsubmit="return confirm('Hapus invoice draft ini?')">
+          <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash me-1"></i> Hapus Draft</button>
+        </form>
+        <% } %>
+      </div>
+    </div>
+  </div>
+
+  <%- include('_backup-restore') %>
+</main>
+<%- include('../partials/footer') %>

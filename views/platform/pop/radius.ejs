@@ -1,0 +1,199 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active, adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Radius Manager</h2>
+      <p class="km-subtitle">Kelola perangkat RADIUS lokal di setiap POP agar autentikasi trafik tetap lokal</p>
+    </div>
+    <button type="button" class="btn btn-km-primary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#addRadiusModal">
+      <i class="bi bi-plus-lg me-1"></i> Tambah Radius Manager
+    </button>
+  </div>
+
+  <%- include('_nav', { popSection }) %>
+
+  <% const activePopCount = pops.filter(function(p) { return p.is_active; }).length; %>
+  <% if (!activePopCount) { %>
+    <div class="alert alert-warning">Buat POP/CABANG aktif terlebih dahulu di <a href="/management/pop" class="alert-link">Daftar POP/CABANG</a>.</div>
+  <% } %>
+
+  <% if (flash && flash.success === 'created') { %><div class="alert alert-success">Radius manager berhasil ditambahkan.</div><% } %>
+  <% if (flash && flash.success === 'updated') { %><div class="alert alert-success">Radius manager berhasil diperbarui.</div><% } %>
+  <% if (flash && flash.success === 'deleted') { %><div class="alert alert-success">Radius manager berhasil dihapus.</div><% } %>
+  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+
+  <div class="km-card km-card--flush">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0 km-tenant-table">
+        <thead>
+          <tr>
+            <th>Nama</th>
+            <th>POP/CABANG</th>
+            <th>Host</th>
+            <th>Auth Port</th>
+            <th>Acct Port</th>
+            <th>Status</th>
+            <th class="text-end">Aksi</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!radiusServers.length) { %>
+            <tr><td colspan="7" class="text-center py-4 text-muted">Belum ada radius manager terdaftar.</td></tr>
+          <% } %>
+          <% radiusServers.forEach(function(r) { %>
+            <tr class="<%= r.is_active ? '' : 'opacity-50' %>">
+              <td class="fw-semibold">
+                <%= r.name %>
+                <% if (r.description) { %><div class="small text-muted"><%= r.description %></div><% } %>
+              </td>
+              <td>
+                <code><%= r.pop_code %></code>
+                <div class="small text-muted"><%= r.pop_name %></div>
+              </td>
+              <td><code><%= r.host %></code></td>
+              <td><%= r.auth_port || 1812 %></td>
+              <td><%= r.acct_port || 1813 %></td>
+              <td>
+                <% if (r.is_active) { %><span class="badge bg-success">Aktif</span>
+                <% } else { %><span class="badge bg-secondary">Nonaktif</span><% } %>
+              </td>
+              <td class="text-end">
+                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editRadiusModal-<%= r.id %>">
+                  <i class="bi bi-pencil"></i>
+                </button>
+                <form method="POST" action="/management/pop/radius/<%= r.id %>/delete" class="d-inline" onsubmit="return confirm('Hapus radius manager ini?')">
+                  <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<div class="modal fade km-modal" id="addRadiusModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
+    <form method="POST" action="/management/pop/radius" class="modal-content km-package-modal">
+      <div class="modal-header km-package-modal__header">
+        <div>
+          <h5 class="modal-title mb-0">Tambah Radius Manager</h5>
+          <p class="km-package-modal__subtitle mb-0">Perangkat RADIUS lokal di POP untuk autentikasi pelanggan area tersebut</p>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body km-package-modal__body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">POP/CABANG</label>
+            <select name="pop_id" class="form-select" required>
+              <option value="">— Pilih POP —</option>
+              <% pops.forEach(function(p) {
+                if (!p.is_active) return;
+              %>
+                <option value="<%= p.id %>" <%= pops.filter(function(x){ return x.is_active; }).length === 1 ? 'selected' : '' %>><%= p.code %> — <%= p.name %></option>
+              <% }); %>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Nama</label>
+            <input type="text" name="name" class="form-control" required placeholder="RADIUS POP BNA">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Host / IP</label>
+            <input type="text" name="host" class="form-control" required placeholder="10.0.0.10">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Auth Port</label>
+            <input type="number" name="auth_port" class="form-control" value="1812">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Acct Port</label>
+            <input type="number" name="acct_port" class="form-control" value="1813">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">RADIUS Secret</label>
+            <input type="password" name="radius_secret" class="form-control" autocomplete="new-password">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Keterangan</label>
+            <textarea name="description" class="form-control" rows="2"></textarea>
+          </div>
+          <div class="col-12">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" name="is_active" value="1" id="addRadiusActive" checked>
+              <label class="form-check-label" for="addRadiusActive">Aktif</label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer km-package-modal__footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-km-primary">Simpan Radius Manager</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<% radiusServers.forEach(function(r) { %>
+<div class="modal fade km-modal" id="editRadiusModal-<%= r.id %>" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
+    <form method="POST" action="/management/pop/radius/<%= r.id %>" class="modal-content km-package-modal">
+      <div class="modal-header km-package-modal__header">
+        <h5 class="modal-title mb-0">Edit <%= r.name %></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body km-package-modal__body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">POP/CABANG</label>
+            <select name="pop_id" class="form-select" required>
+              <% pops.forEach(function(p) { %>
+                <option value="<%= p.id %>" <%= Number(p.id) === Number(r.pop_id) ? 'selected' : '' %><%= p.is_active ? '' : ' disabled' %>><%= p.code %> — <%= p.name %><%= p.is_active ? '' : ' (nonaktif)' %></option>
+              <% }); %>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Nama</label>
+            <input type="text" name="name" class="form-control" value="<%= r.name %>" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Host / IP</label>
+            <input type="text" name="host" class="form-control" value="<%= r.host %>" required>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Auth Port</label>
+            <input type="number" name="auth_port" class="form-control" value="<%= r.auth_port || 1812 %>">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Acct Port</label>
+            <input type="number" name="acct_port" class="form-control" value="<%= r.acct_port || 1813 %>">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">RADIUS Secret <span class="text-muted fw-normal">(kosongkan jika tidak diubah)</span></label>
+            <input type="password" name="radius_secret" class="form-control" autocomplete="new-password">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Keterangan</label>
+            <textarea name="description" class="form-control" rows="2"><%= r.description || '' %></textarea>
+          </div>
+          <div class="col-12">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" name="is_active" value="1" id="editRadiusActive-<%= r.id %>" <%= r.is_active ? 'checked' : '' %>>
+              <label class="form-check-label" for="editRadiusActive-<%= r.id %>">Aktif</label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer km-package-modal__footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-km-primary">Simpan Perubahan</button>
+      </div>
+    </form>
+  </div>
+</div>
+<% }); %>
+
+<%- include('../partials/footer') %>

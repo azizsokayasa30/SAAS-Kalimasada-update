@@ -86,9 +86,9 @@ function sanitizeDomain(domain) {
 
 async function fetchActiveTenantSubdomains() {
     const tenantStore = require('./tenantStore');
-    const tenants = await tenantStore.listTenants();
+    const tenants = await tenantStore.listOperationalTenants();
     return tenants
-        .filter((t) => t.status === 'active' && t.subdomain && !String(t.subdomain).includes('__del_'))
+        .filter((t) => t.subdomain && !String(t.subdomain).includes('__del_'))
         .map((t) => String(t.subdomain).toLowerCase().trim())
         .filter(Boolean);
 }
@@ -366,7 +366,7 @@ function generateNginxConfig(cfg, tenantSubdomains) {
     const lines = [];
     lines.push('# Kalimasada SaaS — Nginx reverse proxy (auto-generated)');
     lines.push(`# Generated: ${new Date().toISOString()}`);
-    lines.push('# Jangan edit manual — gunakan Management Portal /management/reverse-proxy');
+    lines.push('# Jangan edit manual — gunakan Management Portal /management/settings/reverse-proxy');
     const manual = (cfg.manual_subdomains || []).map(sanitizeSubdomainSlug).filter(Boolean);
     lines.push(`# Subdomain tenant (${subs.length}): ${subs.join(', ') || '-'}`);
     if (manual.length) {
@@ -625,7 +625,7 @@ function getTenantProxyRows(tenants, cfg) {
             hostname: `${t.subdomain}.${base}`,
             url: `${scheme}://${t.subdomain}.${base}/login`,
             inProxy: inProxy.has(sanitizeSubdomainSlug(t.subdomain)),
-            proxyActive: t.status === 'active' && inProxy.has(sanitizeSubdomainSlug(t.subdomain)),
+            proxyActive: inProxy.has(sanitizeSubdomainSlug(t.subdomain)),
         }));
 }
 
@@ -644,7 +644,7 @@ function getTenantProxyEntries(tenants, cfg) {
     ];
     const seen = new Set([central]);
     (tenants || []).forEach((t) => {
-        if (t.status !== 'active' || !t.subdomain) return;
+        if (!t.subdomain) return;
         seen.add(t.subdomain);
         entries.push({
             label: t.name,

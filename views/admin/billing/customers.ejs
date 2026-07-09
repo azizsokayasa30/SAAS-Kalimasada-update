@@ -1277,6 +1277,7 @@
                                 <% } %>
                             </select>
                             <small class="form-text text-muted">Pilih paket berlangganan untuk pelanggan ini.</small>
+                            <small class="form-text text-primary d-none" id="package_universal_hint"><i class="bi bi-info-circle me-1"></i>Paket jaringan bisa dipakai untuk pelanggan PPPoE atau IP statik.</small>
                         </div>
                         <div id="addCustomerPppoeProfileNasBlock">
                         <div class="mb-3">
@@ -1602,6 +1603,7 @@
                                 <% } %>
                             </select>
                             <small class="form-text text-muted">Pilih paket berlangganan untuk pelanggan ini.</small>
+                            <small class="form-text text-primary d-none" id="edit_package_universal_hint"><i class="bi bi-info-circle me-1"></i>Paket jaringan bisa dipakai untuk pelanggan PPPoE atau IP statik.</small>
                         </div>
                         <div id="editCustomerPppoeProfileNasBlock">
                         <div class="mb-3">
@@ -1933,8 +1935,14 @@
 
             $('#toggle_static_ip').on('change', function () {
                 $('#static_ip_fields_wrap').toggle(this.checked);
-                if (!this.checked) {
+                if (this.checked) {
+                    $('#create_pppoe_user').prop('checked', false).trigger('change');
+                    $('#pppoe_username').val('');
+                    $('#pppoe_password').val('');
+                    $('#addCustomerPppoeBlock').hide();
+                } else {
                     $('#static_ip, #assigned_ip, #mac_address').val('');
+                    if (typeof updateProfileField === 'function') updateProfileField();
                 }
             });
             
@@ -1950,6 +1958,9 @@
                 filterPackagesByNAS('router_id', 'package_id');
                 $('#toggle_static_ip').prop('checked', false);
                 $('#static_ip_fields_wrap').hide();
+                $('#addCustomerPppoeBlock').show();
+                const createCb = document.getElementById('create_pppoe_user');
+                if (createCb) delete createCb.dataset.userToggled;
                 if (typeof updateProfileField === 'function') updateProfileField();
             });
             
@@ -2771,16 +2782,26 @@
             if (!packageSelect || !profileInput) return;
             const selectedOption = packageSelect.options[packageSelect.selectedIndex];
             const billingOnly = selectedOption && selectedOption.getAttribute('data-billing-only') === '1';
+            const staticIpOn = document.getElementById('toggle_static_ip') && document.getElementById('toggle_static_ip').checked;
 
             const pppoeBlock = document.getElementById('addCustomerPppoeBlock');
             const nasProfBlock = document.getElementById('addCustomerPppoeProfileNasBlock');
-            if (pppoeBlock) pppoeBlock.style.display = billingOnly ? 'none' : '';
+            const staticCard = document.getElementById('add_static_ip_card');
+            const universalHint = document.getElementById('package_universal_hint');
+            if (pppoeBlock) pppoeBlock.style.display = (billingOnly || staticIpOn) ? 'none' : '';
             if (nasProfBlock) nasProfBlock.style.display = billingOnly ? 'none' : '';
+            if (staticCard) staticCard.style.display = billingOnly ? 'none' : '';
+            if (universalHint) universalHint.classList.toggle('d-none', billingOnly || !packageSelect.value);
 
             const createCb = document.getElementById('create_pppoe_user');
             if (createCb) {
-                createCb.checked = !billingOnly;
-                createCb.disabled = billingOnly;
+                if (billingOnly || staticIpOn) {
+                    createCb.checked = false;
+                    createCb.disabled = true;
+                } else {
+                    createCb.disabled = false;
+                    if (!createCb.dataset.userToggled) createCb.checked = true;
+                }
             }
 
             if (billingOnly) {
@@ -2799,11 +2820,13 @@
             if (!packageSelect || !profileInput) return;
             const selectedOption = packageSelect.options[packageSelect.selectedIndex];
             const billingOnly = selectedOption && selectedOption.getAttribute('data-billing-only') === '1';
+            const universalHint = document.getElementById('edit_package_universal_hint');
 
             const pppoeBlock = document.getElementById('editCustomerPppoeBlock');
             const nasProfBlock = document.getElementById('editCustomerPppoeProfileNasBlock');
             if (pppoeBlock) pppoeBlock.style.display = billingOnly ? 'none' : '';
             if (nasProfBlock) nasProfBlock.style.display = billingOnly ? 'none' : '';
+            if (universalHint) universalHint.classList.toggle('d-none', billingOnly || !packageSelect.value);
 
             if (billingOnly) {
                 profileInput.value = '';
@@ -3457,7 +3480,14 @@
         // Toggle PPPoE password row visibility
         $('#create_pppoe_user').on('change', function(){
             const show = $(this).is(':checked');
+            this.dataset.userToggled = '1';
             $('#pppoe_password_row').css('display', show ? '' : 'none');
+            if (show) {
+                $('#toggle_static_ip').prop('checked', false);
+                $('#static_ip_fields_wrap').hide();
+                $('#static_ip, #assigned_ip, #mac_address').val('');
+                $('#addCustomerPppoeBlock').show();
+            }
         });
 
         // Generate password button

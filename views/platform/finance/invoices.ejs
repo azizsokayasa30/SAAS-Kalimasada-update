@@ -1,0 +1,84 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active, adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Invoice Rekap Tenant</h2>
+      <p class="km-subtitle">Buat dan kelola invoice rekap keuangan ke pemilik tenant</p>
+    </div>
+  </div>
+
+  <%- include('_nav', { financeSection }) %>
+
+  <% if (flash && flash.success === 'created') { %><div class="alert alert-success">Invoice rekap berhasil dibuat.</div><% } %>
+  <% if (flash && flash.success === 'deleted') { %><div class="alert alert-success">Invoice draft dihapus.</div><% } %>
+  <% if (flash && flash.success === 'restored') { %><div class="alert alert-success">Backup finance berhasil di-restore.</div><% } %>
+  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+
+  <div class="km-card mb-4">
+    <h5 class="mb-3">Generate Invoice Baru</h5>
+    <form method="POST" action="/management/finance/invoices/generate" class="row g-2 align-items-end">
+      <div class="col-md-4">
+        <label class="form-label small">Tenant</label>
+        <select name="tenant_id" class="form-select form-select-sm" required>
+          <option value="">Pilih tenant...</option>
+          <% tenants.forEach(function(t) { %>
+            <option value="<%= t.id %>"><%= t.name %> (<%= t.owner_name %>)</option>
+          <% }); %>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small">Periode Mulai</label>
+        <input type="date" name="period_start" class="form-control form-control-sm" value="<%= filters.startDate %>" required>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small">Periode Akhir</label>
+        <input type="date" name="period_end" class="form-control form-control-sm" value="<%= filters.endDate %>" required>
+      </div>
+      <div class="col-md-2">
+        <button type="submit" class="btn btn-km-primary btn-sm w-100"><i class="bi bi-plus-lg me-1"></i> Generate</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="km-card km-card--flush">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0 km-tenant-table">
+        <thead>
+          <tr>
+            <th>No. Invoice</th>
+            <th>Tenant</th>
+            <th>Periode</th>
+            <th class="text-end">Gross</th>
+            <th class="text-end">Net</th>
+            <th>Status</th>
+            <th class="text-end">Aksi</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!invoices.length) { %>
+            <tr><td colspan="7" class="text-center py-4" style="color: var(--text-muted)">Belum ada invoice rekap.</td></tr>
+          <% } %>
+          <% invoices.forEach(function(inv) { %>
+            <tr>
+              <td><code><%= inv.invoice_number %></code></td>
+              <td><%= inv.tenant_name %></td>
+              <td class="small"><%= inv.period_start %> — <%= inv.period_end %></td>
+              <td class="text-end"><%= formatRupiah(inv.gross_amount) %></td>
+              <td class="text-end fw-semibold"><%= formatRupiah(inv.net_amount) %></td>
+              <td>
+                <span class="badge <%= inv.status === 'paid' ? 'bg-success' : inv.status === 'sent' ? 'bg-primary' : 'bg-secondary' %>"><%= inv.status %></span>
+              </td>
+              <td class="text-end">
+                <a href="/management/finance/invoices/<%= inv.id %>" class="btn btn-outline-primary btn-sm py-0">Lihat</a>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <%- include('_backup-restore') %>
+</main>
+<%- include('../partials/footer') %>

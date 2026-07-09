@@ -1,0 +1,121 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active, adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Riwayat Pembayaran Gateway</h2>
+      <p class="km-subtitle">Pembayaran online pelanggan tenant via payment gateway</p>
+    </div>
+  </div>
+
+  <%- include('_nav', { financeSection }) %>
+
+  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+  <% if (flash && flash.success === 'restored') { %><div class="alert alert-success">Backup finance berhasil di-restore.</div><% } %>
+
+  <div class="km-card mb-3">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-md-2">
+        <label class="form-label small">Bulan</label>
+        <select name="month" class="form-select form-select-sm">
+          <% const monthNames = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des']; %>
+          <% for (let m = 1; m <= 12; m++) { %>
+            <option value="<%= m %>" <%= Number(filters.month) === m ? 'selected' : '' %>><%= monthNames[m-1] %></option>
+          <% } %>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small">Tahun</label>
+        <% const cy = new Date().getFullYear(); %>
+        <select name="year" class="form-select form-select-sm">
+          <% for (let y = cy - 3; y <= cy + 1; y++) { %>
+            <option value="<%= y %>" <%= Number(filters.year) === y ? 'selected' : '' %>><%= y %></option>
+          <% } %>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small">Tenant</label>
+        <select name="tenant_id" class="form-select form-select-sm">
+          <option value="">Semua tenant</option>
+          <% tenants.forEach(function(t) { %>
+            <option value="<%= t.id %>" <%= String(filters.tenantId) === String(t.id) ? 'selected' : '' %>><%= t.name %></option>
+          <% }); %>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small">Gateway</label>
+        <select name="gateway" class="form-select form-select-sm">
+          <option value="">Semua</option>
+          <% ['midtrans','xendit','tripay','duitku'].forEach(function(g) { %>
+            <option value="<%= g %>" <%= filters.gateway === g ? 'selected' : '' %>><%= g %></option>
+          <% }); %>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <button type="submit" class="btn btn-km-primary btn-sm w-100"><i class="bi bi-funnel me-1"></i> Filter</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="km-card km-card--flush">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0 km-tenant-table">
+        <thead>
+          <tr>
+            <th>Tanggal</th>
+            <th>Tenant</th>
+            <th>Invoice</th>
+            <th>Pelanggan</th>
+            <th>Gateway</th>
+            <th>Order ID</th>
+            <th class="text-end">Nominal</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!payments.length) { %>
+            <tr><td colspan="8" class="text-center py-4" style="color: var(--text-muted)">Tidak ada pembayaran pada periode ini.</td></tr>
+          <% } %>
+          <% payments.forEach(function(p) { %>
+            <tr>
+              <td><%= new Date(p.payment_date).toLocaleDateString('id-ID') %></td>
+              <td>
+                <strong><%= p.tenant_name %></strong>
+                <div class="small text-muted"><%= p.subdomain %></div>
+              </td>
+              <td><code><%= p.invoice_number %></code></td>
+              <td><%= p.customer_name %></td>
+              <td><span class="badge bg-secondary"><%= p.gateway || 'online' %></span></td>
+              <td class="small"><%= p.order_id || '-' %></td>
+              <td class="text-end fw-semibold"><%= formatRupiah(p.amount) %></td>
+              <td>
+                <span class="badge <%= p.gateway_status === 'settlement' || p.gateway_status === 'paid' ? 'bg-success' : 'bg-warning text-dark' %>">
+                  <%= p.gateway_status %>
+                </span>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+    <% if (pagination.totalPages > 1) { %>
+    <div class="d-flex justify-content-between align-items-center p-3 border-top">
+      <span class="small text-muted"><%= pagination.total %> transaksi</span>
+      <nav>
+        <ul class="pagination pagination-sm mb-0">
+          <% if (pagination.page > 1) { %>
+            <li class="page-item"><a class="page-link" href="?page=<%= pagination.page - 1 %>&month=<%= filters.month %>&year=<%= filters.year %>&tenant_id=<%= filters.tenantId %>&gateway=<%= filters.gateway %>">«</a></li>
+          <% } %>
+          <li class="page-item disabled"><span class="page-link"><%= pagination.page %> / <%= pagination.totalPages %></span></li>
+          <% if (pagination.page < pagination.totalPages) { %>
+            <li class="page-item"><a class="page-link" href="?page=<%= pagination.page + 1 %>&month=<%= filters.month %>&year=<%= filters.year %>&tenant_id=<%= filters.tenantId %>&gateway=<%= filters.gateway %>">»</a></li>
+          <% } %>
+        </ul>
+      </nav>
+    </div>
+    <% } %>
+  </div>
+
+  <%- include('_backup-restore') %>
+</main>
+<%- include('../partials/footer') %>

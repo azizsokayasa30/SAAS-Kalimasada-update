@@ -1,0 +1,241 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active, adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Switch Manager</h2>
+      <p class="km-subtitle">Kelola switch per POP — trafik uplink masuk ke aggregate dashboard</p>
+    </div>
+    <button type="button" class="btn btn-km-primary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#addSwitchModal">
+      <i class="bi bi-plus-lg me-1"></i> Tambah Switch
+    </button>
+  </div>
+
+  <%- include('_nav', { popSection }) %>
+
+  <% const activePopCount = pops.filter(function(p) { return p.is_active; }).length; %>
+  <% if (!activePopCount) { %>
+    <div class="alert alert-warning">Buat POP/CABANG aktif terlebih dahulu di <a href="/management/pop" class="alert-link">Daftar POP/CABANG</a>.</div>
+  <% } %>
+
+  <% if (flash && flash.success === 'created') { %><div class="alert alert-success">Switch berhasil ditambahkan.</div><% } %>
+  <% if (flash && flash.success === 'updated') { %><div class="alert alert-success">Switch berhasil diperbarui.</div><% } %>
+  <% if (flash && flash.success === 'deleted') { %><div class="alert alert-success">Switch berhasil dihapus.</div><% } %>
+  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+
+  <div class="km-card km-card--flush">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0 km-tenant-table">
+        <thead>
+          <tr>
+            <th>Nama</th>
+            <th>POP/CABANG</th>
+            <th>IP Address</th>
+            <th>Interface Uplink</th>
+            <th>Aggregate</th>
+            <th>Status</th>
+            <th class="text-end">Aksi</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!switches.length) { %>
+            <tr><td colspan="7" class="text-center py-4 text-muted">Belum ada switch terdaftar.</td></tr>
+          <% } %>
+          <% switches.forEach(function(s) { %>
+            <tr class="<%= s.is_active ? '' : 'opacity-50' %>">
+              <td class="fw-semibold">
+                <%= s.name %>
+                <% if (s.brand || s.model) { %>
+                  <div class="small text-muted"><%= [s.brand, s.model].filter(Boolean).join(' ') %></div>
+                <% } %>
+              </td>
+              <td>
+                <code><%= s.pop_code %></code>
+                <div class="small text-muted"><%= s.pop_name %></div>
+              </td>
+              <td><code><%= s.ip_address %></code></td>
+              <td><code><%= s.main_interface || 'SFP+1' %></code></td>
+              <td>
+                <% if (s.include_in_aggregate) { %>
+                  <span class="badge bg-primary">Ya</span>
+                <% } else { %>
+                  <span class="badge bg-secondary">Tidak</span>
+                <% } %>
+              </td>
+              <td>
+                <% if (s.is_active) { %><span class="badge bg-success">Aktif</span>
+                <% } else { %><span class="badge bg-secondary">Nonaktif</span><% } %>
+              </td>
+              <td class="text-end">
+                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editSwitchModal-<%= s.id %>">
+                  <i class="bi bi-pencil"></i>
+                </button>
+                <form method="POST" action="/management/pop/switches/<%= s.id %>/delete" class="d-inline" onsubmit="return confirm('Hapus switch ini?')">
+                  <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<div class="modal fade km-modal" id="addSwitchModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
+    <form method="POST" action="/management/pop/switches" class="modal-content km-package-modal">
+      <div class="modal-header km-package-modal__header">
+        <div>
+          <h5 class="modal-title mb-0">Tambah Switch</h5>
+          <p class="km-package-modal__subtitle mb-0">Switch di POP untuk monitoring trafik aggregate</p>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body km-package-modal__body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">POP/CABANG</label>
+            <select name="pop_id" class="form-select" required>
+              <option value="">— Pilih POP —</option>
+              <% pops.forEach(function(p) {
+                if (!p.is_active) return;
+              %>
+                <option value="<%= p.id %>" <%= pops.filter(function(x){ return x.is_active; }).length === 1 ? 'selected' : '' %>><%= p.code %> — <%= p.name %></option>
+              <% }); %>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Nama Switch</label>
+            <input type="text" name="name" class="form-control" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Brand</label>
+            <input type="text" name="brand" class="form-control" placeholder="MikroTik">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Model</label>
+            <input type="text" name="model" class="form-control" placeholder="CRS326">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">IP Address</label>
+            <input type="text" name="ip_address" class="form-control" required placeholder="10.0.0.1">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">SNMP Community</label>
+            <input type="text" name="snmp_community" class="form-control">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">SNMP Version</label>
+            <select name="snmp_version" class="form-select">
+              <option value="v2c">v2c</option>
+              <option value="v3">v3</option>
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Interface Uplink</label>
+            <input type="text" name="main_interface" class="form-control" value="SFP+1">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Keterangan</label>
+            <textarea name="description" class="form-control" rows="2"></textarea>
+          </div>
+          <div class="col-md-6">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" name="include_in_aggregate" value="1" id="addSwAggregate" checked>
+              <label class="form-check-label" for="addSwAggregate">Sertakan dalam trafik aggregate</label>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" name="is_active" value="1" id="addSwActive" checked>
+              <label class="form-check-label" for="addSwActive">Aktif</label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer km-package-modal__footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-km-primary">Simpan Switch</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<% switches.forEach(function(s) { %>
+<div class="modal fade km-modal" id="editSwitchModal-<%= s.id %>" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
+    <form method="POST" action="/management/pop/switches/<%= s.id %>" class="modal-content km-package-modal">
+      <div class="modal-header km-package-modal__header">
+        <h5 class="modal-title mb-0">Edit <%= s.name %></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body km-package-modal__body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">POP/CABANG</label>
+            <select name="pop_id" class="form-select" required>
+              <% pops.forEach(function(p) { %>
+                <option value="<%= p.id %>" <%= Number(p.id) === Number(s.pop_id) ? 'selected' : '' %><%= p.is_active ? '' : ' disabled' %>><%= p.code %> — <%= p.name %><%= p.is_active ? '' : ' (nonaktif)' %></option>
+              <% }); %>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Nama Switch</label>
+            <input type="text" name="name" class="form-control" value="<%= s.name %>" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Brand</label>
+            <input type="text" name="brand" class="form-control" value="<%= s.brand || '' %>">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Model</label>
+            <input type="text" name="model" class="form-control" value="<%= s.model || '' %>">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">IP Address</label>
+            <input type="text" name="ip_address" class="form-control" value="<%= s.ip_address %>" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">SNMP Community</label>
+            <input type="text" name="snmp_community" class="form-control" value="<%= s.snmp_community || '' %>">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">SNMP Version</label>
+            <select name="snmp_version" class="form-select">
+              <option value="v2c" <%= s.snmp_version === 'v2c' ? 'selected' : '' %>>v2c</option>
+              <option value="v3" <%= s.snmp_version === 'v3' ? 'selected' : '' %>>v3</option>
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Interface Uplink</label>
+            <input type="text" name="main_interface" class="form-control" value="<%= s.main_interface || 'SFP+1' %>">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Keterangan</label>
+            <textarea name="description" class="form-control" rows="2"><%= s.description || '' %></textarea>
+          </div>
+          <div class="col-md-6">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" name="include_in_aggregate" value="1" id="editSwAggregate-<%= s.id %>" <%= s.include_in_aggregate ? 'checked' : '' %>>
+              <label class="form-check-label" for="editSwAggregate-<%= s.id %>">Sertakan dalam trafik aggregate</label>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" name="is_active" value="1" id="editSwActive-<%= s.id %>" <%= s.is_active ? 'checked' : '' %>>
+              <label class="form-check-label" for="editSwActive-<%= s.id %>">Aktif</label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer km-package-modal__footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-km-primary">Simpan Perubahan</button>
+      </div>
+    </form>
+  </div>
+</div>
+<% }); %>
+
+<%- include('../partials/footer') %>

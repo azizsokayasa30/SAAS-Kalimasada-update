@@ -1,0 +1,140 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active, adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>User Manager</h2>
+      <p class="km-subtitle">Kelola akun yang dapat login ke portal management</p>
+    </div>
+    <button type="button" class="btn btn-km-primary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#addUserModal">
+      <i class="bi bi-person-plus me-1"></i> Tambah User
+    </button>
+  </div>
+
+  <%- include('_nav', { settingsSection }) %>
+
+  <% if (flash && flash.success === 'created') { %><div class="alert alert-success">User berhasil ditambahkan.</div><% } %>
+  <% if (flash && flash.success === 'updated') { %><div class="alert alert-success">User berhasil diperbarui.</div><% } %>
+  <% if (flash && flash.success === 'deactivated') { %><div class="alert alert-success">User berhasil dinonaktifkan.</div><% } %>
+  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+
+  <div class="km-card km-card--flush">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0 km-tenant-table">
+        <thead>
+          <tr>
+            <th>Nama</th>
+            <th>Email</th>
+            <th>Status</th>
+            <th>Terakhir diubah</th>
+            <th class="text-end">Aksi</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!users.length) { %>
+            <tr><td colspan="5" class="text-center py-4 text-muted">Belum ada user.</td></tr>
+          <% } %>
+          <% users.forEach(function(u) { %>
+            <tr class="<%= u.is_active ? '' : 'opacity-50' %>">
+              <td class="fw-semibold">
+                <%= u.name %>
+                <% if (Number(u.id) === Number(currentAdminId)) { %><span class="badge bg-primary ms-1">Anda</span><% } %>
+              </td>
+              <td><%= u.email %></td>
+              <td>
+                <% if (u.is_active) { %><span class="badge bg-success">Aktif</span>
+                <% } else { %><span class="badge bg-secondary">Nonaktif</span><% } %>
+              </td>
+              <td class="text-muted small"><%= u.updated_at ? new Date(u.updated_at).toLocaleString('id-ID') : '—' %></td>
+              <td class="text-end">
+                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editUserModal-<%= u.id %>">
+                  <i class="bi bi-pencil"></i>
+                </button>
+                <% if (u.is_active && Number(u.id) !== Number(currentAdminId)) { %>
+                  <form method="POST" action="/management/settings/users/<%= u.id %>/deactivate" class="d-inline" onsubmit="return confirm('Nonaktifkan user ini?')">
+                    <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-person-x"></i></button>
+                  </form>
+                <% } %>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<div class="modal fade km-modal" id="addUserModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <form method="POST" action="/management/settings/users" class="modal-content km-package-modal">
+      <div class="modal-header km-package-modal__header">
+        <div>
+          <h5 class="modal-title mb-0">Tambah User Management</h5>
+          <p class="km-package-modal__subtitle mb-0">Akun baru dapat login ke portal management</p>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body km-package-modal__body">
+        <div class="mb-3">
+          <label class="form-label">Nama</label>
+          <input type="text" name="name" class="form-control" required>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Email</label>
+          <input type="email" name="email" class="form-control" required>
+        </div>
+        <div class="mb-0">
+          <label class="form-label">Password</label>
+          <input type="password" name="password" class="form-control" required minlength="6">
+          <small class="text-muted">Minimal 6 karakter</small>
+        </div>
+      </div>
+      <div class="modal-footer km-package-modal__footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-km-primary">Simpan User</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<% users.forEach(function(u) { %>
+<div class="modal fade km-modal" id="editUserModal-<%= u.id %>" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <form method="POST" action="/management/settings/users/<%= u.id %>" class="modal-content km-package-modal">
+      <div class="modal-header km-package-modal__header">
+        <h5 class="modal-title mb-0">Edit User</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body km-package-modal__body">
+        <div class="mb-3">
+          <label class="form-label">Nama</label>
+          <input type="text" name="name" class="form-control" required value="<%= u.name %>">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Email</label>
+          <input type="email" name="email" class="form-control" required value="<%= u.email %>">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Password baru <span class="text-muted fw-normal">(kosongkan jika tidak diubah)</span></label>
+          <input type="password" name="password" class="form-control" minlength="6">
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="is_active" value="1" id="isActiveUser-<%= u.id %>"
+            <%= u.is_active ? 'checked' : '' %>
+            <%= Number(u.id) === Number(currentAdminId) ? 'disabled' : '' %>>
+          <label class="form-check-label" for="isActiveUser-<%= u.id %>">User aktif</label>
+        </div>
+        <% if (Number(u.id) === Number(currentAdminId)) { %>
+          <input type="hidden" name="is_active" value="1">
+        <% } %>
+      </div>
+      <div class="modal-footer km-package-modal__footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-km-primary">Simpan Perubahan</button>
+      </div>
+    </form>
+  </div>
+</div>
+<% }); %>
+
+<%- include('../partials/footer') %>

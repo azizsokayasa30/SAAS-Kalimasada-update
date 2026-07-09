@@ -23,6 +23,8 @@
     "radius:apply-fr-fix": "bash scripts/apply-freeradius-sqlite-fix.sh",
     "radius:migrate-mysql": "bash scripts/migrate-freeradius-sqlite-to-mysql.sh",
     "radius:mirror-clients": "bash scripts/mirror-radius-clients-conf.sh",
+    "deploy:full-server": "sudo bash scripts/deploy-full-server.sh",
+    "deploy:freeradius": "sudo bash scripts/install-freeradius-billing.sh",
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "echo \"No build process required\"",
     "build:customer-portal": "cd customer-portal-web && npm install && npm run build",

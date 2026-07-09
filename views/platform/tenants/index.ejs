@@ -1,75 +1,110 @@
+<%
+const summary = {
+  customers: { total: 0, active: 0, inactive: 0, new: 0 },
+  invoices: { total: 0, paid: 0, unpaid: 0, isolir: 0 },
+};
+tenants.forEach(function(t) {
+  const c = t.usage?.customers || {};
+  const inv = t.usage?.invoices || {};
+  summary.customers.total += Number(c.total) || 0;
+  summary.customers.active += Number(c.active) || 0;
+  summary.customers.inactive += Number(c.inactive) || 0;
+  summary.customers.new += Number(c.new) || 0;
+  summary.invoices.total += Number(inv.total) || 0;
+  summary.invoices.paid += Number(inv.paid) || 0;
+  summary.invoices.unpaid += Number(inv.unpaid) || 0;
+  summary.invoices.isolir += Number(inv.isolir) || 0;
+});
+%>
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active: 'tenants', adminName }) %>
 <main class="km-main">
   <div class="km-topbar">
     <div>
       <h2>Kelola Tenant</h2>
-      <p class="km-subtitle">Tambah, edit, suspend, dan hapus tenant ISP/WiFi</p>
+      <p class="km-subtitle">Kelola unit operasional billing Kalimasada</p>
     </div>
-    <a href="/management/tenants/new" class="btn btn-km-primary btn-sm px-3"><i class="bi bi-plus-lg me-1"></i> Tambah Tenant</a>
+    <div class="d-flex flex-wrap gap-2">
+      <a href="#backup-restore" class="btn btn-outline-secondary btn-sm px-3">
+        <i class="bi bi-cloud-arrow-up me-1"></i> Backup &amp; Restore
+      </a>
+      <a href="/management/tenants/new" class="btn btn-km-primary btn-sm px-3"><i class="bi bi-plus-lg me-1"></i> Tambah Tenant</a>
+    </div>
   </div>
 
   <% if (flash && flash.success === 'deleted') { %>
     <div class="alert alert-success">Tenant berhasil dihapus.</div>
   <% } %>
-  <% if (flash && flash.success === 'suspended') { %>
-    <div class="alert alert-success">Tenant berhasil disuspend.</div>
+  <% if (flash && flash.success === 'restored') { %>
+    <div class="alert alert-success">
+      Restore selesai — <%= flash.created || 0 %> dibuat, <%= flash.updated || 0 %> diperbarui, <%= flash.skipped || 0 %> dilewati.
+      <% if (flash.warn) { %><span class="d-block small mt-1"><%= flash.warn %></span><% } %>
+    </div>
   <% } %>
-  <% if (flash && flash.success === 'activated') { %>
-    <div class="alert alert-success">Tenant berhasil diaktifkan kembali.</div>
+  <% if (flash && flash.success === 'imported') { %>
+    <div class="alert alert-success">
+      Import Excel selesai — <%= flash.created || 0 %> dibuat, <%= flash.updated || 0 %> diperbarui, <%= flash.skipped || 0 %> dilewati.
+      <% if (flash.warn) { %><span class="d-block small mt-1"><%= flash.warn %></span><% } %>
+    </div>
   <% } %>
   <% if (flash && flash.error) { %>
     <div class="alert alert-danger"><%= flash.error %></div>
   <% } %>
 
-  <div class="km-card">
+  <div class="km-card km-card--flush">
     <div class="table-responsive">
-      <table class="table table-hover align-middle mb-0">
+      <table class="table table-hover align-middle mb-0 km-tenant-table">
         <thead>
-          <tr>
-            <th>ID</th>
-            <th>Nama Tenant</th>
-            <th>Subdomain</th>
-            <th>Owner</th>
-            <th>Paket</th>
-            <th>Pelanggan</th>
-            <th>Status</th>
-            <th class="text-end">Aksi</th>
+          <tr class="km-tenant-table__head-main">
+            <th rowspan="2" class="km-tenant-table__sticky-col">ID</th>
+            <th rowspan="2">Nama Tenant</th>
+            <th rowspan="2">Subdomain</th>
+            <th rowspan="2">Owner</th>
+            <th colspan="4" class="km-th-group km-th-group--customers">Pelanggan</th>
+            <th colspan="4" class="km-th-group km-th-group--invoices">Tagihan</th>
+            <th rowspan="2" class="text-end km-tenant-table__actions-col">Aksi</th>
+          </tr>
+          <tr class="km-tenant-table__head-sub">
+            <th class="km-metric-th">Total</th>
+            <th class="km-metric-th">Aktif</th>
+            <th class="km-metric-th">Nonaktif</th>
+            <th class="km-metric-th km-th-group--customers-end">Baru</th>
+            <th class="km-metric-th">Total</th>
+            <th class="km-metric-th">Lunas</th>
+            <th class="km-metric-th">Belum Lunas</th>
+            <th class="km-metric-th km-th-group--invoices-end">Isolir</th>
           </tr>
         </thead>
         <tbody>
           <% if (!tenants.length) { %>
-            <tr><td colspan="8" class="text-center py-4" style="color: var(--text-muted)">Belum ada tenant. Klik "Tambah Tenant" untuk memulai.</td></tr>
+            <tr><td colspan="13" class="text-center py-4" style="color: var(--text-muted)">Belum ada tenant. Klik "Tambah Tenant" untuk memulai.</td></tr>
           <% } %>
-          <% tenants.forEach(function(t) { %>
+          <% tenants.forEach(function(t) {
+            const c = t.usage.customers || {};
+            const inv = t.usage.invoices || {};
+          %>
             <tr>
-              <td>#<%= t.id %></td>
+              <td class="km-tenant-table__sticky-col">#<%= t.id %></td>
               <td class="fw-semibold"><%= t.name %></td>
               <td><code><%= t.subdomain %></code></td>
               <td>
                 <div><%= t.owner_name %></div>
                 <small style="color: var(--text-muted)"><%= t.owner_email %></small>
               </td>
-              <td><%= t.plan_name %></td>
-              <td><%= t.usage.customers %></td>
-              <td><span class="badge badge-status-<%= t.status %>"><%= t.status %></span></td>
-              <td>
+              <td class="km-metric-cell km-metric-cell--num"><%= c.total || 0 %></td>
+              <td class="km-metric-cell km-metric-cell--num km-metric-cell--success"><%= c.active || 0 %></td>
+              <td class="km-metric-cell km-metric-cell--num km-metric-cell--muted"><%= c.inactive || 0 %></td>
+              <td class="km-metric-cell km-metric-cell--num km-metric-cell--accent km-th-group--customers-end"><%= c.new || 0 %></td>
+              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(inv.total) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--success"><%= formatRupiah(inv.paid) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning"><%= formatRupiah(inv.unpaid) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--danger km-th-group--invoices-end"><%= formatRupiah(inv.isolir) %></td>
+              <td class="text-end">
                 <div class="km-actions">
                   <a href="/management/tenants/<%= t.id %>" class="btn btn-sm btn-outline-secondary" title="Detail"><i class="bi bi-eye"></i></a>
                   <a href="/management/tenants/<%= t.id %>/edit" class="btn btn-sm btn-outline-primary" title="Edit"><i class="bi bi-pencil"></i></a>
-                  <% if (t.status === 'active') { %>
-                    <button type="button" class="btn btn-sm btn-outline-warning" title="Suspend"
-                      data-bs-toggle="modal" data-bs-target="#suspendModal-<%= t.id %>"><i class="bi bi-pause-circle"></i></button>
-                  <% } else if (t.status === 'suspended') { %>
-                    <form method="POST" action="/management/tenants/<%= t.id %>/activate" class="d-inline">
-                      <input type="hidden" name="redirect" value="list">
-                      <button type="submit" class="btn btn-sm btn-outline-success" title="Aktifkan"><i class="bi bi-play-circle"></i></button>
-                    </form>
-                  <% } %>
-                  <% if (t.id !== 1) { %>
-                    <button type="button" class="btn btn-sm btn-outline-danger" title="Hapus"
-                      data-bs-toggle="modal" data-bs-target="#deleteModal-<%= t.id %>"><i class="bi bi-trash"></i></button>
-                  <% } %>
+                  <button type="button" class="btn btn-sm btn-outline-danger" title="Hapus"
+                    data-bs-toggle="modal" data-bs-target="#deleteModal-<%= t.id %>"><i class="bi bi-trash"></i></button>
                 </div>
               </td>
             </tr>
@@ -78,33 +113,56 @@
       </table>
     </div>
   </div>
+
+  <% if (tenants.length) { %>
+  <section class="km-report-summary" aria-label="Ringkasan keseluruhan tenant">
+    <div class="km-report-summary__header">
+      <div>
+        <h5 class="km-report-summary__title">Ringkasan Keseluruhan</h5>
+        <p class="km-report-summary__subtitle">Total agregat dari <%= tenants.length %> tenant aktif</p>
+      </div>
+      <span class="km-report-summary__badge"><%= tenants.length %> tenant</span>
+    </div>
+
+    <div class="table-responsive">
+      <table class="table mb-0 km-report-summary__table">
+        <thead>
+          <tr>
+            <th colspan="4" class="km-report-summary__label-col">Pelanggan</th>
+            <th colspan="4" class="km-report-summary__label-col">Tagihan</th>
+          </tr>
+          <tr class="km-report-summary__subhead">
+            <th>Total</th>
+            <th>Aktif</th>
+            <th>Nonaktif</th>
+            <th>Baru</th>
+            <th>Total</th>
+            <th>Lunas</th>
+            <th>Belum Lunas</th>
+            <th>Isolir</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="km-report-summary__total-row">
+            <td class="km-metric-cell km-metric-cell--num"><%= summary.customers.total %></td>
+            <td class="km-metric-cell km-metric-cell--num km-metric-cell--success"><%= summary.customers.active %></td>
+            <td class="km-metric-cell km-metric-cell--num km-metric-cell--muted"><%= summary.customers.inactive %></td>
+            <td class="km-metric-cell km-metric-cell--num km-metric-cell--accent"><%= summary.customers.new %></td>
+            <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(summary.invoices.total) %></td>
+            <td class="km-metric-cell km-metric-cell--money km-metric-cell--success"><%= formatRupiah(summary.invoices.paid) %></td>
+            <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning"><%= formatRupiah(summary.invoices.unpaid) %></td>
+            <td class="km-metric-cell km-metric-cell--money km-metric-cell--danger"><%= formatRupiah(summary.invoices.isolir) %></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <% } %>
+
+  <%- include('_backup-restore', { backups }) %>
 </main>
 
 <% tenants.forEach(function(t) { %>
-  <% if (t.status === 'active') { %>
-  <div class="modal fade km-modal" id="suspendModal-<%= t.id %>" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-      <form method="POST" action="/management/tenants/<%= t.id %>/suspend" class="modal-content">
-        <input type="hidden" name="redirect" value="list">
-        <div class="modal-header">
-          <h5 class="modal-title">Suspend Tenant</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
-        </div>
-        <div class="modal-body">
-          <p>Suspend <strong><%= t.name %></strong> (<code><%= t.subdomain %></code>)? Tenant tidak bisa diakses hingga diaktifkan kembali.</p>
-          <label class="form-label">Alasan (opsional)</label>
-          <input type="text" name="reason" class="form-control" placeholder="Subscription expired">
-        </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
-          <button type="submit" class="btn btn-warning">Suspend</button>
-        </div>
-      </form>
-    </div>
-  </div>
-  <% } %>
-
-  <% if (t.id !== 1) { %>
   <div class="modal fade km-modal" id="deleteModal-<%= t.id %>" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
       <form method="POST" action="/management/tenants/<%= t.id %>/delete" class="modal-content">
@@ -131,7 +189,6 @@
       </form>
     </div>
   </div>
-  <% } %>
 <% }); %>
 
 <%- include('../partials/footer') %>

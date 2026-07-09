@@ -1,0 +1,491 @@
+/**
+ * Kalimasada Management Portal — Login Page
+ * Split layout, dual-theme backgrounds, PT Kalimasada branding
+ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body.km-login-page {
+  position: relative;
+  min-height: 100vh;
+  margin: 0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--text-primary);
+  background: var(--body-bg);
+  transition: var(--theme-transition);
+  overflow-x: hidden;
+}
+
+/* ── Background layers ── */
+body.km-login-page::before,
+body.km-login-page::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+[data-theme="light"] body.km-login-page {
+  background:
+    radial-gradient(circle at 15% 20%, rgba(14, 165, 233, .12), transparent 42%),
+    radial-gradient(circle at 85% 75%, rgba(99, 102, 241, .08), transparent 38%),
+    linear-gradient(160deg, #f0f9ff 0%, #f8fafc 55%, #f1f5f9 100%);
+}
+
+[data-theme="light"] body.km-login-page::before {
+  background-image: radial-gradient(rgba(14, 165, 233, .18) 1px, transparent 1px);
+  background-size: 28px 28px;
+  opacity: .35;
+}
+
+[data-theme="dark"] body.km-login-page {
+  background:
+    radial-gradient(circle at 20% 15%, rgba(14, 165, 233, .18), transparent 42%),
+    radial-gradient(circle at 80% 80%, rgba(99, 102, 241, .14), transparent 40%),
+    radial-gradient(circle at 50% 50%, rgba(6, 182, 212, .06), transparent 55%),
+    #0a0f1a;
+}
+
+[data-theme="dark"] body.km-login-page::before {
+  background-image: radial-gradient(rgba(148, 163, 184, .12) 1px, transparent 1px);
+  background-size: 28px 28px;
+  opacity: .4;
+}
+
+[data-theme="dark"] body.km-login-page::after {
+  background:
+    radial-gradient(ellipse 60% 40% at 10% 90%, rgba(14, 165, 233, .08), transparent),
+    radial-gradient(ellipse 50% 35% at 90% 10%, rgba(99, 102, 241, .1), transparent);
+}
+
+/* ── Shell layout ── */
+.km-login-shell {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(360px, 440px);
+  gap: clamp(24px, 5vw, 72px);
+  align-items: center;
+  width: min(1120px, 100%);
+  margin: 0 auto;
+  padding: clamp(22px, 5vw, 56px);
+}
+
+/* ── Hero panel ── */
+.km-login-hero {
+  padding: clamp(10px, 2vw, 18px);
+}
+
+[data-theme="light"] .km-login-hero {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .km-login-hero {
+  color: #fff;
+  text-shadow: 0 2px 18px rgba(2, 6, 23, .5);
+}
+
+.km-login-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: .78rem;
+  font-weight: 650;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+[data-theme="light"] .km-login-eyebrow {
+  border: 1px solid rgba(14, 165, 233, .25);
+  background: rgba(14, 165, 233, .08);
+  color: #0369a1;
+}
+
+[data-theme="dark"] .km-login-eyebrow {
+  border: 1px solid rgba(255, 255, 255, .16);
+  background: rgba(255, 255, 255, .08);
+  color: rgba(255, 255, 255, .88);
+}
+
+.km-login-brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 28px 0 24px;
+}
+
+.km-login-brand-logo {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  padding: 0;
+  overflow: hidden;
+  line-height: 0;
+}
+
+[data-theme="light"] .km-login-brand-logo {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+[data-theme="dark"] .km-login-brand-logo {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.km-login-brand-logo img {
+  display: block;
+  width: auto;
+  height: 72px;
+  max-width: 200px;
+  object-fit: contain;
+}
+
+.km-login-company {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -.02em;
+  line-height: 1.3;
+}
+
+[data-theme="light"] .km-login-company { color: var(--text-primary); }
+[data-theme="dark"] .km-login-company { color: #fff; }
+
+.km-login-product {
+  margin: 4px 0 0;
+  font-size: .88rem;
+  font-weight: 450;
+}
+
+[data-theme="light"] .km-login-product { color: var(--text-muted); }
+[data-theme="dark"] .km-login-product { color: rgba(226, 232, 240, .75); }
+
+.km-login-hero h1 {
+  max-width: 640px;
+  margin: 0 0 18px;
+  font-size: clamp(2rem, 4.5vw, 3.25rem);
+  line-height: 1.08;
+  font-weight: 750;
+  letter-spacing: -.04em;
+}
+
+[data-theme="light"] .km-login-hero h1 { color: var(--text-primary); }
+[data-theme="dark"] .km-login-hero h1 { color: #fff; }
+
+.km-login-hero > p {
+  max-width: 580px;
+  margin: 0;
+  font-size: clamp(.95rem, 1.8vw, 1.1rem);
+  line-height: 1.75;
+  font-weight: 400;
+}
+
+[data-theme="light"] .km-login-hero > p { color: var(--text-secondary); }
+[data-theme="dark"] .km-login-hero > p { color: rgba(226, 232, 240, .82); }
+
+/* ── Motivation cards ── */
+.km-login-motivation {
+  display: grid;
+  gap: 12px;
+  max-width: 640px;
+  margin-top: 28px;
+}
+
+.km-motivation-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px;
+  border-radius: 20px;
+  backdrop-filter: blur(14px);
+}
+
+[data-theme="light"] .km-motivation-card {
+  border: 1px solid rgba(14, 165, 233, .15);
+  background: rgba(255, 255, 255, .72);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .06);
+}
+
+[data-theme="dark"] .km-motivation-card {
+  border: 1px solid rgba(255, 255, 255, .14);
+  background: rgba(15, 23, 42, .32);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .15);
+}
+
+.km-motivation-card i {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 34px;
+  border-radius: 12px;
+  font-size: 1rem;
+}
+
+[data-theme="light"] .km-motivation-card i {
+  background: rgba(14, 165, 233, .12);
+  color: #0284c7;
+}
+
+[data-theme="dark"] .km-motivation-card i {
+  background: rgba(14, 165, 233, .18);
+  color: #7dd3fc;
+}
+
+.km-motivation-card strong {
+  display: block;
+  font-weight: 700;
+  margin-bottom: 2px;
+  font-size: .94rem;
+}
+
+[data-theme="light"] .km-motivation-card strong { color: var(--text-primary); }
+[data-theme="dark"] .km-motivation-card strong { color: #fff; }
+
+.km-motivation-card span {
+  line-height: 1.55;
+  font-size: .9rem;
+  font-weight: 400;
+}
+
+[data-theme="light"] .km-motivation-card span { color: var(--text-muted); }
+[data-theme="dark"] .km-motivation-card span { color: rgba(226, 232, 240, .75); }
+
+/* ── Login card ── */
+.km-login-card {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  border-radius: 28px;
+  transition: var(--theme-transition);
+}
+
+[data-theme="light"] .km-login-card {
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+  box-shadow: 0 24px 64px rgba(15, 23, 42, .1);
+}
+
+[data-theme="dark"] .km-login-card {
+  border: 1px solid rgba(255, 255, 255, .1);
+  background: rgba(30, 41, 59, .85);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, .35);
+}
+
+.km-login-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 6px;
+  background: linear-gradient(90deg, #0ea5e9, #6366f1, #22c55e);
+}
+
+.km-login-card-inner {
+  padding: clamp(26px, 4vw, 38px);
+}
+
+.km-login-card-brand {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin-bottom: 24px;
+}
+
+.km-login-card-brand .km-login-brand-logo {
+  margin: 0;
+  padding: 0;
+}
+
+.km-login-card-brand .km-login-brand-logo img {
+  height: 56px;
+  max-width: 170px;
+}
+
+.km-login-card-title {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 750;
+  letter-spacing: -.03em;
+  color: var(--text-primary);
+}
+
+.km-login-card-subtitle {
+  margin: 2px 0 0;
+  font-size: .84rem;
+  color: var(--text-muted);
+  font-weight: 450;
+}
+
+.km-login-heading {
+  margin-bottom: 22px;
+}
+
+.km-login-heading h2 {
+  margin: 0 0 8px;
+  font-size: clamp(1.5rem, 2.8vw, 1.85rem);
+  font-weight: 720;
+  letter-spacing: -.03em;
+  color: var(--text-primary);
+}
+
+.km-login-heading p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.6;
+  font-size: .9rem;
+}
+
+/* ── Form ── */
+.km-login-form .form-label {
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: .84rem;
+  margin-bottom: 8px;
+}
+
+.km-input-wrap {
+  position: relative;
+}
+
+.km-input-wrap i {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  z-index: 2;
+  font-size: .95rem;
+}
+
+.km-login-form .form-control {
+  min-height: 50px;
+  border-radius: 14px;
+  border: 1.5px solid var(--input-border);
+  padding: 12px 16px 12px 44px;
+  color: var(--input-text);
+  background: var(--input-bg);
+  font-weight: 450;
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+
+.km-login-form .form-control::placeholder {
+  color: var(--input-placeholder);
+}
+
+.km-login-form .form-control:focus {
+  border-color: #0ea5e9;
+  box-shadow: 0 0 0 4px rgba(14, 165, 233, .14);
+  background: var(--input-bg);
+  color: var(--input-text);
+}
+
+.km-btn-login {
+  width: 100%;
+  min-height: 52px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+  border: 0;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #0ea5e9, #6366f1);
+  color: #fff !important;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  box-shadow: 0 16px 32px rgba(14, 165, 233, .25);
+  transition: transform .2s ease, box-shadow .2s ease, filter .2s ease;
+  cursor: pointer;
+}
+
+.km-btn-login:hover {
+  color: #fff !important;
+  filter: brightness(1.05);
+  transform: translateY(-1px);
+  box-shadow: 0 20px 40px rgba(14, 165, 233, .3);
+}
+
+/* ── Theme switcher (below login button) ── */
+.km-login-theme-btn {
+  width: 100%;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: .88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .2s ease, border-color .2s ease, color .2s ease;
+}
+
+.km-login-theme-btn:hover {
+  background: var(--surface-2);
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.km-login-theme-btn i {
+  font-size: 1rem;
+  transition: transform .3s ease;
+}
+
+.km-login-footer {
+  margin-top: 20px;
+  text-align: center;
+  font-size: .78rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.km-login-form .alert {
+  border: 0;
+  border-radius: 12px;
+  font-size: .88rem;
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+
+/* ── Responsive ── */
+@media (max-width: 900px) {
+  .km-login-shell {
+    grid-template-columns: 1fr;
+    gap: 28px;
+    padding: 22px 16px;
+  }
+
+  .km-login-hero {
+    text-align: center;
+  }
+
+  .km-login-brand {
+    justify-content: center;
+  }
+
+  .km-login-hero h1,
+  .km-login-hero > p {
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .km-login-motivation {
+    display: none;
+  }
+}

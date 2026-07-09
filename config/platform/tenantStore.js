@@ -54,6 +54,7 @@ function parseTenant(row) {
 
 const RESERVED_SUBDOMAINS = new Set([
     'manage', 'management', 'api', 'www', 'admin', 'mail', 'ftp', 'cdn', 'static', 'app', 'billing',
+    '__master__',
 ]);
 
 function isReservedSubdomain(subdomain) {
@@ -162,6 +163,24 @@ async function ensurePlatformSchema() {
     }
 }
 
+async function ensureMasterTenantSchema() {
+    const fs = require('fs');
+    const migrationPath = path.join(__dirname, '../../migrations/add_master_tenant.sql');
+    if (!fs.existsSync(migrationPath)) return;
+    const sql = fs.readFileSync(migrationPath, 'utf8');
+    const statements = sql.split(';').map((s) => s.trim()).filter(Boolean);
+    for (const stmt of statements) {
+        try {
+            await dbRun(stmt);
+        } catch (err) {
+            const msg = String(err.message || '').toLowerCase();
+            if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+                console.warn('[tenantStore] master tenant migration warn:', err.message);
+            }
+        }
+    }
+}
+
 const TENANT_SCOPED_TABLES = [
     'customers', 'packages', 'invoices', 'payments', 'routers',
     'technicians', 'collectors', 'areas', 'app_settings', 'agents',
@@ -209,37 +228,6 @@ async function ensureTenantIdColumns() {
     }
 }
 
-async function ensureDefaultTenant() {
-    const existing = await dbGet('SELECT id FROM tenants WHERE id = 1');
-    if (existing) return;
-
-    await dbRun(
-        `INSERT INTO tenants (
-            id, uuid, name, subdomain, slug, owner_name, owner_email, owner_phone,
-            subscription_plan_id, subscription_starts_at, subscription_ends_at,
-            status, settings, provisioned_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'), datetime('now','+10 years','localtime'), ?, ?, datetime('now','localtime'))`,
-        [
-            1,
-            newUuid(),
-            'Default Tenant',
-            'default',
-            'default',
-            'Administrator',
-            'admin@local',
-            '08000000000',
-            3,
-            'active',
-            JSON.stringify({
-                admin_username: 'admin',
-                admin_password: 'admin',
-                company_header: 'Kalimasada Billing',
-                company_name: 'Kalimasada Billing',
-            }),
-        ]
-    );
-}
-
 async function ensureSuperAdmin(email, password, name = 'Kalimasada Management') {
     const hash = await bcrypt.hash(password, 10);
     const existing = await dbGet('SELECT id FROM super_admins WHERE email = ?', [email]);
@@ -268,8 +256,11 @@ async function listSubscriptionPlans() {
     return dbAll('SELECT * FROM subscription_plans WHERE is_active = 1 ORDER BY id');
 }
 
-async function listTenants({ includeDeleted = false } = {}) {
-    const where = includeDeleted ? '' : 'WHERE t.deleted_at IS NULL';
+async function listTenants({ includeDeleted = false, operationalOnly = false } = {}) {
+    const clauses = [];
+    if (!includeDeleted) clauses.push('t.deleted_at IS NULL');
+    if (operationalOnly) clauses.push('COALESCE(t.is_master, 0) = 0');
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const rows = await dbAll(
         `SELECT t.*, sp.name as plan_name, sp.code as plan_code,
                 sp.max_customers, sp.max_routers, sp.max_admins
@@ -279,6 +270,56 @@ async function listTenants({ includeDeleted = false } = {}) {
          ORDER BY t.id DESC`
     );
     return rows.map(parseTenant);
+}
+
+async function listOperationalTenants() {
+    return listTenants({ operationalOnly: true });
+}
+
+async function getMasterTenant() {
+    const row = await dbGet(
+        `SELECT t.*, sp.name as plan_name, sp.code as plan_code,
+                sp.max_customers, sp.max_routers, sp.max_admins
+         FROM tenants t
+         LEFT JOIN subscription_plans sp ON sp.id = t.subscription_plan_id
+         WHERE COALESCE(t.is_master, 0) = 1 AND t.deleted_at IS NULL`
+    );
+    return parseTenant(row);
+}
+
+const MASTER_TENANT_SUBDOMAIN = '__master__';
+
+async function ensureMasterTenant(data) {
+    const existing = await getMasterTenant();
+    if (existing) {
+        throw new Error('Master tenant sudah ada.');
+    }
+
+    const settings = {
+        company_header: data.name,
+        company_name: data.name,
+        is_master_parent: true,
+    };
+
+    const insert = await dbRun(
+        `INSERT INTO tenants (
+            uuid, name, subdomain, slug, owner_name, owner_email, owner_phone,
+            subscription_plan_id, subscription_starts_at, subscription_ends_at,
+            status, settings, is_master, provisioned_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, datetime('now','localtime'), datetime('now','+10 years','localtime'), 'active', ?, 1, datetime('now','localtime'))`,
+        [
+            newUuid(),
+            data.name,
+            MASTER_TENANT_SUBDOMAIN,
+            MASTER_TENANT_SUBDOMAIN,
+            data.owner_name,
+            data.owner_email,
+            data.owner_phone,
+            JSON.stringify(settings),
+        ]
+    );
+
+    return getTenantById(insert.id);
 }
 
 async function getTenantById(id) {
@@ -312,23 +353,97 @@ async function getTenantStats(tenantId) {
         const row = await dbGet(`SELECT COUNT(*) as c FROM ${table} WHERE tenant_id = ?`, [tenantId]);
         return row?.c || 0;
     };
+
+    const customers = { total: 0, active: 0, inactive: 0, new: 0 };
+    const invoices = { total: 0, paid: 0, unpaid: 0, isolir: 0 };
+
+    if (await tableExists('customers') && (await tableHasColumn('customers', 'tenant_id'))) {
+        const hasJoinDate = await tableHasColumn('customers', 'join_date');
+        const hasCreatedAt = await tableHasColumn('customers', 'created_at');
+        const joinExpr = hasJoinDate && hasCreatedAt
+            ? 'COALESCE(join_date, created_at)'
+            : hasJoinDate
+                ? 'join_date'
+                : hasCreatedAt
+                    ? 'created_at'
+                    : null;
+
+        const newExpr = joinExpr
+            ? `SUM(CASE WHEN strftime('%Y-%m', date(${joinExpr})) = strftime('%Y-%m', 'now') THEN 1 ELSE 0 END)`
+            : '0';
+
+        const row = await dbGet(
+            `SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN status IN ('active', 'suspended', 'isolir') THEN 1 ELSE 0 END) AS active,
+                SUM(CASE WHEN status = 'inactive' THEN 1 ELSE 0 END) AS inactive,
+                ${newExpr} AS new_count
+             FROM customers
+             WHERE tenant_id = ?`,
+            [tenantId]
+        );
+
+        customers.total = row?.total || 0;
+        customers.active = row?.active || 0;
+        customers.inactive = row?.inactive || 0;
+        customers.new = row?.new_count || 0;
+    }
+
+    if (await tableExists('invoices') && (await tableHasColumn('invoices', 'tenant_id'))) {
+        const hasInvoiceType = await tableHasColumn('invoices', 'invoice_type');
+        const voucherExcl = hasInvoiceType
+            ? "(i.invoice_type != 'voucher' OR i.invoice_type IS NULL)"
+            : '1=1';
+        const hasCustomerId = await tableHasColumn('invoices', 'customer_id');
+        const joinCustomers = hasCustomerId ? 'LEFT JOIN customers c ON c.id = i.customer_id' : '';
+        const isolirExpr = hasCustomerId
+            ? "SUM(CASE WHEN i.status = 'unpaid' AND c.status IN ('suspended', 'isolir') THEN i.amount ELSE 0 END)"
+            : '0';
+
+        const row = await dbGet(
+            `SELECT
+                COALESCE(SUM(i.amount), 0) AS total,
+                COALESCE(SUM(CASE WHEN i.status = 'paid' THEN i.amount ELSE 0 END), 0) AS paid,
+                COALESCE(SUM(CASE WHEN i.status = 'unpaid' THEN i.amount ELSE 0 END), 0) AS unpaid,
+                COALESCE(${isolirExpr}, 0) AS isolir
+             FROM invoices i
+             ${joinCustomers}
+             WHERE i.tenant_id = ? AND ${voucherExcl}`,
+            [tenantId]
+        );
+
+        invoices.total = row?.total || 0;
+        invoices.paid = row?.paid || 0;
+        invoices.unpaid = row?.unpaid || 0;
+        invoices.isolir = row?.isolir || 0;
+    }
+
     return {
-        customers: await safeCount('customers'),
+        customers,
+        invoices,
         routers: await safeCount('routers'),
-        invoices: await safeCount('invoices'),
     };
 }
 
 async function getGlobalStats() {
     const tenants = await dbGet(`SELECT COUNT(*) as total FROM tenants WHERE deleted_at IS NULL`);
-    const active = await dbGet(`SELECT COUNT(*) as total FROM tenants WHERE status = 'active' AND deleted_at IS NULL`);
-    const suspended = await dbGet(`SELECT COUNT(*) as total FROM tenants WHERE status = 'suspended' AND deleted_at IS NULL`);
     const customers = await dbGet('SELECT COUNT(*) as total FROM customers');
     return {
         totalTenants: tenants?.total || 0,
-        activeTenants: active?.total || 0,
-        suspendedTenants: suspended?.total || 0,
         totalCustomers: customers?.total || 0,
+    };
+}
+
+async function getExtendedGlobalStats() {
+    const base = await getGlobalStats();
+    let totalRouters = 0;
+    if (await tableExists('routers')) {
+        const row = await dbGet('SELECT COUNT(*) as total FROM routers');
+        totalRouters = row?.total || 0;
+    }
+    return {
+        ...base,
+        totalRouters,
     };
 }
 
@@ -491,8 +606,7 @@ async function createTenant(data) {
 
     try {
         await logProvisionStep(tenantId, 'create_record', 'completed');
-        await seedDefaultPackages(tenantId);
-        await logProvisionStep(tenantId, 'default_packages', 'completed');
+        await logProvisionStep(tenantId, 'default_packages', 'skipped');
         await logProvisionStep(tenantId, 'default_settings', 'completed');
 
         await dbRun(
@@ -512,6 +626,7 @@ async function createTenant(data) {
 async function updateTenant(id, data) {
     const tenant = await getTenantById(id);
     if (!tenant) throw new Error('Tenant tidak ditemukan.');
+    if (tenant.is_master) throw new Error('Master tenant tidak bisa diedit dari halaman tenant operasional.');
 
     let subdomain = data.subdomain ? String(data.subdomain).toLowerCase().trim() : tenant.subdomain;
     if (isReservedSubdomain(subdomain)) {
@@ -630,8 +745,9 @@ async function activateTenant(id) {
 }
 
 async function deleteTenant(id) {
-    if (Number(id) === 1) {
-        throw new Error('Tenant default tidak bisa dihapus.');
+    const row = await dbGet('SELECT is_master FROM tenants WHERE id = ? AND deleted_at IS NULL', [id]);
+    if (row?.is_master) {
+        throw new Error('Master tenant tidak bisa dihapus dari halaman tenant operasional.');
     }
     await purgeTenantBillingData(id);
     await releaseTenantIdentifiers(id);
@@ -652,9 +768,39 @@ async function auditLog({ tenantId, actorType, actorId, action, details, ip }) {
 
 async function initPlatform() {
     await ensurePlatformSchema();
+    await ensureMasterTenantSchema();
+    try {
+        const { ensureMasterPackageSchema } = require('./masterPackageService');
+        await ensureMasterPackageSchema();
+    } catch (err) {
+        console.warn('[tenantStore] master package schema:', err.message);
+    }
+    try {
+        const { ensureFinanceSchema } = require('./platformFinanceService');
+        await ensureFinanceSchema();
+    } catch (err) {
+        console.warn('[tenantStore] finance schema:', err.message);
+    }
+    try {
+        const { ensurePlatformSettingsSchema } = require('./platformSettingsService');
+        await ensurePlatformSettingsSchema();
+    } catch (err) {
+        console.warn('[tenantStore] platform settings schema:', err.message);
+    }
+    try {
+        const { ensurePopSchema } = require('./popService');
+        await ensurePopSchema();
+    } catch (err) {
+        console.warn('[tenantStore] pop schema:', err.message);
+    }
+    try {
+        const { migrateLegacyPaymentToPlatform } = require('./paymentGatewaySync');
+        await migrateLegacyPaymentToPlatform();
+    } catch (err) {
+        console.warn('[tenantStore] payment gateway migrate:', err.message);
+    }
     await ensureTenantIdColumns();
     await releaseDeletedTenantSlugs();
-    await ensureDefaultTenant();
     await backfillTenantSettingsFromTemplate();
     await ensureSuperAdmin('management@kalimasada', 'kalimasada123', 'Kalimasada Management');
     console.log('[platform] SaaS platform initialized');
@@ -664,10 +810,15 @@ module.exports = {
     initPlatform,
     listSubscriptionPlans,
     listTenants,
+    listOperationalTenants,
+    getMasterTenant,
+    ensureMasterTenant,
+    MASTER_TENANT_SUBDOMAIN,
     getTenantById,
     getTenantBySubdomain,
     getTenantStats,
     getGlobalStats,
+    getExtendedGlobalStats,
     createTenant,
     updateTenant,
     updateTenantAdminCredentials,
@@ -679,4 +830,7 @@ module.exports = {
     isReservedSubdomain,
     updateTenantSettings,
     getDb,
+    dbRun,
+    dbGet,
+    dbAll,
 };

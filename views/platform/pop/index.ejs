@@ -1,0 +1,180 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active, adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Daftar POP/CABANG</h2>
+      <p class="km-subtitle">Kelola titik keberadaan infrastruktur jaringan Kalimasada</p>
+    </div>
+    <button type="button" class="btn btn-km-primary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#addPopModal">
+      <i class="bi bi-plus-lg me-1"></i> Tambah POP/CABANG
+    </button>
+  </div>
+
+  <%- include('_nav', { popSection }) %>
+
+  <% if (flash && flash.success === 'created') { %><div class="alert alert-success">POP/CABANG berhasil ditambahkan.</div><% } %>
+  <% if (flash && flash.success === 'updated') { %><div class="alert alert-success">POP/CABANG berhasil diperbarui.</div><% } %>
+  <% if (flash && flash.success === 'deleted') { %><div class="alert alert-success">POP/CABANG berhasil dihapus.</div><% } %>
+  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+
+  <div class="km-card km-card--flush">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0 km-tenant-table">
+        <thead>
+          <tr>
+            <th>Kode</th>
+            <th>Nama</th>
+            <th>Lokasi</th>
+            <th>Switch</th>
+            <th>Radius</th>
+            <th>Status</th>
+            <th class="text-end">Aksi</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!pops.length) { %>
+            <tr><td colspan="7" class="text-center py-4 text-muted">Belum ada POP/CABANG. Tambahkan lokasi pertama Anda.</td></tr>
+          <% } %>
+          <% pops.forEach(function(p) { %>
+            <tr class="<%= p.is_active ? '' : 'opacity-50' %>">
+              <td><code><%= p.code %></code></td>
+              <td class="fw-semibold"><%= p.name %></td>
+              <td>
+                <div><%= p.location || '—' %></div>
+                <% if (p.address) { %><small class="text-muted"><%= p.address %></small><% } %>
+              </td>
+              <td><span class="badge bg-secondary"><%= p.switch_count || 0 %></span></td>
+              <td><span class="badge bg-secondary"><%= p.radius_count || 0 %></span></td>
+              <td>
+                <% if (p.is_active) { %><span class="badge bg-success">Aktif</span>
+                <% } else { %><span class="badge bg-secondary">Nonaktif</span><% } %>
+              </td>
+              <td class="text-end">
+                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editPopModal-<%= p.id %>">
+                  <i class="bi bi-pencil"></i>
+                </button>
+                <form method="POST" action="/management/pop/<%= p.id %>/delete" class="d-inline" onsubmit="return confirm('Hapus POP/CABANG ini beserta switch dan radius di dalamnya?')">
+                  <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<div class="modal fade km-modal" id="addPopModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <form method="POST" action="/management/pop" class="modal-content km-package-modal">
+      <div class="modal-header km-package-modal__header">
+        <div>
+          <h5 class="modal-title mb-0">Tambah POP/CABANG</h5>
+          <p class="km-package-modal__subtitle mb-0">Lokasi infrastruktur untuk switch dan radius lokal</p>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body km-package-modal__body">
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label">Kode</label>
+            <input type="text" name="code" class="form-control" placeholder="POP-BNA" required>
+          </div>
+          <div class="col-md-8">
+            <label class="form-label">Nama</label>
+            <input type="text" name="name" class="form-control" placeholder="POP Banjarnegara" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Lokasi / Area</label>
+            <input type="text" name="location" class="form-control" placeholder="Banjarnegara">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Alamat</label>
+            <input type="text" name="address" class="form-control">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Latitude</label>
+            <input type="text" name="latitude" class="form-control" placeholder="-7.37">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Longitude</label>
+            <input type="text" name="longitude" class="form-control" placeholder="109.69">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Keterangan</label>
+            <textarea name="description" class="form-control" rows="2"></textarea>
+          </div>
+          <div class="col-12">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" name="is_active" value="1" id="addPopActive" checked>
+              <label class="form-check-label" for="addPopActive">Aktif</label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer km-package-modal__footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-km-primary">Simpan POP/CABANG</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<% pops.forEach(function(p) { %>
+<div class="modal fade km-modal" id="editPopModal-<%= p.id %>" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <form method="POST" action="/management/pop/<%= p.id %>" class="modal-content km-package-modal">
+      <div class="modal-header km-package-modal__header">
+        <h5 class="modal-title mb-0">Edit <%= p.name %></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body km-package-modal__body">
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label">Kode</label>
+            <input type="text" name="code" class="form-control" value="<%= p.code %>" required>
+          </div>
+          <div class="col-md-8">
+            <label class="form-label">Nama</label>
+            <input type="text" name="name" class="form-control" value="<%= p.name %>" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Lokasi / Area</label>
+            <input type="text" name="location" class="form-control" value="<%= p.location || '' %>">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Alamat</label>
+            <input type="text" name="address" class="form-control" value="<%= p.address || '' %>">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Latitude</label>
+            <input type="text" name="latitude" class="form-control" value="<%= p.latitude != null ? p.latitude : '' %>">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Longitude</label>
+            <input type="text" name="longitude" class="form-control" value="<%= p.longitude != null ? p.longitude : '' %>">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Keterangan</label>
+            <textarea name="description" class="form-control" rows="2"><%= p.description || '' %></textarea>
+          </div>
+          <div class="col-12">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" name="is_active" value="1" id="editPopActive-<%= p.id %>" <%= p.is_active ? 'checked' : '' %>>
+              <label class="form-check-label" for="editPopActive-<%= p.id %>">Aktif</label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer km-package-modal__footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-km-primary">Simpan Perubahan</button>
+      </div>
+    </form>
+  </div>
+</div>
+<% }); %>
+
+<%- include('../partials/footer') %>

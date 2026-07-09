@@ -1,0 +1,125 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active: 'master-tenant', adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2><%= child.name %></h2>
+      <p class="km-subtitle">
+        Child tenant · <code><%= tenantHostname %></code>
+        · <span class="km-master-readonly-badge"><i class="bi bi-eye me-1"></i>Read-only</span>
+      </p>
+    </div>
+    <a href="/management/master-tenant" class="btn btn-outline-secondary btn-sm">← Master Tenant</a>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pelanggan Total</div><div class="value"><%= usage.customers.total || 0 %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pelanggan Aktif</div><div class="value text-success"><%= usage.customers.active || 0 %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Nonaktif</div><div class="value text-muted"><%= usage.customers.inactive || 0 %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Baru Bulan Ini</div><div class="value" style="color: var(--accent)"><%= usage.customers.new || 0 %></div></div></div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Tagihan Total</div><div class="value"><%= formatRupiah(usage.invoices.total) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Lunas</div><div class="value text-success"><%= formatRupiah(usage.invoices.paid) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Belum Lunas</div><div class="value text-warning"><%= formatRupiah(usage.invoices.unpaid) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Isolir</div><div class="value text-danger"><%= formatRupiah(usage.invoices.isolir) %></div></div></div>
+  </div>
+
+  <ul class="nav nav-tabs km-master-tabs mb-3">
+    <li class="nav-item">
+      <a class="nav-link <%= tab === 'customers' ? 'active' : '' %>" href="/management/master-tenant/children/<%= child.id %>?tab=customers">Pelanggan</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link <%= tab === 'invoices' ? 'active' : '' %>" href="/management/master-tenant/children/<%= child.id %>?tab=invoices">Tagihan</a>
+    </li>
+  </ul>
+
+  <div class="km-card km-card--flush">
+    <div class="table-responsive">
+      <% if (tab === 'customers' && customers) { %>
+      <table class="table table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Nama</th>
+            <th>Telepon</th>
+            <th>Status</th>
+            <th>Bergabung</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!customers.rows.length) { %>
+            <tr><td colspan="5" class="text-center py-4" style="color: var(--text-muted)">Tidak ada pelanggan.</td></tr>
+          <% } %>
+          <% customers.rows.forEach(function(row) { %>
+            <tr>
+              <td>#<%= row.id %></td>
+              <td><%= row.name %></td>
+              <td><%= row.phone || '—' %></td>
+              <td><span class="badge bg-secondary"><%= row.status %></span></td>
+              <td><%= row.join_date || row.created_at || '—' %></td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+      <% if (customers.totalPages > 1) { %>
+      <div class="d-flex justify-content-between align-items-center p-3 border-top">
+        <small style="color: var(--text-muted)">Halaman <%= customers.page %> / <%= customers.totalPages %> (<%= customers.total %> pelanggan)</small>
+        <div class="btn-group btn-group-sm">
+          <% if (customers.page > 1) { %>
+            <a class="btn btn-outline-secondary" href="?tab=customers&page=<%= customers.page - 1 %>">←</a>
+          <% } %>
+          <% if (customers.page < customers.totalPages) { %>
+            <a class="btn btn-outline-secondary" href="?tab=customers&page=<%= customers.page + 1 %>">→</a>
+          <% } %>
+        </div>
+      </div>
+      <% } %>
+      <% } %>
+
+      <% if (tab === 'invoices' && invoices) { %>
+      <table class="table table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>No. Invoice</th>
+            <th>Pelanggan</th>
+            <th class="text-end">Nominal</th>
+            <th>Status</th>
+            <th>Jatuh Tempo</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!invoices.rows.length) { %>
+            <tr><td colspan="5" class="text-center py-4" style="color: var(--text-muted)">Tidak ada tagihan.</td></tr>
+          <% } %>
+          <% invoices.rows.forEach(function(row) { %>
+            <tr>
+              <td><code><%= row.invoice_number %></code></td>
+              <td><%= row.customer_name || '—' %></td>
+              <td class="text-end fw-semibold"><%= formatRupiah(row.amount) %></td>
+              <td><span class="badge <%= row.status === 'paid' ? 'bg-success' : 'bg-warning text-dark' %>"><%= row.status %></span></td>
+              <td><%= row.due_date || '—' %></td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+      <% if (invoices.totalPages > 1) { %>
+      <div class="d-flex justify-content-between align-items-center p-3 border-top">
+        <small style="color: var(--text-muted)">Halaman <%= invoices.page %> / <%= invoices.totalPages %> (<%= invoices.total %> tagihan)</small>
+        <div class="btn-group btn-group-sm">
+          <% if (invoices.page > 1) { %>
+            <a class="btn btn-outline-secondary" href="?tab=invoices&page=<%= invoices.page - 1 %>">←</a>
+          <% } %>
+          <% if (invoices.page < invoices.totalPages) { %>
+            <a class="btn btn-outline-secondary" href="?tab=invoices&page=<%= invoices.page + 1 %>">→</a>
+          <% } %>
+        </div>
+      </div>
+      <% } %>
+      <% } %>
+    </div>
+  </div>
+</main>
+
+<%- include('../partials/footer') %>

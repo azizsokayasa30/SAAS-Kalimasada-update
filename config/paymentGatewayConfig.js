@@ -114,6 +114,16 @@ async function loadFromSettingsJson() {
 async function getPaymentGatewayConfig() {
     await ensureAppSettingsTable();
 
+    try {
+        const { isPlatformPaymentConfigured } = require('./platform/paymentGatewaySync');
+        if (await isPlatformPaymentConfigured()) {
+            const { getPlatformPaymentGateway } = require('./platform/platformSettingsService');
+            return applyDefaults(await getPlatformPaymentGateway());
+        }
+    } catch (err) {
+        logger?.warn?.('[PAYMENT_GATEWAY_CONFIG] Platform config fallback:', err.message);
+    }
+
     return new Promise((resolve) => {
         const db = new sqlite3.Database(dbPath);
         db.get(
@@ -147,7 +157,19 @@ async function getPaymentGatewayConfig() {
     });
 }
 
-async function savePaymentGatewayConfig(config) {
+async function savePaymentGatewayConfig(config, options = {}) {
+    if (!options.internal) {
+        try {
+            const { isPlatformPaymentConfigured } = require('./platform/paymentGatewaySync');
+            if (await isPlatformPaymentConfigured()) {
+                throw new Error('Payment gateway dikelola oleh Management Portal. Hubungi administrator SaaS.');
+            }
+        } catch (err) {
+            if (err.message && err.message.includes('Management Portal')) throw err;
+            logger?.warn?.('[PAYMENT_GATEWAY_CONFIG] Platform check warn:', err.message);
+        }
+    }
+
     await ensureAppSettingsTable();
 
     return new Promise((resolve, reject) => {

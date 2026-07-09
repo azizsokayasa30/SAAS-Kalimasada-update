@@ -1,124 +1,170 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active: 'mobile-app', adminName }) %>
-<main class="km-main">
+<main class="km-main km-mobile-build">
   <div class="km-topbar">
     <div>
-      <h2>Mobile App Management</h2>
-      <p class="km-subtitle">Build aplikasi mobile billing per tenant — config <code>.env</code> otomatis dari subdomain</p>
+      <h2>Mobile App — Build &amp; OTA</h2>
+      <p class="km-subtitle">Aplikasi Flutter unified <code>billing_kalimasada_mobile</code> — build APK release &amp; publikasi update OTA</p>
     </div>
-    <div class="d-flex align-items-center gap-2">
-      <% if (flutter.installed) { %>
-        <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i> Flutter: <%= flutter.version %></span>
-      <% } else { %>
-        <span class="badge bg-warning text-dark"><i class="bi bi-exclamation-triangle me-1"></i> Flutter belum terinstall</span>
-      <% } %>
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+      <span class="badge bg-secondary" id="flutterStatusBadge"><i class="bi bi-hourglass-split me-1"></i> Memuat…</span>
+      <span class="badge bg-secondary d-none" id="keystoreStatusBadge"></span>
     </div>
   </div>
 
-  <% if (flash && flash.success === 'saved') { %>
-    <div class="alert alert-success py-2">Konfigurasi disimpan.</div>
-  <% } %>
-  <% if (flash && flash.error) { %>
-    <div class="alert alert-danger py-2"><%= flash.error %></div>
-  <% } %>
+  <div class="alert alert-info km-mobile-info">
+    <i class="bi bi-info-circle me-2"></i>
+    <strong>Aplikasi unified</strong> — satu APK untuk semua tenant. Pengguna memilih server saat login di dalam app.
+    Setelah build sukses, <code>manifest.json</code> dan APK di <code id="apkPublishDirHint">public/mobile-app/</code> diperbarui
+    sehingga pengguna bisa update langsung dari aplikasi.
+    <span id="keystoreOkHint" class="d-none"><br><i class="bi bi-shield-check text-success me-1"></i>Keystore produksi aktif di <code>public/mobile-app/keystore/kalimasada.jks</code>.</span>
+  </div>
+  <div id="keystoreAlert" class="alert alert-danger d-none mb-3"></div>
 
-  <% if (!flutter.installed) { %>
-    <div class="alert alert-info">
-      <strong>Mode config-only.</strong> Server ini belum punya Flutter SDK — portal tetap bisa menghasilkan folder config &amp; <code>build.sh</code> per tenant.
-      Jalankan build di mesin developer atau install Flutter di server.
+  <div class="row g-3 mb-4" id="mobileStatsRow">
+    <div class="col-md-3 col-6">
+      <div class="km-stat">
+        <div class="label">Versi Saat Ini</div>
+        <div class="value fs-6" id="statVersion">—</div>
+      </div>
     </div>
-  <% } %>
+    <div class="col-md-3 col-6">
+      <div class="km-stat">
+        <div class="label">Build Number</div>
+        <div class="value" id="statBuild">—</div>
+      </div>
+    </div>
+    <div class="col-md-3 col-6">
+      <div class="km-stat">
+        <div class="label">Status Build</div>
+        <div class="value fs-6" id="statBuildStatus">—</div>
+      </div>
+    </div>
+    <div class="col-md-3 col-6">
+      <div class="km-stat">
+        <div class="label">APK Terbit</div>
+        <div class="value" id="statApkCount">—</div>
+      </div>
+    </div>
+  </div>
 
-  <div class="row g-3 mb-4">
-    <div class="col-md-4">
-      <div class="km-stat">
-        <div class="label">Total Tenant</div>
-        <div class="value"><%= rows.length %></div>
+  <form id="mobileBuildForm">
+    <div class="row g-3">
+      <div class="col-lg-6">
+        <div class="km-card">
+          <h5 class="mb-3"><i class="bi bi-wifi text-primary me-2"></i>Environment &amp; Flutter SDK</h5>
+          <div class="mb-3">
+            <label class="form-label fw-semibold" for="apiUrl">API_URL default (.env)</label>
+            <input type="url" class="form-control" id="apiUrl" name="api_url" placeholder="https://billing.example.com" required>
+            <div class="form-text">URL server billing default saat pertama install. Tanpa slash di akhir. Disalin ke <code>billing_kalimasada_mobile/.env</code>.</div>
+          </div>
+          <div class="mb-0">
+            <label class="form-label fw-semibold" for="flutterPath">Path Flutter SDK</label>
+            <input type="text" class="form-control" id="flutterPath" name="flutter_path" placeholder="public/mobile-app/flutter-sdk/bin/flutter">
+            <div class="form-text" id="flutterDetectHint">—</div>
+            <div class="form-text">Default: <code id="defaultFlutterPathHint">public/mobile-app/flutter-sdk/bin/flutter</code></div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-6">
+        <div class="km-card">
+          <h5 class="mb-3"><i class="bi bi-app-indicator text-success me-2"></i>Aplikasi &amp; Versi</h5>
+          <div class="mb-3">
+            <label class="form-label fw-semibold" for="appName">Nama aplikasi (launcher)</label>
+            <input type="text" class="form-control" id="appName" name="app_name" maxlength="40" required>
+            <div class="form-text">Diubah di <code>AndroidManifest.xml</code> (<code>android:label</code>).</div>
+          </div>
+          <div class="row g-2">
+            <div class="col-7">
+              <label class="form-label fw-semibold" for="versionName">Versi (nama)</label>
+              <input type="text" class="form-control" id="versionName" name="version_name" placeholder="5.9.3" required>
+            </div>
+            <div class="col-5">
+              <label class="form-label fw-semibold" for="versionCode">Build (+)</label>
+              <input type="number" class="form-control" id="versionCode" name="version_code" min="1" step="1" required>
+              <div class="form-text" id="versionCodeHint">Min. build untuk update OTA</div>
+            </div>
+          </div>
+          <div class="form-text mt-1">Disimpan ke <code>pubspec.yaml</code> sebagai <code>version: nama+build</code>.</div>
+        </div>
+      </div>
+      <div class="col-12">
+        <div class="km-card">
+          <h5 class="mb-3"><i class="bi bi-cloud-upload text-warning me-2"></i>Publikasi OTA</h5>
+          <div class="row g-3">
+            <div class="col-lg-8">
+              <label class="form-label fw-semibold" for="releaseNotes">Catatan rilis</label>
+              <textarea class="form-control" id="releaseNotes" name="release_notes" rows="3" placeholder="Perbaikan bug, fitur baru…"></textarea>
+              <div class="form-text">Masuk ke <code>public/mobile-app/manifest.json</code> — ditampilkan saat pengguna update dari dalam app.</div>
+            </div>
+            <div class="col-lg-4">
+              <label class="form-label fw-semibold">Endpoint OTA</label>
+              <div class="km-ota-endpoints small">
+                <div class="mb-2">
+                  <span class="text-muted">Manifest API</span><br>
+                  <code class="text-break" id="otaManifestUrl">—</code>
+                </div>
+                <div>
+                  <span class="text-muted">APK URL</span><br>
+                  <code class="text-break" id="otaApkUrl">—</code>
+                </div>
+              </div>
+              <div class="form-check mt-3">
+                <input class="form-check-input" type="checkbox" id="forceUpdate" name="force_update">
+                <label class="form-check-label" for="forceUpdate">Paksa update (<code>force_update</code>)</label>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
-    <div class="col-md-4">
-      <div class="km-stat">
-        <div class="label">Sudah Ada Config</div>
-        <div class="value"><%= rows.filter(function(r){ return r.hasWorkspace; }).length %></div>
+
+    <div class="d-flex flex-wrap gap-2 my-4">
+      <button type="submit" class="btn btn-km-primary" id="btnSaveConfig">
+        <i class="bi bi-save me-1"></i>Simpan konfigurasi
+      </button>
+      <button type="button" class="btn btn-success" id="btnBuildApk">
+        <i class="bi bi-hammer me-1"></i>Build APK Release
+      </button>
+      <button type="button" class="btn btn-outline-danger" id="btnCancelBuild" disabled>
+        <i class="bi bi-x-circle me-1"></i>Batalkan build
+      </button>
+    </div>
+  </form>
+
+  <div class="km-card mb-3">
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+      <h5 class="mb-0"><i class="bi bi-terminal me-2"></i>Log build</h5>
+      <button type="button" class="btn btn-sm btn-outline-secondary" id="btnClearLogView">Bersihkan tampilan</button>
+    </div>
+
+    <div id="buildProgressPanel" class="km-build-progress mb-3">
+      <div id="buildStatusHeadline" class="km-build-status is-idle">
+        <i class="bi bi-hourglass-split"></i>
+        <span id="buildStatusText">Siap build aplikasi</span>
+      </div>
+      <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div id="buildProgressBar" class="progress-bar bg-secondary" style="width:0%">0%</div>
+      </div>
+      <div class="km-build-progress-meta">
+        <span id="buildProgressPhase">Menunggu perintah build</span>
+        <span id="buildProgressEta">—</span>
+      </div>
+      <div id="buildDownloadRow" class="d-none mt-2">
+        <a id="btnDownloadLatestApk" class="btn btn-success btn-sm" href="#" download>
+          <i class="bi bi-download me-1"></i>Unduh APK hasil build
+        </a>
+        <span id="buildDownloadSize" class="text-muted small ms-2"></span>
       </div>
     </div>
-    <div class="col-md-4">
-      <div class="km-stat">
-        <div class="label">Folder Build</div>
-        <div class="value fs-6"><code>data/mobile-apps/tenants/</code></div>
-      </div>
-    </div>
+
+    <div id="buildLog" class="km-build-log text-muted">Belum ada log build.</div>
   </div>
 
   <div class="km-card">
-    <h5 class="mb-3"><i class="bi bi-phone me-1"></i> Daftar Tenant</h5>
-    <div class="table-responsive">
-      <table class="table table-sm table-hover mb-0">
-        <thead>
-          <tr>
-            <th>Tenant</th>
-            <th>Subdomain</th>
-            <th>Nama App</th>
-            <th>API URL</th>
-            <th>Config</th>
-            <th>Build</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <% if (!rows.length) { %>
-            <tr><td colspan="7" class="text-center py-4 text-muted">Belum ada tenant.</td></tr>
-          <% } %>
-          <% rows.forEach(function(r) { %>
-            <tr>
-              <td class="fw-medium"><%= r.name %></td>
-              <td><code><%= r.subdomain %>.<%= baseDomain %></code></td>
-              <td><%= r.appName %></td>
-              <td class="small"><code class="text-break"><%= r.apiUrl %></code></td>
-              <td>
-                <% if (r.hasWorkspace) { %>
-                  <span class="badge bg-success">Siap</span>
-                <% } else { %>
-                  <span class="badge bg-secondary">Belum</span>
-                <% } %>
-              </td>
-              <td>
-                <% if (r.lastBuildStatus === 'success') { %>
-                  <span class="badge bg-success" title="<%= r.lastApkFile %>">OK</span>
-                <% } else if (r.lastBuildStatus === 'failed') { %>
-                  <span class="badge bg-danger">Gagal</span>
-                <% } else if (r.lastBuildStatus === 'pending') { %>
-                  <span class="badge bg-warning text-dark">Manual</span>
-                <% } else { %>
-                  <span class="text-muted">—</span>
-                <% } %>
-                <% if (r.apkCount > 0) { %>
-                  <span class="badge bg-secondary"><%= r.apkCount %> APK</span>
-                <% } %>
-              </td>
-              <td>
-                <a href="/management/mobile-app/tenants/<%= r.id %>" class="btn btn-outline-primary btn-sm py-0 px-2">
-                  <i class="bi bi-gear"></i> Kelola
-                </a>
-              </td>
-            </tr>
-          <% }); %>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <div class="km-card mt-3">
-    <h6 class="mb-2"><i class="bi bi-folder2-open me-1"></i> Struktur Folder</h6>
-    <pre class="mb-0 p-2 rounded small" style="background: var(--bg-elevated); border: 1px solid var(--border-color);"><code>data/mobile-apps/
-├── registry.json
-└── tenants/
-    └── {subdomain}/
-        ├── .env              # API_URL tenant
-        ├── app-config.json   # metadata
-        ├── build.sh          # script build APK
-        ├── output/           # hasil APK
-        └── logs/             # log build</code></pre>
+    <h5 class="mb-3"><i class="bi bi-archive me-2"></i>APK di server</h5>
+    <ul id="apkList" class="km-apk-list mb-0 text-muted"><li>Memuat…</li></ul>
   </div>
 </main>
 <%- include('../partials/footer') %>
+<script src="/js/management-mobile-app.js?v=1"></script>

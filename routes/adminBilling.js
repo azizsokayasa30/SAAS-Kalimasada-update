@@ -6125,7 +6125,21 @@ router.get('/api/radius/groupnames', async (req, res) => {
 // Paket Management
 router.get('/packages', getAppSettings, async (req, res) => {
     try {
-        const packages = await billingManager.getPackages();
+        const masterPackageService = require('../config/platform/masterPackageService');
+        const { getTenantId, hasTenantContext } = require('../config/platform/tenantContext');
+        const tenantId = hasTenantContext() ? getTenantId() : null;
+        const packagesManagedByMaster = Boolean(tenantId);
+        let packages = await billingManager.getPackages();
+        let packageCatalog = [];
+
+        if (tenantId) {
+            packageCatalog = await masterPackageService.getTenantPackageCatalog(tenantId);
+            const selected = packageCatalog.filter((c) => c.selected && c.tenantPackage && c.tenantPackage.is_active);
+            if (selected.length) {
+                packages = selected.map((c) => c.tenantPackage);
+            }
+        }
+
         // Fetch routers for NAS selection
         const sqlite3 = require('sqlite3').verbose();
         const db = new sqlite3.Database('./data/billing.db');
@@ -6144,6 +6158,8 @@ router.get('/packages', getAppSettings, async (req, res) => {
         res.render('admin/billing/packages', {
             title: 'Kelola Paket',
             packages,
+            packageCatalog,
+            packagesManagedByMaster,
             routers,
             appSettings: req.appSettings,
             authMode // Pass auth mode ke view
@@ -6160,6 +6176,14 @@ router.get('/packages', getAppSettings, async (req, res) => {
 
 router.post('/packages', imageUpload.single('image'), async (req, res) => {
     try {
+        const { hasTenantContext } = require('../config/platform/tenantContext');
+        if (hasTenantContext()) {
+            return res.status(403).json({
+                success: false,
+                message: 'Paket internet dikelola dari portal Management (Master Paket). Pilih paket yang tersedia di halaman ini.',
+            });
+        }
+
         const { 
             name, speed, price, tax_rate, description, pppoe_profile, router_id, nas_ip,
             upload_limit, download_limit, burst_limit_upload, burst_limit_download, 
@@ -6310,6 +6334,28 @@ router.post('/packages', imageUpload.single('image'), async (req, res) => {
 
 router.put('/packages/:id', imageUpload.single('image'), async (req, res) => {
     try {
+        const { hasTenantContext, getTenantId } = require('../config/platform/tenantContext');
+        if (hasTenantContext()) {
+            const masterPackageService = require('../config/platform/masterPackageService');
+            const pkg = await billingManager.getPackageById(req.params.id);
+            if (pkg && pkg.master_package_id) {
+                const updated = await masterPackageService.updateTenantPackageRouter(getTenantId(), req.params.id, {
+                    router_id: req.body.router_id,
+                    nas_ip: req.body.nas_ip,
+                    pppoe_profile: req.body.pppoe_profile,
+                });
+                return res.json({
+                    success: true,
+                    message: 'Konfigurasi NAS paket diperbarui',
+                    package: updated,
+                });
+            }
+            return res.status(403).json({
+                success: false,
+                message: 'Paket master tidak bisa diedit dari tenant. Hubungi management untuk perubahan harga/nama paket.',
+            });
+        }
+
         const { id } = req.params;
         const { 
             name, speed, price, tax_rate, description, pppoe_profile, router_id, nas_ip,
@@ -6518,8 +6564,55 @@ router.get('/api/packages/:id', async (req, res) => {
     }
 });
 
+router.post('/packages/select/:masterPackageId', async (req, res) => {
+    try {
+        const { getTenantId, hasTenantContext } = require('../config/platform/tenantContext');
+        if (!hasTenantContext()) {
+            return res.status(400).json({ success: false, message: 'Konteks tenant tidak ditemukan.' });
+        }
+        const masterPackageService = require('../config/platform/masterPackageService');
+        await masterPackageService.selectPackageForTenant(getTenantId(), req.params.masterPackageId);
+        res.json({ success: true, message: 'Paket berhasil dipilih dan diaktifkan.' });
+    } catch (error) {
+        logger.error('Error selecting master package:', error);
+        res.status(400).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/packages/unselect/:masterPackageId', async (req, res) => {
+    try {
+        const { getTenantId, hasTenantContext } = require('../config/platform/tenantContext');
+        if (!hasTenantContext()) {
+            return res.status(400).json({ success: false, message: 'Konteks tenant tidak ditemukan.' });
+        }
+        const masterPackageService = require('../config/platform/masterPackageService');
+        await masterPackageService.unselectPackageForTenant(getTenantId(), req.params.masterPackageId);
+        res.json({ success: true, message: 'Paket dilepas dari tenant.' });
+    } catch (error) {
+        logger.error('Error unselecting master package:', error);
+        res.status(400).json({ success: false, message: error.message });
+    }
+});
+
 router.delete('/packages/:id', async (req, res) => {
     try {
+        const { hasTenantContext, getTenantId } = require('../config/platform/tenantContext');
+        if (hasTenantContext()) {
+            const pkg = await billingManager.getPackageById(req.params.id);
+            if (pkg && pkg.master_package_id) {
+                const masterPackageService = require('../config/platform/masterPackageService');
+                await masterPackageService.unselectPackageForTenant(getTenantId(), pkg.master_package_id);
+                return res.json({
+                    success: true,
+                    message: 'Paket dilepas dari tenant',
+                });
+            }
+            return res.status(403).json({
+                success: false,
+                message: 'Paket tidak bisa dihapus. Gunakan menu lepas paket untuk paket master.',
+            });
+        }
+
         const { id } = req.params;
         await billingManager.deletePackage(id);
         logger.info(`Package deleted: ${id}`);
@@ -7088,7 +7181,8 @@ router.post('/customers', customerPhotoUpload.fields([
             cable_length: cable_length ? parseInt(cable_length) : null,
             port_number: port_number ? parseInt(port_number) : null,
             cable_status: cable_status || 'connected',
-            cable_notes: cable_notes || null
+            cable_notes: cable_notes || null,
+            create_pppoe_user: create_pppoe_user
         };
 
         if (!packageUsesPPPoEProfile(packageData)) {
@@ -9907,6 +10001,8 @@ router.post('/invoices/send-whatsapp', async (req, res) => {
 // Payment Settings Routes
 router.get('/payment-settings', getAppSettings, async (req, res) => {
     try {
+        const { isPlatformPaymentConfigured } = require('../config/platform/paymentGatewaySync');
+        const platformManaged = await isPlatformPaymentConfigured();
         const paymentConfig = await getPaymentGatewayConfig();
         const settings = getSettingsWithCache();
         settings.payment_gateway = paymentConfig;
@@ -9920,7 +10016,8 @@ router.get('/payment-settings', getAppSettings, async (req, res) => {
             tp: paymentConfig.tripay,
             dk: paymentConfig.duitku,
             gatewayStatus: await billingManager.getGatewayStatus(),
-            saved: req.query.saved === '1'
+            saved: req.query.saved === '1',
+            platformManaged,
         });
     } catch (error) {
         logger.error('Error loading payment settings:', error);
@@ -9935,6 +10032,13 @@ router.get('/payment-settings', getAppSettings, async (req, res) => {
 // Update active gateway
 router.post('/payment-settings/active-gateway', async (req, res) => {
     try {
+        const { isPlatformPaymentConfigured } = require('../config/platform/paymentGatewaySync');
+        if (await isPlatformPaymentConfigured()) {
+            return res.status(403).json({
+                success: false,
+                message: 'Payment gateway dikelola oleh Management Portal. Hubungi administrator SaaS.',
+            });
+        }
         const { activeGateway } = req.body;
         const updatedConfig = await setActivePaymentGateway(activeGateway);
         const reloadInfo = await billingManager.reloadPaymentGateway();
@@ -9958,6 +10062,13 @@ router.post('/payment-settings/active-gateway', async (req, res) => {
 // Update gateway configuration
 router.post('/payment-settings/:gateway', async (req, res) => {
     try {
+        const { isPlatformPaymentConfigured } = require('../config/platform/paymentGatewaySync');
+        if (await isPlatformPaymentConfigured()) {
+            return res.status(403).json({
+                success: false,
+                message: 'Payment gateway dikelola oleh Management Portal. Hubungi administrator SaaS.',
+            });
+        }
         const { gateway } = req.params;
         const config = req.body || {};
 

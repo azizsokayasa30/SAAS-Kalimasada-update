@@ -14,95 +14,125 @@
     })();
   </script>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Kalimasada Management Portal</title>
   <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
   <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
   <link rel="stylesheet" href="/css/theme-system.css?v=6">
-  <link rel="stylesheet" href="/css/management-portal.css?v=1">
-  <style>
-    body.km-login-page {
-      min-height: 100vh;
-      margin: 0;
-      display: grid;
-      place-items: center;
-      padding: 1.5rem;
-      background: var(--body-bg);
-      color: var(--text-primary);
-      font-family: Inter, system-ui, sans-serif;
-      transition: var(--theme-transition);
-    }
-    [data-theme="dark"] body.km-login-page {
-      background:
-        radial-gradient(circle at 20% 20%, rgba(14,165,233,.15), transparent 40%),
-        radial-gradient(circle at 80% 80%, rgba(99,102,241,.1), transparent 35%),
-        var(--body-bg);
-    }
-    .card-login {
-      width: min(440px, 100%);
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 20px;
-      padding: 2rem;
-      box-shadow: var(--card-shadow);
-    }
-    .logo {
-      width: 56px; height: 56px; border-radius: 16px;
-      display: grid; place-items: center;
-      background: linear-gradient(135deg, #0ea5e9, #6366f1);
-      color: #fff;
-      font-size: 1.5rem; margin-bottom: 1rem;
-    }
-    .btn-login {
-      background: linear-gradient(135deg, #0ea5e9, #6366f1);
-      border: none; border-radius: 12px; padding: .8rem;
-      font-weight: 600; color: #fff !important;
-    }
-    .btn-login:hover { filter: brightness(1.05); color: #fff !important; }
-    .km-login-muted { color: var(--text-muted); }
-    .km-theme-fab {
-      position: fixed; top: 1rem; right: 1rem;
-      width: 42px; height: 42px; border-radius: 12px;
-      border: 1px solid var(--border-color);
-      background: var(--card-bg);
-      color: var(--text-primary);
-      display: grid; place-items: center;
-      cursor: pointer;
-    }
-  </style>
+  <link rel="stylesheet" href="/css/management-login.css?v=2">
 </head>
 <body class="km-login-page">
-  <button type="button" class="km-theme-fab" id="globalThemeToggle" title="Ganti tema">
-    <i class="bi bi-moon-fill" id="themeToggleIcon"></i>
-  </button>
 
-  <div class="card-login">
-    <div class="logo"><i class="bi bi-shield-lock-fill"></i></div>
-    <h1 class="h4 fw-bold mb-1">Kalimasada Management</h1>
-    <p class="km-login-muted mb-4">Portal Super Admin — kelola seluruh tenant SaaS</p>
+  <main class="km-login-shell">
 
-    <% if (error) { %>
-      <div class="alert alert-danger py-2"><%= error %></div>
-    <% } %>
-    <% if (success) { %>
-      <div class="alert alert-success py-2"><%= success %></div>
-    <% } %>
-
-    <form method="POST" action="/management/login">
-      <div class="mb-3">
-        <label class="form-label km-login-muted">Email</label>
-        <input type="email" name="email" class="form-control" placeholder="management@kalimasada" required autofocus>
+    <!-- Hero: branding + motivasi -->
+    <section class="km-login-hero" aria-label="Branding Kalimasada">
+      <div class="km-login-eyebrow">
+        <i class="bi bi-layers-fill"></i>
+        Portal Management Multi-Tenant
       </div>
-      <div class="mb-4">
-        <label class="form-label km-login-muted">Password</label>
-        <input type="password" name="password" class="form-control" placeholder="••••••••" required>
+
+      <div class="km-login-brand">
+        <div class="km-login-brand-logo">
+          <img src="/img/logo.svg" alt="Logo Kalimasada" onerror="this.style.display='none'">
+        </div>
+        <div>
+          <p class="km-login-company">PT Kalimasada Inti Sarana</p>
+          <p class="km-login-product">Kalimasada Management Portal</p>
+        </div>
       </div>
-      <button type="submit" class="btn btn-login w-100">
-        <i class="bi bi-box-arrow-in-right me-1"></i> Masuk Portal
-      </button>
-    </form>
-    <p class="km-login-muted small mt-4 mb-0 text-center">Shared DB Multi-Tenant · Kalimasada Billing SaaS</p>
-  </div>
+
+      <h1>Membangun ISP andal dimulai dari manajemen yang kuat.</h1>
+      <p>Platform dedicated untuk mengelola seluruh tenant billing Kalimasada dari satu pusat kendali.</p>
+
+      <div class="km-login-motivation">
+        <div class="km-motivation-card">
+          <i class="bi bi-diagram-3-fill"></i>
+          <div>
+            <strong>Manajemen terpusat</strong>
+            <span>Satu dashboard untuk tenant, reverse proxy, dan mobile app.</span>
+          </div>
+        </div>
+        <div class="km-motivation-card">
+          <i class="bi bi-lightning-charge-fill"></i>
+          <div>
+            <strong>Keputusan lebih cepat</strong>
+            <span>Data terstruktur membuat operasional ISP lebih responsif.</span>
+          </div>
+        </div>
+        <div class="km-motivation-card">
+          <i class="bi bi-graph-up-arrow"></i>
+          <div>
+            <strong>Skala dengan percaya diri</strong>
+            <span>Multi-tenant yang rapi, siap tumbuh bersama jaringan Anda.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Login card -->
+    <section aria-label="Form login">
+      <div class="km-login-card">
+        <div class="km-login-card-inner">
+
+          <div class="km-login-card-brand">
+            <div class="km-login-brand-logo">
+              <img src="/img/logo.svg" alt="Logo Kalimasada" onerror="this.style.display='none'">
+            </div>
+            <div>
+              <p class="km-login-card-title">Kalimasada Management</p>
+              <p class="km-login-card-subtitle">Portal Super Admin</p>
+            </div>
+          </div>
+
+          <div class="km-login-heading">
+            <h2>Selamat datang</h2>
+            <p>Masuk ke portal management untuk mengelola seluruh tenant SaaS Kalimasada.</p>
+          </div>
+
+          <% if (error) { %>
+            <div class="alert alert-danger py-2" role="alert"><%= error %></div>
+          <% } %>
+          <% if (success) { %>
+            <div class="alert alert-success py-2" role="alert"><%= success %></div>
+          <% } %>
+
+          <form method="POST" action="/management/login" class="km-login-form">
+            <div class="mb-3">
+              <label class="form-label" for="email">Email</label>
+              <div class="km-input-wrap">
+                <i class="bi bi-envelope-fill"></i>
+                <input type="email" id="email" name="email" class="form-control"
+                  placeholder="management@kalimasada" required autofocus autocomplete="email">
+              </div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="password">Password</label>
+              <div class="km-input-wrap">
+                <i class="bi bi-lock-fill"></i>
+                <input type="password" id="password" name="password" class="form-control"
+                  placeholder="••••••••" required autocomplete="current-password">
+              </div>
+            </div>
+            <button type="submit" class="km-btn-login">
+              <i class="bi bi-box-arrow-in-right"></i>
+              Masuk Portal
+            </button>
+            <button type="button" class="km-login-theme-btn" id="globalThemeToggle" title="Ganti tema">
+              <i class="bi bi-moon-fill" id="themeToggleIcon"></i>
+              <span id="themeToggleLabel">Tema Terang</span>
+            </button>
+          </form>
+
+          <p class="km-login-footer">
+            Dedicated Platform · PT Kalimasada Inti Sarana · Shared DB Multi-Tenant
+          </p>
+
+        </div>
+      </div>
+    </section>
+
+  </main>
 
   <script src="/js/theme-switcher.js?v=1"></script>
 </body>

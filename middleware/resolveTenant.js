@@ -86,7 +86,7 @@ function getDefaultTenantSubdomain() {
     return String(
         process.env.KALIMASADA_DEFAULT_TENANT
         || process.env.KALIMASADA_IP_DEFAULT_TENANT
-        || 'default'
+        || ''
     ).toLowerCase().trim();
 }
 
@@ -143,11 +143,6 @@ function resolveTenantMiddleware(req, res, next) {
             tenant = await tenantStore.getTenantById(req.session.tenantId);
         }
 
-        // Fallback legacy single-tenant hanya untuk request tanpa sesi tenant
-        if (!tenant && !req.path.startsWith('/login') && !req.session?.tenantId) {
-            tenant = await tenantStore.getTenantById(1);
-        }
-
         if (!tenant) {
             if (req.path.startsWith('/login')) {
                 return next();
@@ -161,14 +156,14 @@ function resolveTenantMiddleware(req, res, next) {
         req.tenant = tenant;
         req.tenantId = tenant.id;
 
-        if (tenant.status === 'suspended' && !req.path.startsWith('/login')) {
-            return res.status(403).render('platform/errors/tenant-suspended', {
-                title: 'Tenant Disuspend',
-                tenant,
+        if (tenant.is_master) {
+            return res.status(404).render('platform/errors/tenant-not-found', {
+                title: 'Tenant Tidak Ditemukan',
             });
         }
 
-        if (tenant.status !== 'active' && tenant.status !== 'suspended' && !req.path.startsWith('/login')) {
+        const blockedStatuses = new Set(['provisioning', 'pending', 'failed']);
+        if (blockedStatuses.has(tenant.status) && !req.path.startsWith('/login')) {
             return res.status(503).render('platform/errors/tenant-unavailable', {
                 title: 'Tenant Tidak Tersedia',
                 tenant,

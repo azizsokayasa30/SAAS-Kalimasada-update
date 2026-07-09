@@ -1,0 +1,148 @@
+<%
+const children = overview.children || [];
+const summary = overview.summary || { customers: {}, invoices: {}, routers: 0 };
+%>
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active: 'master-tenant', adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Master Tenant</h2>
+      <p class="km-subtitle">Parent read-only — ringkasan agregat semua tenant child</p>
+    </div>
+    <span class="km-master-badge"><i class="bi bi-diagram-3 me-1"></i> Parent</span>
+  </div>
+
+  <% if (flash && flash.success === 'created') { %>
+    <div class="alert alert-success">Master tenant berhasil dibuat.</div>
+  <% } %>
+
+  <div class="km-card km-master-info mb-4">
+    <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">
+      <div>
+        <span class="km-master-info__label">Tenant Parent</span>
+        <h3 class="km-master-info__name mb-1"><%= master.name %></h3>
+        <p class="km-subtitle mb-0">
+          <%= master.owner_name %> · <%= master.owner_email %> · <%= master.owner_phone %>
+        </p>
+      </div>
+      <div class="text-end">
+        <div class="km-master-info__stat">
+          <span class="label">Tenant Child</span>
+          <span class="value"><%= overview.childCount %></span>
+        </div>
+        <div class="km-master-info__stat mt-2">
+          <span class="label">Router / NAS</span>
+          <span class="value"><%= summary.routers || 0 %></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="km-card km-card--flush">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0 km-tenant-table">
+        <thead>
+          <tr class="km-tenant-table__head-main">
+            <th rowspan="2" class="km-tenant-table__sticky-col">ID</th>
+            <th rowspan="2">Nama Tenant Child</th>
+            <th rowspan="2">Subdomain</th>
+            <th rowspan="2">Owner</th>
+            <th colspan="4" class="km-th-group km-th-group--customers">Pelanggan</th>
+            <th colspan="4" class="km-th-group km-th-group--invoices">Tagihan</th>
+            <th rowspan="2" class="text-end km-tenant-table__actions-col">Detail</th>
+          </tr>
+          <tr class="km-tenant-table__head-sub">
+            <th class="km-metric-th">Total</th>
+            <th class="km-metric-th">Aktif</th>
+            <th class="km-metric-th">Nonaktif</th>
+            <th class="km-metric-th km-th-group--customers-end">Baru</th>
+            <th class="km-metric-th">Total</th>
+            <th class="km-metric-th">Lunas</th>
+            <th class="km-metric-th">Belum Lunas</th>
+            <th class="km-metric-th km-th-group--invoices-end">Isolir</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!children.length) { %>
+            <tr><td colspan="13" class="text-center py-4" style="color: var(--text-muted)">Belum ada tenant child. Tambahkan tenant operasional di menu Tenant.</td></tr>
+          <% } %>
+          <% children.forEach(function(t) {
+            const c = t.usage.customers || {};
+            const inv = t.usage.invoices || {};
+          %>
+            <tr>
+              <td class="km-tenant-table__sticky-col">#<%= t.id %></td>
+              <td class="fw-semibold"><%= t.name %></td>
+              <td><code><%= t.subdomain %></code></td>
+              <td>
+                <div><%= t.owner_name %></div>
+                <small style="color: var(--text-muted)"><%= t.owner_email %></small>
+              </td>
+              <td class="km-metric-cell km-metric-cell--num"><%= c.total || 0 %></td>
+              <td class="km-metric-cell km-metric-cell--num km-metric-cell--success"><%= c.active || 0 %></td>
+              <td class="km-metric-cell km-metric-cell--num km-metric-cell--muted"><%= c.inactive || 0 %></td>
+              <td class="km-metric-cell km-metric-cell--num km-metric-cell--accent km-th-group--customers-end"><%= c.new || 0 %></td>
+              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(inv.total) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--success"><%= formatRupiah(inv.paid) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning"><%= formatRupiah(inv.unpaid) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--danger km-th-group--invoices-end"><%= formatRupiah(inv.isolir) %></td>
+              <td class="text-end">
+                <a href="/management/master-tenant/children/<%= t.id %>" class="btn btn-sm btn-outline-secondary" title="Lihat detail read-only">
+                  <i class="bi bi-eye"></i>
+                </a>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <% if (children.length) { %>
+  <section class="km-report-summary" aria-label="Ringkasan agregat master tenant">
+    <div class="km-report-summary__header">
+      <div>
+        <h5 class="km-report-summary__title">Ringkasan Agregat Master</h5>
+        <p class="km-report-summary__subtitle">Total dari <%= overview.childCount %> tenant child (read-only)</p>
+      </div>
+      <span class="km-report-summary__badge"><%= overview.childCount %> child</span>
+    </div>
+
+    <div class="table-responsive">
+      <table class="table mb-0 km-report-summary__table">
+        <thead>
+          <tr>
+            <th colspan="4" class="km-report-summary__label-col">Pelanggan</th>
+            <th colspan="4" class="km-report-summary__label-col">Tagihan</th>
+          </tr>
+          <tr class="km-report-summary__subhead">
+            <th>Total</th>
+            <th>Aktif</th>
+            <th>Nonaktif</th>
+            <th>Baru</th>
+            <th>Total</th>
+            <th>Lunas</th>
+            <th>Belum Lunas</th>
+            <th>Isolir</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="km-report-summary__total-row">
+            <td class="km-metric-cell km-metric-cell--num"><%= summary.customers.total || 0 %></td>
+            <td class="km-metric-cell km-metric-cell--num km-metric-cell--success"><%= summary.customers.active || 0 %></td>
+            <td class="km-metric-cell km-metric-cell--num km-metric-cell--muted"><%= summary.customers.inactive || 0 %></td>
+            <td class="km-metric-cell km-metric-cell--num km-metric-cell--accent"><%= summary.customers.new || 0 %></td>
+            <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(summary.invoices.total) %></td>
+            <td class="km-metric-cell km-metric-cell--money km-metric-cell--success"><%= formatRupiah(summary.invoices.paid) %></td>
+            <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning"><%= formatRupiah(summary.invoices.unpaid) %></td>
+            <td class="km-metric-cell km-metric-cell--money km-metric-cell--danger"><%= formatRupiah(summary.invoices.isolir) %></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <% } %>
+</main>
+
+<%- include('../partials/footer') %>

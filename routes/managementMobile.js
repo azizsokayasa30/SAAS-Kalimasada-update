@@ -1,185 +1,124 @@
 'use strict';
 
 const express = require('express');
-const path = require('path');
-const fs = require('fs');
+const mobileAndroidBuild = require('../utils/mobileAndroidBuild');
 const tenantStore = require('../config/platform/tenantStore');
-const mobileAppManager = require('../config/platform/mobileAppManager');
-const { getTenantHostname, getTenantBaseDomain } = require('../config/platform/tenantUrls');
 
 const router = express.Router();
 
-router.get('/', async (req, res) => {
+router.get('/', (req, res) => {
+    res.render('platform/mobile/index', {
+        title: 'Mobile App — Build & OTA',
+        adminName: req.session.platformAdminName,
+    });
+});
+
+router.get('/api/config', (req, res) => {
     try {
-        const tenants = await tenantStore.listTenants();
-        const rows = mobileAppManager.listTenantRows(tenants);
-        const flutter = await mobileAppManager.getFlutterStatus();
-        res.render('platform/mobile/index', {
-            title: 'Mobile App Management',
-            rows,
-            flutter,
-            baseDomain: getTenantBaseDomain(),
-            adminName: req.session.platformAdminName,
-            flash: req.query,
-        });
-    } catch (err) {
-        console.error('[management/mobile] index:', err);
-        res.status(500).send('Gagal memuat halaman mobile app');
+        const config = mobileAndroidBuild.readMobileBuildConfig();
+        res.json({ success: true, data: config });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message || 'Gagal membaca konfigurasi' });
     }
 });
 
-router.get('/tenants/:id', async (req, res) => {
+router.post('/api/config', async (req, res) => {
     try {
-        const tenant = await tenantStore.getTenantById(req.params.id);
-        if (!tenant) return res.status(404).send('Tenant tidak ditemukan');
-
-        const cfg = mobileAppManager.getTenantConfig(tenant);
-        const flutter = await mobileAppManager.getFlutterStatus();
-        const ws = mobileAppManager.getTenantWorkspaceDir(tenant.subdomain);
-        const envPath = path.join(ws, '.env');
-        const envPreview = fs.existsSync(envPath)
-            ? fs.readFileSync(envPath, 'utf8')
-            : `API_URL=${cfg.apiUrl}\n`;
-
-        let buildLog = '';
-        const logPath = path.join(ws, 'logs', 'last-build.log');
-        if (fs.existsSync(logPath)) {
-            buildLog = fs.readFileSync(logPath, 'utf8').slice(-8000);
-        }
-
-        const outputFiles = [];
-        const outputDir = path.join(ws, 'output');
-        if (fs.existsSync(outputDir)) {
-            outputFiles.push(...fs.readdirSync(outputDir).filter((f) => f.endsWith('.apk')).sort().reverse());
-        }
-
-        res.render('platform/mobile/tenant', {
-            title: `Mobile App — ${tenant.name}`,
-            tenant,
-            cfg,
-            flutter,
-            hostname: getTenantHostname(tenant.subdomain),
-            envPreview,
-            buildLog,
-            outputFiles,
-            adminName: req.session.platformAdminName,
-            flash: req.query,
-        });
-    } catch (err) {
-        console.error('[management/mobile] tenant:', err);
-        res.status(500).send('Gagal memuat konfigurasi mobile');
-    }
-});
-
-router.post('/tenants/:id/save', async (req, res) => {
-    try {
-        const tenant = await tenantStore.getTenantById(req.params.id);
-        if (!tenant) return res.redirect('/management/mobile-app?error=Tenant+tidak+ditemukan');
-
-        mobileAppManager.saveTenantConfig(tenant, {
-            appName: req.body.app_name,
-            apiUrl: req.body.api_url,
-            packageId: req.body.package_id,
-            releaseNotes: req.body.release_notes,
+        const body = req.body || {};
+        const saved = mobileAndroidBuild.saveMobileBuildConfig({
+            api_url: body.api_url,
+            app_name: body.app_name,
+            version_name: body.version_name,
+            version_code: body.version_code,
+            release_notes: body.release_notes,
+            force_update: body.force_update === true || body.force_update === 'true' || body.force_update === 1,
+            flutter_path: body.flutter_path,
+            apk_file_name: body.apk_file_name,
+            update_manifest: body.update_manifest !== false,
         });
 
         await tenantStore.auditLog({
             actorType: 'SuperAdmin',
             actorId: req.session.platformAdminId,
             action: 'mobile_app_config_saved',
-            details: { tenantId: tenant.id, subdomain: tenant.subdomain },
-            ip: req.ip,
-        });
-
-        return res.redirect(`/management/mobile-app/tenants/${tenant.id}?success=saved`);
-    } catch (err) {
-        return res.redirect(`/management/mobile-app/tenants/${req.params.id}?error=${encodeURIComponent(err.message)}`);
-    }
-});
-
-router.post('/tenants/:id/generate', async (req, res) => {
-    try {
-        const tenant = await tenantStore.getTenantById(req.params.id);
-        if (!tenant) return res.redirect('/management/mobile-app?error=Tenant+tidak+ditemukan');
-
-        mobileAppManager.saveTenantConfig(tenant, {
-            appName: req.body.app_name,
-            apiUrl: req.body.api_url,
-            packageId: req.body.package_id,
-            releaseNotes: req.body.release_notes,
-        });
-        mobileAppManager.generateWorkspace(tenant);
-
-        await tenantStore.auditLog({
-            actorType: 'SuperAdmin',
-            actorId: req.session.platformAdminId,
-            action: 'mobile_app_workspace_generated',
-            details: { tenantId: tenant.id, subdomain: tenant.subdomain },
-            ip: req.ip,
-        });
-
-        return res.redirect(`/management/mobile-app/tenants/${tenant.id}?success=generated`);
-    } catch (err) {
-        return res.redirect(`/management/mobile-app/tenants/${req.params.id}?error=${encodeURIComponent(err.message)}`);
-    }
-});
-
-router.post('/tenants/:id/build', async (req, res) => {
-    try {
-        const tenant = await tenantStore.getTenantById(req.params.id);
-        if (!tenant) return res.redirect('/management/mobile-app?error=Tenant+tidak+ditemukan');
-
-        if (req.body.app_name || req.body.api_url) {
-            mobileAppManager.saveTenantConfig(tenant, {
-                appName: req.body.app_name,
-                apiUrl: req.body.api_url,
-                packageId: req.body.package_id,
-                releaseNotes: req.body.release_notes,
-            });
-        }
-
-        const result = await mobileAppManager.runBuild(tenant);
-
-        await tenantStore.auditLog({
-            actorType: 'SuperAdmin',
-            actorId: req.session.platformAdminId,
-            action: 'mobile_app_build',
             details: {
-                tenantId: tenant.id,
-                subdomain: tenant.subdomain,
-                ok: result.ok,
-                pending: !!result.pending,
+                version: `${saved.version_name}+${saved.version_code}`,
+                api_url: saved.api_url,
             },
             ip: req.ip,
         });
 
-        if (result.ok) {
-            return res.redirect(`/management/mobile-app/tenants/${tenant.id}?success=built&apk=${encodeURIComponent(result.apk || '')}`);
-        }
-        if (result.pending) {
-            return res.redirect(`/management/mobile-app/tenants/${tenant.id}?success=generated&pending=1`);
-        }
-        return res.redirect(`/management/mobile-app/tenants/${tenant.id}?error=${encodeURIComponent(result.message)}`);
-    } catch (err) {
-        return res.redirect(`/management/mobile-app/tenants/${req.params.id}?error=${encodeURIComponent(err.message)}`);
+        res.json({ success: true, message: 'Konfigurasi mobile tersimpan', data: saved });
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message || 'Gagal menyimpan' });
     }
 });
 
-router.get('/tenants/:id/download/:filename', async (req, res) => {
+router.get('/api/build-status', (req, res) => {
     try {
-        const tenant = await tenantStore.getTenantById(req.params.id);
-        if (!tenant) return res.status(404).send('Tenant tidak ditemukan');
-
-        const filename = path.basename(req.params.filename);
-        if (!filename.endsWith('.apk')) return res.status(400).send('File tidak valid');
-
-        const filePath = path.join(mobileAppManager.getTenantWorkspaceDir(tenant.subdomain), 'output', filename);
-        if (!fs.existsSync(filePath)) return res.status(404).send('APK tidak ditemukan');
-
-        res.download(filePath, filename);
-    } catch (err) {
-        res.status(500).send('Gagal mengunduh APK');
+        const status = mobileAndroidBuild.readBuildStatus();
+        res.json({ success: true, data: status });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 });
+
+router.post('/api/build', async (req, res) => {
+    try {
+        const body = req.body || {};
+        if (body.api_url || body.app_name || body.version_name) {
+            mobileAndroidBuild.saveMobileBuildConfig({
+                api_url: body.api_url,
+                app_name: body.app_name,
+                version_name: body.version_name,
+                version_code: body.version_code,
+                release_notes: body.release_notes,
+                force_update: body.force_update,
+                flutter_path: body.flutter_path,
+                update_manifest: true,
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Build dimulai di server. Pantau log di bawah.',
+            data: mobileAndroidBuild.readBuildStatus(),
+        });
+
+        setImmediate(() => {
+            mobileAndroidBuild.startAndroidApkBuild(body).catch((err) => {
+                console.error('[management/mobile] build failed:', err.message);
+            });
+        });
+
+        await tenantStore.auditLog({
+            actorType: 'SuperAdmin',
+            actorId: req.session.platformAdminId,
+            action: 'mobile_app_build_started',
+            details: {
+                version: `${body.version_name || ''}+${body.version_code || ''}`,
+            },
+            ip: req.ip,
+        });
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message || 'Gagal memulai build' });
+    }
+});
+
+router.post('/api/build-cancel', (req, res) => {
+    const cancelled = mobileAndroidBuild.cancelActiveBuild();
+    res.json({
+        success: true,
+        cancelled,
+        message: cancelled ? 'Build dibatalkan' : 'Tidak ada build aktif',
+    });
+});
+
+/** Legacy per-tenant routes — redirect ke halaman unified */
+router.get('/tenants/:id', (req, res) => res.redirect('/management/mobile-app'));
+router.get('/tenants/:id/download/:filename', (req, res) => res.redirect('/management/mobile-app'));
+router.post('/tenants/:id/save', (req, res) => res.redirect('/management/mobile-app'));
+router.post('/tenants/:id/generate', (req, res) => res.redirect('/management/mobile-app'));
+router.post('/tenants/:id/build', (req, res) => res.redirect('/management/mobile-app'));
 
 module.exports = router;

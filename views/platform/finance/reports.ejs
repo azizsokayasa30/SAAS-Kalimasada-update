@@ -1,0 +1,107 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active, adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Laporan Keuangan Platform</h2>
+      <p class="km-subtitle">Ringkasan koleksi gateway, fee platform, dan laba/rugi operasional</p>
+    </div>
+    <a href="/management/finance/reports/export.xlsx?month=<%= filters.month %>&year=<%= filters.year %>" class="btn btn-outline-success btn-sm">
+      <i class="bi bi-file-earmark-excel me-1"></i> Export Excel
+    </a>
+  </div>
+
+  <%- include('_nav', { financeSection }) %>
+
+  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+  <% if (flash && flash.success === 'restored') { %><div class="alert alert-success">Backup finance berhasil di-restore.</div><% } %>
+
+  <div class="km-card mb-3">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-md-2">
+        <label class="form-label small">Bulan</label>
+        <select name="month" class="form-select form-select-sm">
+          <% for (let m = 1; m <= 12; m++) { %>
+            <option value="<%= m %>" <%= Number(filters.month) === m ? 'selected' : '' %>><%= m %></option>
+          <% } %>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small">Tahun</label>
+        <% const cy = new Date().getFullYear(); %>
+        <select name="year" class="form-select form-select-sm">
+          <% for (let y = cy - 3; y <= cy + 1; y++) { %>
+            <option value="<%= y %>" <%= Number(filters.year) === y ? 'selected' : '' %>><%= y %></option>
+          <% } %>
+        </select>
+      </div>
+      <div class="col-md-2"><button type="submit" class="btn btn-km-primary btn-sm">Filter</button></div>
+    </form>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Koleksi Gateway</div><div class="value"><%= formatRupiah(report.summary.totalGross) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">BHP USO</div><div class="value text-warning"><%= formatRupiah(report.summary.totalBhpUso) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Management Fee</div><div class="value text-warning"><%= formatRupiah(report.summary.totalManagementFee) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pemasukan Manual</div><div class="value text-success"><%= formatRupiah(report.summary.totalIncomeManual) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pengeluaran</div><div class="value text-danger"><%= formatRupiah(report.summary.totalExpense) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Laba Bersih Platform</div><div class="value <%= report.summary.netProfit >= 0 ? 'text-success' : 'text-danger' %>"><%= formatRupiah(report.summary.netProfit) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Transaksi Gateway</div><div class="value"><%= report.summary.transactionCount %></div></div></div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-lg-6">
+      <div class="km-card km-card--flush">
+        <div class="p-3 border-bottom"><h5 class="mb-0">Rekap Per Tenant</h5></div>
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead><tr><th>Tenant</th><th class="text-end">Gross</th><th class="text-end">Fee</th><th class="text-end">Net</th></tr></thead>
+            <tbody>
+              <% report.tenantSummary.forEach(function(row) { %>
+                <tr>
+                  <td><%= row.tenant_name %></td>
+                  <td class="text-end"><%= formatRupiah(row.gross_amount) %></td>
+                  <td class="text-end"><%= formatRupiah(Number(row.bhp_uso_amount) + Number(row.management_fee_amount)) %></td>
+                  <td class="text-end"><%= formatRupiah(row.net_amount) %></td>
+                </tr>
+              <% }); %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="km-card km-card--flush mb-3">
+        <div class="p-3 border-bottom"><h5 class="mb-0">Pemasukan Manual</h5></div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead><tr><th>Tanggal</th><th>Deskripsi</th><th class="text-end">Jumlah</th></tr></thead>
+            <tbody>
+              <% if (!report.incomes.length) { %><tr><td colspan="3" class="text-center text-muted py-3">Tidak ada data</td></tr><% } %>
+              <% report.incomes.forEach(function(inc) { %>
+                <tr><td><%= new Date(inc.transaction_date).toLocaleDateString('id-ID') %></td><td><%= inc.description %></td><td class="text-end text-success"><%= formatRupiah(inc.amount) %></td></tr>
+              <% }); %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="km-card km-card--flush">
+        <div class="p-3 border-bottom"><h5 class="mb-0">Pengeluaran</h5></div>
+        <div class="table-responsive">
+          <table class="table table-sm mb-0">
+            <thead><tr><th>Tanggal</th><th>Deskripsi</th><th class="text-end">Jumlah</th></tr></thead>
+            <tbody>
+              <% if (!report.expenses.length) { %><tr><td colspan="3" class="text-center text-muted py-3">Tidak ada data</td></tr><% } %>
+              <% report.expenses.forEach(function(exp) { %>
+                <tr><td><%= new Date(exp.transaction_date).toLocaleDateString('id-ID') %></td><td><%= exp.description %></td><td class="text-end text-danger"><%= formatRupiah(exp.amount) %></td></tr>
+              <% }); %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <%- include('_backup-restore') %>
+</main>
+<%- include('../partials/footer') %>

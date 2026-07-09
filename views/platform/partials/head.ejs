@@ -18,9 +18,19 @@
   <title><%= title %> | Kalimasada Management</title>
   <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
   <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/theme-system.css?v=6">
-  <link rel="stylesheet" href="/css/management-portal.css?v=3">
-  <style>:root { --km-sidebar: 260px; }</style>
+  <link rel="stylesheet" href="/css/management-portal.css?v=32">
+  <style>:root { --km-sidebar: 280px; }</style>
 </head>
-<body>
+<body class="km-portal-body">
+<div class="km-page-bg" aria-hidden="true">
+  <div class="km-page-bg-base"></div>
+  <div class="km-page-bg-glow km-page-bg-glow--a"></div>
+  <div class="km-page-bg-glow km-page-bg-glow--b"></div>
+  <div class="km-page-bg-glow km-page-bg-glow--c"></div>
+  <canvas class="km-page-bg-canvas" id="kmTechBgCanvas"></canvas>
+</div>
 <div class="km-shell">

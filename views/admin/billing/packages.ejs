@@ -61,11 +61,84 @@
                         <i class="bi bi-box-seam-fill"></i> Kelola Paket Internet
                     </h1>
                     <div>
+                        <% if (!packagesManagedByMaster) { %>
                         <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addPackageModal">
                             <i class="bi bi-plus-lg"></i> Tambah Paket
                         </button>
+                        <% } %>
                     </div>
                 </div>
+
+                <% if (packagesManagedByMaster) { %>
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle me-1"></i>
+                    Paket internet dikelola pusat (Master Paket). Pilih paket dari katalog di bawah — Anda tidak bisa membuat paket sendiri.
+                </div>
+
+                <% if (packageCatalog && packageCatalog.length) { %>
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0"><i class="bi bi-grid-3x3-gap"></i> Katalog Paket Tersedia</h5>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-hover mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Nama</th>
+                                        <th>Kecepatan</th>
+                                        <th>Tipe</th>
+                                        <th>Harga</th>
+                                        <th>Status</th>
+                                        <th>Aksi</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <% packageCatalog.forEach(function(item) {
+                                        const m = item.master;
+                                        const billingOnly = m.billing_only === 1;
+                                        const priceWithTax = parseFloat(m.price) * (1 + (parseFloat(m.tax_rate) || 0) / 100);
+                                    %>
+                                    <tr>
+                                        <td class="fw-semibold"><%= m.name %></td>
+                                        <td><%= m.speed %></td>
+                                        <td>
+                                            <% if (billingOnly) { %>
+                                                <span class="badge bg-secondary">Billing only</span>
+                                            <% } else { %>
+                                                <span class="badge bg-primary">PPPoE + IP Statik</span>
+                                            <% } %>
+                                        </td>
+                                        <td>Rp <%= Math.round(priceWithTax).toLocaleString('id-ID') %></td>
+                                        <td>
+                                            <% if (item.selected) { %>
+                                                <span class="badge bg-success">Dipilih</span>
+                                            <% } else { %>
+                                                <span class="badge bg-secondary">Belum dipilih</span>
+                                            <% } %>
+                                        </td>
+                                        <td>
+                                            <% if (!item.selected) { %>
+                                                <button type="button" class="btn btn-sm btn-primary btn-select-master-pkg" data-master-id="<%= m.id %>">
+                                                    <i class="bi bi-check-lg"></i> Pilih
+                                                </button>
+                                            <% } else { %>
+                                                <button type="button" class="btn btn-sm btn-outline-danger btn-unselect-master-pkg" data-master-id="<%= m.id %>">
+                                                    Lepas
+                                                </button>
+                                            <% } %>
+                                        </td>
+                                    </tr>
+                                    <% }); %>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <% } else { %>
+                <div class="alert alert-warning">Belum ada master paket dari management. Hubungi administrator SaaS.</div>
+                <% } %>
+                <% } %>
 
                 <!-- Packages Table -->
                 <div class="card">
@@ -121,11 +194,11 @@
                                                 </td>
                                                 <td>
                                                     <% if (package.pppoe_profile != null && String(package.pppoe_profile).trim() !== '') { %>
-                                                        <span class="badge bg-info"><%= package.pppoe_profile %></span>
-                                                        <span class="text-muted small d-block">PPPoE</span>
+                                                        <span class="badge bg-primary">PPPoE + IP Statik</span>
+                                                        <span class="text-muted small d-block">Profil PPPoE: <%= package.pppoe_profile %></span>
                                                     <% } else { %>
-                                                        <span class="badge bg-secondary">Non-PPPoE</span>
-                                                        <span class="text-muted small d-block">Billing / tagihan</span>
+                                                        <span class="badge bg-secondary">Billing only</span>
+                                                        <span class="text-muted small d-block">Hanya tagihan</span>
                                                     <% } %>
                                                 </td>
                                                 <td>
@@ -1292,6 +1365,45 @@
                      type === 'success' ? 'Berhasil' : type === 'danger' ? 'Error' : 'Info', 
                      message);
         }
+
+        <% if (packagesManagedByMaster) { %>
+        document.querySelectorAll('.btn-select-master-pkg').forEach(function(btn) {
+            btn.addEventListener('click', async function() {
+                const masterId = btn.getAttribute('data-master-id');
+                try {
+                    const res = await fetch('/admin/billing/packages/select/' + masterId, { method: 'POST', headers: { 'Accept': 'application/json' } });
+                    const data = await res.json();
+                    if (data.success) {
+                        showAlert('success', data.message);
+                        setTimeout(function() { window.location.reload(); }, 800);
+                    } else {
+                        showAlert('danger', data.message || 'Gagal memilih paket');
+                    }
+                } catch (e) {
+                    showAlert('danger', 'Gagal memilih paket');
+                }
+            });
+        });
+
+        document.querySelectorAll('.btn-unselect-master-pkg').forEach(function(btn) {
+            btn.addEventListener('click', async function() {
+                if (!confirm('Lepas paket ini dari tenant?')) return;
+                const masterId = btn.getAttribute('data-master-id');
+                try {
+                    const res = await fetch('/admin/billing/packages/unselect/' + masterId, { method: 'POST', headers: { 'Accept': 'application/json' } });
+                    const data = await res.json();
+                    if (data.success) {
+                        showAlert('success', data.message);
+                        setTimeout(function() { window.location.reload(); }, 800);
+                    } else {
+                        showAlert('danger', data.message || 'Gagal melepas paket');
+                    }
+                } catch (e) {
+                    showAlert('danger', 'Gagal melepas paket');
+                }
+            });
+        });
+        <% } %>
     </script>
     
     <!-- Currency Helper -->

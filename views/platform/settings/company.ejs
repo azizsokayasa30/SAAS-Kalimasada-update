@@ -1,0 +1,84 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active, adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Company Profile</h2>
+      <p class="km-subtitle">Profil perusahaan yang ditampilkan di portal management</p>
+    </div>
+  </div>
+
+  <%- include('_nav', { settingsSection }) %>
+
+  <% if (flash && flash.success === 'saved') { %><div class="alert alert-success">Profil perusahaan berhasil disimpan.</div><% } %>
+  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+
+  <div class="km-card">
+    <form method="POST" action="/management/settings/company" class="km-settings-form">
+      <div class="row g-4">
+        <div class="col-lg-4 text-center">
+          <div class="km-company-logo-preview mb-3">
+            <img src="<%= profile.logo_path || '/img/logo.png' %>" alt="Logo" id="logoPreview" onerror="this.src='/img/logo.png'">
+          </div>
+          <div class="mb-0">
+            <label class="form-label">Path Logo</label>
+            <input type="text" name="logo_path" class="form-control form-control-sm" value="<%= profile.logo_path || '/img/logo.png' %>" id="logoPathInput">
+            <small class="text-muted">Contoh: /img/logo.png</small>
+          </div>
+        </div>
+        <div class="col-lg-8">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label">Nama Perusahaan</label>
+              <input type="text" name="company_name" class="form-control" required value="<%= profile.company_name || '' %>">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Header / Brand</label>
+              <input type="text" name="company_header" class="form-control" value="<%= profile.company_header || '' %>">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Slogan</label>
+              <input type="text" name="company_slogan" class="form-control" value="<%= profile.company_slogan || '' %>">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Website</label>
+              <input type="text" name="company_website" class="form-control" value="<%= profile.company_website || '' %>">
+            </div>
+            <div class="col-12">
+              <label class="form-label">Alamat</label>
+              <textarea name="company_address" class="form-control" rows="2"><%= profile.company_address || '' %></textarea>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Telepon</label>
+              <input type="text" name="contact_phone" class="form-control" value="<%= profile.contact_phone || '' %>">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Email</label>
+              <input type="email" name="contact_email" class="form-control" value="<%= profile.contact_email || '' %>">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">WhatsApp</label>
+              <input type="text" name="contact_whatsapp" class="form-control" value="<%= profile.contact_whatsapp || '' %>">
+            </div>
+            <div class="col-12">
+              <label class="form-label">Footer Info</label>
+              <input type="text" name="footer_info" class="form-control" value="<%= profile.footer_info || '' %>">
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="mt-4 pt-3 border-top d-flex justify-content-end">
+        <button type="submit" class="btn btn-km-primary px-4"><i class="bi bi-check-lg me-1"></i> Simpan Profil</button>
+      </div>
+    </form>
+  </div>
+</main>
+
+<script>
+document.getElementById('logoPathInput')?.addEventListener('input', function () {
+  var img = document.getElementById('logoPreview');
+  if (img && this.value.trim()) img.src = this.value.trim();
+});
+</script>
+
+<%- include('../partials/footer') %>

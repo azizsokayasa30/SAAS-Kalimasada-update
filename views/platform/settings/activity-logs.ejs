@@ -1,0 +1,147 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active, adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Log Aktivitas</h2>
+      <p class="km-subtitle">Riwayat aktivitas user di portal management</p>
+    </div>
+  </div>
+
+  <%- include('_nav', { settingsSection }) %>
+
+  <div class="km-card mb-3">
+    <form method="GET" action="/management/settings/activity-logs" class="row g-2 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label small">Aksi</label>
+        <input type="text" name="action" class="form-control form-control-sm" value="<%= filters.action %>" placeholder="Cari aksi...">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small">User</label>
+        <select name="actor_id" class="form-select form-select-sm">
+          <option value="">Semua user</option>
+          <% users.forEach(function(u) { %>
+            <option value="<%= u.id %>" <%= String(filters.actor_id) === String(u.id) ? 'selected' : '' %>><%= u.name %></option>
+          <% }); %>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small">Dari tanggal</label>
+        <input type="date" name="from" class="form-control form-control-sm" value="<%= filters.from %>">
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small">Sampai tanggal</label>
+        <input type="date" name="to" class="form-control form-control-sm" value="<%= filters.to %>">
+      </div>
+      <div class="col-md-3 d-flex gap-2">
+        <button type="submit" class="btn btn-km-primary btn-sm"><i class="bi bi-search"></i> Filter</button>
+        <a href="/management/settings/activity-logs" class="btn btn-outline-secondary btn-sm">Reset</a>
+      </div>
+    </form>
+  </div>
+
+  <div class="km-card km-card--flush">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0 km-tenant-table">
+        <thead>
+          <tr>
+            <th>Waktu</th>
+            <th>User</th>
+            <th>Aktivitas</th>
+            <th>Tenant</th>
+            <th>IP</th>
+            <th class="text-end">Detail</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!logs.length) { %>
+            <tr><td colspan="6" class="text-center py-4 text-muted">Belum ada log aktivitas.</td></tr>
+          <% } %>
+          <% logs.forEach(function(log) { %>
+            <tr>
+              <td class="text-muted small"><%= new Date(log.created_at).toLocaleString('id-ID') %></td>
+              <td>
+                <div class="fw-semibold small"><%= log.actor_name || log.actor_type || '—' %></div>
+                <% if (log.actor_email) { %><small class="text-muted"><%= log.actor_email %></small><% } %>
+              </td>
+              <td><span class="badge bg-light text-dark border"><%= formatActionLabel(log.action) %></span></td>
+              <td class="small"><%= log.tenant_name || (log.tenant_id ? '#' + log.tenant_id : '—') %></td>
+              <td class="small text-muted"><code><%= log.ip_address || '—' %></code></td>
+              <td class="text-end">
+                <button type="button" class="btn btn-sm btn-outline-primary btn-log-detail" data-log-id="<%= log.id %>">
+                  <i class="bi bi-eye"></i>
+                </button>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+    <% if (pagination.totalPages > 1) { %>
+    <div class="d-flex justify-content-between align-items-center p-3 border-top">
+      <small class="text-muted">Total <%= pagination.total %> log</small>
+      <nav>
+        <ul class="pagination pagination-sm mb-0">
+          <% for (let p = 1; p <= pagination.totalPages; p++) { %>
+            <li class="page-item <%= p === pagination.page ? 'active' : '' %>">
+              <a class="page-link" href="?page=<%= p %>&action=<%= encodeURIComponent(filters.action) %>&actor_id=<%= filters.actor_id %>&from=<%= filters.from %>&to=<%= filters.to %>"><%= p %></a>
+            </li>
+          <% } %>
+        </ul>
+      </nav>
+    </div>
+    <% } %>
+  </div>
+</main>
+
+<div class="modal fade km-modal" id="logDetailModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content km-package-modal">
+      <div class="modal-header km-package-modal__header">
+        <h5 class="modal-title mb-0">Detail Aktivitas</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body km-package-modal__body" id="logDetailBody">
+        <div class="text-center py-4 text-muted">Memuat...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var modal = document.getElementById('logDetailModal');
+  var body = document.getElementById('logDetailBody');
+  if (!modal || !body) return;
+
+  document.querySelectorAll('.btn-log-detail').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var id = btn.getAttribute('data-log-id');
+      body.innerHTML = '<div class="text-center py-4 text-muted">Memuat...</div>';
+      bootstrap.Modal.getOrCreateInstance(modal).show();
+      fetch('/management/settings/activity-logs/' + id)
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data.success) throw new Error(data.message || 'Gagal memuat');
+          var log = data.log;
+          var details = log.details_parsed
+            ? '<pre class="km-log-detail-json mb-0">' + JSON.stringify(log.details_parsed, null, 2) + '</pre>'
+            : '<span class="text-muted">Tidak ada detail tambahan</span>';
+          body.innerHTML =
+            '<dl class="row km-log-detail-dl mb-3">' +
+            '<dt class="col-sm-3">Waktu</dt><dd class="col-sm-9">' + new Date(log.created_at).toLocaleString('id-ID') + '</dd>' +
+            '<dt class="col-sm-3">User</dt><dd class="col-sm-9">' + (log.actor_name || '—') + ' &lt;' + (log.actor_email || '') + '&gt;</dd>' +
+            '<dt class="col-sm-3">Aktivitas</dt><dd class="col-sm-9">' + (log.action_label || log.action) + '</dd>' +
+            '<dt class="col-sm-3">Tenant</dt><dd class="col-sm-9">' + (log.tenant_name || '—') + '</dd>' +
+            '<dt class="col-sm-3">IP</dt><dd class="col-sm-9"><code>' + (log.ip_address || '—') + '</code></dd>' +
+            '</dl><h6 class="fw-semibold mb-2">Detail</h6>' + details;
+        })
+        .catch(function (err) {
+          body.innerHTML = '<div class="alert alert-danger mb-0">' + err.message + '</div>';
+        });
+    });
+  });
+})();
+</script>
+
+<%- include('../partials/footer') %>

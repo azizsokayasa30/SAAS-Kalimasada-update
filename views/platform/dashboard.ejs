@@ -1,44 +1,194 @@
 <%- include('partials/head', { title }) %>
 <%- include('partials/sidebar', { active: 'dashboard', adminName }) %>
-<main class="km-main">
-  <div class="km-topbar">
-    <div>
-      <h2>Dashboard</h2>
-      <p class="km-subtitle">Ringkasan platform SaaS Kalimasada Billing</p>
+<main class="km-main km-dashboard">
+  <div class="km-dash-hero">
+    <div class="km-dash-hero-copy">
+      <span class="km-dash-eyebrow"><i class="bi bi-broadcast-pin"></i> Operations Center</span>
+      <h2>Dashboard Management Kalimasada</h2>
+      <p class="km-subtitle">Monitoring multi-tenant ISP</p>
     </div>
-    <a href="/management/tenants/new" class="btn btn-km-primary btn-sm px-3"><i class="bi bi-plus-lg me-1"></i> Tambah Tenant</a>
+    <div class="km-dash-hero-actions">
+      <span class="km-dash-updated" id="dashUpdatedAt">Memuat data live…</span>
+      <button type="button" class="btn btn-outline-secondary btn-sm" id="dashRefreshBtn">
+        <i class="bi bi-arrow-clockwise"></i> Refresh
+      </button>
+      <a href="/management/tenants/new" class="btn btn-km-primary btn-sm px-3">
+        <i class="bi bi-plus-lg me-1"></i> Tambah Tenant
+      </a>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-4 km-dash-kpis">
+    <div class="col-xl-3 col-md-6 col-6">
+      <div class="km-dash-kpi km-dash-kpi--tenants">
+        <div class="km-dash-kpi-icon"><i class="bi bi-buildings"></i></div>
+        <div>
+          <div class="label">Total Tenant/PIC</div>
+          <div class="value" id="kpiTotalTenants"><%= stats.totalTenants %></div>
+          <div class="meta">Unit operasional terdaftar</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-xl-3 col-md-6 col-6">
+      <div class="km-dash-kpi km-dash-kpi--customers">
+        <div class="km-dash-kpi-icon"><i class="bi bi-people-fill"></i></div>
+        <div>
+          <div class="label">Total Pelanggan</div>
+          <div class="value" id="kpiTotalCustomers"><%= stats.totalCustomers %></div>
+          <div class="meta">Akumulasi semua tenant</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-xl-3 col-md-6 col-6">
+      <div class="km-dash-kpi km-dash-kpi--radius">
+        <div class="km-dash-kpi-icon"><i class="bi bi-shield-check"></i></div>
+        <div>
+          <div class="label">RADIUS Server</div>
+          <div class="value" id="kpiRadiusTotal">—</div>
+          <div class="meta">
+            <span class="text-success" id="kpiRadiusUp">— up</span>
+            ·
+            <span class="text-danger" id="kpiRadiusDown">— down</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-xl-3 col-md-6 col-6">
+      <div class="km-dash-kpi km-dash-kpi--traffic">
+        <div class="km-dash-kpi-icon"><i class="bi bi-activity"></i></div>
+        <div>
+          <div class="label">Trafik Aggregate Uplink</div>
+          <div class="value km-dash-traffic-line">
+            <span class="rx" id="kpiRxMbps">—</span>
+            <span class="sep">/</span>
+            <span class="tx" id="kpiTxMbps">—</span>
+            <small>Mbps</small>
+          </div>
+          <div class="meta">Interface <code id="kpiMainIface">—</code> · <span id="kpiTrafficRouters">—</span> NAS melaporkan</div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="row g-3 mb-4">
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Total Tenant</div><div class="value"><%= stats.totalTenants %></div></div></div>
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Aktif</div><div class="value" style="color: var(--color-success)"><%= stats.activeTenants %></div></div></div>
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Suspended</div><div class="value" style="color: var(--color-danger)"><%= stats.suspendedTenants %></div></div></div>
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Total Pelanggan</div><div class="value"><%= stats.totalCustomers %></div></div></div>
+    <div class="col-lg-5">
+      <div class="km-card km-dash-panel h-100">
+        <div class="km-dash-panel-head">
+          <h5 class="mb-0"><i class="bi bi-pie-chart me-2"></i>Ringkasan Infrastruktur</h5>
+        </div>
+        <div class="km-dash-gauges">
+          <div class="km-dash-gauge">
+            <div class="km-dash-gauge-ring" id="gaugeNasRing" data-value="0">
+              <span id="gaugeNasPct">0%</span>
+            </div>
+            <div>
+              <strong>NAS Online</strong>
+              <p class="mb-0 text-muted small" id="gaugeNasLabel">Memuat…</p>
+            </div>
+          </div>
+          <div class="km-dash-gauge">
+            <div class="km-dash-gauge-ring km-dash-gauge-ring--radius" id="gaugeRadiusRing" data-status="<%= radius.status %>">
+              <i class="bi bi-shield-fill-check"></i>
+            </div>
+            <div>
+              <strong>RADIUS</strong>
+              <p class="mb-0 text-muted small" id="gaugeRadiusLabel"><%= radius.message %></p>
+            </div>
+          </div>
+        </div>
+        <div class="km-dash-traffic-bars mt-3">
+          <div class="km-dash-bar-row">
+            <span>Download</span>
+            <div class="km-dash-bar"><div class="km-dash-bar-fill km-dash-bar-fill--rx" id="barRx" style="width:0%"></div></div>
+            <strong id="barRxLabel">0 Mbps</strong>
+          </div>
+          <div class="km-dash-bar-row">
+            <span>Upload</span>
+            <div class="km-dash-bar"><div class="km-dash-bar-fill km-dash-bar-fill--tx" id="barTx" style="width:0%"></div></div>
+            <strong id="barTxLabel">0 Mbps</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-7">
+      <div class="km-card km-dash-panel h-100">
+        <div class="km-dash-panel-head">
+          <h5 class="mb-0"><i class="bi bi-diagram-3 me-2"></i>NAS per Tenant</h5>
+          <span class="badge bg-secondary" id="nasTableCount">—</span>
+        </div>
+        <div class="table-responsive km-dash-table-wrap">
+          <table class="table table-sm table-hover mb-0" id="tenantNasTable">
+            <thead>
+              <tr>
+                <th>Tenant</th>
+                <th>Pelanggan</th>
+                <th>NAS</th>
+                <th>Online</th>
+                <th>Sesi PPPoE</th>
+                <th class="text-end">RX</th>
+                <th class="text-end">TX</th>
+              </tr>
+            </thead>
+            <tbody id="tenantNasBody">
+              <tr><td colspan="7" class="text-center py-4 text-muted">Memuat status jaringan…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <div class="km-card">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-      <h5 class="mb-0">Tenant Terbaru</h5>
-      <a href="/management/tenants" class="btn btn-outline-secondary btn-sm">Lihat Semua</a>
+  <div class="row g-3">
+    <div class="col-lg-7">
+      <div class="km-card km-dash-panel">
+        <div class="km-dash-panel-head">
+          <h5 class="mb-0"><i class="bi bi-router me-2"></i>Status NAS (Live)</h5>
+        </div>
+        <div class="table-responsive km-dash-table-wrap">
+          <table class="table table-sm table-hover mb-0" id="nasLiveTable">
+            <thead>
+              <tr>
+                <th>NAS</th>
+                <th>Tenant</th>
+                <th>IP</th>
+                <th>Status</th>
+                <th class="text-end">RX Mbps</th>
+                <th class="text-end">TX Mbps</th>
+              </tr>
+            </thead>
+            <tbody id="nasLiveBody">
+              <tr><td colspan="6" class="text-center py-4 text-muted">Memuat probe MikroTik…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
-    <div class="table-responsive">
-      <table class="table table-hover mb-0">
-        <thead><tr><th>Nama</th><th>Subdomain</th><th>Paket</th><th>Status</th></tr></thead>
-        <tbody>
-          <% if (!recentTenants.length) { %>
-            <tr><td colspan="4" class="text-center py-3" style="color: var(--text-muted)">Belum ada tenant.</td></tr>
-          <% } %>
-          <% recentTenants.forEach(function(t) { %>
-            <tr>
-              <td><a href="/management/tenants/<%= t.id %>" class="fw-semibold text-decoration-none" style="color: var(--accent)"><%= t.name %></a></td>
-              <td><code><%= t.subdomain %></code></td>
-              <td><%= t.plan_name || '-' %></td>
-              <td><span class="badge badge-status-<%= t.status %>"><%= t.status %></span></td>
-            </tr>
-          <% }); %>
-        </tbody>
-      </table>
+    <div class="col-lg-5">
+      <div class="km-card km-dash-panel">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <h5 class="mb-0"><i class="bi bi-clock-history me-2"></i>Tenant Terbaru</h5>
+          <a href="/management/tenants" class="btn btn-outline-secondary btn-sm">Lihat Semua</a>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-hover mb-0">
+            <thead><tr><th>Nama</th><th>Subdomain</th><th>Pelanggan</th></tr></thead>
+            <tbody>
+              <% if (!recentTenants.length) { %>
+                <tr><td colspan="3" class="text-center py-3 text-muted">Belum ada tenant.</td></tr>
+              <% } %>
+              <% recentTenants.forEach(function(t) { %>
+                <tr>
+                  <td><a href="/management/tenants/<%= t.id %>" class="fw-semibold text-decoration-none"><%= t.name %></a></td>
+                  <td><code><%= t.subdomain %></code></td>
+                  <td><%= t.usage?.customers?.total ?? 0 %></td>
+                </tr>
+              <% }); %>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   </div>
 </main>
+<script src="/js/management-dashboard.js?v=2"></script>
 <%- include('partials/footer') %>

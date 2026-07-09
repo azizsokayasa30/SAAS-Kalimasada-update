@@ -1,0 +1,143 @@
+      <div class="modal-header km-package-modal__header">
+        <div class="km-package-modal__head-text">
+          <span class="km-package-modal__kicker"><i class="bi bi-box-seam me-1"></i> Master Paket</span>
+          <h5 class="modal-title mb-0"><%= pkg.id ? 'Edit Paket Internet' : 'Tambah Paket Internet' %></h5>
+          <p class="km-package-modal__subtitle mb-0"><%= pkg.id ? 'Perbarui katalog paket untuk semua tenant' : 'Definisikan paket baru di katalog pusat' %></p>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+      </div>
+
+      <div class="modal-body km-package-modal__body">
+        <!-- Informasi dasar -->
+        <section class="km-form-section">
+          <div class="km-form-section__head">
+            <span class="km-form-section__icon km-form-section__icon--blue"><i class="bi bi-card-text"></i></span>
+            <div>
+              <h6 class="km-form-section__title">Informasi Paket</h6>
+              <p class="km-form-section__desc">Nama dan kecepatan yang ditampilkan ke tenant</p>
+            </div>
+          </div>
+          <div class="km-form-section__body">
+            <div class="row g-3">
+              <div class="col-md-7">
+                <label class="form-label">Nama Paket</label>
+                <input type="text" name="name" class="form-control" required placeholder="Contoh: Paket Rumah 20 Mbps" value="<%= pkg.name || '' %>">
+              </div>
+              <div class="col-md-5">
+                <label class="form-label">Kecepatan</label>
+                <input type="text" name="speed" class="form-control" required placeholder="20M/20M" value="<%= pkg.speed || '' %>">
+              </div>
+              <div class="col-12">
+                <label class="form-label">Deskripsi <span class="text-muted fw-normal">(opsional)</span></label>
+                <textarea name="description" class="form-control" rows="2" placeholder="Keterangan singkat paket..."><%= pkg.description || '' %></textarea>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Harga & PPN -->
+        <section class="km-form-section">
+          <div class="km-form-section__head">
+            <span class="km-form-section__icon km-form-section__icon--green"><i class="bi bi-currency-exchange"></i></span>
+            <div>
+              <h6 class="km-form-section__title">Harga &amp; PPN</h6>
+              <p class="km-form-section__desc">Nominal tagihan sebelum atau sesudah pajak</p>
+            </div>
+          </div>
+          <div class="km-form-section__body">
+            <div class="row g-3 align-items-stretch">
+              <div class="col-md-6">
+                <label class="form-label km-ppn-price-label-<%= prefix %>">Harga<%= (pkg.tax_rate == null || Number(pkg.tax_rate) > 0) ? ' (sebelum PPN)' : '' %></label>
+                <div class="input-group">
+                  <span class="input-group-text">Rp</span>
+                  <input type="number" name="price" class="form-control" required min="0" step="1000" placeholder="150000" value="<%= pkg.price || '' %>">
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="km-ppn-box <%= Number(pkg.tax_rate) === 0 ? 'km-ppn-box--off' : '' %>" id="ppnBox-<%= prefix %>">
+                  <div class="km-ppn-box__top">
+                    <span class="km-ppn-box__label"><i class="bi bi-percent me-1"></i> PPN</span>
+                    <div class="form-check form-switch mb-0">
+                      <input class="form-check-input km-ppn-switch" type="checkbox" role="switch"
+                        name="ppn_enabled" value="1" id="ppnEnabled-<%= prefix %>"
+                        data-prefix="<%= prefix %>"
+                        <%= (pkg.tax_rate == null || Number(pkg.tax_rate) > 0) ? 'checked' : '' %>>
+                      <label class="form-check-label" for="ppnEnabled-<%= prefix %>">Aktif</label>
+                    </div>
+                  </div>
+                  <div class="km-ppn-box__rate">
+                    <input type="number" name="tax_rate" id="taxRate-<%= prefix %>"
+                      class="form-control form-control-sm km-ppn-rate text-end" min="0" step="0.01" max="100"
+                      value="<%= Number(pkg.tax_rate) > 0 ? pkg.tax_rate : 11 %>"
+                      <%= Number(pkg.tax_rate) === 0 ? 'disabled' : '' %>>
+                    <span class="km-ppn-box__suffix">%</span>
+                  </div>
+                  <small class="km-ppn-hint-<%= prefix %> km-ppn-box__hint" style="<%= Number(pkg.tax_rate) === 0 ? '' : 'display:none' %>">PPN nonaktif — harga final sama dengan harga dasar</small>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Jaringan -->
+        <section class="km-form-section km-form-section--network" id="networkSection-<%= prefix %>">
+          <div class="km-form-section__head">
+            <span class="km-form-section__icon km-form-section__icon--purple"><i class="bi bi-hdd-network"></i></span>
+            <div>
+              <h6 class="km-form-section__title">Profil &amp; Bandwidth</h6>
+              <p class="km-form-section__desc">Dipakai saat pelanggan PPPoE. Pelanggan IP statik memakai harga &amp; kecepatan paket yang sama.</p>
+            </div>
+          </div>
+          <div class="km-form-section__body">
+            <p class="km-form-section__note text-muted small mb-3"><i class="bi bi-info-circle me-1"></i>Paket default mendukung <strong>PPPoE dan IP statik</strong>. Tenant memilih tipe koneksi saat menambah pelanggan.</p>
+            <div class="row g-3">
+              <div class="col-md-4">
+                <label class="form-label">Profil PPPoE</label>
+                <input type="text" name="pppoe_profile" id="pppoeProfile-<%= prefix %>" class="form-control" value="<%= pkg.pppoe_profile || 'default' %>" <%= pkg.billing_only === 1 ? 'disabled' : '' %>>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label">Upload Limit</label>
+                <input type="text" name="upload_limit" class="form-control" placeholder="10M" value="<%= pkg.upload_limit || '' %>" <%= pkg.billing_only === 1 ? 'disabled' : '' %>>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label">Download Limit</label>
+                <input type="text" name="download_limit" class="form-control" placeholder="10M" value="<%= pkg.download_limit || '' %>" <%= pkg.billing_only === 1 ? 'disabled' : '' %>>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Opsi -->
+        <section class="km-form-section km-form-section--flat">
+          <div class="km-form-option-row">
+            <label class="km-form-option" for="billingOnly-<%= prefix %>">
+              <input class="form-check-input km-billing-only-switch" type="checkbox" name="billing_only" value="1" id="billingOnly-<%= prefix %>"
+                data-prefix="<%= prefix %>"
+                <%= pkg.billing_only === 1 ? 'checked' : '' %>>
+              <span class="km-form-option__icon"><i class="bi bi-receipt"></i></span>
+              <span class="km-form-option__text">
+                <strong>Hanya tagihan</strong>
+                <small>Tanpa layanan jaringan (bukan PPPoE maupun IP statik)</small>
+              </span>
+            </label>
+            <% if (pkg.id) { %>
+            <label class="km-form-option" for="isActive-<%= prefix %>">
+              <input class="form-check-input" type="checkbox" name="is_active" value="1" id="isActive-<%= prefix %>"
+                <%= pkg.is_active !== 0 ? 'checked' : '' %>>
+              <span class="km-form-option__icon km-form-option__icon--green"><i class="bi bi-check-circle"></i></span>
+              <span class="km-form-option__text">
+                <strong>Paket aktif</strong>
+                <small>Tampil di katalog tenant</small>
+              </span>
+            </label>
+            <% } %>
+          </div>
+        </section>
+      </div>
+
+      <div class="modal-footer km-package-modal__footer">
+        <button type="button" class="btn btn-outline-secondary px-4" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-km-primary px-4">
+          <i class="bi bi-check-lg me-1"></i><%= pkg.id ? 'Simpan Perubahan' : 'Simpan Paket' %>
+        </button>
+      </div>

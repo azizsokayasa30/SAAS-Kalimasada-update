@@ -1,0 +1,90 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active, adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Rekap Keuangan Per Tenant</h2>
+      <p class="km-subtitle">Ringkasan koleksi payment gateway per tenant dengan breakdown PPN, BHP USO, dan management fee</p>
+    </div>
+  </div>
+
+  <%- include('_nav', { financeSection }) %>
+
+  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+  <% if (flash && flash.success === 'restored') { %><div class="alert alert-success">Backup finance berhasil di-restore.</div><% } %>
+
+  <div class="km-card mb-3">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-md-2">
+        <label class="form-label small">Bulan</label>
+        <select name="month" class="form-select form-select-sm">
+          <% const monthNames = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des']; %>
+          <% for (let m = 1; m <= 12; m++) { %>
+            <option value="<%= m %>" <%= Number(filters.month) === m ? 'selected' : '' %>><%= monthNames[m-1] %></option>
+          <% } %>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label small">Tahun</label>
+        <% const cy = new Date().getFullYear(); %>
+        <select name="year" class="form-select form-select-sm">
+          <% for (let y = cy - 3; y <= cy + 1; y++) { %>
+            <option value="<%= y %>" <%= Number(filters.year) === y ? 'selected' : '' %>><%= y %></option>
+          <% } %>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <button type="submit" class="btn btn-km-primary btn-sm"><i class="bi bi-funnel me-1"></i> Filter</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-md-4 col-6"><div class="km-stat"><div class="label">Total Koleksi</div><div class="value"><%= formatRupiah(totals.gross) %></div></div></div>
+    <div class="col-md-4 col-6"><div class="km-stat"><div class="label">BHP USO + Mgmt Fee</div><div class="value text-warning"><%= formatRupiah(totals.bhp_uso + totals.management_fee) %></div></div></div>
+    <div class="col-md-4 col-6"><div class="km-stat"><div class="label">Net ke Tenant</div><div class="value text-success"><%= formatRupiah(totals.net) %></div></div></div>
+  </div>
+
+  <div class="km-card km-card--flush">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0 km-tenant-table">
+        <thead>
+          <tr>
+            <th>Tenant</th>
+            <th>Pemilik</th>
+            <th class="text-end">Transaksi</th>
+            <th class="text-end">Gross</th>
+            <th class="text-end">PPN</th>
+            <th class="text-end">BHP USO</th>
+            <th class="text-end">Mgmt Fee</th>
+            <th class="text-end">Net</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!summary.length) { %>
+            <tr><td colspan="9" class="text-center py-4" style="color: var(--text-muted)">Tidak ada data pada periode ini.</td></tr>
+          <% } %>
+          <% summary.forEach(function(row) { %>
+            <tr>
+              <td class="fw-semibold"><%= row.tenant_name %></td>
+              <td><%= row.owner_name %></td>
+              <td class="text-end"><%= row.transaction_count %></td>
+              <td class="text-end"><%= formatRupiah(row.gross_amount) %></td>
+              <td class="text-end"><%= formatRupiah(row.tax_amount) %></td>
+              <td class="text-end"><%= formatRupiah(row.bhp_uso_amount) %></td>
+              <td class="text-end"><%= formatRupiah(row.management_fee_amount) %></td>
+              <td class="text-end fw-semibold text-success"><%= formatRupiah(row.net_amount) %></td>
+              <td class="text-end">
+                <a href="/management/finance/payments?tenant_id=<%= row.tenant_id %>&month=<%= filters.month %>&year=<%= filters.year %>" class="btn btn-outline-primary btn-sm py-0">Detail</a>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <%- include('_backup-restore') %>
+</main>
+<%- include('../partials/footer') %>

@@ -1825,6 +1825,24 @@
     }
 
     async getPackages() {
+        const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
+        if (hasTenantContext()) {
+            try {
+                const masterPackageService = require('./platform/masterPackageService');
+                const tenantId = getTenantId();
+                const masterPkgs = await masterPackageService.getTenantActivePackages(tenantId);
+                const legacy = await new Promise((resolve, reject) => {
+                    const sql = `SELECT * FROM packages WHERE is_active = 1 AND tenant_id = ? AND master_package_id IS NULL ORDER BY price ASC`;
+                    this.db.all(sql, [tenantId], (err, rows) => (err ? reject(err) : resolve(rows || [])));
+                });
+                if (masterPkgs.length || legacy.length) {
+                    return [...masterPkgs, ...legacy];
+                }
+            } catch (err) {
+                console.warn('[billing] getPackages master fallback:', err.message);
+            }
+        }
+
         const _t = this._tenantWhere();
         return new Promise((resolve, reject) => {
             const sql = `SELECT * FROM packages WHERE is_active = 1${_t.sql} ORDER BY price ASC`;
@@ -1962,9 +1980,23 @@
             
             // Username = login portal (UNIQUE). PPPoE = terpisah. Bentrok sering terjadi bila pola nama+tanggal sama.
             let finalUsername = (username && String(username).trim()) || this.generateUsername(phone);
-            const autoPPPoEUsername = customerData.__billing_only_package
-                ? ((pppoe_username != null && String(pppoe_username).trim()) || '')
-                : (pppoe_username || this.generatePPPoEUsername(phone));
+            const explicitPppoe = pppoe_username != null && String(pppoe_username).trim() !== '';
+            const hasStaticIpIntent = Boolean(
+                (static_ip && String(static_ip).trim()) || (assigned_ip && String(assigned_ip).trim())
+            );
+            const wantsCreatePppoe = ['1', 'true', 'on', 'yes'].includes(
+                String(customerData.create_pppoe_user ?? '').toLowerCase()
+            );
+            let autoPPPoEUsername;
+            if (customerData.__billing_only_package) {
+                autoPPPoEUsername = explicitPppoe ? String(pppoe_username).trim() : '';
+            } else if (explicitPppoe) {
+                autoPPPoEUsername = String(pppoe_username).trim();
+            } else if (hasStaticIpIntent && !wantsCreatePppoe) {
+                autoPPPoEUsername = null;
+            } else {
+                autoPPPoEUsername = this.generatePPPoEUsername(phone);
+            }
             const pppoeUserStored =
                 autoPPPoEUsername != null && String(autoPPPoEUsername).trim() !== ''
                     ? String(autoPPPoEUsername).trim()

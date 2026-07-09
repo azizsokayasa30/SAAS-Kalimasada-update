@@ -12,16 +12,7 @@
     <div class="d-flex gap-2 flex-wrap">
       <a href="/management/tenants" class="btn btn-outline-secondary btn-sm">← Daftar</a>
       <a href="/management/tenants/<%= tenant.id %>/edit" class="btn btn-outline-primary btn-sm">Edit</a>
-      <% if (tenant.status === 'active') { %>
-        <button class="btn btn-outline-warning btn-sm" data-bs-toggle="modal" data-bs-target="#suspendModal">Suspend</button>
-      <% } else if (tenant.status === 'suspended') { %>
-        <form method="POST" action="/management/tenants/<%= tenant.id %>/activate" class="d-inline">
-          <button class="btn btn-outline-success btn-sm">Aktifkan</button>
-        </form>
-      <% } %>
-      <% if (tenant.id !== 1) { %>
-        <button class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deleteModal">Hapus</button>
-      <% } %>
+      <button class="btn btn-outline-danger btn-sm" data-bs-toggle="modal" data-bs-target="#deleteModal">Hapus</button>
     </div>
   </div>
 
@@ -30,23 +21,32 @@
       <% if (flash.success === 'created') { %>Tenant berhasil dibuat. Subdomain otomatis diaktifkan di reverse proxy.<% } %>
       <% if (flash.success === 'updated') { %>Perubahan tenant disimpan. Reverse proxy diperbarui.<% } %>
       <% if (flash.success === 'credentials') { %>Username &amp; password admin tenant berhasil diperbarui.<% } %>
-      <% if (flash.success === 'suspended') { %>Tenant disuspend.<% } %>
-      <% if (flash.success === 'activated') { %>Tenant diaktifkan kembali.<% } %>
     </div>
   <% } %>
   <% if (flash && flash.nginx_warn) { %>
     <div class="alert alert-warning">
       <strong>Reverse proxy:</strong> <%= flash.nginx_warn %>
-      <a href="/management/reverse-proxy" class="alert-link">Buka halaman Reverse Proxy</a> untuk aktivasi manual.
+      <a href="/management/settings/reverse-proxy" class="alert-link">Buka halaman Reverse Proxy</a> untuk aktivasi manual.
     </div>
   <% } %>
   <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
 
   <div class="row g-3 mb-4">
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Status</div><div class="value fs-5"><span class="badge badge-status-<%= tenant.status %>"><%= tenant.status %></span></div></div></div>
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pelanggan</div><div class="value"><%= usage.customers %></div></div></div>
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Router</div><div class="value"><%= usage.routers %></div></div></div>
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Invoice</div><div class="value"><%= usage.invoices %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pelanggan Total</div><div class="value"><%= usage.customers.total || 0 %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pelanggan Aktif</div><div class="value text-success"><%= usage.customers.active || 0 %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Nonaktif</div><div class="value text-muted"><%= usage.customers.inactive || 0 %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Baru Bulan Ini</div><div class="value" style="color: var(--accent)"><%= usage.customers.new || 0 %></div></div></div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Tagihan Total</div><div class="value"><%= formatRupiah(usage.invoices.total) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Lunas</div><div class="value text-success"><%= formatRupiah(usage.invoices.paid) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Belum Lunas</div><div class="value text-warning"><%= formatRupiah(usage.invoices.unpaid) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Isolir</div><div class="value text-danger"><%= formatRupiah(usage.invoices.isolir) %></div></div></div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-md-4 col-6"><div class="km-stat"><div class="label">Router / NAS</div><div class="value"><%= usage.routers || 0 %></div></div></div>
   </div>
 
   <div class="row g-3">
@@ -57,8 +57,6 @@
           <tr><td>Owner</td><td><%= tenant.owner_name %></td></tr>
           <tr><td>Email</td><td><%= tenant.owner_email %></td></tr>
           <tr><td>WhatsApp</td><td><%= tenant.owner_phone %></td></tr>
-          <tr><td>Paket</td><td><%= tenant.plan_name %> (<%= tenant.plan_code %>)</td></tr>
-          <tr><td>Berlangganan</td><td><%= tenant.subscription_starts_at || '-' %> s/d <%= tenant.subscription_ends_at || '-' %></td></tr>
           <tr><td>Provisioned</td><td><%= tenant.provisioned_at || '-' %></td></tr>
         </table>
       </div>
@@ -155,27 +153,6 @@
   </div>
 </div>
 
-<div class="modal fade km-modal" id="suspendModal" tabindex="-1">
-  <div class="modal-dialog modal-dialog-centered">
-    <form method="POST" action="/management/tenants/<%= tenant.id %>/suspend" class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title">Suspend Tenant</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body">
-        <p>Tenant <strong><%= tenant.name %></strong> tidak akan bisa diakses hingga diaktifkan kembali.</p>
-        <label class="form-label">Alasan</label>
-        <input type="text" name="reason" class="form-control" placeholder="Subscription expired / pelanggaran kebijakan">
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
-        <button type="submit" class="btn btn-warning">Suspend</button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<% if (tenant.id !== 1) { %>
 <div class="modal fade km-modal" id="deleteModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered">
     <form method="POST" action="/management/tenants/<%= tenant.id %>/delete" class="modal-content">
@@ -196,7 +173,6 @@
     </form>
   </div>
 </div>
-<% } %>
 
 <script>
   (function () {

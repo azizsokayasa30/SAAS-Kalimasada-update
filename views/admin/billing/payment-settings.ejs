@@ -88,7 +88,19 @@
                 <!-- Alert Messages -->
                 <div id="alertContainer"></div>
 
+                <% if (typeof platformManaged !== 'undefined' && platformManaged) { %>
+                <div class="alert alert-info d-flex align-items-start gap-2 mb-4" role="alert">
+                    <i class="bi bi-info-circle-fill fs-5 mt-1"></i>
+                    <div>
+                        <strong>Pengaturan terpusat</strong><br>
+                        Payment gateway dikelola oleh <strong>Management Portal</strong> dan otomatis berlaku untuk semua tenant.
+                        Halaman ini hanya menampilkan konfigurasi aktif. Hubungi administrator SaaS jika perlu perubahan.
+                    </div>
+                </div>
+                <% } %>
+
                 <!-- Active Gateway Selection -->
+                <fieldset <%= (typeof platformManaged !== 'undefined' && platformManaged) ? 'disabled' : '' %>>
                 <div class="row mb-4">
                     <div class="col-12">
                         <div class="card">
@@ -389,6 +401,7 @@
                         </div>
                     </div>
                 </div>
+                </fieldset>
 
                 <!-- Test Connection Section -->
                 <div class="row mt-4">
@@ -432,6 +445,8 @@
 
     <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
     <script>
+        const PLATFORM_MANAGED = <%= (typeof platformManaged !== 'undefined' && platformManaged) ? 'true' : 'false' %>;
+
         function showAlert(type, message) {
             const alertContainer = document.getElementById('alertContainer');
             const alertDiv = document.createElement('div');
@@ -448,6 +463,10 @@
         }
 
         async function updateActiveGateway() {
+            if (PLATFORM_MANAGED) {
+                showAlert('info', 'Payment gateway dikelola oleh Management Portal.');
+                return;
+            }
             const activeGateway = document.getElementById('activeGateway').value;
             
             try {
@@ -526,6 +545,10 @@
         });
 
         async function saveGatewayConfig(gateway) {
+            if (PLATFORM_MANAGED) {
+                showAlert('info', 'Payment gateway dikelola oleh Management Portal.');
+                return;
+            }
             const formData = {
                 enabled: document.getElementById(`${gateway}Enabled`).checked,
                 production: document.getElementById(`${gateway}Production`).checked

@@ -1,23 +1,147 @@
 <aside class="km-sidebar">
+  <%
+    const company = (typeof platformCompany !== 'undefined' && platformCompany) ? platformCompany : {};
+    const brandName = company.company_name || 'PT. KALIMASADA INTI SARANA';
+    const brandLogo = company.logo_path || '/img/logo.png';
+    const settingsOpen = active && String(active).startsWith('settings');
+    const financeOpen = active && String(active).startsWith('finance');
+    const popOpen = active && String(active).startsWith('pop');
+  %>
   <div class="km-brand">
-    <div class="km-brand-icon">
-      <img src="/img/logo.svg" alt="Kalimasada" style="width:100%;height:100%;object-fit:contain;padding:4px;">
+    <div class="km-brand-logo-wrap">
+      <img src="<%= brandLogo %>" alt="Logo <%= brandName %>">
     </div>
-    <div>
-      <h1>Kalimasada</h1>
-      <p>Management Portal</p>
+    <div class="km-brand-text">
+      <span class="km-brand-kicker">SaaS Management</span>
+      <h1><%= brandName %></h1>
+      <p><%= company.footer_info || 'portal management billing' %></p>
     </div>
   </div>
-  <nav class="km-nav">
-    <a href="/management/dashboard" class="<%= active === 'dashboard' ? 'active' : '' %>"><i class="bi bi-speedometer2"></i> Dashboard</a>
-    <a href="/management/tenants" class="<%= active === 'tenants' ? 'active' : '' %>"><i class="bi bi-buildings"></i> Tenant</a>
-    <a href="/management/reverse-proxy" class="<%= active === 'reverse-proxy' ? 'active' : '' %>"><i class="bi bi-hdd-network"></i> Reverse Proxy</a>
-    <a href="/management/mobile-app" class="<%= active === 'mobile-app' ? 'active' : '' %>"><i class="bi bi-phone"></i> Mobile App</a>
-    <a href="/management/logout"><i class="bi bi-box-arrow-right"></i> Logout</a>
+  <nav class="km-nav" aria-label="Navigasi management">
+    <p class="km-nav-label">Menu Utama</p>
+    <a href="/management/dashboard" class="km-nav-item km-nav-item--dashboard <%= active === 'dashboard' ? 'active' : '' %>">
+      <span class="km-nav-icon"><i class="bi bi-speedometer2"></i></span>
+      <span>Dashboard</span>
+    </a>
+    <a href="/management/master-tenant" class="km-nav-item km-nav-item--master <%= active === 'master-tenant' ? 'active' : '' %>">
+      <span class="km-nav-icon"><i class="bi bi-diagram-3"></i></span>
+      <span>Master Tenant</span>
+    </a>
+    <a href="/management/tenants" class="km-nav-item km-nav-item--tenants <%= active === 'tenants' ? 'active' : '' %>">
+      <span class="km-nav-icon"><i class="bi bi-buildings"></i></span>
+      <span>Tenant</span>
+    </a>
+    <a href="/management/mobile-app" class="km-nav-item km-nav-item--mobile <%= active === 'mobile-app' ? 'active' : '' %>">
+      <span class="km-nav-icon"><i class="bi bi-phone"></i></span>
+      <span>Mobile App</span>
+    </a>
+
+    <div class="km-nav-group <%= popOpen ? 'is-open' : '' %>" id="popNavGroup">
+      <button type="button" class="km-nav-item km-nav-item--pop km-nav-btn km-nav-group__toggle <%= popOpen ? 'active' : '' %>" aria-expanded="<%= popOpen ? 'true' : 'false' %>" aria-controls="popSubmenu">
+        <span class="km-nav-icon"><i class="bi bi-geo-alt-fill"></i></span>
+        <span class="km-nav-group__label">POP/CABANG</span>
+        <i class="bi bi-chevron-down km-nav-group__chevron" aria-hidden="true"></i>
+      </button>
+      <div class="km-nav-submenu" id="popSubmenu">
+        <a href="/management/pop" class="km-nav-submenu__item km-nav-item--pop-list <%= active === 'pop-list' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-list-ul"></i></span>
+          <span>Daftar POP/CABANG</span>
+        </a>
+        <a href="/management/pop/switches" class="km-nav-submenu__item km-nav-item--pop-switches <%= active === 'pop-switches' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-hdd-network"></i></span>
+          <span>Switch Manager</span>
+        </a>
+        <a href="/management/pop/radius" class="km-nav-submenu__item km-nav-item--pop-radius <%= active === 'pop-radius' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-shield-check"></i></span>
+          <span>Radius Manager</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="km-nav-group <%= financeOpen ? 'is-open' : '' %>" id="financeNavGroup">
+      <button type="button" class="km-nav-item km-nav-item--finance km-nav-btn km-nav-group__toggle <%= financeOpen ? 'active' : '' %>" aria-expanded="<%= financeOpen ? 'true' : 'false' %>" aria-controls="financeSubmenu">
+        <span class="km-nav-icon"><i class="bi bi-cash-stack"></i></span>
+        <span class="km-nav-group__label">Finance</span>
+        <i class="bi bi-chevron-down km-nav-group__chevron" aria-hidden="true"></i>
+      </button>
+      <div class="km-nav-submenu" id="financeSubmenu">
+        <a href="/management/finance/payments" class="km-nav-submenu__item km-nav-item--finance-payments <%= active === 'finance-payments' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-credit-card-2-front"></i></span>
+          <span>Riwayat Pembayaran</span>
+        </a>
+        <a href="/management/finance/tenant-summary" class="km-nav-submenu__item km-nav-item--finance-tenant-summary <%= active === 'finance-tenant-summary' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-bar-chart"></i></span>
+          <span>Rekap Per Tenant</span>
+        </a>
+        <a href="/management/finance/invoices" class="km-nav-submenu__item km-nav-item--finance-invoices <%= active === 'finance-invoices' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-receipt"></i></span>
+          <span>Invoice Tenant</span>
+        </a>
+        <a href="/management/finance/tax-fees" class="km-nav-submenu__item km-nav-item--finance-tax-fees <%= active === 'finance-tax-fees' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-percent"></i></span>
+          <span>Pajak &amp; Fee</span>
+        </a>
+        <a href="/management/finance/income" class="km-nav-submenu__item km-nav-item--finance-income <%= active === 'finance-income' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-arrow-down-circle"></i></span>
+          <span>Catatan Pemasukan</span>
+        </a>
+        <a href="/management/finance/expenses" class="km-nav-submenu__item km-nav-item--finance-expenses <%= active === 'finance-expenses' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-arrow-up-circle"></i></span>
+          <span>Catatan Pengeluaran</span>
+        </a>
+        <a href="/management/finance/reports" class="km-nav-submenu__item km-nav-item--finance-reports <%= active === 'finance-reports' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-file-earmark-bar-graph"></i></span>
+          <span>Laporan Keuangan</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="km-nav-group <%= settingsOpen ? 'is-open' : '' %>" id="settingsNavGroup">
+      <button type="button" class="km-nav-item km-nav-item--settings km-nav-btn km-nav-group__toggle <%= settingsOpen ? 'active' : '' %>" aria-expanded="<%= settingsOpen ? 'true' : 'false' %>" aria-controls="settingsSubmenu">
+        <span class="km-nav-icon"><i class="bi bi-gear"></i></span>
+        <span class="km-nav-group__label">Pengaturan</span>
+        <i class="bi bi-chevron-down km-nav-group__chevron" aria-hidden="true"></i>
+      </button>
+      <div class="km-nav-submenu" id="settingsSubmenu">
+        <a href="/management/settings/users" class="km-nav-submenu__item km-nav-item--settings-users <%= active === 'settings-users' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-people"></i></span>
+          <span>User Manager</span>
+        </a>
+        <a href="/management/settings/company" class="km-nav-submenu__item km-nav-item--settings-company <%= active === 'settings-company' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-building"></i></span>
+          <span>Company Profile</span>
+        </a>
+        <a href="/management/settings/packages" class="km-nav-submenu__item km-nav-item--settings-packages <%= active === 'settings-packages' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-box-seam"></i></span>
+          <span>Master Paket</span>
+        </a>
+        <a href="/management/settings/payment" class="km-nav-submenu__item km-nav-item--settings-payment <%= active === 'settings-payment' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-credit-card"></i></span>
+          <span>Payment Manager</span>
+        </a>
+        <a href="/management/settings/activity-logs" class="km-nav-submenu__item km-nav-item--settings-logs <%= active === 'settings-logs' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-journal-text"></i></span>
+          <span>Log Aktivitas</span>
+        </a>
+        <a href="/management/settings/reverse-proxy" class="km-nav-submenu__item km-nav-item--settings-proxy <%= active === 'settings-reverse-proxy' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-hdd-network"></i></span>
+          <span>Reverse Proxy</span>
+        </a>
+      </div>
+    </div>
+
+    <a href="/management/logout" class="km-nav-item km-nav-item--logout km-nav-logout">
+      <span class="km-nav-icon"><i class="bi bi-box-arrow-right"></i></span>
+      <span>Logout</span>
+    </a>
   </nav>
   <div class="km-sidebar-bottom">
     <div class="km-user-footer">
-      <i class="bi bi-person-circle"></i> <%= adminName || 'Super Admin' %>
+      <span class="km-user-avatar"><i class="bi bi-person-circle"></i></span>
+      <span>
+        <strong><%= adminName || 'Super Admin' %></strong>
+        <small>Management Admin</small>
+      </span>
     </div>
     <p class="km-sidebar-footer-label">Kalimasada Management</p>
     <button type="button" class="km-theme-toggle-btn" id="globalThemeToggle" title="Ganti tema gelap / terang">
@@ -26,3 +150,15 @@
     </button>
   </div>
 </aside>
+<script>
+(function () {
+  document.querySelectorAll('.km-nav-group').forEach(function (group) {
+    var toggle = group.querySelector('.km-nav-group__toggle');
+    if (!toggle) return;
+    toggle.addEventListener('click', function () {
+      group.classList.toggle('is-open');
+      toggle.setAttribute('aria-expanded', group.classList.contains('is-open') ? 'true' : 'false');
+    });
+  });
+})();
+</script>
