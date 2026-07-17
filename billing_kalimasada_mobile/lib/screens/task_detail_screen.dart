@@ -40,6 +40,16 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
   /// TR atau PSB yang sedang in_progress — tampilkan timer + tombol "Sedang dikerjakan".
   bool get _workActive => _serverInProgress && (_isTr || _isInstall);
 
+  /// Status final: tugas tidak boleh dikerjakan / dimulai lagi dari app.
+  /// Mencegah tugas selesai ter-revert ke "sedang dikerjakan".
+  bool get _isFinal {
+    final s = (_task['status'] ?? '').toString().toLowerCase().trim();
+    return s == 'completed' ||
+        s == 'cancelled' ||
+        s == 'resolved' ||
+        s == 'closed';
+  }
+
   /// Nilai string dari map tugas (API JSON).
   String _taskStr(String key) {
     final v = _task[key];
@@ -186,6 +196,14 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
     final id = _task['id']?.toString();
     final type = _task['type']?.toString();
     if (id == null || type == null) return;
+    if (_isFinal) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Tiket sudah selesai/ditutup. Hubungi admin bila perlu dibuka kembali.'),
+        ),
+      );
+      return;
+    }
     final tasks = context.read<TaskProvider>();
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _busy = true);
@@ -225,6 +243,14 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
     final id = _task['id']?.toString();
     final type = _task['type']?.toString();
     if (id == null || type == null) return;
+    if (_isFinal) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Tugas sudah selesai/dibatalkan. Hubungi admin bila perlu dibuka kembali.'),
+        ),
+      );
+      return;
+    }
     if (_workActive) {
       _openJobExecution(context);
       return;
@@ -816,8 +842,9 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     _SmoothActionButton(
-                      enabled: !_busy,
+                      enabled: !_busy && !_isFinal,
                       onTap: () async {
+                        if (_isFinal) return;
                         if (_isTr) {
                           if (_workActive) {
                             _openJobExecution(context);
@@ -867,7 +894,9 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                               color: Colors.white,
                             ),
                           Text(
-                            (_isTr || _isInstall)
+                            _isFinal
+                                ? 'Tugas selesai'
+                                : (_isTr || _isInstall)
                                 ? (_workActive
                                       ? 'Sedang dikerjakan'
                                       : 'Kerjakan')
@@ -882,40 +911,42 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                         ],
                       ),
                     ),
-                    const SizedBox(height: 10),
-                    _SmoothActionButton(
-                      enabled: !_busy,
-                      onTap: () async {
-                        await _showPendingReasonDialog();
-                      },
-                      borderRadius: 16,
-                      gradient: const LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [Color(0xFFEF4444), Color(0xFFDC2626)],
-                      ),
-                      shadowColor: const Color(0xFFEF4444),
-                      child: const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.pause_circle_outline_rounded,
-                            size: 22,
-                            color: Colors.white,
-                          ),
-                          SizedBox(width: 8),
-                          Text(
-                            'Pending',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
+                    if (!_isFinal) ...[
+                      const SizedBox(height: 10),
+                      _SmoothActionButton(
+                        enabled: !_busy,
+                        onTap: () async {
+                          await _showPendingReasonDialog();
+                        },
+                        borderRadius: 16,
+                        gradient: const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [Color(0xFFEF4444), Color(0xFFDC2626)],
+                        ),
+                        shadowColor: const Color(0xFFEF4444),
+                        child: const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.pause_circle_outline_rounded,
+                              size: 22,
                               color: Colors.white,
-                              letterSpacing: 0.2,
                             ),
-                          ),
-                        ],
+                            SizedBox(width: 8),
+                            Text(
+                              'Pending',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white,
+                                letterSpacing: 0.2,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),

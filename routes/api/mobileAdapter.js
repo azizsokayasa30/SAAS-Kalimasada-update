@@ -4632,6 +4632,15 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                 if (oldLower === 'in_progress') {
                     return res.json({ success: true, message: 'Status sudah sedang dikerjakan' });
                 }
+                // Cegah tugas yang sudah final (selesai/dibatalkan) dikembalikan ke "sedang dikerjakan"
+                // oleh aksi "Mulai" — mis. teknisi membuka kembali tugas lama dari riwayat.
+                // Jika perlu dikerjakan ulang, admin yang membuka kembali dari web.
+                if (oldLower === 'completed' || oldLower === 'cancelled') {
+                    return res.status(409).json({
+                        success: false,
+                        message: 'Tugas sudah selesai/dibatalkan dan tidak dapat dikerjakan ulang. Hubungi admin bila perlu dibuka kembali.'
+                    });
+                }
                 const updInProgSql = isAdminTask
                     ? `UPDATE installation_jobs SET status = ?, updated_at = ?,
                      work_started_at = COALESCE(work_started_at, ?)
@@ -4813,33 +4822,63 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
 
         if (dbStatus === 'in_progress') {
             const wallNow = getLocalTimestamp();
-            if (isAdminTask) {
+            // Cegah tiket yang sudah final (resolved/closed) dikembalikan ke in_progress
+            // oleh aksi "Mulai" — mis. teknisi membuka kembali tiket lama dari riwayat.
+            const trGuardSql = isAdminTask
+                ? `SELECT status FROM trouble_reports WHERE id = ? AND tenant_id = ?`
+                : `SELECT status FROM trouble_reports
+                     WHERE id = ?
+                       AND tenant_id = ?
+                       AND (
+                            assigned_technician_id = ?
+                            OR CAST(assigned_technician_id AS TEXT) = ?
+                            OR IFNULL(TRIM(CAST(assigned_technician_id AS TEXT)), '') IN ('', '0')
+                       )`;
+            const trGuardParams = isAdminTask
+                ? [id, tenantId]
+                : [id, tenantId, techId, String(techId)];
+            db.get(trGuardSql, trGuardParams, (gErr, trRow) => {
+                if (gErr) {
+                    return res.status(500).json({ success: false, message: gErr.message });
+                }
+                if (!trRow) {
+                    return res.status(404).json({ success: false, message: 'Tiket tidak ditemukan atau bukan milik Anda' });
+                }
+                const trOld = String(trRow.status || '').toLowerCase().trim();
+                if (trOld === 'resolved' || trOld === 'closed') {
+                    return res.status(409).json({
+                        success: false,
+                        message: 'Tiket sudah selesai/ditutup dan tidak dapat dikerjakan ulang. Hubungi admin bila perlu dibuka kembali.'
+                    });
+                }
+                if (isAdminTask) {
+                    db.run(
+                        `UPDATE trouble_reports SET status = ?, updated_at = ?,
+                         work_started_at = COALESCE(work_started_at, ?)
+                         WHERE id = ? AND tenant_id = ?`,
+                        [dbStatus, wallNow, wallNow, id, tenantId],
+                        done
+                    );
+                    return;
+                }
                 db.run(
                     `UPDATE trouble_reports SET status = ?, updated_at = ?,
-                     work_started_at = COALESCE(work_started_at, ?)
-                     WHERE id = ? AND tenant_id = ?`,
-                    [dbStatus, wallNow, wallNow, id, tenantId],
+                     work_started_at = COALESCE(work_started_at, ?),
+                     assigned_technician_id = CASE
+                        WHEN IFNULL(TRIM(CAST(assigned_technician_id AS TEXT)), '') IN ('', '0') THEN ?
+                        ELSE assigned_technician_id
+                     END
+                     WHERE id = ?
+                       AND tenant_id = ?
+                       AND (
+                            assigned_technician_id = ?
+                            OR CAST(assigned_technician_id AS TEXT) = ?
+                            OR IFNULL(TRIM(CAST(assigned_technician_id AS TEXT)), '') IN ('', '0')
+                       )`,
+                    [dbStatus, wallNow, wallNow, techId, id, tenantId, techId, String(techId)],
                     done
                 );
-                return;
-            }
-            db.run(
-                `UPDATE trouble_reports SET status = ?, updated_at = ?,
-                 work_started_at = COALESCE(work_started_at, ?),
-                 assigned_technician_id = CASE
-                    WHEN IFNULL(TRIM(CAST(assigned_technician_id AS TEXT)), '') IN ('', '0') THEN ?
-                    ELSE assigned_technician_id
-                 END
-                 WHERE id = ?
-                   AND tenant_id = ?
-                   AND (
-                        assigned_technician_id = ?
-                        OR CAST(assigned_technician_id AS TEXT) = ?
-                        OR IFNULL(TRIM(CAST(assigned_technician_id AS TEXT)), '') IN ('', '0')
-                   )`,
-                [dbStatus, wallNow, wallNow, techId, id, tenantId, techId, String(techId)],
-                done
-            );
+            });
             return;
         }
 
