@@ -466,8 +466,6 @@
                                         const roundRp = (n) => Math.round(Number(n || 0));
                                         const sudahLunas = roundRp(collector.total_lunas_area);
                                         const discPeriode = roundRp(collector.discount_tagihan_periode);
-                                        const discTunggakan = roundRp(collector.discount_tunggakan);
-                                        const discTotal = roundRp(collector.total_discount != null ? collector.total_discount : (discPeriode + discTunggakan));
                                         const diterimaTunggakan = roundRp(collector.diterima_tunggakan);
                                         const lunasTunai = roundRp(collector.total_lunas_gross);
                                         const lunasTransfer = roundRp(collector.total_lunas_transfer);
@@ -496,9 +494,9 @@
                                             <span class="cc-rp">+ <%= rp(diterimaTunggakan) %></span>
                                         </div>
                                         <div class="cc-row">
-                                            <span class="cc-label" title="Total diskon pada pelunasan periode ini.">Diskon</span>
+                                            <span class="cc-label" title="Diskon pada tagihan bulan ini (diskon tunggakan sudah termasuk di angka Tunggakan yang bersih).">Diskon</span>
                                             <span class="cc-mid is-empty">&nbsp;</span>
-                                            <span class="cc-rp">- <%= rp(discTotal) %></span>
+                                            <span class="cc-rp">- <%= rp(discPeriode) %></span>
                                         </div>
                                         <div class="cc-row">
                                             <span class="cc-label" title="Pembayaran tunai yang dicatat kolektor (setoran ke kasir).">Lunas Kolektor (tunai)</span>
