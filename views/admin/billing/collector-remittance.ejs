@@ -518,6 +518,11 @@
                                             <span class="cc-mid is-empty">&nbsp;</span>
                                             <span class="cc-rp"><%= rp(belumSetor) %></span>
                                         </div>
+                                        <div class="cc-row">
+                                            <span class="cc-label" title="Komisi kolektor dari pembayaran tunai (di luar persamaan setoran).">Komisi</span>
+                                            <span class="cc-mid"><%= collector.commission_rate != null && collector.commission_rate !== undefined ? collector.commission_rate : 5 %>%</span>
+                                            <span class="cc-rp"><%= rp(collector.total_commission_cash != null ? collector.total_commission_cash : (collector.total_commission || 0)) %></span>
+                                        </div>
                                     </div>
 
                                     <div class="mt-3">

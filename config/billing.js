@@ -3351,31 +3351,41 @@ ${lifetimePaymentStatusSql}
         const monthStr = String(m).padStart(2, '0');
         const yearStr = String(y);
 
-        let filterJoins = '';
-        let filterWhere = '';
+        // Filter selain kolektor hanya mereferensi alias pelanggan (c.), aman untuk rename c.->c_sub./c_sum.
+        let baseWhere = '';
         const filterParams = [];
 
         if (filters.search) {
-            filterWhere += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.pppoe_username LIKE ?)';
+            baseWhere += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.pppoe_username LIKE ?)';
             const searchTerm = `%${filters.search}%`;
             filterParams.push(searchTerm, searchTerm, searchTerm);
         }
         if (filters.package_id) {
-            filterWhere += ' AND c.package_id = ?';
+            baseWhere += ' AND c.package_id = ?';
             filterParams.push(filters.package_id);
         }
         if (filters.area) {
-            filterWhere += ' AND c.area = ?';
+            baseWhere += ' AND c.area = ?';
             filterParams.push(filters.area);
         }
-        if (filters.collector_id) {
-            const hasAreas = await this._hasAreasReferenceTable();
-            const areaRowMatch = this._sqlCustomerMatchesCollectorAreaRow(hasAreas, 'cra', 'c');
-            filterJoins += ' LEFT JOIN collector_assignments ca ON ca.customer_id = c.id';
-            filterJoins += ` LEFT JOIN collector_areas cra ON (${areaRowMatch})`;
-            filterWhere += ' AND (ca.collector_id = ? OR cra.collector_id = ?)';
-            filterParams.push(filters.collector_id, filters.collector_id);
-        }
+
+        // Filter kolektor dibangun per-alias (bukan regex rename) supaya JOIN & WHERE-nya
+        // konsisten di subquery nominal — kalau tidak, ca./cra. jadi korelasi ke query luar
+        // sehingga nominal tidak ikut terfilter walau jumlahnya benar.
+        const hasAreasForCollector = filters.collector_id ? await this._hasAreasReferenceTable() : false;
+        const collectorJoins = (custAlias, suffix) => {
+            if (!filters.collector_id) return '';
+            const caA = 'ca' + suffix;
+            const craA = 'cra' + suffix;
+            const areaMatch = this._sqlCustomerMatchesCollectorAreaRow(hasAreasForCollector, craA, custAlias);
+            return ` LEFT JOIN collector_assignments ${caA} ON ${caA}.customer_id = ${custAlias}.id`
+                 + ` LEFT JOIN collector_areas ${craA} ON (${areaMatch})`;
+        };
+        const collectorWhere = (suffix) =>
+            filters.collector_id ? ` AND (ca${suffix}.collector_id = ? OR cra${suffix}.collector_id = ?)` : '';
+        const collectorParams = filters.collector_id ? [filters.collector_id, filters.collector_id] : [];
+        // Urutan param: filter dasar (search/package/area) dulu, lalu kolektor — selaras urutan klausa.
+        filterParams.push(...collectorParams);
 
         // Isolasi tenant — prioritaskan tenantId eksplisit (hilang di callback sqlite / tanpa ALS).
         const _tId = (options.tenantId != null)
@@ -3386,12 +3396,13 @@ ${lifetimePaymentStatusSql}
         const tenantSub = tLit ? ` AND c_sub.tenant_id = ${tLit}` : '';
         const tenantSum = tLit ? ` AND c_sum.tenant_id = ${tLit}` : '';
         const invTenantSql = tLit ? ` AND i.tenant_id = ${tLit}` : '';
-        if (tenantC) filterWhere += tenantC;
 
-        const fjSub = filterJoins.replace(/ ca/g, ' ca_sub').replace(/ cra/g, ' cra_sub').replace(/ c\./g, ' c_sub.');
-        let fwSub = filterWhere.replace(/c\./g, 'c_sub.') + tenantSub;
-        const fjSum = filterJoins.replace(/ ca/g, ' ca_sum').replace(/ cra/g, ' cra_sum').replace(/ c\./g, ' c_sum.');
-        let fwSum = filterWhere.replace(/c\./g, 'c_sum.') + tenantSum;
+        const filterJoins = collectorJoins('c', '');
+        const filterWhere = baseWhere + collectorWhere('') + tenantC;
+        const fjSub = collectorJoins('c_sub', '_sub');
+        const fwSub = baseWhere.replace(/\bc\./g, 'c_sub.') + collectorWhere('_sub') + tenantSub;
+        const fjSum = collectorJoins('c_sum', '_sum');
+        const fwSum = baseWhere.replace(/\bc\./g, 'c_sum.') + collectorWhere('_sum') + tenantSum;
 
         const hasInvoiceType = await new Promise((resolve) => {
             this.db.all('PRAGMA table_info(invoices)', (err, cols) => {
