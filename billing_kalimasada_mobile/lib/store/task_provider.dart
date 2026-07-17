@@ -52,6 +52,25 @@ class TaskProvider extends ChangeNotifier {
   bool get employeeMatched => _employeeMatched;
   int get tasksWeekMaxPerDay => _tasksWeekMaxPerDay;
 
+  /// Bersihkan cache tugas saat logout.
+  void clear() {
+    _loading = false;
+    _historyLoading = false;
+    _error = null;
+    _tasks = [];
+    _historyTasks = [];
+    _tasksMonth = null;
+    _tasksYear = null;
+    _weekPerfLoading = false;
+    _weekPerfError = null;
+    _weekPerfDays = [];
+    _tasksWeekTotal = 0;
+    _attendanceWeekAvg = 0;
+    _employeeMatched = false;
+    _tasksWeekMaxPerDay = 0;
+    notifyListeners();
+  }
+
   String _tasksPath({
     bool history = false,
     bool refresh = false,

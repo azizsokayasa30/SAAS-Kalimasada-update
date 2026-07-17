@@ -4,7 +4,7 @@
   <div class="km-topbar">
     <div>
       <h2>Radius Manager</h2>
-      <p class="km-subtitle">Kelola perangkat RADIUS lokal di setiap POP agar autentikasi trafik tetap lokal</p>
+      <p class="km-subtitle">Inventaris mesin FreeRADIUS Kalimasada (VPS pusat &amp; POP) untuk monitoring dashboard</p>
     </div>
     <button type="button" class="btn btn-km-primary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#addRadiusModal">
       <i class="bi bi-plus-lg me-1"></i> Tambah Radius Manager
@@ -14,6 +14,7 @@
   <%- include('_nav', { popSection }) %>
 
   <% const activePopCount = pops.filter(function(p) { return p.is_active; }).length; %>
+  <% const live = typeof radiusLive !== 'undefined' && radiusLive ? radiusLive : { total: 0, up: 0, down: 0 }; %>
   <% if (!activePopCount) { %>
     <div class="alert alert-warning">Buat POP/CABANG aktif terlebih dahulu di <a href="/management/pop" class="alert-link">Daftar POP/CABANG</a>.</div>
   <% } %>
@@ -22,6 +23,27 @@
   <% if (flash && flash.success === 'updated') { %><div class="alert alert-success">Radius manager berhasil diperbarui.</div><% } %>
   <% if (flash && flash.success === 'deleted') { %><div class="alert alert-success">Radius manager berhasil dihapus.</div><% } %>
   <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+
+  <div class="row g-3 mb-3">
+    <div class="col-md-4 col-6">
+      <div class="km-card h-100 py-3 px-3">
+        <div class="text-muted small">FreeRADIUS terdaftar</div>
+        <div class="fs-3 fw-semibold"><%= live.total || 0 %></div>
+      </div>
+    </div>
+    <div class="col-md-4 col-6">
+      <div class="km-card h-100 py-3 px-3">
+        <div class="text-muted small">Up</div>
+        <div class="fs-3 fw-semibold text-success"><%= live.up || 0 %></div>
+      </div>
+    </div>
+    <div class="col-md-4 col-6">
+      <div class="km-card h-100 py-3 px-3">
+        <div class="text-muted small">Down</div>
+        <div class="fs-3 fw-semibold text-danger"><%= live.down || 0 %></div>
+      </div>
+    </div>
+  </div>
 
   <div class="km-card km-card--flush">
     <div class="table-responsive">
@@ -33,13 +55,14 @@
             <th>Host</th>
             <th>Auth Port</th>
             <th>Acct Port</th>
-            <th>Status</th>
+            <th>Registrasi</th>
+            <th>Live</th>
             <th class="text-end">Aksi</th>
           </tr>
         </thead>
         <tbody>
           <% if (!radiusServers.length) { %>
-            <tr><td colspan="7" class="text-center py-4 text-muted">Belum ada radius manager terdaftar.</td></tr>
+            <tr><td colspan="8" class="text-center py-4 text-muted">Belum ada FreeRADIUS terdaftar.</td></tr>
           <% } %>
           <% radiusServers.forEach(function(r) { %>
             <tr class="<%= r.is_active ? '' : 'opacity-50' %>">
@@ -55,14 +78,26 @@
               <td><%= r.auth_port || 1812 %></td>
               <td><%= r.acct_port || 1813 %></td>
               <td>
-                <% if (r.is_active) { %><span class="badge bg-success">Aktif</span>
-                <% } else { %><span class="badge bg-secondary">Nonaktif</span><% } %>
+                <% if (r.is_active) { %><span class="km-fr-badge km-fr-badge--reg">Aktif</span>
+                <% } else { %><span class="km-fr-badge km-fr-badge--off">Nonaktif</span><% } %>
+              </td>
+              <td>
+                <div class="km-fr-live">
+                  <% if (r.live_status === 'up') { %>
+                    <span class="km-fr-badge km-fr-badge--up">up</span>
+                  <% } else if (r.live_status === 'down') { %>
+                    <span class="km-fr-badge km-fr-badge--down">down</span>
+                  <% } else { %>
+                    <span class="km-fr-badge km-fr-badge--off">—</span>
+                  <% } %>
+                  <% if (r.live_detail) { %><span class="km-fr-live__detail"><%= r.live_detail %></span><% } %>
+                </div>
               </td>
               <td class="text-end">
                 <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editRadiusModal-<%= r.id %>">
                   <i class="bi bi-pencil"></i>
                 </button>
-                <form method="POST" action="/management/pop/radius/<%= r.id %>/delete" class="d-inline" onsubmit="return confirm('Hapus radius manager ini?')">
+                <form method="POST" action="/management/pop/radius/<%= r.id %>/delete" class="d-inline" onsubmit="return confirm('Hapus FreeRADIUS ini?')">
                   <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
                 </form>
               </td>

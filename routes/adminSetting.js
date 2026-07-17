@@ -148,7 +148,7 @@ async function restoreBillingDbFromFile(sourceAbsPath) {
         liveDb.run('PRAGMA wal_checkpoint(TRUNCATE)', () => resolve());
     });
     try {
-        createBillingDbBackup(dbPath, { prefix: 'pre_restore' });
+        await createBillingDbBackup(dbPath, { prefix: 'pre_restore', db: liveDb });
     } catch (e) {
         logger.warn('[restore] Gagal membuat cadangan pra-restore: ' + e.message);
     }
@@ -410,6 +410,13 @@ router.post('/save', async (req, res) => {
         const mergedSettings = { ...oldSettings, ...newSettings };
         removePaymentGatewayEntries(mergedSettings);
         collapseDottedKeysIntoObjects(mergedSettings);
+
+        // Port server dikunci — tenant tidak boleh mengubah lewat UI/API settings
+        if (oldSettings.server_port !== undefined && oldSettings.server_port !== null && oldSettings.server_port !== '') {
+            mergedSettings.server_port = oldSettings.server_port;
+        } else {
+            delete mergedSettings.server_port;
+        }
 
         // Hapus user_auth_mode dari settings.json karena sudah dialihkan ke /admin/radius
         // Mode autentikasi sekarang dikelola di /admin/radius dan disimpan di database
@@ -809,7 +816,11 @@ router.use((error, req, res, next) => {
 router.get('/wa-status', async (req, res) => {
     try {
         const { getWhatsAppStatus, connectToWhatsApp } = require('../config/whatsapp');
-        const getCurrentStatus = () => getWhatsAppStatus();
+        const tenantIdForWa = req.session?.tenantId || req.tenantId || req.tenant?.id || null;
+        const tid = tenantIdForWa ? parseInt(tenantIdForWa, 10) : null;
+        const normalizedTid = Number.isFinite(tid) && tid > 0 ? tid : null;
+
+        const getCurrentStatus = () => getWhatsAppStatus(normalizedTid);
         let status = getCurrentStatus();
         const buildQrImage = async (qrText) => {
             if (!qrText) return null;
@@ -836,42 +847,45 @@ router.get('/wa-status', async (req, res) => {
             }
             return getCurrentStatus();
         };
-        
-        // Debug: Log status untuk troubleshooting
-        console.log('WhatsApp Status Request:', {
-            hasStatus: !!status,
-            connected: status?.connected,
-            hasQrCode: !!status?.qrCode,
-            hasQr: !!status?.qr,
-            status: status?.status,
-            globalStatus: global.whatsappStatus ? {
-                connected: global.whatsappStatus.connected,
-                hasQrCode: !!global.whatsappStatus.qrCode,
-                status: global.whatsappStatus.status
-            } : null
-        });
 
         const settings = await getSettingsForAdmin(req);
         const baileysEnabled = settings.baileys_enabled === true || String(settings.baileys_enabled).toLowerCase() === 'true';
         const activeProvider = String(settings.whatsapp_active_provider || 'baileys').toLowerCase();
-        const hasQr = !!(status && (status.qrCode || status.qr));
-        const isConnected = !!(status && status.connected);
+        let hasQr = !!(status && (status.qrCode || status.qr));
+        let isConnected = !!(status && status.connected);
 
+        const kickKey = normalizedTid ? `__baileysQrKickAt_${normalizedTid}` : '__baileysQrKickAt_legacy';
         if (baileysEnabled && activeProvider === 'baileys' && !isConnected && !hasQr) {
             const now = Date.now();
-            if (!global.__baileysQrKickAt || now - global.__baileysQrKickAt > 10000) {
-                global.__baileysQrKickAt = now;
-                console.log('Memicu koneksi Baileys dari endpoint wa-status karena QR belum tersedia');
-                connectToWhatsApp().catch((connectError) => {
+            if (!global[kickKey] || now - global[kickKey] > 10000) {
+                global[kickKey] = now;
+                console.log(`Memicu koneksi Baileys wa-status (${normalizedTid ? 'tenant-' + normalizedTid : 'legacy'})`);
+                connectToWhatsApp(normalizedTid).catch((connectError) => {
                     console.warn('Gagal memicu koneksi Baileys dari wa-status:', connectError.message);
                 });
             }
             status = await waitForQr();
+            hasQr = !!(status && (status.qrCode || status.qr));
+            isConnected = !!(status && status.connected);
         }
-        
-        // Cek global.whatsappStatus terlebih dahulu (ini yang di-update saat QR code diterima)
+
+        // Tenant: hanya pakai status registry tenant ini (jangan mirror global legacy QR)
+        if (normalizedTid) {
+            const qrCode = status?.qrCode || status?.qr || null;
+            return res.json({
+                connected: !!(status && status.connected),
+                qr: qrCode,
+                qrImage: await buildQrImage(qrCode),
+                phoneNumber: status?.phoneNumber || null,
+                status: status?.status || 'disconnected',
+                connectedSince: status?.connectedSince || null,
+                tenantId: normalizedTid,
+                sessionDir: status?.sessionDir || null
+            });
+        }
+
+        // Legacy / non-tenant: boleh pakai global.whatsappStatus
         if (global.whatsappStatus && global.whatsappStatus.qrCode) {
-            console.log('Using QR code from global.whatsappStatus');
             const qrImage = await buildQrImage(global.whatsappStatus.qrCode);
             return res.json({
                 connected: false,
@@ -882,15 +896,14 @@ router.get('/wa-status', async (req, res) => {
                 connectedSince: null
             });
         }
-        
-        // Pastikan QR code dalam format yang benar
+
         let qrCode = null;
         if (status && status.qrCode) {
             qrCode = status.qrCode;
         } else if (status && status.qr) {
             qrCode = status.qr;
         }
-        
+
         res.json({
             connected: status?.connected || false,
             qr: qrCode,
@@ -901,10 +914,10 @@ router.get('/wa-status', async (req, res) => {
         });
     } catch (e) {
         console.error('Error getting WhatsApp status:', e);
-        res.status(500).json({ 
-            connected: false, 
-            qr: null, 
-            error: e.message 
+        res.status(500).json({
+            connected: false,
+            qr: null,
+            error: e.message
         });
     }
 });
@@ -912,24 +925,32 @@ router.get('/wa-status', async (req, res) => {
 // POST: Refresh QR WhatsApp
 router.post('/wa-refresh', async (req, res) => {
     try {
+        const tenantIdForWa = req.session?.tenantId || req.tenantId || req.tenant?.id || null;
+        const tid = tenantIdForWa ? parseInt(tenantIdForWa, 10) : null;
+        const normalizedTid = Number.isFinite(tid) && tid > 0 ? tid : null;
+
         const { deleteWhatsAppSession } = require('../config/whatsapp');
-        const result = await deleteWhatsAppSession();
+        const result = await deleteWhatsAppSession(normalizedTid);
         if (!result || result.success !== true) {
             return res.status(500).json({
                 success: false,
                 error: (result && result.message) || 'Gagal mereset sesi WhatsApp'
             });
         }
-        
-        // Tunggu sebentar sebelum memeriksa status baru
+
         setTimeout(() => {
-            res.json({ success: true, message: 'Sesi WhatsApp telah direset. Silakan pindai QR code baru.' });
+            res.json({
+                success: true,
+                message: normalizedTid
+                    ? `Sesi WhatsApp tenant ${normalizedTid} telah direset. Silakan pindai QR code baru.`
+                    : 'Sesi WhatsApp telah direset. Silakan pindai QR code baru.'
+            });
         }, 1000);
     } catch (e) {
         console.error('Error refreshing WhatsApp session:', e);
-        res.status(500).json({ 
-            success: false, 
-            error: e.message 
+        res.status(500).json({
+            success: false,
+            error: e.message
         });
     }
 });
@@ -937,23 +958,29 @@ router.post('/wa-refresh', async (req, res) => {
 // POST: Hapus sesi WhatsApp
 router.post('/wa-delete', async (req, res) => {
     try {
+        const tenantIdForWa = req.session?.tenantId || req.tenantId || req.tenant?.id || null;
+        const tid = tenantIdForWa ? parseInt(tenantIdForWa, 10) : null;
+        const normalizedTid = Number.isFinite(tid) && tid > 0 ? tid : null;
+
         const { deleteWhatsAppSession } = require('../config/whatsapp');
-        const result = await deleteWhatsAppSession();
+        const result = await deleteWhatsAppSession(normalizedTid);
         if (!result || result.success !== true) {
             return res.status(500).json({
                 success: false,
                 error: (result && result.message) || 'Gagal menghapus sesi WhatsApp'
             });
         }
-        res.json({ 
-            success: true, 
-            message: 'Sesi WhatsApp telah dihapus. Silakan pindai QR code baru untuk terhubung kembali.' 
+        res.json({
+            success: true,
+            message: normalizedTid
+                ? `Sesi WhatsApp tenant ${normalizedTid} telah dihapus. Silakan pindai QR code baru.`
+                : 'Sesi WhatsApp telah dihapus. Silakan pindai QR code baru untuk terhubung kembali.'
         });
     } catch (e) {
         console.error('Error deleting WhatsApp session:', e);
-        res.status(500).json({ 
-            success: false, 
-            error: e.message 
+        res.status(500).json({
+            success: false,
+            error: e.message
         });
     }
 });
@@ -962,9 +989,11 @@ router.post('/wa-delete', async (req, res) => {
 router.post('/backup', async (req, res) => {
     try {
         const dbPath = path.join(__dirname, '../data/billing.db');
-        const { filename, cleanup } = createBillingDbBackup(dbPath);
+        const { filename, cleanup, method } = await createBillingDbBackup(dbPath, {
+            db: billing && billing.db ? billing.db : undefined
+        });
 
-        logger.info(`Database backup created: ${filename}`);
+        logger.info(`Database backup created: ${filename} (method=${method || 'online'})`);
         await logAdminActivity(req, 'database_backup', `Backup database: ${filename}`, { backup_file: filename });
 
         let message = 'Database backup berhasil dibuat';

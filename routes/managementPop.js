@@ -87,15 +87,31 @@ router.post('/switches/:id/delete', async (req, res) => {
 // ── Radius Manager ──
 router.get('/radius', async (req, res) => {
     try {
+        const { buildRadiusServerStats } = require('../config/platform/dashboardMetrics');
+        const liveStats = await buildRadiusServerStats();
         const [radiusServers, pops] = await Promise.all([
             popService.listRadiusServers(),
             popService.listPops(),
         ]);
+
+        const statusById = new Map(
+            (liveStats.items || []).map((item) => [Number(item.id), item])
+        );
+        const radiusServersWithStatus = radiusServers.map((server) => {
+            const live = statusById.get(Number(server.id));
+            return {
+                ...server,
+                live_status: live?.status || (server.is_active ? 'unknown' : 'down'),
+                live_detail: live?.detail || null,
+            };
+        });
+
         res.render('platform/pop/radius', {
             title: 'Radius Manager',
             active: 'pop-radius',
             popSection: 'radius',
-            radiusServers,
+            radiusServers: radiusServersWithStatus,
+            radiusLive: liveStats,
             pops,
             adminName: req.session.platformAdminName,
             flash: req.query,

@@ -12,6 +12,17 @@ const DB_PATH = path.join(__dirname, '../data/billing.db');
 const billingManager = require('../config/billing');
 console.log('[HOTSPOT] adminHotspot routes module loaded');
 
+function _hotspotRouterWhere() {
+    const t = billingManager._tenantWhere('');
+    if (!t.sql) return '';
+    return ` WHERE tenant_id = ${parseInt(t.params[0], 10)}`;
+}
+function _hotspotRouterAnd() {
+    const t = billingManager._tenantWhere('');
+    if (!t.sql) return '';
+    return ` AND tenant_id = ${parseInt(t.params[0], 10)}`;
+}
+
 const VOUCHER_PAGE_TIMEOUT_MS = 8000;
 /** Timeout untuk load penuh halaman users/hotspot (agar tidak ERR_EMPTY_RESPONSE saat router lambat) */
 const LOAD_PAGE_TIMEOUT_MS = 25000;
@@ -401,7 +412,7 @@ async function loadHotspotPageData() {
     logger.info(`[DIAGNOSTIC] loadHotspotPageData: fetching routers via billingManager (authMode: ${userAuthMode})`);
     
     const routers = await new Promise((resolve) => {
-        billingManager.db.all('SELECT * FROM routers ORDER BY id', [], (err, rows) => {
+        billingManager.db.all('SELECT * FROM routers' + _hotspotRouterWhere() + ' ORDER BY id', [], (err, rows) => {
             if (err) {
                 logger.error('[DIAGNOSTIC] Hotspot: error fetching routers:', err.message);
                 resolve([]);
@@ -621,7 +632,7 @@ async function loadHotspotUsersPageDataSimple() {
     }
 
     const routers = await new Promise((resolve, reject) => {
-        billingManager.db.all('SELECT * FROM routers ORDER BY id', (err, rows) => {
+        billingManager.db.all('SELECT * FROM routers' + _hotspotRouterWhere() + ' ORDER BY id', (err, rows) => {
             if (err) reject(err);
             else resolve(rows || []);
         });
@@ -877,7 +888,7 @@ router.post('/delete', async (req, res) => {
         if (router_id) {
             const db = new sqlite3.Database(DB_PATH);
             routerObj = await new Promise((resolve, reject) => {
-                db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+                db.get('SELECT * FROM routers WHERE id=?' + _hotspotRouterAnd(), [parseInt(router_id)], (err, row) => {
                     db.close();
                     if (err) reject(err);
                     else resolve(row || null);
@@ -908,7 +919,7 @@ router.post('/delete-selected', async (req, res) => {
             return routerCache.get(numericId);
         }
         return await new Promise((resolve, reject) => {
-            db.get('SELECT * FROM routers WHERE id=?', [numericId], (err, row) => {
+            db.get('SELECT * FROM routers WHERE id=?' + _hotspotRouterAnd(), [numericId], (err, row) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -1190,7 +1201,7 @@ router.post('/', async (req, res) => {
         }
         const db = new sqlite3.Database(DB_PATH);
         const routerObj = await new Promise((resolve, reject) => {
-            db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+            db.get('SELECT * FROM routers WHERE id=?' + _hotspotRouterAnd(), [parseInt(router_id)], (err, row) => {
                 db.close();
                 if (err) reject(err);
                 else resolve(row || null);
@@ -1237,7 +1248,7 @@ router.post('/edit', async (req, res) => {
         }
         const db = new sqlite3.Database(DB_PATH);
         const routerObj = await new Promise((resolve, reject) => {
-            db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+            db.get('SELECT * FROM routers WHERE id=?' + _hotspotRouterAnd(), [parseInt(router_id)], (err, row) => {
                 db.close();
                 if (err) reject(err);
                 else resolve(row || null);
@@ -1310,7 +1321,7 @@ router.post('/generate-vouchers', async (req, res) => {
         if (router_id) {
             const db = new sqlite3.Database(DB_PATH);
             routerObj = await new Promise((resolve, reject) => {
-                db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+                db.get('SELECT * FROM routers WHERE id=?' + _hotspotRouterAnd(), [parseInt(router_id)], (err, row) => {
                     db.close();
                     if (err) reject(err);
                     else resolve(row || null);
@@ -1348,7 +1359,7 @@ router.post('/generate-vouchers', async (req, res) => {
         if (!routerObj && serverMetadata.nasId) {
             const db = new sqlite3.Database(DB_PATH);
             routerObj = await new Promise((resolve, reject) => {
-                db.get('SELECT * FROM routers WHERE id=?', [serverMetadata.nasId], (err, row) => {
+                db.get('SELECT * FROM routers WHERE id=?' + _hotspotRouterAnd(), [serverMetadata.nasId], (err, row) => {
                     db.close();
                     if (err) reject(err);
                     else resolve(row || null);
@@ -1491,7 +1502,7 @@ router.get('/voucher', async (req, res) => {
 
         // Fetch routers from database using centralized manager
         routers = await new Promise((resolve) => {
-            billingManager.db.all('SELECT * FROM routers ORDER BY id', (err, rows) => {
+            billingManager.db.all('SELECT * FROM routers' + _hotspotRouterWhere() + ' ORDER BY id', (err, rows) => {
                 if (err) {
                     logger.error('[Voucher Page] Error fetching routers:', err.message);
                     resolve([]);
@@ -2005,7 +2016,7 @@ router.get('/voucher', async (req, res) => {
         if (!routers || routers.length === 0) {
             try {
                 routers = await new Promise((resolve) => {
-                    billingManager.db.all('SELECT * FROM routers ORDER BY id', (e, rows) => resolve(rows || []));
+                    billingManager.db.all('SELECT * FROM routers' + _hotspotRouterWhere() + ' ORDER BY id', (e, rows) => resolve(rows || []));
                 });
             } catch (_) {
                 logger.error('[Voucher Page] Failed to fetch routers even in error fallback');
@@ -2083,7 +2094,7 @@ router.post('/generate-voucher', async (req, res) => {
                 try {
                     // Ambil semua router dan cek server hotspot mereka
                     const routers = await new Promise((resolve, reject) => {
-                        db.all('SELECT * FROM routers ORDER BY name', [], (err, rows) => {
+                        db.all('SELECT * FROM routers' + _hotspotRouterWhere() + ' ORDER BY name', [], (err, rows) => {
                             if (err) reject(err);
                             else resolve(rows || []);
                         });
@@ -2126,7 +2137,7 @@ router.post('/generate-voucher', async (req, res) => {
             // Fetch router object dari database
             const db = new sqlite3.Database(DB_PATH);
             routerObj = await new Promise((resolve, reject) => {
-                db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+                db.get('SELECT * FROM routers WHERE id=?' + _hotspotRouterAnd(), [parseInt(router_id)], (err, row) => {
                     db.close();
                     if (err) reject(err);
                     else resolve(row || null);
@@ -2251,7 +2262,7 @@ router.post('/delete-voucher', async (req, res) => {
         if (router_id) {
             const db = new sqlite3.Database(DB_PATH);
             routerObj = await new Promise((resolve, reject) => {
-                db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+                db.get('SELECT * FROM routers WHERE id=?' + _hotspotRouterAnd(), [parseInt(router_id)], (err, row) => {
                     db.close();
                     if (err) reject(err);
                     else resolve(row || null);
@@ -2321,7 +2332,7 @@ router.post('/generate-manual-voucher', async (req, res) => {
         // Fetch router object
         const db = new sqlite3.Database(DB_PATH);
         const routerObj = await new Promise((resolve, reject) => {
-            db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+            db.get('SELECT * FROM routers WHERE id=?' + _hotspotRouterAnd(), [parseInt(router_id)], (err, row) => {
                 db.close();
                 if (err) reject(err);
                 else resolve(row || null);
@@ -2401,7 +2412,7 @@ router.post('/generate-auto-voucher', async (req, res) => {
         // Fetch router object
         const db = new sqlite3.Database(DB_PATH);
             routerObj = await new Promise((resolve, reject) => {
-            db.get('SELECT * FROM routers WHERE id=?', [parseInt(router_id)], (err, row) => {
+            db.get('SELECT * FROM routers WHERE id=?' + _hotspotRouterAnd(), [parseInt(router_id)], (err, row) => {
                 db.close();
                 if (err) reject(err);
                 else resolve(row || null);

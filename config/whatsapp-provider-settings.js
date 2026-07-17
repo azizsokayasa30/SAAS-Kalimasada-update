@@ -169,9 +169,9 @@ function applyWhatsAppProviderInput(target = {}, input = {}) {
     out.wablas_enabled = enabledByProvider.wablas;
     out.wablas_api_url = String(wablas.apiUrl || DEFAULTS.wablas.apiUrl).trim();
     out.wablas_api_key = String(wablas.apiKey || '').trim();
-    out.wablas_secret_key = String(wablas.secretKey || '');
+    out.wablas_secret_key = String(wablas.secretKey || '').trim();
     out.wablas_device_id = String(wablas.deviceId || '').trim();
-    out.wablas_webhook_secret = String(wablas.webhookSecret || '');
+    out.wablas_webhook_secret = String(wablas.webhookSecret || '').trim();
     out.wablas_min_delay = toInteger(wablas.minDelay, DEFAULTS.wablas.minDelay);
     out.wablas_max_retries = toInteger(wablas.maxRetries, DEFAULTS.wablas.maxRetries);
     out.wablas_retry_delay = toInteger(wablas.retryDelay, DEFAULTS.wablas.retryDelay);

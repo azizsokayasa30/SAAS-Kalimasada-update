@@ -61,9 +61,19 @@
     --f-foreground: #f8fafc;
     --f-background: #0a0f1a;
     --f-card: #1e293b;
+    --f-card-foreground: #f8fafc;
     --f-border: #334155;
     --f-muted: #1e293b;
     --f-muted-foreground: #94a3b8;
+    --f-accent: #0f172a;
+    --f-accent-foreground: #f8fafc;
+    --f-secondary: #0f172a;
+    --f-secondary-foreground: #f8fafc;
+    /* Soft tints for dark surfaces (hindari putih terang) */
+    --f-success-soft: rgba(16, 185, 129, 0.16);
+    --f-error-soft: rgba(239, 68, 68, 0.16);
+    --f-warning-soft: rgba(245, 158, 11, 0.16);
+    --f-info-soft: rgba(59, 130, 246, 0.18);
 }
 
 
@@ -590,4 +600,48 @@
 
 [data-theme="dark"] .f-pl-total-row {
     background: rgba(255,255,255,0.02);
+}
+
+/* Baris LABA BERSIH — kontras aman light & dark */
+.f-pl-net-profit {
+    background: var(--f-info-soft) !important;
+    color: var(--f-foreground);
+}
+.f-pl-net-profit td {
+    color: inherit;
+}
+.f-pl-net-profit .f-pl-net-amount {
+    color: var(--f-info) !important;
+}
+
+.f-pl-net-loss {
+    background: var(--f-error-soft) !important;
+    color: var(--f-foreground);
+}
+.f-pl-net-loss td {
+    color: inherit;
+}
+.f-pl-net-loss .f-pl-net-amount {
+    color: var(--f-error) !important;
+}
+
+[data-theme="dark"] .f-pl-net-profit {
+    background: rgba(59, 130, 246, 0.2) !important;
+    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.35);
+}
+[data-theme="dark"] .f-pl-net-profit .f-pl-net-amount {
+    color: #93c5fd !important;
+}
+
+[data-theme="dark"] .f-pl-net-loss {
+    background: rgba(239, 68, 68, 0.2) !important;
+    box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.35);
+}
+[data-theme="dark"] .f-pl-net-loss .f-pl-net-amount {
+    color: #fca5a5 !important;
+}
+
+/* Hindari Bootstrap .text-dark yang putih-hitam kaku di dark mode */
+.finance-content-area .text-theme {
+    color: var(--f-foreground) !important;
 }

@@ -27,6 +27,7 @@ const {
     enrichCustomersWithPppoe,
     getPppoeBatchCached
 } = require('../utils/mappingNewData');
+const { tenantIdForInsert } = require('../config/platform/tenantSqlHelpers');
 
 // Helper function untuk mendapatkan nilai parameter dari device
 function getParameterValue(device, parameterPath) {
@@ -646,12 +647,13 @@ router.post('/update-odp', adminAuth, async (req, res) => {
             savedCode = finalCode;
 
             savedOdpId = await new Promise((resolve, reject) => {
+                const tenantId = tenantIdForInsert();
                 db.run(`
                     INSERT INTO odps (
                         name, code, capacity, used_ports, status,
                         address, latitude, longitude, installation_date,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'), datetime('now','localtime'))
+                        created_at, updated_at, tenant_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'), datetime('now','localtime'), ?)
                 `, [
                     name,
                     finalCode,
@@ -661,7 +663,8 @@ router.post('/update-odp', adminAuth, async (req, res) => {
                     address || '',
                     latitude != null ? parseFloat(latitude) : 0,
                     longitude != null ? parseFloat(longitude) : 0,
-                    installation_date || new Date().toISOString().split('T')[0]
+                    installation_date || new Date().toISOString().split('T')[0],
+                    tenantId
                 ], function onInsert(err) {
                     if (err) reject(err);
                     else resolve(this.lastID);

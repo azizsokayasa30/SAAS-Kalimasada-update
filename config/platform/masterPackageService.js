@@ -35,6 +35,27 @@ function dbAll(sql, params = []) {
     });
 }
 
+async function ensurePackagesLimitColumns() {
+    const columns = [
+        'router_id INTEGER',
+        'nas_ip TEXT',
+        'upload_limit TEXT',
+        'download_limit TEXT',
+        'burst_limit_upload TEXT',
+        'burst_limit_download TEXT',
+        'burst_threshold TEXT',
+        'burst_time TEXT',
+    ];
+    for (const col of columns) {
+        try {
+            await dbRun(`ALTER TABLE packages ADD COLUMN ${col}`);
+        } catch (err) {
+            const msg = String(err.message || '').toLowerCase();
+            if (!msg.includes('duplicate')) throw err;
+        }
+    }
+}
+
 async function ensureMasterPackageSchema() {
     const fs = require('fs');
     const migrationPath = path.join(__dirname, '../../migrations/add_master_packages.sql');
@@ -51,6 +72,7 @@ async function ensureMasterPackageSchema() {
             }
         }
     }
+    await ensurePackagesLimitColumns();
 }
 
 function normalizeMasterInput(data) {
@@ -148,6 +170,7 @@ async function deleteMasterPackage(id) {
 }
 
 async function syncMasterPackageToTenant(masterPackageId, tenantId) {
+    await ensurePackagesLimitColumns();
     const master = await getMasterPackageById(masterPackageId);
     if (!master) throw new Error('Master paket tidak ditemukan.');
 
@@ -209,6 +232,7 @@ async function syncMasterPackageToAllSelectedTenants(masterPackageId) {
 }
 
 async function selectPackageForTenant(tenantId, masterPackageId) {
+    await ensurePackagesLimitColumns();
     const master = await getMasterPackageById(masterPackageId);
     if (!master || !master.is_active) {
         throw new Error('Paket tidak tersedia.');
@@ -223,8 +247,28 @@ async function selectPackageForTenant(tenantId, masterPackageId) {
          ON CONFLICT(tenant_id, master_package_id) DO UPDATE SET is_enabled = 1`,
         [tenantId, masterPackageId]
     );
-    await syncMasterPackageToTenant(masterPackageId, tenantId);
-    return getTenantPackageCatalog(tenantId);
+    const packageId = await syncMasterPackageToTenant(masterPackageId, tenantId);
+
+    let syncResult = null;
+    try {
+        const pkg = await dbGet('SELECT * FROM packages WHERE id = ?', [packageId]);
+        if (pkg && pkg.pppoe_profile != null && String(pkg.pppoe_profile).trim() !== '') {
+            const { ensurePppoeProfileForPackage } = require('../mikrotik');
+            syncResult = await ensurePppoeProfileForPackage(pkg);
+            if (syncResult && syncResult.profileName &&
+                String(syncResult.profileName).trim() !== String(pkg.pppoe_profile).trim()) {
+                await dbRun(
+                    'UPDATE packages SET pppoe_profile = ? WHERE id = ?',
+                    [syncResult.profileName, packageId]
+                );
+            }
+        }
+    } catch (syncErr) {
+        console.warn('[masterPackage] ensure PPPoE profile:', syncErr.message);
+    }
+
+    const catalog = await getTenantPackageCatalog(tenantId);
+    return { catalog, syncResult };
 }
 
 async function unselectPackageForTenant(tenantId, masterPackageId) {

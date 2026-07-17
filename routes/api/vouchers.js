@@ -12,8 +12,8 @@ const {
 } = require('../../config/mikrotik');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const { tenantSqlFromRequest } = require('../../config/platform/tenantSqlHelpers');
 
-// Database helper
 const getDB = () => new sqlite3.Database(path.join(process.cwd(), 'data/billing.db'));
 
 // API: POST /api/vouchers/generate
@@ -37,6 +37,7 @@ router.post('/generate', verifyToken, async (req, res) => {
 
         const authMode = await getUserAuthModeAsync();
         let routerObj = null;
+        const t = tenantSqlFromRequest(req);
 
         if (authMode !== 'radius') {
             if (!router_id) {
@@ -44,7 +45,7 @@ router.post('/generate', verifyToken, async (req, res) => {
             }
             const db = getDB();
             routerObj = await new Promise((resolve) => {
-                db.get('SELECT * FROM routers WHERE id = ?', [router_id], (err, row) => {
+                db.get(`SELECT * FROM routers WHERE id = ?${t.and()}`, [router_id], (err, row) => {
                     db.close();
                     resolve(row || null);
                 });
@@ -61,7 +62,7 @@ router.post('/generate', verifyToken, async (req, res) => {
             profile,
             prefix: prefix || '',
             length: parseInt(length) || 6,
-            userType: user_type || 'vc', // vc = username & password same
+            userType: user_type || 'vc',
             limitUptime: limit_uptime || null,
             limitBytes: limit_bytes || null,
             validity: validity || null
@@ -71,7 +72,7 @@ router.post('/generate', verifyToken, async (req, res) => {
             res.json({ 
                 success: true, 
                 message: `${qty} vouchers generated successfully`,
-                vouchers: result.vouchers // If returned by config/mikrotik.js
+                vouchers: result.vouchers
             });
         } else {
             res.status(500).json({ success: false, message: result.message });
@@ -92,9 +93,10 @@ router.get('/profiles', verifyToken, async (req, res) => {
             return res.json(result);
         }
 
+        const t = tenantSqlFromRequest(req);
         const db = getDB();
         const routers = await new Promise((resolve) => {
-            db.all('SELECT * FROM routers', [], (err, rows) => {
+            db.all(`SELECT * FROM routers${t.where()}`, [], (err, rows) => {
                 db.close();
                 resolve(rows || []);
             });
@@ -104,9 +106,9 @@ router.get('/profiles', verifyToken, async (req, res) => {
         for (const r of routers) {
             if (router_id && parseInt(router_id) !== r.id) continue;
             try {
-                const res = await getHotspotProfiles(r);
-                if (res.success) {
-                    allProfiles = allProfiles.concat(res.data.map(p => ({ ...p, router_id: r.id, router_name: r.name })));
+                const profileRes = await getHotspotProfiles(r);
+                if (profileRes.success) {
+                    allProfiles = allProfiles.concat(profileRes.data.map(p => ({ ...p, router_id: r.id, router_name: r.name })));
                 }
             } catch (e) { /* skip failed routers */ }
         }

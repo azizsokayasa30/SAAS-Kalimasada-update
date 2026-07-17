@@ -113,24 +113,48 @@
         
         .template-enabled {
             opacity: 1;
-            background-color: #fff !important;
+            background-color: var(--panel-bg, var(--panel, #fff)) !important;
         }
         
         .variable-item {
             display: inline-block;
-            background: #e9ecef;
+            background: #e2e8f0;
             padding: 2px 8px;
             margin: 2px;
             border-radius: 4px;
             font-size: 0.8rem;
-            color: #495057;
+            color: #0f172a !important;
+            border: 1px solid #cbd5e1;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         }
         
         .variable-list {
             margin-bottom: 1rem;
             padding: 0.5rem;
-            background: var(--bg-secondary, #f8f9fa);
+            background: var(--bg-secondary, #f1f5f9);
             border-radius: 5px;
+            border: 1px solid var(--border, #e2e8f0);
+            color: var(--text, #0f172a);
+        }
+
+        .variable-list > strong {
+            color: var(--text, #0f172a) !important;
+        }
+
+        [data-theme="dark"] .variable-item {
+            background: #334155;
+            color: #f1f5f9 !important;
+            border-color: #475569;
+        }
+
+        [data-theme="dark"] .variable-list {
+            background: #1e293b;
+            border-color: #334155;
+            color: #f1f5f9;
+        }
+
+        [data-theme="dark"] .variable-list > strong {
+            color: #f8fafc !important;
         }
 
         .gateway-card {
@@ -350,6 +374,19 @@
                                     </div>
                                 </div>
                                 <div class="provider-row-body">
+                                    <div id="wablasDiagnosisPanel" class="alert alert-secondary mb-3 py-2">
+                                        <div class="d-flex justify-content-between align-items-start gap-2 flex-wrap">
+                                            <div>
+                                                <strong id="wablasDiagnosisLabel">Status Wablas: belum dicek</strong>
+                                                <div id="wablasDiagnosisDetail" class="small mt-1 mb-0 text-muted">
+                                                    Klik “Cek Koneksi Wablas” setelah mengisi Token &amp; Secret Key.
+                                                </div>
+                                            </div>
+                                            <span id="wablasDiagnosisBadge" class="badge bg-secondary">Unknown</span>
+                                        </div>
+                                        <ul id="wablasDiagnosisIssues" class="small mb-0 mt-2 d-none"></ul>
+                                        <ul id="wablasDiagnosisHints" class="small mb-0 mt-1 text-muted d-none"></ul>
+                                    </div>
                                     <div class="row g-2">
                                         <div class="col-md-6">
                                             <label class="form-label">API URL</label>
@@ -382,6 +419,11 @@
                                         <div class="col-12">
                                             <label class="form-label">Webhook Secret</label>
                                             <input type="password" class="form-control" id="wablas_webhook_secret" placeholder="Webhook secret">
+                                        </div>
+                                        <div class="col-12">
+                                            <button type="button" class="btn btn-outline-primary btn-sm" id="btnDiagnoseWablas">
+                                                <i class="bi bi-heart-pulse"></i> Cek Koneksi Wablas
+                                            </button>
                                         </div>
                                     </div>
                                 </div>
@@ -767,15 +809,26 @@
                                         <span class="variable-item">{amount}</span>
                                         <span class="variable-item">{due_date}</span>
                                         <span class="variable-item">{package_name}</span>
-                                        <span class="variable-item" title="Untuk Customer (PPPoE) dan Member (Hotspot)">{package_speed}</span>
+                                        <span class="variable-item">{package_speed}</span>
                                         <span class="variable-item">{notes}</span>
+                                        <span class="variable-item" title="URL portal pelanggan otomatis per tenant">{customer_portal_url}</span>
+                                        <span class="variable-item" title="Dari Setting Umum → Billing & Pembayaran">{Rekening_Pembayaran}</span>
                                         <div class="mt-2 text-muted small">
-                                            <i class="bi bi-info-circle"></i> <strong>Catatan:</strong> Variabel {package_name} dan {package_speed} otomatis mendeteksi paket Customer (PPPoE) atau Member (Hotspot) berdasarkan tipe invoice.
+                                            <i class="bi bi-info-circle"></i> <strong>Catatan:</strong> Variabel {package_name} dan {package_speed} otomatis mendeteksi paket Customer (PPPoE) atau Member (Hotspot) berdasarkan tipe invoice. Hapus baris paket di template jika tidak ingin ditampilkan.
+                                        </div>
+                                        <div class="mt-1 text-muted small">
+                                            <i class="bi bi-link-45deg"></i> <strong>{customer_portal_url}</strong> otomatis mengikuti subdomain tenant (contoh: https://skynet.kalimasada-app.com/customer-app/login).
+                                        </div>
+                                        <div class="mt-1 text-muted small">
+                                            <i class="bi bi-bank"></i> <strong>{Rekening_Pembayaran}</strong> mengambil nama bank, no. rekening, dan A/N dari Setting Umum → Billing &amp; Pembayaran (per tenant).
                                         </div>
                                     </div>
                                     <textarea class="form-control" id="invoice_created_template" rows="8" placeholder="Enter template message..."></textarea>
-                                    <div class="mt-2">
-                                        <button class="btn btn-warning btn-sm" onclick="testTemplate('invoice_created')">
+                                    <div class="mt-2 d-flex gap-2 flex-wrap align-items-center">
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveTemplate('invoice_created')">
+                                            <i class="bi bi-save"></i> Save Template
+                                        </button>
+                                        <button type="button" class="btn btn-warning btn-sm" onclick="testTemplate('invoice_created')">
                                             <i class="bi bi-send"></i> Test Template
                                         </button>
                                     </div>
@@ -801,11 +854,19 @@
                                         <span class="variable-item">{due_date}</span>
                                         <span class="variable-item">{days_remaining}</span>
                                         <span class="variable-item">{package_name}</span>
-                                        <span class="variable-item" title="Untuk Customer (PPPoE) dan Member (Hotspot)">{package_speed}</span>
+                                        <span class="variable-item">{package_speed}</span>
+                                        <span class="variable-item" title="URL portal pelanggan otomatis per tenant">{customer_portal_url}</span>
+                                        <span class="variable-item" title="Dari Setting Umum → Billing & Pembayaran">{Rekening_Pembayaran}</span>
+                                        <div class="mt-2 text-muted small">
+                                            <i class="bi bi-info-circle"></i> <strong>Catatan:</strong> Variabel {package_name} dan {package_speed} otomatis mendeteksi paket Customer (PPPoE) atau Member (Hotspot) berdasarkan tipe invoice. Hapus baris paket di template jika tidak ingin ditampilkan.
+                                        </div>
                                     </div>
                                     <textarea class="form-control" id="due_date_reminder_template" rows="8" placeholder="Enter template message..."></textarea>
-                                    <div class="mt-2">
-                                        <button class="btn btn-warning btn-sm" onclick="testTemplate('due_date_reminder')">
+                                    <div class="mt-2 d-flex gap-2 flex-wrap align-items-center">
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveTemplate('due_date_reminder')">
+                                            <i class="bi bi-save"></i> Save Template
+                                        </button>
+                                        <button type="button" class="btn btn-warning btn-sm" onclick="testTemplate('due_date_reminder')">
                                             <i class="bi bi-send"></i> Test Template
                                         </button>
                                     </div>
@@ -830,10 +891,18 @@
                                         <span class="variable-item">{due_date}</span>
                                         <span class="variable-item">{package_name}</span>
                                         <span class="variable-item">{package_speed}</span>
+                                        <span class="variable-item" title="URL portal pelanggan otomatis per tenant">{customer_portal_url}</span>
+                                        <span class="variable-item" title="Dari Setting Umum → Billing & Pembayaran">{Rekening_Pembayaran}</span>
+                                        <div class="mt-2 text-muted small">
+                                            <i class="bi bi-info-circle"></i> <strong>Catatan:</strong> Variabel {package_name} dan {package_speed} otomatis mendeteksi paket Customer (PPPoE) atau Member (Hotspot) berdasarkan tipe invoice. Hapus baris paket di template jika tidak ingin ditampilkan.
+                                        </div>
                                     </div>
                                     <textarea class="form-control" id="due_date_reminder_today_template" rows="8" placeholder="Enter template message..."></textarea>
-                                    <div class="mt-2">
-                                        <button class="btn btn-warning btn-sm" onclick="testTemplate('due_date_reminder_today')">
+                                    <div class="mt-2 d-flex gap-2 flex-wrap align-items-center">
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveTemplate('due_date_reminder_today')">
+                                            <i class="bi bi-save"></i> Save Template
+                                        </button>
+                                        <button type="button" class="btn btn-warning btn-sm" onclick="testTemplate('due_date_reminder_today')">
                                             <i class="bi bi-send"></i> Test Template
                                         </button>
                                     </div>
@@ -859,14 +928,18 @@
                                         <span class="variable-item">{payment_date}</span>
                                         <span class="variable-item">{reference_number}</span>
                                         <span class="variable-item">{package_name}</span>
-                                        <span class="variable-item" title="Untuk Customer (PPPoE) dan Member (Hotspot)">{package_speed}</span>
+                                        <span class="variable-item">{package_speed}</span>
+                                        <span class="variable-item" title="URL portal pelanggan otomatis per tenant">{customer_portal_url}</span>
                                         <div class="mt-2 text-muted small">
-                                            <i class="bi bi-info-circle"></i> <strong>Catatan:</strong> Variabel {package_name} dan {package_speed} otomatis mendeteksi paket Customer (PPPoE) atau Member (Hotspot) berdasarkan tipe invoice.
+                                            <i class="bi bi-info-circle"></i> <strong>Catatan:</strong> Variabel {package_name} dan {package_speed} otomatis mendeteksi paket Customer (PPPoE) atau Member (Hotspot) berdasarkan tipe invoice. Hapus baris paket di template jika tidak ingin ditampilkan.
                                         </div>
                                     </div>
                                     <textarea class="form-control" id="payment_received_template" rows="8" placeholder="Enter template message..."></textarea>
-                                    <div class="mt-2">
-                                        <button class="btn btn-warning btn-sm" onclick="testTemplate('payment_received')">
+                                    <div class="mt-2 d-flex gap-2 flex-wrap align-items-center">
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveTemplate('payment_received')">
+                                            <i class="bi bi-save"></i> Save Template
+                                        </button>
+                                        <button type="button" class="btn btn-warning btn-sm" onclick="testTemplate('payment_received')">
                                             <i class="bi bi-send"></i> Test Template
                                         </button>
                                     </div>
@@ -889,10 +962,14 @@
                                         <span class="variable-item">{affected_area}</span>
                                         <span class="variable-item">{estimated_resolution}</span>
                                         <span class="variable-item">{support_phone}</span>
+                                        <span class="variable-item" title="URL portal pelanggan otomatis per tenant">{customer_portal_url}</span>
                                     </div>
                                     <textarea class="form-control" id="service_disruption_template" rows="8" placeholder="Enter template message..."></textarea>
-                                    <div class="mt-2">
-                                        <button class="btn btn-warning btn-sm" onclick="testTemplate('service_disruption')">
+                                    <div class="mt-2 d-flex gap-2 flex-wrap align-items-center">
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveTemplate('service_disruption')">
+                                            <i class="bi bi-save"></i> Save Template
+                                        </button>
+                                        <button type="button" class="btn btn-warning btn-sm" onclick="testTemplate('service_disruption')">
                                             <i class="bi bi-send"></i> Test Template
                                         </button>
                                     </div>
@@ -914,8 +991,11 @@
                                         <span class="variable-item">{announcement_content}</span>
                                     </div>
                                     <textarea class="form-control" id="service_announcement_template" rows="8" placeholder="Enter template message..."></textarea>
-                                    <div class="mt-2">
-                                        <button class="btn btn-warning btn-sm" onclick="testTemplate('service_announcement')">
+                                    <div class="mt-2 d-flex gap-2 flex-wrap align-items-center">
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveTemplate('service_announcement')">
+                                            <i class="bi bi-save"></i> Save Template
+                                        </button>
+                                        <button type="button" class="btn btn-warning btn-sm" onclick="testTemplate('service_announcement')">
                                             <i class="bi bi-send"></i> Test Template
                                         </button>
                                     </div>
@@ -938,13 +1018,22 @@
                                         <span class="variable-item">{reason}</span>
                                         <span class="variable-item">{username}</span>
                                         <span class="variable-item">{package_name}</span>
+                                        <span class="variable-item">{package_speed}</span>
                                         <span class="variable-item">{due_date}</span>
                                         <span class="variable-item">{amount}</span>
                                         <span class="variable-item">{days_overdue}</span>
+                                        <span class="variable-item" title="URL portal pelanggan otomatis per tenant">{customer_portal_url}</span>
+                                        <span class="variable-item" title="Dari Setting Umum → Billing & Pembayaran">{Rekening_Pembayaran}</span>
+                                        <div class="mt-2 text-muted small">
+                                            <i class="bi bi-info-circle"></i> <strong>Catatan:</strong> Variabel {package_name} dan {package_speed} otomatis dari data pelanggan. Hapus baris paket di template jika tidak ingin ditampilkan.
+                                        </div>
                                     </div>
                                     <textarea class="form-control" id="service_suspension_template" rows="8" placeholder="Enter template message..."></textarea>
-                                    <div class="mt-2">
-                                        <button class="btn btn-warning btn-sm" onclick="testTemplate('service_suspension')">
+                                    <div class="mt-2 d-flex gap-2 flex-wrap align-items-center">
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveTemplate('service_suspension')">
+                                            <i class="bi bi-save"></i> Save Template
+                                        </button>
+                                        <button type="button" class="btn btn-warning btn-sm" onclick="testTemplate('service_suspension')">
                                             <i class="bi bi-send"></i> Test Template
                                         </button>
                                     </div>
@@ -971,10 +1060,14 @@
                                         <span class="variable-item">{payment_date}</span>
                                         <span class="variable-item">{amount}</span>
                                         <span class="variable-item">{payment_method}</span>
+                                        <span class="variable-item" title="URL portal pelanggan otomatis per tenant">{customer_portal_url}</span>
                                     </div>
                                     <textarea class="form-control" id="service_restoration_template" rows="8" placeholder="Enter template message..."></textarea>
-                                    <div class="mt-2">
-                                        <button class="btn btn-warning btn-sm" onclick="testTemplate('service_restoration')">
+                                    <div class="mt-2 d-flex gap-2 flex-wrap align-items-center">
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveTemplate('service_restoration')">
+                                            <i class="bi bi-save"></i> Save Template
+                                        </button>
+                                        <button type="button" class="btn btn-warning btn-sm" onclick="testTemplate('service_restoration')">
                                             <i class="bi bi-send"></i> Test Template
                                         </button>
                                     </div>
@@ -983,7 +1076,7 @@
                                 <!-- Welcome Message Template -->
                                 <div class="mb-4">
                                     <div class="d-flex justify-content-between align-items-center mb-2">
-                                        <h5>Pesan Selamat Datang</h5>
+                                        <h5>WA welcome pelanggan baru</h5>
                                         <div class="form-check form-switch">
                                             <input class="form-check-input" type="checkbox" id="welcome_message_enabled" checked>
                                             <label class="form-check-label" for="welcome_message_enabled">
@@ -991,18 +1084,30 @@
                                             </label>
                                         </div>
                                     </div>
+                                    <p class="text-muted small mb-2">
+                                        Template ini dipakai untuk notifikasi sambutan pelanggan baru (daftar pelanggan / aktivasi / instalasi selesai).
+                                    </p>
                                     <div class="variable-list">
                                         <strong>Available Variables:</strong>
                                         <span class="variable-item">{customer_name}</span>
                                         <span class="variable-item">{username}</span>
                                         <span class="variable-item">{package_name}</span>
                                         <span class="variable-item">{package_speed}</span>
+                                        <span class="variable-item">{pppoe_username}</span>
+                                        <span class="variable-item">{pppoe_password}</span>
                                         <span class="variable-item">{wifi_password}</span>
                                         <span class="variable-item">{support_phone}</span>
+                                        <span class="variable-item">{company_header}</span>
+                                        <span class="variable-item">{footer_info}</span>
+                                        <span class="variable-item" title="URL portal pelanggan otomatis per tenant">{customer_portal_url}</span>
+                                        <span class="variable-item" title="Dari Setting Umum → Billing & Pembayaran">{Rekening_Pembayaran}</span>
                                     </div>
-                                    <textarea class="form-control" id="welcome_message_template" rows="8" placeholder="Enter template message..."></textarea>
-                                    <div class="mt-2">
-                                        <button class="btn btn-warning btn-sm" onclick="testTemplate('welcome_message')">
+                                    <textarea class="form-control" id="welcome_message_template" rows="10" placeholder="Enter template message..."></textarea>
+                                    <div class="mt-2 d-flex gap-2 flex-wrap align-items-center">
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveTemplate('welcome_message')">
+                                            <i class="bi bi-save"></i> Save Template
+                                        </button>
+                                        <button type="button" class="btn btn-warning btn-sm" onclick="testTemplate('welcome_message')">
                                             <i class="bi bi-send"></i> Test Template
                                         </button>
                                     </div>
@@ -1037,7 +1142,8 @@
                                         <span class="variable-item">{pppoe_password}</span>
                                     </div>
                                     <textarea class="form-control" id="installation_job_assigned_template" rows="8" placeholder="Template..."></textarea>
-                                    <div class="mt-2">
+                                    <div class="mt-2 d-flex gap-2 flex-wrap align-items-center">
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveTemplate('installation_job_assigned')"><i class="bi bi-save"></i> Save</button>
                                         <button type="button" class="btn btn-warning btn-sm" onclick="testTemplate('installation_job_assigned')"><i class="bi bi-send"></i> Test</button>
                                     </div>
                                 </div>
@@ -1059,7 +1165,8 @@
                                         <span class="variable-item">{notes}</span>
                                     </div>
                                     <textarea class="form-control" id="installation_status_update_template" rows="8"></textarea>
-                                    <div class="mt-2">
+                                    <div class="mt-2 d-flex gap-2 flex-wrap align-items-center">
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveTemplate('installation_status_update')"><i class="bi bi-save"></i> Save</button>
                                         <button type="button" class="btn btn-warning btn-sm" onclick="testTemplate('installation_status_update')"><i class="bi bi-send"></i> Test</button>
                                     </div>
                                 </div>
@@ -1080,7 +1187,8 @@
                                         <span class="variable-item">{completion_notes}</span>
                                     </div>
                                     <textarea class="form-control" id="installation_completed_template" rows="8"></textarea>
-                                    <div class="mt-2">
+                                    <div class="mt-2 d-flex gap-2 flex-wrap align-items-center">
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveTemplate('installation_completed')"><i class="bi bi-save"></i> Save</button>
                                         <button type="button" class="btn btn-warning btn-sm" onclick="testTemplate('installation_completed')"><i class="bi bi-send"></i> Test</button>
                                     </div>
                                 </div>
@@ -1106,7 +1214,8 @@
                                         <span class="variable-item">{pppoe_profile}</span>
                                     </div>
                                     <textarea class="form-control" id="sales_order_new_customer_template" rows="8"></textarea>
-                                    <div class="mt-2">
+                                    <div class="mt-2 d-flex gap-2 flex-wrap align-items-center">
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveTemplate('sales_order_new_customer')"><i class="bi bi-save"></i> Save</button>
                                         <button type="button" class="btn btn-warning btn-sm" onclick="testTemplate('sales_order_new_customer')"><i class="bi bi-send"></i> Test</button>
                                     </div>
                                 </div>
@@ -1134,7 +1243,8 @@
                                         <span class="variable-item">{status}</span>
                                     </div>
                                     <textarea class="form-control" id="trouble_report_new_technician_template" rows="10"></textarea>
-                                    <div class="mt-2">
+                                    <div class="mt-2 d-flex gap-2 flex-wrap align-items-center">
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveTemplate('trouble_report_new_technician')"><i class="bi bi-save"></i> Save</button>
                                         <button type="button" class="btn btn-warning btn-sm" onclick="testTemplate('trouble_report_new_technician')"><i class="bi bi-send"></i> Test</button>
                                     </div>
                                 </div>
@@ -1156,7 +1266,8 @@
                                         <span class="variable-item">{status_message}</span>
                                     </div>
                                     <textarea class="form-control" id="trouble_report_customer_update_template" rows="10"></textarea>
-                                    <div class="mt-2">
+                                    <div class="mt-2 d-flex gap-2 flex-wrap align-items-center">
+                                        <button type="button" class="btn btn-primary btn-sm" onclick="saveTemplate('trouble_report_customer_update')"><i class="bi bi-save"></i> Save</button>
                                         <button type="button" class="btn btn-warning btn-sm" onclick="testTemplate('trouble_report_customer_update')"><i class="bi bi-send"></i> Test</button>
                                     </div>
                                 </div>
@@ -1187,7 +1298,7 @@
                                             <option value="service_announcement">Service Announcement</option>
                                             <option value="service_suspension">Service Suspension</option>
                                             <option value="service_restoration">Service Restoration</option>
-                                            <option value="welcome_message">Welcome Message</option>
+                                            <option value="welcome_message">WA welcome pelanggan baru</option>
                                             <option value="installation_job_assigned">Instalasi: tugas baru</option>
                                             <option value="installation_status_update">Instalasi: update status</option>
                                             <option value="installation_completed">Instalasi: selesai</option>
@@ -1275,6 +1386,121 @@
         return !!document.getElementById(id)?.checked;
     }
 
+    function renderWablasDiagnosis(diagnosis) {
+        const panel = document.getElementById('wablasDiagnosisPanel');
+        const labelEl = document.getElementById('wablasDiagnosisLabel');
+        const detailEl = document.getElementById('wablasDiagnosisDetail');
+        const badgeEl = document.getElementById('wablasDiagnosisBadge');
+        const issuesEl = document.getElementById('wablasDiagnosisIssues');
+        const hintsEl = document.getElementById('wablasDiagnosisHints');
+        if (!panel || !labelEl || !detailEl || !badgeEl) return;
+
+        if (!diagnosis) {
+            panel.className = 'alert alert-secondary mb-3 py-2';
+            labelEl.textContent = 'Status Wablas: belum dicek';
+            detailEl.textContent = 'Klik “Cek Koneksi Wablas” setelah mengisi Token & Secret Key.';
+            badgeEl.className = 'badge bg-secondary';
+            badgeEl.textContent = 'Unknown';
+            if (issuesEl) { issuesEl.classList.add('d-none'); issuesEl.innerHTML = ''; }
+            if (hintsEl) { hintsEl.classList.add('d-none'); hintsEl.innerHTML = ''; }
+            return;
+        }
+
+        const connected = !!diagnosis.connected;
+        const authOk = !!diagnosis.authOk;
+        panel.className = `alert mb-3 py-2 ${connected ? 'alert-success' : (authOk ? 'alert-warning' : 'alert-danger')}`;
+        labelEl.textContent = `Status Wablas: ${diagnosis.label || (connected ? 'Connected' : 'Disconnected')}`;
+
+        const parts = [];
+        if (diagnosis.phone) parts.push(`Nomor device: ${diagnosis.phone}`);
+        if (diagnosis.quota != null) parts.push(`Quota: ${diagnosis.quota}`);
+        if (diagnosis.expired_date) parts.push(`Expired: ${diagnosis.expired_date}`);
+        if (diagnosis.device?.device) parts.push(`Device: ${diagnosis.device.device}`);
+        detailEl.textContent = parts.length
+            ? parts.join(' · ')
+            : (connected ? 'Device WhatsApp Connected.' : 'Belum siap mengirim pesan ke nomor tujuan.');
+
+        badgeEl.className = `badge ${connected ? 'bg-success' : (authOk ? 'bg-warning text-dark' : 'bg-danger')}`;
+        badgeEl.textContent = connected ? 'Connected' : (authOk ? 'Device Offline' : 'Error');
+
+        const issues = Array.isArray(diagnosis.issues) ? diagnosis.issues : [];
+        const hints = Array.isArray(diagnosis.hints) ? diagnosis.hints : [];
+        if (issuesEl) {
+            if (issues.length) {
+                issuesEl.classList.remove('d-none');
+                issuesEl.innerHTML = issues.map((i) => `<li><strong>Masalah:</strong> ${escapeHtml(i)}</li>`).join('');
+            } else {
+                issuesEl.classList.add('d-none');
+                issuesEl.innerHTML = '';
+            }
+        }
+        if (hintsEl) {
+            if (hints.length) {
+                hintsEl.classList.remove('d-none');
+                hintsEl.innerHTML = hints.map((h) => `<li>${escapeHtml(h)}</li>`).join('');
+            } else {
+                hintsEl.classList.add('d-none');
+                hintsEl.innerHTML = '';
+            }
+        }
+    }
+
+    function escapeHtml(text) {
+        return String(text || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    async function diagnoseWablasConnection(showToast = true) {
+        const btn = document.getElementById('btnDiagnoseWablas');
+        const original = btn ? btn.innerHTML : '';
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Mengecek...';
+        }
+        try {
+            const payload = collectProviderSettings();
+            payload.forceWablas = true;
+            const response = await fetch('/admin/billing/whatsapp-settings/gateway/diagnose', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await response.json();
+            const diagnosis = data.diagnosis || null;
+            renderWablasDiagnosis(diagnosis);
+            if (showToast) {
+                if (diagnosis?.connected) {
+                    showAlert('Wablas Connected. Siap mengirim pesan.', 'success');
+                } else if (diagnosis?.authOk) {
+                    showAlert('Token diterima Wablas, tetapi device WhatsApp masih offline/disconnect.', 'warning');
+                } else {
+                    const firstIssue = diagnosis?.issues?.[0] || data.message || 'Koneksi Wablas gagal';
+                    showAlert(firstIssue, 'danger');
+                }
+            }
+            return diagnosis;
+        } catch (error) {
+            console.error('diagnoseWablasConnection error:', error);
+            renderWablasDiagnosis({
+                connected: false,
+                authOk: false,
+                label: 'Error',
+                issues: [error.message || 'Gagal cek koneksi'],
+                hints: ['Coba refresh halaman atau cek jaringan server.']
+            });
+            if (showToast) showAlert('Gagal cek koneksi Wablas', 'danger');
+            return null;
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = original;
+            }
+        }
+    }
+
     async function loadProviderSettings() {
         try {
             const response = await fetch('/admin/billing/whatsapp-settings/gateway');
@@ -1285,6 +1511,9 @@
 
             applyProviderSettings(data.settings || {});
             syncAllProviderRows();
+            if ((data.settings?.activeProvider === 'wablas') || getFieldChecked('wablas_enabled')) {
+                diagnoseWablasConnection(false);
+            }
         } catch (error) {
             console.error('Error loading provider settings:', error);
             showAlert('Gagal memuat pengaturan provider WhatsApp', 'danger');
@@ -1480,6 +1709,11 @@
             saveButton.addEventListener('click', saveProviderSettings);
         }
 
+        const diagnoseBtn = document.getElementById('btnDiagnoseWablas');
+        if (diagnoseBtn) {
+            diagnoseBtn.addEventListener('click', () => diagnoseWablasConnection(true));
+        }
+
         if (refreshButton) {
             refreshButton.addEventListener('click', refreshWAQRCode);
         }
@@ -1507,8 +1741,21 @@
 
             if (data.success) {
                 applyProviderSettings(data.settings || {});
-                showAlert('Pengaturan provider WhatsApp berhasil disimpan!', 'success');
                 syncAllProviderRows();
+                if (data.diagnosis) {
+                    renderWablasDiagnosis(data.diagnosis);
+                    if (data.diagnosis.connected) {
+                        showAlert('Pengaturan disimpan. Wablas Connected.', 'success');
+                    } else if (data.diagnosis.authOk) {
+                        showAlert('Pengaturan disimpan, tetapi device Wablas masih offline. Pesan tidak akan sampai sampai device Connected.', 'warning');
+                    } else {
+                        const issue = data.diagnosis.issues?.[0] || 'Koneksi Wablas belum valid';
+                        showAlert('Pengaturan disimpan, tetapi ada masalah: ' + issue, 'warning');
+                    }
+                } else {
+                    showAlert('Pengaturan provider WhatsApp berhasil disimpan!', 'success');
+                }
+                loadStatus();
             } else {
                 showAlert('Gagal menyimpan provider: ' + (data.message || data.error || 'Unknown error'), 'danger');
             }
@@ -1723,7 +1970,27 @@
             
             if (data.success) {
                 const providerLabel = data.whatsappProvider ? ` (${data.whatsappProvider})` : '';
-                document.getElementById('whatsappStatus').textContent = `${data.whatsappStatus}${providerLabel}`;
+                let statusText = `${data.whatsappStatus}${providerLabel}`;
+                if (data.diagnosis) {
+                    renderWablasDiagnosis(data.diagnosis);
+                    if (!data.diagnosis.connected && data.diagnosis.issues?.length) {
+                        statusText += ` — ${data.diagnosis.issues[0]}`;
+                    } else if (data.diagnosis.connected && data.diagnosis.phone) {
+                        statusText += ` · ${data.diagnosis.phone}`;
+                    }
+                } else if (data.whatsappPhone) {
+                    statusText += ` · WA ${data.whatsappPhone}`;
+                } else if (data.whatsappProvider === 'wablas' && data.whatsappDevice) {
+                    const d = data.whatsappDevice;
+                    if (d.connected) {
+                        statusText += d.phone ? ` · WA ${d.phone}` : '';
+                    } else if (d.error) {
+                        statusText += ` · ${d.error}`;
+                    } else {
+                        statusText += ' · device belum Connected';
+                    }
+                }
+                document.getElementById('whatsappStatus').textContent = statusText;
                 document.getElementById('activeCustomers').textContent = data.activeCustomers;
                 document.getElementById('pendingInvoices').textContent = data.pendingInvoices;
                 document.getElementById('nextReminder').textContent = data.nextReminder;
@@ -1733,22 +2000,59 @@
         }
     }
 
+    function collectTemplatePayload(templateKey) {
+        const textarea = document.getElementById(`${templateKey}_template`);
+        const toggle = document.getElementById(`${templateKey}_enabled`);
+        if (!textarea) return null;
+        const meta = (templates && templates[templateKey]) || {};
+        return {
+            title: meta.title || templateKey,
+            template: textarea.value,
+            enabled: toggle ? toggle.checked : true
+        };
+    }
+
+    // Save one template
+    async function saveTemplate(templateKey) {
+        try {
+            const payload = collectTemplatePayload(templateKey);
+            if (!payload) {
+                showAlert('Template tidak ditemukan di form', 'danger');
+                return;
+            }
+
+            const response = await fetch('/admin/billing/whatsapp-settings/templates', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ [templateKey]: payload })
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                if (!templates) templates = {};
+                templates[templateKey] = { ...(templates[templateKey] || {}), ...payload };
+                showAlert(`Template "${payload.title || templateKey}" berhasil disimpan`, 'success');
+                updateTemplateStatus();
+            } else {
+                showAlert('Error saving template: ' + data.message, 'danger');
+            }
+        } catch (error) {
+            console.error('Error saving template:', error);
+            showAlert('Error saving template', 'danger');
+        }
+    }
+
     // Save all templates
     async function saveAllTemplates() {
         try {
             // Collect all template data
             const templateData = {};
             Object.keys(templates).forEach(key => {
-                const textarea = document.getElementById(`${key}_template`);
-                const toggle = document.getElementById(`${key}_enabled`);
-                
-                if (textarea) {
-                    templateData[key] = {
-                        title: templates[key].title,
-                        template: textarea.value,
-                        enabled: toggle ? toggle.checked : true
-                    };
-                }
+                const item = collectTemplatePayload(key);
+                if (item) templateData[key] = item;
             });
             
             const response = await fetch('/admin/billing/whatsapp-settings/templates', {
@@ -1792,7 +2096,11 @@
             const data = await response.json();
             
             if (data.success) {
-                showAlert('Test notification sent successfully!', 'success');
+                if (data.pending) {
+                    showAlert(data.message || 'Pesan PENDING di Wablas. Pastikan device WhatsApp Connected (scan QR) di dashboard Wablas.', 'warning');
+                } else {
+                    showAlert(data.message || 'Test notification sent successfully!', 'success');
+                }
             } else {
                 showAlert('Error sending test notification: ' + data.message, 'danger');
             }
@@ -1827,7 +2135,11 @@
             const data = await response.json();
             
             if (data.success) {
-                showAlert('Test notification sent successfully!', 'success');
+                if (data.pending) {
+                    showAlert(data.message || 'Pesan PENDING di Wablas. Pastikan device WhatsApp Connected (scan QR) di dashboard Wablas.', 'warning');
+                } else {
+                    showAlert(data.message || 'Test notification sent successfully!', 'success');
+                }
             } else {
                 showAlert('Error sending test notification: ' + data.message, 'danger');
             }

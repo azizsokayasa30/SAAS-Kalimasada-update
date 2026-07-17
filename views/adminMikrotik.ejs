@@ -31,6 +31,27 @@
             border: 1px solid #ccc;
             padding: 4px 10px;
         }
+        .pppoe-toolbar-filters {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.5rem;
+            justify-content: flex-end;
+        }
+        .pppoe-toolbar-filters .form-select {
+            min-width: 180px;
+            max-width: 260px;
+        }
+        @media (max-width: 767.98px) {
+            .pppoe-toolbar-filters {
+                justify-content: flex-start;
+                margin-top: 0.75rem;
+            }
+            .pppoe-toolbar-filters .form-select {
+                max-width: 100%;
+                width: 100%;
+            }
+        }
         /* Mobile responsive table styles */
         .table-responsive {
             overflow-x: auto;
@@ -248,12 +269,22 @@
                 </div>
             </div>
             
-            <div class="row mb-3">
+            <div class="row mb-3 align-items-center">
                 <div class="col-md-6">
                     <button class="btn btn-primary" id="btnTambahUser">Tambah User PPPoE</button>
                     <button class="btn btn-outline-secondary ms-2" id="btnRefreshStats">
                         <i class="bi bi-arrow-clockwise"></i> Refresh Stats
                     </button>
+                </div>
+                <div class="col-md-6">
+                    <div class="pppoe-toolbar-filters">
+                        <label for="filterProfile" class="form-label mb-0 text-nowrap">
+                            <i class="bi bi-funnel me-1"></i>Filter Profile
+                        </label>
+                        <select id="filterProfile" class="form-select form-select-sm" aria-label="Filter Profile">
+                            <option value="">Semua Profile</option>
+                        </select>
+                    </div>
                 </div>
             </div>
   <div class="table-responsive">
@@ -275,9 +306,14 @@
         <% users.forEach(function(user, i) { %>
         <tr>
           <td><%= i+1 %></td>
-          <td><%= user.name %></td>
+          <td>
+            <%= user.name %>
+            <% if (user.missing_radius) { %>
+              <div class="small text-warning">Belum ada di RADIUS</div>
+            <% } %>
+          </td>
           <td><%= user.password %></td>
-          <td><%= user.profile %></td>
+          <td><%= user.profile_display || user.profile %></td>
           <td>
             <% if (user.active) { %>
               <span class="badge rounded-pill bg-success">Aktif</span>
@@ -417,9 +453,53 @@ function showToast(type, message, duration) {
 }
 
 $(function() {
+  const PROFILE_COL = 3;
+  const STATUS_COL = 4;
+
+  function getPppoeTable() {
+    const $table = $('#pppoeTable');
+    if (!$table.length || !$.fn.DataTable || !$.fn.DataTable.isDataTable('#pppoeTable')) return null;
+    return $table.DataTable();
+  }
+
   function setActiveFilterCard(filterKey) {
     $('.stat-filter-card').removeClass('is-selected');
     $(`.stat-filter-card[data-filter="${filterKey}"]`).addClass('is-selected');
+  }
+
+  function applyProfileFilter(table, profileValue) {
+    if (!table) return;
+    if (profileValue) {
+      const escaped = $.fn.dataTable.util.escapeRegex(profileValue);
+      table.column(PROFILE_COL).search('^' + escaped + '$', true, false);
+    } else {
+      table.column(PROFILE_COL).search('');
+    }
+  }
+
+  function populateProfileFilter(table) {
+    const $select = $('#filterProfile');
+    if (!$select.length || !table) return;
+
+    const profiles = new Set();
+    table.column(PROFILE_COL, { search: 'none' }).data().each(function(value) {
+      const name = String(value || '').trim();
+      if (name) profiles.add(name);
+    });
+
+    const current = $select.val() || '';
+    $select.find('option:not(:first)').remove();
+    Array.from(profiles).sort(function(a, b) {
+      return a.localeCompare(b, 'id', { sensitivity: 'base' });
+    }).forEach(function(name) {
+      $select.append($('<option></option>').attr('value', name).text(name));
+    });
+
+    if (current && profiles.has(current)) {
+      $select.val(current);
+    } else {
+      $select.val('');
+    }
   }
 
   function filterUsersByCard(filterKey) {
@@ -428,19 +508,16 @@ $(function() {
       return;
     }
 
-    const $table = $('#pppoeTable');
-    if (!$table.length || !$.fn.DataTable) return;
-    const table = $table.DataTable();
+    const table = getPppoeTable();
+    if (!table) return;
 
-    // Status selalu berada di kolom ke-5 (index 4)
-    const statusColumnIndex = 4;
-
+    // Hanya ubah filter status; biarkan pencarian username & filter profile tetap
     if (filterKey === 'active') {
-      table.column(statusColumnIndex).search('^Aktif$', true, false).draw();
+      table.column(STATUS_COL).search('^Aktif$', true, false).draw();
     } else if (filterKey === 'offline') {
-      table.column(statusColumnIndex).search('^Offline$', true, false).draw();
+      table.column(STATUS_COL).search('^Offline$', true, false).draw();
     } else {
-      table.search('').columns().search('').draw();
+      table.column(STATUS_COL).search('').draw();
     }
 
     setActiveFilterCard(filterKey);
@@ -451,8 +528,19 @@ $(function() {
     filterUsersByCard(filterKey);
   });
 
-  // Default state: tampilkan semua user
+  $('#filterProfile').on('change', function() {
+    const table = getPppoeTable();
+    if (!table) return;
+    applyProfileFilter(table, $(this).val());
+    table.draw();
+  });
+
+  // Default state: tampilkan semua user + isi opsi filter profile
   setActiveFilterCard('all');
+  const pppoeTable = getPppoeTable();
+  if (pppoeTable) {
+    populateProfileFilter(pppoeTable);
+  }
 
   // Load profiles ke select
   function loadProfiles(selectedProfile) {

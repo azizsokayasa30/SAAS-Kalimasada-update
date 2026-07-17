@@ -118,9 +118,22 @@ class AuthProvider extends ChangeNotifier {
         final data = jsonDecode(response.body);
         if (data['success'] == true) {
           _token = data['token'];
-          _user = data['user'];
-          _role = _user?['role'];
+          _user = data['user'] is Map
+              ? Map<String, dynamic>.from(data['user'] as Map)
+              : data['user'];
+          _role = _user?['role']?.toString();
           ApiClient.setAuthToken(_token);
+
+          // Bind tenant dari server (sumber kebenaran), bukan hanya dropdown lokal.
+          final serverTenant = (_user?['tenant'] ?? _user?['tenant_slug'])
+              ?.toString()
+              .trim()
+              .toLowerCase();
+          final boundTenant =
+              (serverTenant != null && serverTenant.isNotEmpty)
+                  ? serverTenant
+                  : tenantSlug;
+          await TenantStorage.save(boundTenant);
 
           final prefs = await SharedPreferences.getInstance();
           // Persist session di background — UI tidak perlu menunggu disk I/O.
@@ -134,7 +147,7 @@ class AuthProvider extends ChangeNotifier {
                 username: phone,
                 password: password,
                 enableBiometric: enableBiometric,
-                tenant: tenantSlug,
+                tenant: boundTenant,
               );
             } else {
               await CredentialStorage.clearCredentials();
@@ -283,6 +296,9 @@ class AuthProvider extends ChangeNotifier {
     await prefs.remove('role');
     await prefs.remove('user');
     await SessionService.clearSessionMarker();
+
+    // Wajib: hapus slug tenant agar login berikutnya tidak memakai X-Tenant tenant lama.
+    await TenantStorage.save(null);
 
     if (clearSavedCredentials) {
       await CredentialStorage.clearCredentials();

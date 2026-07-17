@@ -198,6 +198,44 @@
         }).join('');
     }
 
+    function renderReadiness(readiness) {
+        var panel = el('readinessPanel');
+        var text = el('readinessText');
+        var icon = el('readinessIcon');
+        var badge = el('readinessBadge');
+        var btnBoot = el('btnBootstrapKeystore');
+        var btnAdopt = el('btnAdoptKeystore');
+        var ready = !!(readiness && readiness.ready);
+
+        if (panel) {
+            panel.className = 'km-readiness-banner mb-3 ' + (ready ? 'is-ready' : 'is-missing');
+        }
+        if (text) text.textContent = ready ? 'Server Siap' : 'Server Belum Siap';
+        if (icon) {
+            icon.className = ready ? 'bi bi-check-circle-fill' : 'bi bi-exclamation-triangle-fill';
+        }
+
+        if (badge) {
+            badge.className = 'badge ' + (ready ? 'bg-success' : 'bg-warning text-dark');
+            badge.innerHTML = ready
+                ? '<i class="bi bi-check-circle me-1"></i> Server Siap'
+                : '<i class="bi bi-exclamation-triangle me-1"></i> Belum siap';
+        }
+
+        var ks = (readiness && readiness.keystore) || {};
+        if (btnBoot) {
+            btnBoot.classList.toggle('d-none', !!(ks.ready && ks.matches_production));
+        }
+        if (btnAdopt) {
+            btnAdopt.classList.toggle('d-none', !(ks.ready && !ks.matches_production && ks.sha256));
+        }
+        if (lastStatusRef && lastStatusRef.status === 'running') {
+            el('btnBuildApk').disabled = true;
+        } else {
+            el('btnBuildApk').disabled = !(readiness && readiness.can_build);
+        }
+    }
+
     function renderKeystoreStatus(ks) {
         var box = el('keystoreAlert');
         var okHint = el('keystoreOkHint');
@@ -269,6 +307,7 @@
         el('statApkCount').textContent = (data.latest_apk_files || []).length;
 
         renderKeystoreStatus(data.keystore);
+        renderReadiness(data.readiness);
         renderApkList(data.latest_apk_files);
         updateBuildProgress({ status: data.build_status || 'idle' });
     }
@@ -342,6 +381,7 @@
             var j = await r.json();
             if (!j.success) {
                 alert(j.message || 'Gagal memulai build');
+                if (j.data) renderReadiness(j.data);
                 return;
             }
             lastProgressPct = 0;
@@ -361,6 +401,34 @@
     el('btnClearLogView').addEventListener('click', function () {
         el('buildLog').textContent = '';
         el('buildLog').classList.add('text-muted');
+    });
+
+    el('btnBootstrapKeystore').addEventListener('click', async function () {
+        if (!confirm('Buat keystore baru di server ini?\n\nPerangkat yang sudah terpasang APK lama (sertifikat berbeda) harus install ulang untuk update OTA.')) return;
+        try {
+            var r = await fetch(API_BASE + '/keystore/bootstrap', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ force: false })
+            });
+            var j = await r.json();
+            alert(j.message || (j.success ? 'OK' : 'Gagal'));
+            if (j.success) loadConfig();
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
+    });
+
+    el('btnAdoptKeystore').addEventListener('click', async function () {
+        if (!confirm('Adopsi SHA keystore saat ini sebagai baseline OTA?\n\nPerangkat lama dengan sertifikat berbeda harus install ulang.')) return;
+        try {
+            var r = await fetch(API_BASE + '/keystore/adopt', { method: 'POST' });
+            var j = await r.json();
+            alert(j.message || (j.success ? 'OK' : 'Gagal'));
+            if (j.success) loadConfig();
+        } catch (err) {
+            alert('Error: ' + err.message);
+        }
     });
 
     loadConfig().then(pollStatus).catch(function (e) { alert(e.message); });

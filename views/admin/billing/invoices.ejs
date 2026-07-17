@@ -952,176 +952,63 @@
 
         // Send WhatsApp Notification for Invoice
         function sendWhatsAppNotification(invoiceId, phoneNumber, status, customerName, amount, dueDate, invoiceNumber, packageName) {
-            // Store invoice ID for sending
             currentNotificationData = {
                 invoiceId: invoiceId
             };
 
-            // Set form data
-            document.getElementById('waPhoneNumber').value = phoneNumber;
-            document.getElementById('waCustomerName').value = customerName;
+            document.getElementById('waPhoneNumber').value = phoneNumber || '';
+            document.getElementById('waCustomerName').value = customerName || '';
+            document.getElementById('notificationPreview').innerHTML = `
+                <div class="card">
+                    <div class="card-body text-muted">
+                        <i class="bi bi-hourglass-split"></i> Memuat preview dari template WhatsApp tenant...
+                    </div>
+                </div>
+            `;
 
-            // Fetch invoice details from server for preview
-            fetch(`/admin/billing/api/invoices/${invoiceId}`)
+            fetch(`/admin/billing/invoices/${invoiceId}/whatsapp-preview`)
                 .then(response => response.json())
                 .then(data => {
-                    if (data.success && data.invoice) {
-                        const invoice = data.invoice;
-                        const actualInvoiceNumber = invoice.invoice_number || invoiceNumber || `INV-${invoiceId}`;
-                        const actualPackageName = packageName || (invoice.package_name || 'Paket Internet');
-                        const actualPackageSpeed = invoice.package_speed || '';
-                        
-                        // Generate message preview based on status
-                        const messagePreview = generateMessagePreview(
-                            status, 
-                            customerName, 
-                            amount, 
-                            dueDate,
-                            actualInvoiceNumber,
-                            actualPackageName,
-                            actualPackageSpeed
-                        );
-                        
+                    if (data.success) {
+                        if (data.phone) document.getElementById('waPhoneNumber').value = data.phone;
+                        if (data.customerName) document.getElementById('waCustomerName').value = data.customerName;
+                        const title = data.templateTitle
+                            ? `<div class="small text-muted mb-2">Template: <strong>${escapeHtml(data.templateTitle)}</strong> <code>${escapeHtml(data.templateKey || '')}</code></div>`
+                            : '';
                         document.getElementById('notificationPreview').innerHTML = `
                             <div class="card">
                                 <div class="card-header">
                                     <h6 class="mb-0">Preview Pesan:</h6>
                                 </div>
                                 <div class="card-body">
-                                    <pre style="white-space: pre-wrap; font-size: 14px;">${messagePreview}</pre>
+                                    ${title}
+                                    <pre style="white-space: pre-wrap; font-size: 14px;">${escapeHtml(data.preview || '')}</pre>
                                 </div>
                             </div>
                         `;
                     } else {
-                        // Fallback if invoice not found
-                        const messagePreview = generateMessagePreview(
-                            status, 
-                            customerName, 
-                            amount, 
-                            dueDate,
-                            invoiceNumber || `INV-${invoiceId}`,
-                            packageName || 'Paket Internet',
-                            ''
-                        );
-                        
                         document.getElementById('notificationPreview').innerHTML = `
-                            <div class="card">
-                                <div class="card-header">
-                                    <h6 class="mb-0">Preview Pesan:</h6>
-                                </div>
-                                <div class="card-body">
-                                    <pre style="white-space: pre-wrap; font-size: 14px;">${messagePreview}</pre>
-                                </div>
-                            </div>
+                            <div class="alert alert-warning mb-0">${escapeHtml(data.message || 'Gagal memuat preview template')}</div>
                         `;
                     }
                 })
                 .catch(error => {
-                    console.error('Error fetching invoice details:', error);
-                    // Fallback preview
-                    const messagePreview = generateMessagePreview(
-                        status, 
-                        customerName, 
-                        amount, 
-                        dueDate,
-                        invoiceNumber || `INV-${invoiceId}`,
-                        packageName || 'Paket Internet',
-                        ''
-                    );
-                    
+                    console.error('Error fetching WhatsApp preview:', error);
                     document.getElementById('notificationPreview').innerHTML = `
-                        <div class="card">
-                            <div class="card-header">
-                                <h6 class="mb-0">Preview Pesan:</h6>
-                            </div>
-                            <div class="card-body">
-                                <pre style="white-space: pre-wrap; font-size: 14px;">${messagePreview}</pre>
-                            </div>
-                        </div>
+                        <div class="alert alert-danger mb-0">Gagal memuat preview WhatsApp</div>
                     `;
                 });
 
-            // Show modal
             $('#whatsappModal').modal('show');
         }
 
-        function generateMessagePreview(status, customerName, amount, dueDate, invoiceNumber, packageName, packageSpeed) {
-            const formattedAmount = new Intl.NumberFormat('id-ID', {
-                style: 'currency',
-                currency: 'IDR',
-                minimumFractionDigits: 0
-            }).format(amount);
-
-            const formattedDueDate = new Date(dueDate).toLocaleDateString('id-ID');
-            const packageDisplay = packageSpeed ? `${packageName} (${packageSpeed})` : packageName;
-            
-            // Get company name and footer from settings
-            const companyName = typeof settings !== 'undefined' && settings.company_header ? settings.company_header : (typeof versionInfo !== 'undefined' && versionInfo.companyHeader ? versionInfo.companyHeader : 'KALIMASADA');
-            const footerInfo = typeof settings !== 'undefined' && settings.footer_info ? settings.footer_info : 'Internet Tanpa Batas';
-
-            if (status === 'paid') {
-                return `? *PEMBAYARAN DITERIMA*
-
-Halo ${customerName},
-
-Terima kasih! Pembayaran Anda telah kami terima:
-
-?? *No. Invoice:* ${invoiceNumber || 'N/A'}
-?? *Jumlah:* Rp ${parseFloat(amount).toLocaleString('id-ID')}
-?? *Metode Pembayaran:* Manual Admin
-?? *Tanggal Pembayaran:* ${new Date().toLocaleDateString('id-ID')}
-?? *Paket:* ${packageDisplay}
-
-Layanan internet Anda akan tetap aktif. Terima kasih atas kepercayaan Anda.
-
-????????????????????????????????????????
-
-${companyName}
-${footerInfo}`;
-            } else if (status === 'unpaid') {
-                const today = new Date();
-                const due = new Date(dueDate);
-                const daysRemaining = Math.ceil((due - today) / (1000 * 60 * 60 * 24));
-                
-                if (daysRemaining < 0) {
-                    return `?? *TAGIHAN TERLAMBAT*
-
-Halo ${customerName},
-
-Tagihan Anda telah melewati jatuh tempo:
-
-?? *No. Invoice:* ${invoiceNumber || 'N/A'}
-?? *Jumlah:* Rp ${parseFloat(amount).toLocaleString('id-ID')}
-?? *Jatuh Tempo:* ${formattedDueDate}
-?? *Paket:* ${packageDisplay}
-?? *Status:* TERLAMBAT ${Math.abs(daysRemaining)} hari
-
-Silakan lakukan pembayaran segera untuk menghindari denda keterlambatan.
-
-????????????????????????????????????????
-
-${companyName}
-${footerInfo}`;
-                } else {
-                    return `?? *PERINGATAN JATUH TEMPO*
-
-Halo ${customerName},
-
-Tagihan Anda akan jatuh tempo dalam ${daysRemaining} hari:
-
-?? *No. Invoice:* ${invoiceNumber || 'N/A'}
-?? *Jumlah:* Rp ${parseFloat(amount).toLocaleString('id-ID')}
-?? *Jatuh Tempo:* ${formattedDueDate}
-?? *Paket:* ${packageDisplay}
-
-Silakan lakukan pembayaran segera untuk menghindari denda keterlambatan.
-
-????????????????????????????????????????
-
-${companyName}
-${footerInfo}`;
-                }
-            }
+        function escapeHtml(text) {
+            return String(text == null ? '' : text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
         }
 
         // Confirm send WhatsApp notification
@@ -1145,7 +1032,7 @@ ${footerInfo}`;
             })
             .then(({ response, data }) => {
                 if (data.success) {
-                    showToast('success', 'Notifikasi Terkirim', 'Notifikasi WhatsApp berhasil dikirim');
+                    showToast('success', 'Notifikasi Terkirim', data.message || 'Notifikasi WhatsApp berhasil dikirim');
                     $('#whatsappModal').modal('hide');
                 } else {
                     showToast('error', 'Gagal Mengirim', data.message || 'Gagal mengirim notifikasi WhatsApp');
@@ -1156,7 +1043,6 @@ ${footerInfo}`;
                 showToast('error', 'Error', 'Terjadi kesalahan saat mengirim notifikasi');
             })
             .finally(() => {
-                // Reset button
                 btn.disabled = false;
                 btn.innerHTML = originalText;
             });

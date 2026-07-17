@@ -736,6 +736,85 @@ class EmailNotificationManager {
         }
     }
 
+    /** Email pelunasan multi-invoice (kolektor) — satu email merekap semua nomor invoice. */
+    async sendCollectorBatchPaymentReceivedNotification(paymentIds) {
+        try {
+            const ids = [...new Set((paymentIds || [])
+                .map((v) => parseInt(String(v), 10))
+                .filter((id) => Number.isFinite(id) && id > 0))];
+            if (!ids.length) return { success: false, error: 'No payment ids' };
+            if (ids.length === 1) return this.sendPaymentReceivedNotification(ids[0]);
+            if (!this.isTemplateEnabled('payment_received')) {
+                return { success: true, skipped: true, reason: 'Template disabled' };
+            }
+
+            const rows = [];
+            for (const paymentId of ids) {
+                const payment = await billingManager.getPaymentById(paymentId);
+                if (!payment) continue;
+                const invoice = await billingManager.getInvoiceById(payment.invoice_id);
+                if (!invoice) continue;
+                rows.push({ payment, invoice });
+            }
+            if (!rows.length) return { success: false, error: 'Missing data' };
+
+            const customer = await billingManager.getCustomerById(rows[0].invoice.customer_id);
+            if (!customer?.email) {
+                return { success: false, error: 'No email address' };
+            }
+
+            let gross = 0;
+            let discount = 0;
+            for (const r of rows) {
+                gross += Number(r.invoice.amount) || Number(r.payment.amount) || 0;
+                discount += Number(r.payment.discount_amount) || 0;
+            }
+            const data = {
+                customer_name: customer.name,
+                invoice_number: rows.map((r) => r.invoice.invoice_number || `#${r.invoice.id}`).join(', '),
+                amount: this.formatCurrency(Math.max(0, gross - discount)),
+                payment_method: rows[0].payment.payment_method,
+                payment_date: this.formatDate(rows[0].payment.payment_date),
+                reference_number: 'N/A',
+                company_header: getCompanyHeader(),
+                footer_info: getSetting('footer_info', 'Powered by Alijaya Digital Network')
+            };
+
+            const subject = this.replaceTemplateVariables(this.templates.payment_received.subject, data);
+            const htmlContent = this.replaceTemplateVariables(this.templates.payment_received.template, data);
+
+            let pdfPath = null;
+            try {
+                const { generateCollectorBatchReceiptPdf } = require('./invoicePdf');
+                const pdfResult = await generateCollectorBatchReceiptPdf(rows.map((r) => r.invoice.id));
+                const tempDir = path.join(__dirname, '../temp');
+                if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+                pdfPath = path.join(tempDir, pdfResult.fileName || `Resi-${rows.length}-invoice.pdf`);
+                fs.writeFileSync(pdfPath, pdfResult.buffer);
+                const result = await this.sendNotification(customer.email, subject, htmlContent, {
+                    attachments: [{
+                        filename: pdfResult.fileName || `Resi-${rows.length}-invoice.pdf`,
+                        path: pdfPath,
+                        contentType: 'application/pdf'
+                    }]
+                });
+                try {
+                    if (pdfPath && fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
+                } catch (_) { /* ignore */ }
+                return result;
+            } catch (pdfError) {
+                logger.warn('[EMAIL] Batch PDF failed, sending without attachment:', pdfError.message);
+                if (pdfPath && fs.existsSync(pdfPath)) {
+                    try { fs.unlinkSync(pdfPath); } catch (_) { /* ignore */ }
+                }
+                return await this.sendNotification(customer.email, subject, htmlContent);
+            }
+        } catch (error) {
+            logger.error('[EMAIL] Error sending batch payment received notification:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
     // Send service disruption notification
     async sendServiceDisruptionNotification(disruptionData) {
         try {

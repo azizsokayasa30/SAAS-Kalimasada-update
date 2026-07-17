@@ -191,10 +191,14 @@ class ServiceSuspensionManager {
             };
 
             // Tentukan tipe koneksi pelanggan
-            const pppUser = (customer.pppoe_username && String(customer.pppoe_username).trim()) || (customer.username && String(customer.username).trim());
+            // Prefer jalur static jika ada IP/MAC dan tidak ada pppoe_username eksplisit
+            // (jangan fallback ke username portal — itu login billing, bukan secret PPPoE)
+            const explicitPppoe = customer.pppoe_username && String(customer.pppoe_username).trim();
+            const hasStaticIP = !!(customer.static_ip || customer.ip_address || customer.assigned_ip);
+            const hasMacAddress = !!customer.mac_address;
+            const pppUser = explicitPppoe
+                || (!hasStaticIP && !hasMacAddress && customer.username ? String(customer.username).trim() : '');
             const hasPPPoE = !!pppUser;
-            const hasStaticIP = customer.static_ip || customer.ip_address || customer.assigned_ip;
-            const hasMacAddress = customer.mac_address;
 
             // 1. Prioritas suspend PPPoE jika tersedia
             if (hasPPPoE) {
@@ -466,10 +470,14 @@ class ServiceSuspensionManager {
             };
 
             // Tentukan tipe koneksi pelanggan
-            const pppUser = (customer.pppoe_username && String(customer.pppoe_username).trim()) || (customer.username && String(customer.username).trim());
+            // Prefer jalur static jika ada IP/MAC dan tidak ada pppoe_username eksplisit
+            // (jangan fallback ke username portal — itu login billing, bukan secret PPPoE)
+            const explicitPppoe = customer.pppoe_username && String(customer.pppoe_username).trim();
+            const hasStaticIP = !!(customer.static_ip || customer.ip_address || customer.assigned_ip);
+            const hasMacAddress = !!customer.mac_address;
+            const pppUser = explicitPppoe
+                || (!hasStaticIP && !hasMacAddress && customer.username ? String(customer.username).trim() : '');
             const hasPPPoE = !!pppUser;
-            const hasStaticIP = customer.static_ip || customer.ip_address || customer.assigned_ip;
-            const hasMacAddress = customer.mac_address;
 
             // 1. Prioritas restore PPPoE jika tersedia
             if (hasPPPoE) {
@@ -575,6 +583,25 @@ class ServiceSuspensionManager {
                     }
                 } catch (staticIPError) {
                     logger.error(`Static IP restoration failed for ${customer.username}:`, staticIPError.message);
+                }
+
+                // Re-apply package speed queue after lifting suspension
+                try {
+                    const { provisionStaticIPQueue, getCustomerStaticIp } = require('./staticIPProvisioning');
+                    if (getCustomerStaticIp(customer) && customer.package_id) {
+                        const pkg = await billingManager.getPackageById(customer.package_id);
+                        const prov = await provisionStaticIPQueue(customer, pkg);
+                        if (prov && prov.success) {
+                            results.mikrotik = true;
+                            results.static_ip_queue = prov.queue;
+                            results.static_ip_rate = prov.maxLimit;
+                            logger.info(`Static IP package queue restored for ${customer.username}: ${prov.queue} (${prov.maxLimit})`);
+                        } else if (prov && !prov.skipped) {
+                            logger.warn(`Static IP package queue re-provision failed for ${customer.username}: ${prov.message}`);
+                        }
+                    }
+                } catch (provErr) {
+                    logger.warn(`Static IP package queue re-provision error for ${customer.username}: ${provErr.message}`);
                 }
             }
             // 3. Jika tidak ada PPPoE atau IP statik, coba enable WAN

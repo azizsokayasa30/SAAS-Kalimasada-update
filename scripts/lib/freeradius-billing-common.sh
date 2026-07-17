@@ -83,7 +83,12 @@ install_freeradius_packages() {
   if [[ "$mode" == "mysql" ]]; then
     apt-get install -y freeradius freeradius-mysql mariadb-server freeradius-utils
   else
-    apt-get install -y freeradius freeradius-sqlite freeradius-utils sqlite3
+    # Ubuntu 22.04+: SQLite built into freeradius (libsqlite3); no freeradius-sqlite package
+    local sqlite_pkgs=(freeradius freeradius-utils sqlite3)
+    if apt-cache show freeradius-sqlite &>/dev/null; then
+      sqlite_pkgs+=(freeradius-sqlite)
+    fi
+    apt-get install -y "${sqlite_pkgs[@]}"
   fi
 
   log_success "Paket FreeRADIUS terpasang"
@@ -374,6 +379,14 @@ install_freeradius_for_billing() {
   fi
 
   apply_freeradius_billing_patches "$billing_dir"
+  # Pin literal `@` in PPPoE User-Name (disable suffix + soften filter_username + sql_user_name)
+  if [[ -f "${billing_dir}/scripts/lib/freeradius-pin-literal-at.sh" ]]; then
+    bash "${billing_dir}/scripts/lib/freeradius-pin-literal-at.sh" --no-restart
+  elif [[ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/freeradius-pin-literal-at.sh" ]]; then
+    bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/freeradius-pin-literal-at.sh" --no-restart
+  else
+    log_warn "freeradius-pin-literal-at.sh tidak ditemukan — lewati pin @"
+  fi
   configure_default_nas_client "$nas_ip" "$nas_secret"
   validate_freeradius_config
   restart_freeradius

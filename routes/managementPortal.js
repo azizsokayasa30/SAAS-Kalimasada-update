@@ -16,6 +16,7 @@ const managementMobileRouter = require('./managementMobile');
 const managementSettingsRouter = require('./managementSettings');
 const managementFinanceRouter = require('./managementFinance');
 const managementPopRouter = require('./managementPop');
+const managementVpnRouter = require('./managementVpn');
 const nginxManager = require('../config/platform/nginxManager');
 const { formatRupiah, formatRupiahShort } = require('../config/platform/formatRupiah');
 const masterTenantService = require('../config/platform/masterTenantService');
@@ -151,6 +152,7 @@ router.get('/master-packages/*', (req, res) => {
 });
 router.use('/finance', managementFinanceRouter);
 router.use('/pop', managementPopRouter);
+router.use('/vpn', managementVpnRouter);
 
 router.get('/dashboard', async (req, res) => {
     try {
@@ -191,11 +193,19 @@ router.get('/dashboard/api/metrics', async (req, res) => {
 
 router.get('/tenants', async (req, res) => {
     try {
+        const period = tenantStore.resolveStatsPeriod({
+            month: req.query.month,
+            year: req.query.year,
+        });
         const tenants = await tenantStore.listOperationalTenants();
         const withStats = await Promise.all(
             tenants.map(async (t) => ({
                 ...t,
-                usage: await tenantStore.getTenantStats(t.id),
+                usage: await tenantStore.getTenantStats(t.id, {
+                    month: period.month,
+                    year: period.year,
+                    periodFilter: true,
+                }),
             }))
         );
         const backups = tenantBackup.listTenantBackups();
@@ -203,6 +213,12 @@ router.get('/tenants', async (req, res) => {
             title: 'Kelola Tenant',
             tenants: withStats,
             backups,
+            filters: {
+                month: period.month,
+                year: period.year,
+                label: period.label,
+                isFullYear: period.isFullYear,
+            },
             adminName: req.session.platformAdminName,
             flash: req.query,
         });

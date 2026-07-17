@@ -4,9 +4,9 @@ const logger = require('../logger');
 const { getWhatsAppProviderSettings } = require('../whatsapp-provider-settings');
 
 class QontakProvider extends WhatsAppProvider {
-    constructor() {
+    constructor(config = null) {
         super();
-        this.config = getWhatsAppProviderSettings().qontak;
+        this.config = config || getWhatsAppProviderSettings().qontak;
         this.status = {
             connected: false,
             phoneNumber: null,

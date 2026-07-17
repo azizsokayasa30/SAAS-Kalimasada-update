@@ -77,7 +77,7 @@ async function main() {
                 user,
                 password,
                 keepalive: false,
-                timeout: 10000 // 10 detik timeout
+                timeout: 15 // detik (node-routeros), bukan ms
             });
             
             await conn.connect();

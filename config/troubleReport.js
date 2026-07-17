@@ -186,6 +186,20 @@ async function createTroubleReport(reportData) {
   });
 }
 
+/** Cache kolom trouble_reports (untuk UPDATE dinamis). */
+let _troubleReportColumnsCache = null;
+
+function getTroubleReportColumns(db) {
+  return new Promise((resolve, reject) => {
+    if (_troubleReportColumnsCache) return resolve(_troubleReportColumnsCache);
+    db.all('PRAGMA table_info(trouble_reports)', (err, rows) => {
+      if (err) return reject(err);
+      _troubleReportColumnsCache = new Set((rows || []).map((r) => r.name));
+      resolve(_troubleReportColumnsCache);
+    });
+  });
+}
+
 // Update status laporan gangguan
 async function updateTroubleReportStatus(id, status, notes, technicalData = {}, sendNotification = true) {
   const currentReport = await getTroubleReportById(id);
@@ -206,37 +220,68 @@ async function updateTroubleReportStatus(id, status, notes, technicalData = {}, 
       updatedNotes.push(noteEntry);
     }
 
-    const { odp, sn, signal_level } = technicalData;
-
-    const sql = `
-      UPDATE trouble_reports 
-      SET status = ?, notes = ?, updated_at = ?, odp = ?, sn = ?, signal_level = ?
-      WHERE id = ?${_tWhere().sql}
-    `;
+    const { odp, sn, signal_level } = technicalData || {};
     const _tw = _tWhere();
-    db.run(sql, [status, JSON.stringify(updatedNotes), now, odp, sn, signal_level, id, ..._tw.params], async function(err) {
-      db.close();
-      if (err) {
-        logger.error(`Gagal mengupdate status laporan gangguan: ${err.message}`);
-        return reject(err);
-      }
-      
-      const updatedReport = {
-        ...currentReport,
-        status,
-        notes: updatedNotes,
-        updated_at: now,
-        odp,
-        sn,
-        signal_level
-      };
 
-      if (sendNotification) {
-        sendStatusUpdateToCustomer(updatedReport);
+    (async () => {
+      try {
+        const cols = await getTroubleReportColumns(db);
+        const setParts = ['status = ?', 'notes = ?', 'updated_at = ?'];
+        const params = [status, JSON.stringify(updatedNotes), now];
+
+        // Sertakan kolom teknis hanya jika ada di skema (hindari "no such column")
+        if (cols.has('odp')) {
+          setParts.push('odp = ?');
+          params.push(odp != null ? odp : currentReport.odp ?? null);
+        }
+        if (cols.has('sn')) {
+          setParts.push('sn = ?');
+          params.push(sn != null ? sn : currentReport.sn ?? null);
+        }
+        if (cols.has('signal_level')) {
+          setParts.push('signal_level = ?');
+          params.push(signal_level != null ? signal_level : currentReport.signal_level ?? null);
+        }
+
+        const sql = `
+          UPDATE trouble_reports
+          SET ${setParts.join(', ')}
+          WHERE id = ?${_tw.sql}
+        `;
+        params.push(id, ..._tw.params);
+
+        db.run(sql, params, function(err) {
+          db.close();
+          if (err) {
+            logger.error(`Gagal mengupdate status laporan gangguan: ${err.message}`);
+            return reject(err);
+          }
+
+          const updatedReport = {
+            ...currentReport,
+            status,
+            notes: updatedNotes,
+            updated_at: now,
+          };
+          if (cols.has('odp')) updatedReport.odp = odp != null ? odp : currentReport.odp ?? null;
+          if (cols.has('sn')) updatedReport.sn = sn != null ? sn : currentReport.sn ?? null;
+          if (cols.has('signal_level')) {
+            updatedReport.signal_level =
+              signal_level != null ? signal_level : currentReport.signal_level ?? null;
+          }
+
+          if (sendNotification) {
+            sendStatusUpdateToCustomer(updatedReport);
+          }
+
+          resolve(updatedReport);
+        });
+      } catch (e) {
+        try { db.close(); } catch (_) { /* ignore */ }
+        logger.error(`Gagal mengupdate status laporan gangguan: ${e.message}`);
+        reject(e);
       }
-      
-      resolve(updatedReport);
-    });
+    })();
   });
 }
 
@@ -336,7 +381,10 @@ async function sendNotificationToTechnicians(report) {
     } catch (_) { /* ignore */ }
 
     const whatsappNotifications = require('./whatsapp-notifications');
-    if (!whatsappNotifications.isTemplateEnabled('trouble_report_new_technician')) {
+    const templates = await whatsappNotifications.getResolvedTemplates(
+      whatsappNotifications.resolveTenantId(report.tenant_id)
+    );
+    if (!whatsappNotifications.isTemplateEnabled('trouble_report_new_technician', templates)) {
       logger.info('Template trouble_report_new_technician nonaktif; lewati notifikasi WA ke teknisi.');
       return false;
     }
@@ -344,7 +392,7 @@ async function sendNotificationToTechnicians(report) {
     const technicianGroupId = getSetting('technician_group_id', '');
     const companyHeader = getSetting('company_header', 'CV Lintas Multimedia');
 
-    const tpl = whatsappNotifications.templates.trouble_report_new_technician.template;
+    const tpl = templates.trouble_report_new_technician.template;
     const message = whatsappNotifications.replaceTemplateVariables(tpl, {
       company_header: companyHeader,
       report_id: String(report.id),
@@ -397,7 +445,10 @@ async function sendStatusUpdateToCustomer(report) {
     } catch (_) { /* ignore */ }
 
     const whatsappNotifications = require('./whatsapp-notifications');
-    if (!whatsappNotifications.isTemplateEnabled('trouble_report_customer_update')) {
+    const templates = await whatsappNotifications.getResolvedTemplates(
+      whatsappNotifications.resolveTenantId(report.tenant_id)
+    );
+    if (!whatsappNotifications.isTemplateEnabled('trouble_report_customer_update', templates)) {
       logger.info('Template trouble_report_customer_update nonaktif; lewati notifikasi WA ke pelanggan.');
       return false;
     }
@@ -431,7 +482,7 @@ async function sendStatusUpdateToCustomer(report) {
       ? `💬 *Catatan Teknisi*:\n${latestNote}\n\n`
       : '';
 
-    const tpl = whatsappNotifications.templates.trouble_report_customer_update.template;
+    const tpl = templates.trouble_report_customer_update.template;
     const message = whatsappNotifications.replaceTemplateVariables(tpl, {
       company_header: companyHeader,
       report_id: String(report.id),

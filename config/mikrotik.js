@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const cacheManager = require('./cacheManager');
 const { tenantCacheKey } = require('./platform/tenantCache');
+const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
 const { looksLikePasswordHashNotCleartext } = require('../utils/passwordHashHeuristic');
 
 let sock = null;
@@ -16,6 +17,76 @@ const MIN_MONITOR_INTERVAL_MS = 10 * 1000;
 
 // Connection pool untuk router (reuse koneksi per router)
 const routerConnections = new Map();
+// Serialize concurrent connect attempts per router (hindari reconnect storm)
+const routerConnectLocks = new Map();
+
+// node-routeros: options.timeout is in SECONDS (socket.setTimeout(timeout * 1000)).
+// Historically this codebase passed 10000 intending "10s ms" — that became ~2.7h idle timeout
+// and made failed connects hang until OS/proxy gave up (flaky "tes koneksi").
+const ROUTEROS_API_TIMEOUT_SEC = 15;
+const POOL_HEALTH_TIMEOUT_MS = 8000;
+const CONNECT_HARD_TIMEOUT_MS = 20000;
+
+function getRouterApiPassword(routerObj) {
+    // Prefer API password column; secret is legacy/RADIUS-adjacent and must not win over password
+    return routerObj.password || routerObj.secret || '';
+}
+
+function formatMikrotikConnectError(host, port, err) {
+    const msg = (err && err.message) ? String(err.message) : String(err || 'unknown');
+    const lower = msg.toLowerCase();
+    if (lower.includes('timeout') || lower.includes('etimedout') || lower.includes('timed out')) {
+        return `Timeout ke ${host}:${port} (TCP RouterOS API). Pastikan VPN tunnel aktif, IP NAS = Tunnel IP, service api enabled, dan firewall mengizinkan TCP ${port} dari VPS.`;
+    }
+    if (lower.includes('econnrefused') || lower.includes('refused')) {
+        return `Koneksi ditolak di ${host}:${port}. Service API MikroTik kemungkinan nonaktif atau port salah (default 8728).`;
+    }
+    if (lower.includes('ehostunreach') || lower.includes('enetunreach') || lower.includes('no route')) {
+        return `Host ${host} tidak terjangkau dari VPS. Cek Tunnel IP NAS dan status VPN (bukan ping dari sisi MikroTik ke VPS).`;
+    }
+    if (lower.includes('cannot log in') || lower.includes('invalid user') || lower.includes('login failure') || lower.includes('authentication')) {
+        return `Autentikasi gagal ke ${host}:${port}. Periksa username/password API MikroTik.`;
+    }
+    return `Gagal koneksi ke ${host}:${port} - ${msg}`;
+}
+
+async function withRouterConnectLock(routerKey, fn) {
+    while (routerConnectLocks.has(routerKey)) {
+        try {
+            await routerConnectLocks.get(routerKey);
+        } catch (_) {
+            // previous connect failed; continue to try
+        }
+    }
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    routerConnectLocks.set(routerKey, gate);
+    try {
+        return await fn();
+    } finally {
+        routerConnectLocks.delete(routerKey);
+        release();
+    }
+}
+
+async function connectRouterOsApi({ host, port, user, password, keepalive = true }) {
+    const conn = new RouterOSAPI({
+        host,
+        port,
+        user,
+        password,
+        keepalive,
+        timeout: ROUTEROS_API_TIMEOUT_SEC
+    });
+    const hardTimeout = new Promise((_, reject) => {
+        setTimeout(
+            () => reject(new Error(`Timeout koneksi TCP ke ${host}:${port} setelah ${Math.round(CONNECT_HARD_TIMEOUT_MS / 1000)} detik`)),
+            CONNECT_HARD_TIMEOUT_MS
+        );
+    });
+    await Promise.race([conn.connect(), hardTimeout]);
+    return conn;
+}
 
 const PPPoe_EXCLUDE_CACHE_BASE = 'radius:pppoe:exclude_usernames';
 const PPPoe_EXCLUDE_CACHE_TTL = 5 * 60 * 1000;
@@ -27,9 +98,17 @@ function scopedRadiusCacheKey(base) {
     return tenantCacheKey(base);
 }
 
+/**
+ * Append IN (...) filter for allowed usernames.
+ * - null/undefined → no filter (caller intentionally wants all / platform)
+ * - [] or empty after normalize → match nothing (prevents accidental full-table leak)
+ */
 function appendAllowedUsernamesSql(baseSql, params, allowedUsernames, columnExpr) {
-    if (!Array.isArray(allowedUsernames) || allowedUsernames.length === 0) {
+    if (allowedUsernames == null) {
         return baseSql;
+    }
+    if (!Array.isArray(allowedUsernames)) {
+        return `${baseSql} AND 1=0`;
     }
     const normalized = [
         ...new Set(
@@ -39,7 +118,7 @@ function appendAllowedUsernamesSql(baseSql, params, allowedUsernames, columnExpr
         )
     ];
     if (!normalized.length) {
-        return baseSql;
+        return `${baseSql} AND 1=0`;
     }
     const placeholders = normalized.map(() => '?').join(',');
     params.push(...normalized);
@@ -188,18 +267,15 @@ async function connectToMikrotik() {
             return null;
         }
         
-        // Buat koneksi ke Mikrotik
-        const conn = new RouterOSAPI({
+        // Buat koneksi ke Mikrotik (timeout unit = detik di node-routeros)
+        const conn = await connectRouterOsApi({
             host,
             port,
             user,
             password,
-            keepalive: true,
-            timeout: 10000 // 10 second timeout (aligned with production)
+            keepalive: true
         });
         
-        // Connect ke Mikrotik
-        await conn.connect();
         logger.info(`Connected to Mikrotik at ${host}:${port}`);
         
         // Set global connection
@@ -213,14 +289,25 @@ async function connectToMikrotik() {
 }
 
 // Fungsi untuk mendapatkan koneksi Mikrotik
+function _routersTenantWhereSql() {
+    try {
+        const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
+        if (!hasTenantContext()) return '';
+        return ` WHERE tenant_id = ${parseInt(getTenantId(), 10)}`;
+    } catch (_) {
+        return '';
+    }
+}
+
 async function getMikrotikConnection() {
     if (!mikrotikConnection) {
-        // PRIORITAS: gunakan NAS (routers) terlebih dahulu
+        // PRIORITAS: gunakan NAS (routers) milik tenant saat ini
         try {
             const sqlite3 = require('sqlite3').verbose();
             const db = new sqlite3.Database(require('path').join(__dirname, '../data/billing.db'));
+            const whereSql = _routersTenantWhereSql();
             const router = await new Promise((resolve) => {
-                db.get('SELECT * FROM routers ORDER BY id LIMIT 1', [], (err, row) => resolve(row || null));
+                db.get(`SELECT * FROM routers${whereSql} ORDER BY id LIMIT 1`, [], (err, row) => resolve(row || null));
             });
             db.close();
             if (router) {
@@ -245,74 +332,136 @@ async function getMikrotikConnection() {
 
 // === MULTI-NAS helpers ===
 async function getMikrotikConnectionForRouter(routerObj) {
-    const { RouterOSAPI } = require('node-routeros');
     if (!routerObj || !routerObj.nas_ip || !routerObj.id) {
         throw new Error('Router data kurang lengkap: id atau nas_ip tidak ditemukan');
     }
     const host = routerObj.nas_ip;
-    const port = parseInt(routerObj.port || routerObj.nas_port || 8728);
+    const port = parseInt(routerObj.port || routerObj.nas_port || 8728, 10);
     const user = routerObj.user || routerObj.nas_user || routerObj.username;
-    const password = routerObj.secret || routerObj.password;
+    const password = getRouterApiPassword(routerObj);
     
     // Buat key unik untuk router (untuk connection pooling)
     const routerKey = `${routerObj.id}_${host}_${port}_${user}`;
-    
-    // Cek apakah koneksi sudah ada di pool dan masih aktif
-    if (routerConnections.has(routerKey)) {
-        const existingConn = routerConnections.get(routerKey);
-        try {
-            // Test koneksi dengan command sederhana (timeout pendek)
-            const testPromise = existingConn.write('/system/identity/print');
-            const testTimeout = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Connection test timeout')), 2000)
-            );
-            await Promise.race([testPromise, testTimeout]);
-            // Koneksi masih aktif, reuse
-            logger.debug(`[MIKROTIK] Reusing existing connection for router ${routerObj.id} (${host}:${port})`);
-            return existingConn;
-        } catch (error) {
-            // Koneksi terputus atau error, hapus dari pool dan buat baru
-            logger.warn(`[MIKROTIK] Existing connection for router ${routerObj.id} is dead, creating new one: ${error.message}`);
-            routerConnections.delete(routerKey);
+
+    return withRouterConnectLock(routerKey, async () => {
+        // Cek apakah koneksi sudah ada di pool dan masih aktif
+        if (routerConnections.has(routerKey)) {
+            const existingConn = routerConnections.get(routerKey);
             try {
-                if (existingConn && typeof existingConn.close === 'function') {
-                    existingConn.close();
+                const testPromise = existingConn.write('/system/identity/print');
+                const testTimeout = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error('Connection test timeout')), POOL_HEALTH_TIMEOUT_MS)
+                );
+                await Promise.race([testPromise, testTimeout]);
+                logger.debug(`[MIKROTIK] Reusing existing connection for router ${routerObj.id} (${host}:${port})`);
+                return existingConn;
+            } catch (error) {
+                logger.warn(`[MIKROTIK] Existing connection for router ${routerObj.id} is dead, creating new one: ${error.message}`);
+                routerConnections.delete(routerKey);
+                try {
+                    if (existingConn && typeof existingConn.close === 'function') {
+                        existingConn.close();
+                    }
+                } catch (closeError) {
+                    // Ignore close error
                 }
-            } catch (closeError) {
-                // Ignore close error
             }
         }
+        
+        if (!host) throw new Error('Koneksi router gagal: IP address (nas_ip) tidak ditemukan');
+        if (!user) throw new Error('Koneksi router gagal: Username tidak ditemukan');
+        if (!password) throw new Error('Koneksi router gagal: Password tidak ditemukan');
+        
+        logger.info(`[MIKROTIK] Creating new connection to ${host}:${port} with user ${user}`);
+        
+        try {
+            const conn = await connectRouterOsApi({
+                host,
+                port,
+                user,
+                password,
+                keepalive: true
+            });
+            logger.info(`[MIKROTIK] ✓ Successfully connected to ${host}:${port}`);
+            
+            routerConnections.set(routerKey, conn);
+            
+            conn.on('close', () => {
+                logger.debug(`[MIKROTIK] Connection closed for router ${routerObj.id}, removing from pool`);
+                if (routerConnections.get(routerKey) === conn) {
+                    routerConnections.delete(routerKey);
+                }
+            });
+            
+            conn.on('error', (error) => {
+                logger.warn(`[MIKROTIK] Connection error for router ${routerObj.id}: ${error.message}, removing from pool`);
+                if (routerConnections.get(routerKey) === conn) {
+                    routerConnections.delete(routerKey);
+                }
+            });
+            
+            return conn;
+        } catch (connectError) {
+            logger.error(`[MIKROTIK] ✗ Failed to connect to ${host}:${port}:`, connectError.message);
+            throw new Error(formatMikrotikConnectError(host, port, connectError));
+        }
+    });
+}
+
+/**
+ * One-shot connection test (ephemeral, not pooled).
+ * Avoids pool thrashing / concurrent close() races that make "tes koneksi" flaky.
+ */
+async function testMikrotikConnectionForRouter(routerObj) {
+    if (!routerObj || !routerObj.nas_ip) {
+        throw new Error('Router data kurang lengkap: nas_ip tidak ditemukan');
     }
-    
-    if (!host) throw new Error('Koneksi router gagal: IP address (nas_ip) tidak ditemukan');
-    if (!user) throw new Error('Koneksi router gagal: Username tidak ditemukan');
-    if (!password) throw new Error('Koneksi router gagal: Password tidak ditemukan');
-    
-    logger.info(`[MIKROTIK] Creating new connection to ${host}:${port} with user ${user}`);
-    const conn = new RouterOSAPI({ host, port, user, password, keepalive: true, timeout: 10000 });
-    
+    const host = String(routerObj.nas_ip).trim();
+    const port = parseInt(routerObj.port || routerObj.nas_port || 8728, 10);
+    const user = routerObj.user || routerObj.nas_user || routerObj.username;
+    const password = getRouterApiPassword(routerObj);
+
+    if (!host) throw new Error('IP address (nas_ip) tidak ditemukan');
+    if (!user) throw new Error('Username tidak ditemukan');
+    if (!password) throw new Error('Password tidak ditemukan');
+
+    let conn = null;
     try {
-        await conn.connect();
-        logger.info(`[MIKROTIK] ✓ Successfully connected to ${host}:${port}`);
-        
-        // Simpan koneksi ke pool
-        routerConnections.set(routerKey, conn);
-        
-        // Handle disconnect event untuk cleanup
-        conn.on('close', () => {
-            logger.debug(`[MIKROTIK] Connection closed for router ${routerObj.id}, removing from pool`);
-            routerConnections.delete(routerKey);
+        logger.info(`[MIKROTIK] Testing connection to ${host}:${port} with user ${user}`);
+        conn = await connectRouterOsApi({
+            host,
+            port,
+            user,
+            password,
+            keepalive: false
         });
-        
-        conn.on('error', (error) => {
-            logger.warn(`[MIKROTIK] Connection error for router ${routerObj.id}: ${error.message}, removing from pool`);
-            routerConnections.delete(routerKey);
-        });
-        
-        return conn;
+        const identityRows = await Promise.race([
+            conn.write('/system/identity/print'),
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Timeout membaca identity MikroTik')), POOL_HEALTH_TIMEOUT_MS)
+            )
+        ]);
+        const identityName = identityRows && identityRows[0]
+            ? (identityRows[0].name || identityRows[0]['name'] || 'connected')
+            : 'connected';
+        logger.info(`[MIKROTIK] ✓ Connection test OK ${host}:${port} identity=${identityName}`);
+        return {
+            success: true,
+            identity: identityName,
+            host,
+            port
+        };
     } catch (connectError) {
-        logger.error(`[MIKROTIK] ✗ Failed to connect to ${host}:${port}:`, connectError.message);
-        throw new Error(`Gagal koneksi ke ${host}:${port} - ${connectError.message}`);
+        logger.error(`[MIKROTIK] ✗ Connection test failed ${host}:${port}:`, connectError.message);
+        throw new Error(formatMikrotikConnectError(host, port, connectError));
+    } finally {
+        if (conn) {
+            try {
+                if (typeof conn.close === 'function') conn.close();
+            } catch (_) {
+                // ignore
+            }
+        }
     }
 }
 
@@ -354,6 +503,15 @@ async function syncRadiusToFreeRadiusMysql(options = {}) {
         await syncRadiusSqliteToMysql({ force: options.force === true });
     } catch (e) {
         logger.debug(`[RADIUS] sync ke MySQL: ${e.message}`);
+    }
+    // Auth MikroTik ke FreeRADIUS POP — push user tables segera (debounced)
+    if (options.skipPopSync !== true) {
+        try {
+            const { triggerRadiusPopSync } = require('../utils/radiusPopSync');
+            triggerRadiusPopSync(options.popSyncReason || 'sqlite-write');
+        } catch (e) {
+            logger.debug(`[RADIUS-POP-SYNC] trigger skip: ${e.message}`);
+        }
     }
 }
 
@@ -718,6 +876,38 @@ async function getPPPoEUsersRadius(options = {}) {
 
         const profileMap = await getRadusergroupProfileMap(conn, rowList.map((r) => r.username));
 
+        // Label profil = display_name di metadata (sama seperti /admin/mikrotik/profiles)
+        const uniqueProfiles = [...new Set([...profileMap.values()].filter(Boolean))];
+        const metaByExact = await getPPPoEProfilesMetadata(conn, uniqueProfiles);
+        const metaByNorm = new Map();
+        for (const [gn, meta] of Object.entries(metaByExact || {})) {
+            metaByNorm.set(String(gn).toLowerCase().trim(), meta);
+            metaByNorm.set(String(gn).toLowerCase().trim().replace(/\s+/g, '_'), meta);
+        }
+        // Juga ambil metadata lain bila groupname fisik beda huruf besar/kecil
+        try {
+            const [allMetaRows] = await conn.execute(
+                `SELECT groupname, display_name FROM pppoe_profiles`
+            );
+            for (const row of Array.isArray(allMetaRows) ? allMetaRows : []) {
+                if (!row || !row.groupname) continue;
+                const k1 = String(row.groupname).toLowerCase().trim();
+                const k2 = k1.replace(/\s+/g, '_');
+                if (!metaByNorm.has(k1)) metaByNorm.set(k1, row);
+                if (!metaByNorm.has(k2)) metaByNorm.set(k2, row);
+            }
+        } catch (_) { /* metadata optional */ }
+
+        const resolveProfileLabel = (groupname) => {
+            const gn = groupname != null ? String(groupname).trim() : '';
+            if (!gn) return 'default';
+            const meta =
+                metaByExact[gn] ||
+                metaByNorm.get(gn.toLowerCase()) ||
+                metaByNorm.get(gn.toLowerCase().replace(/\s+/g, '_'));
+            return (meta && meta.display_name) ? String(meta.display_name).trim() : gn;
+        };
+
         await conn.end();
 
         const activeSet = new Set();
@@ -742,12 +932,16 @@ async function getPPPoEUsersRadius(options = {}) {
             logger.warn(`Failed to get active connections: ${activeError.message}`);
         }
 
-        const users = rowList.map((row) => ({
-            name: row.username,
-            password: row.password,
-            profile: profileMap.get(row.username) || 'default',
-            active: activeSet.has(String(row.username).toLowerCase().trim())
-        }));
+        const users = rowList.map((row) => {
+            const profile = profileMap.get(row.username) || 'default';
+            return {
+                name: row.username,
+                password: row.password,
+                profile,
+                profile_display: resolveProfileLabel(profile),
+                active: activeSet.has(String(row.username).toLowerCase().trim())
+            };
+        });
 
         logger.info(`Mapped ${users.length} PPPoE users successfully (${activeSet.size} active)`);
         return users;
@@ -997,8 +1191,9 @@ async function getAllRoutersFromBillingDb() {
     const sqlite3 = require('sqlite3').verbose();
     const dbPath = path.join(__dirname, '../data/billing.db');
     const db = new sqlite3.Database(dbPath);
+    const whereSql = _routersTenantWhereSql();
     return new Promise((resolve, reject) => {
-        db.all('SELECT * FROM routers ORDER BY id', [], (err, rows) => {
+        db.all(`SELECT * FROM routers${whereSql} ORDER BY id`, [], (err, rows) => {
             db.close();
             if (err) reject(err);
             else resolve(rows || []);
@@ -1139,8 +1334,24 @@ async function collectMikrotikPppActiveUptimeByLoginMap() {
 
 /** Cache singkat agar list pelanggan / network-map tidak menunggu reconnect MikroTik tiap request. */
 const ACTIVE_PPPOE_CACHE_TTL_MS = 30000;
-let _activePppoeCache = null;
-let _activePppoeInflight = null;
+/** Cold start (belum ada cache): tunggu cukup lama agar badge mobile tidak kosong/offline. */
+const ACTIVE_PPPOE_COLD_START_WAIT_MS = 10000;
+/** Cache + inflight per tenant — hindari tenant A memakai set online tenant B (atau sebaliknya). */
+const _activePppoeCacheByTenant = new Map();
+const _activePppoeInflightByTenant = new Map();
+
+function _activePppoeTenantCacheKey() {
+    try {
+        const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
+        if (hasTenantContext()) {
+            const tid = parseInt(getTenantId(), 10);
+            if (Number.isFinite(tid)) return `t${tid}`;
+        }
+    } catch (_) {
+        /* ignore */
+    }
+    return 'global';
+}
 
 function cloneActivePppoeResult(result) {
     return {
@@ -1153,29 +1364,40 @@ function cloneActivePppoeResult(result) {
  * Sekali panggil: himpunan login online (RADIUS radacct ATAU nama di /ppp/active) + uptime tampilan **hanya dari MikroTik /ppp/active**
  * (sama flow sumber uptime seperti GET customers/:id/ppp-session).
  * Dipakai mobile-adapter network-map (tanpa N+1 per pelanggan).
+ * Nama login di Set selalu lowercase agar cocok dengan badge mobile.
  */
-async function fetchActivePppoeLoginNamesSetWithUptimeMapUncached() {
+async function fetchActivePppoeLoginNamesSetWithUptimeMapUncached(options = {}) {
+    const namesOnly = options.namesOnly === true;
     const set = new Set();
     const authMode = await getUserAuthModeAsync();
 
     if (authMode === 'radius') {
-        const active = await getActivePPPoEConnectionsRadius();
+        // Satu poll (sama sumber /admin/mikrotik) — jangan poll /ppp/active kedua kali hanya untuk uptime.
+        const active = await getActivePPPoEConnectionsRadius({
+            mikrotikTimeoutMs: options.mikrotikTimeoutMs,
+            forceRefresh: options.forceRefresh === true
+        });
+        const uptimeByLogin = Object.create(null);
         for (const a of active || []) {
-            const n = a && a.name != null ? String(a.name).trim() : '';
-            if (n) set.add(n);
+            const n = a && a.name != null ? String(a.name).trim().toLowerCase() : '';
+            if (!n) continue;
+            set.add(n);
+            if (!namesOnly) {
+                const disp = formatPppActiveUptimeLikeCustomerDetail(a.uptime);
+                if (disp) uptimeByLogin[n] = disp;
+            }
         }
-        const uptimeByLogin = await collectMikrotikPppActiveUptimeByLoginMap();
         return { names: set, uptimeByLogin };
     }
 
     const uptimeByLogin = Object.create(null);
     const mergeRow = (row) => {
-        const n = row && row.name != null ? String(row.name).trim() : '';
+        const n = row && row.name != null ? String(row.name).trim().toLowerCase() : '';
         if (!n) return;
         set.add(n);
-        const disp = pppActiveRowToUptimeDisplay(row);
-        if (disp) {
-            uptimeByLogin[String(n).toLowerCase()] = disp;
+        if (!namesOnly) {
+            const disp = pppActiveRowToUptimeDisplay(row);
+            if (disp) uptimeByLogin[n] = disp;
         }
     };
     const routers = await getAllRoutersFromBillingDb();
@@ -1210,87 +1432,111 @@ async function getActivePppoeLoginNamesSetWithUptimeMap(options = {}) {
     const ttlMs = Number.isFinite(options.ttlMs) ? options.ttlMs : ACTIVE_PPPOE_CACHE_TTL_MS;
     const forceRefresh = options.forceRefresh === true;
     const maxWaitMs = Number.isFinite(options.maxWaitMs) ? options.maxWaitMs : 1200;
+    const namesOnly = options.namesOnly === true;
+    const cacheKey = `${_activePppoeTenantCacheKey()}:${namesOnly ? 'names' : 'full'}`;
     const now = Date.now();
+    const cachedEntry = _activePppoeCacheByTenant.get(cacheKey) || null;
 
-    if (
-        !forceRefresh &&
-        _activePppoeCache &&
-        now - _activePppoeCache.at < ttlMs
-    ) {
-        return cloneActivePppoeResult(_activePppoeCache.value);
+    if (!forceRefresh && cachedEntry && now - cachedEntry.at < ttlMs) {
+        return cloneActivePppoeResult(cachedEntry.value);
     }
 
     const emptyResult = () => ({ names: new Set(), uptimeByLogin: Object.create(null) });
 
-    const awaitWithBudget = async (promise) => {
-        if (_activePppoeCache && !forceRefresh) {
-            return cloneActivePppoeResult(_activePppoeCache.value);
+    const awaitWithBudget = async (promise, staleEntry) => {
+        // Stale-while-revalidate: jangan blokir list pelanggan jika cache (meski expired) masih ada.
+        if (staleEntry && !forceRefresh) {
+            return cloneActivePppoeResult(staleEntry.value);
         }
+        // Cold start: tunggu lebih lama — timeout pendek (ex: 800ms) membuat semua badge Offline di mobile.
+        const waitMs =
+            staleEntry || forceRefresh
+                ? maxWaitMs
+                : Math.max(maxWaitMs, ACTIVE_PPPOE_COLD_START_WAIT_MS);
         try {
             const value = await Promise.race([
                 promise,
                 new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('active-pppoe-cache-wait-timeout')), maxWaitMs)
+                    setTimeout(() => reject(new Error('active-pppoe-cache-wait-timeout')), waitMs)
                 ),
             ]);
             return cloneActivePppoeResult(value);
         } catch (e) {
             if (e && e.message === 'active-pppoe-cache-wait-timeout') {
-                if (_activePppoeCache) {
-                    return cloneActivePppoeResult(_activePppoeCache.value);
+                if (staleEntry) {
+                    return cloneActivePppoeResult(staleEntry.value);
                 }
+                logger.warn(
+                    `[getActivePppoeLoginNamesSetWithUptimeMap] cold-start timeout ${waitMs}ms (${cacheKey})`
+                );
                 return emptyResult();
             }
-            if (_activePppoeCache) {
-                return cloneActivePppoeResult(_activePppoeCache.value);
+            if (staleEntry) {
+                return cloneActivePppoeResult(staleEntry.value);
             }
             throw e;
         }
     };
 
-    if (_activePppoeInflight) {
-        return awaitWithBudget(_activePppoeInflight);
+    const existingInflight = _activePppoeInflightByTenant.get(cacheKey);
+    if (existingInflight) {
+        return awaitWithBudget(existingInflight, cachedEntry);
     }
 
-    _activePppoeInflight = (async () => {
+    const inflight = (async () => {
         try {
-            const value = await fetchActivePppoeLoginNamesSetWithUptimeMapUncached();
-            _activePppoeCache = { at: Date.now(), value };
+            const value = await fetchActivePppoeLoginNamesSetWithUptimeMapUncached({
+                namesOnly,
+                mikrotikTimeoutMs: options.mikrotikTimeoutMs,
+                forceRefresh
+            });
+            _activePppoeCacheByTenant.set(cacheKey, { at: Date.now(), value });
             return value;
         } catch (e) {
-            if (_activePppoeCache) {
+            if (cachedEntry) {
                 logger.warn(
                     `[getActivePppoeLoginNamesSetWithUptimeMap] refresh failed, using stale cache: ${e.message}`
                 );
-                return _activePppoeCache.value;
+                return cachedEntry.value;
             }
             throw e;
         } finally {
-            _activePppoeInflight = null;
+            _activePppoeInflightByTenant.delete(cacheKey);
         }
     })();
+    _activePppoeInflightByTenant.set(cacheKey, inflight);
 
-    return awaitWithBudget(_activePppoeInflight);
+    return awaitWithBudget(inflight, cachedEntry);
 }
 
 /**
  * Sekali panggil: himpunan nama login PPPoE yang sedang online (semua NAS / RADIUS).
- * Dipakai mobile-adapter network-map agar tidak memanggil getPppoeLoginOnlineStatus per pelanggan (sangat berat).
+ * Dipakai mobile-adapter (list pelanggan / network-map) agar tidak N+1 per pelanggan.
  */
 async function getActivePppoeLoginNamesSet(options = {}) {
-    const { names } = await getActivePppoeLoginNamesSetWithUptimeMap(options);
+    const { names } = await getActivePppoeLoginNamesSetWithUptimeMap({
+        ...options,
+        namesOnly: true
+    });
     return names;
 }
 
-// Fungsi untuk mendapatkan statistik RADIUS (total users, active, offline) - HANYA PPPoE, BUKAN voucher DAN BUKAN member
+// Fungsi untuk mendapatkan statistik RADIUS (total users, active, offline) - HANYA PPPoE milik tenant
 async function getRadiusStatistics() {
     const conn = await getRadiusConnection();
     try {
-        const excludeUsernames = await getPppoeRadcheckExcludeUsernames();
+        const { getTenantAllowedPppoeUsernames } = require('../utils/tenantPppoeOwnership');
+        const allowedUsernames = await getTenantAllowedPppoeUsernames();
 
+        // Tenant aktif tanpa user → 0 (jangan hitung seluruh radcheck bersama)
+        if (allowedUsernames !== null && allowedUsernames.length === 0) {
+            await conn.end();
+            return { total: 0, active: 0, offline: 0 };
+        }
+
+        const excludeUsernames = await getPppoeRadcheckExcludeUsernames();
         const pwdC = sqlRadcheckPasswordPredicate('c');
 
-        // Total PPPoE users (exclude vouchers DAN hotspot member)
         let totalQuery = `
             SELECT COUNT(DISTINCT c.username) as total
             FROM radcheck c
@@ -1302,34 +1548,48 @@ async function getRadiusStatistics() {
             totalQuery += ` AND c.username NOT IN (${placeholders})`;
             params.push(...excludeUsernames);
         }
-        
+        totalQuery = appendAllowedUsernamesSql(totalQuery, params, allowedUsernames, 'c.username');
+
         const [totalRows] = await conn.execute(totalQuery, params);
         const totalRowList = Array.isArray(totalRows) ? totalRows : [];
         const totalUsers = totalRowList[0]?.total || 0;
 
-        // Active PPPoE — dari Mikrotik /ppp/active (+ MySQL radacct), bukan SQLite radacct yatim
         let activeConnections = 0;
         try {
-            const activeList = await getActivePPPoEConnectionsRadius({ forceRefresh: true });
-            activeConnections = Array.isArray(activeList) ? activeList.length : 0;
+            const activeList = await getActivePPPoEConnectionsRadius({
+                forceRefresh: true,
+                allowedUsernames: allowedUsernames === null ? null : allowedUsernames
+            });
+            let list = Array.isArray(activeList) ? activeList : [];
+            if (Array.isArray(allowedUsernames) && allowedUsernames.length > 0) {
+                const set = new Set(
+                    allowedUsernames.map((u) => String(u).toLowerCase().trim()).filter(Boolean)
+                );
+                list = list.filter((u) => set.has(String(u?.name || u?.username || '').toLowerCase().trim()));
+            }
+            activeConnections = list.length;
         } catch (activeStatErr) {
             logger.warn(`[RADIUS stats] active sessions tidak dihitung: ${activeStatErr.message}`);
         }
-        
-        // Offline users
+
         const offlineUsers = Math.max(totalUsers - activeConnections, 0);
-        
+
         await conn.end();
-        
-        logger.info(`RADIUS Statistics - Total: ${totalUsers}, Active: ${activeConnections}, Offline: ${offlineUsers} (excluded ${excludeUsernames.length} voucher/hotspot)`);
-        
+
+        logger.info(
+            `RADIUS Statistics - Total: ${totalUsers}, Active: ${activeConnections}, Offline: ${offlineUsers}` +
+            (allowedUsernames === null
+                ? ' (global)'
+                : ` (tenant allowlist ${allowedUsernames.length})`)
+        );
+
         return {
             total: totalUsers,
             active: activeConnections,
             offline: offlineUsers
         };
     } catch (error) {
-        await conn.end();
+        try { await conn.end(); } catch (_) {}
         logger.error(`Error getting RADIUS statistics: ${error.message}`);
         return {
             total: 0,
@@ -1446,9 +1706,24 @@ function buildMikrotikRateLimit({ upload_limit, download_limit, burst_limit_uplo
 
 // Fungsi untuk sync package limits ke RADIUS (radgroupreply)
 async function syncPackageLimitsToRadius({ groupname, upload_limit, download_limit, burst_limit_upload, burst_limit_download, burst_threshold, burst_time }) {
+    const {
+        ensureExclusivePppoeProfileForTenant,
+        claimTenantPppoeProfile,
+        normalizeGroupname: normProfile
+    } = require('../utils/tenantPppoeProfileOwnership');
+    let exclusiveName = normProfile(groupname);
+    try {
+        const exclusive = await ensureExclusivePppoeProfileForTenant(exclusiveName);
+        exclusiveName = exclusive.groupname || exclusiveName;
+        await claimTenantPppoeProfile(exclusiveName);
+    } catch (ownErr) {
+        logger.warn(`[syncPackageLimitsToRadius] Ownership: ${ownErr.message}`);
+        throw ownErr;
+    }
+
     const conn = await getRadiusConnection();
     try {
-        const normalizedGroupname = groupname.toLowerCase().replace(/\s+/g, '_');
+        const normalizedGroupname = exclusiveName;
         
         // Hapus limit attributes yang lama untuk group ini
         await conn.execute(
@@ -1521,7 +1796,11 @@ async function syncPackageLimitsToRadius({ groupname, upload_limit, download_lim
         }
         
         await conn.end();
-        return { success: true, message: `Package limits berhasil di-sync ke RADIUS group ${normalizedGroupname}` };
+        return {
+            success: true,
+            message: `Package limits berhasil di-sync ke RADIUS group ${normalizedGroupname}`,
+            groupname: normalizedGroupname
+        };
     } catch (error) {
         await conn.end();
         logger.error(`Error syncing package limits to RADIUS: ${error.message}`);
@@ -2237,7 +2516,7 @@ async function editPPPoEUserRadius({ oldUsername, username, password, profile = 
             }).then(async (r) => {
                 if (r && r.success) {
                     await syncRadiusToFreeRadiusMysql({ force: true });
-                    if (resolvedGroup && resolvedGroup !== 'isolir') {
+                    if (resolvedGroup) {
                         await disconnectPPPoEUserAllRouters(username);
                     }
                 }
@@ -2286,7 +2565,8 @@ async function editPPPoEUserRadius({ oldUsername, username, password, profile = 
         }).then(async (r) => {
             if (r && r.success) {
                 await syncRadiusToFreeRadiusMysql({ force: true });
-                if (resolvedProfile && resolvedProfile !== 'isolir') {
+                // Selalu kick agar sesi hidup re-auth ke grup baru (termasuk isolir) di RADIUS POP
+                if (resolvedProfile) {
                     await disconnectPPPoEUserAllRouters(usernameToUpdate);
                 }
             }
@@ -2397,6 +2677,112 @@ async function syncPackageLimitsToMikrotik({ profile_name, upload_limit, downloa
     } catch (error) {
         logger.error(`Error syncing package limits to Mikrotik: ${error.message}`);
         return { success: false, message: `Gagal sync limits ke Mikrotik: ${error.message}` };
+    }
+}
+
+/**
+ * Ensure PPPoE profile exists for a billing package (RADIUS group or MikroTik /ppp/profile).
+ * Used when tenant selects a master package, binds NAS, or creates/updates a package.
+ * Does not throw — failures return { success: false }.
+ */
+async function ensurePppoeProfileForPackage(pkg, options = {}) {
+    try {
+        if (!pkg || pkg.pppoe_profile == null || String(pkg.pppoe_profile).trim() === '') {
+            return { success: true, skipped: true, message: 'Billing-only / no pppoe_profile' };
+        }
+
+        const profileName = String(pkg.pppoe_profile).trim();
+        const authMode = await getUserAuthModeAsync();
+        const limits = {
+            upload_limit: pkg.upload_limit,
+            download_limit: pkg.download_limit,
+            burst_limit_upload: pkg.burst_limit_upload,
+            burst_limit_download: pkg.burst_limit_download,
+            burst_threshold: pkg.burst_threshold,
+            burst_time: pkg.burst_time
+        };
+
+        if (authMode === 'radius') {
+            const groupname = profileName.toLowerCase().replace(/\s+/g, '_');
+            const syncResult = await syncPackageLimitsToRadius({
+                groupname,
+                ...limits
+            });
+            const syncedName = (syncResult && syncResult.groupname) || groupname;
+            return {
+                success: !!(syncResult && syncResult.success),
+                mode: 'radius',
+                profileName: syncedName,
+                message: (syncResult && syncResult.message) || `Synced to RADIUS group ${syncedName}`
+            };
+        }
+
+        let routerObj = options.routerObj || null;
+        const routerId = pkg.router_id || options.router_id;
+        if (!routerObj && routerId) {
+            routerObj = await new Promise((resolve) => {
+                const sqlite3 = require('sqlite3').verbose();
+                const path = require('path');
+                const dbPath = path.join(__dirname, '../data/billing.db');
+                const db = new sqlite3.Database(dbPath);
+                db.get('SELECT * FROM routers WHERE id = ?', [routerId], (err, row) => {
+                    db.close();
+                    if (err) {
+                        logger.warn(`[ensurePppoeProfileForPackage] load router: ${err.message}`);
+                        resolve(null);
+                    } else {
+                        resolve(row || null);
+                    }
+                });
+            });
+        }
+
+        if (!routerObj) {
+            return {
+                success: true,
+                skipped: true,
+                mode: 'mikrotik',
+                profileName,
+                message: 'No router_id; deferred until NAS bind'
+            };
+        }
+
+        const profilesResult = await getPPPoEProfiles(routerObj);
+        const profileExists = profilesResult.success && profilesResult.data &&
+            profilesResult.data.some(p => (p.name || p['name']) === profileName);
+
+        if (profileExists) {
+            const syncResult = await syncPackageLimitsToMikrotik({
+                profile_name: profileName,
+                ...limits
+            }, routerObj);
+            return {
+                success: !!(syncResult && syncResult.success),
+                mode: 'mikrotik',
+                profileName,
+                message: (syncResult && syncResult.message) || `Synced to Mikrotik profile ${profileName}`
+            };
+        }
+
+        const rateLimit = buildMikrotikRateLimit(limits);
+        const createResult = await addPPPoEProfile({
+            name: profileName,
+            'remote-address': options.remoteAddress || 'POOL-PPPOE-NEW',
+            'rate-limit': rateLimit || undefined
+        }, routerObj);
+
+        return {
+            success: !!(createResult && createResult.success),
+            mode: 'mikrotik',
+            profileName,
+            message: (createResult && createResult.message) ||
+                (createResult && createResult.success
+                    ? `PPPoE profile created: ${profileName}`
+                    : `Failed to create profile ${profileName}`)
+        };
+    } catch (error) {
+        logger.warn(`[ensurePppoeProfileForPackage] ${error.message}`);
+        return { success: false, message: error.message };
     }
 }
 
@@ -3898,8 +4284,8 @@ async function addHotspotUser(username, password, profile, comment = null, custo
                                 logger.info(`🔁 Voucher revenue record updated for ${username}: ID=${voucherRecordId}`);
                             } else {
                                 runResult = await runAsync(`
-                                    INSERT INTO voucher_revenue (username, price, profile, created_at, status, notes, server_name, server_metadata)
-                                    VALUES (?, ?, ?, datetime('now','localtime'), ?, ?, ?, ?)
+                                    INSERT INTO voucher_revenue (username, price, profile, created_at, status, notes, server_name, server_metadata, tenant_id)
+                                    VALUES (?, ?, ?, datetime('now','localtime'), ?, ?, ?, ?, ?)
                                 `, [
                                     username,
                                     voucherPrice,
@@ -3907,7 +4293,8 @@ async function addHotspotUser(username, password, profile, comment = null, custo
                                     'unpaid',
                                     `Voucher Hotspot ${username} - Profile: ${profile}`,
                                     serverNameForVoucher,
-                                    serverMetadataForStore
+                                    serverMetadataForStore,
+                                    (hasTenantContext() ? getTenantId() : 1)
                                 ]);
                                 voucherRecordId = runResult ? runResult.lastID : null;
                                 logger.info(`✅ Voucher revenue record saved for ${username}: ID=${voucherRecordId}, Price=Rp ${voucherPrice} - Status: unpaid (will be paid when voucher is used)`);
@@ -3980,8 +4367,8 @@ async function addHotspotUser(username, password, profile, comment = null, custo
                                     voucherRecordId = existing.id;
                                 } else {
                                     const insertResult = await runAsync(`
-                                        INSERT INTO voucher_revenue (username, price, profile, created_at, status, notes, server_name, server_metadata)
-                                        VALUES (?, ?, ?, datetime('now','localtime'), ?, ?, ?, ?)
+                                        INSERT INTO voucher_revenue (username, price, profile, created_at, status, notes, server_name, server_metadata, tenant_id)
+                                    VALUES (?, ?, ?, datetime('now','localtime'), ?, ?, ?, ?, ?)
                                     `, [
                                         username,
                                         voucherPrice,
@@ -3989,7 +4376,8 @@ async function addHotspotUser(username, password, profile, comment = null, custo
                                         'unpaid',
                                         `Voucher Hotspot ${username} - Profile: ${profile}`,
                                         serverNameForVoucher,
-                                        serverMetadataForStore
+                                        serverMetadataForStore,
+                                    (hasTenantContext() ? getTenantId() : 1)
                                     ]);
                                     voucherRecordId = insertResult ? insertResult.lastID : null;
                                 }
@@ -4258,8 +4646,9 @@ async function disconnectPPPoEUserAllRouters(username) {
     const sqlite3 = require('sqlite3').verbose();
     const dbPath = require('path').join(__dirname, '../data/billing.db');
     const db = new sqlite3.Database(dbPath);
+    const whereSql = _routersTenantWhereSql();
     const routers = await new Promise((resolve) =>
-        db.all('SELECT * FROM routers ORDER BY id', (err, rows) => {
+        db.all(`SELECT * FROM routers${whereSql} ORDER BY id`, (err, rows) => {
             db.close();
             resolve(rows || []);
         })
@@ -8117,6 +8506,37 @@ async function getPPPoEProfilesRadius(options = {}) {
         
         logger.info(`📋 Hasil filter: ${filteredGroupnames.length} profil PPPoE (dari ${groupnames.length} total, ${Object.keys(hotspotMetadataMap).length} adalah hotspot)`);
 
+        // Isolasi multi-tenant: hanya tampilkan profil milik tenant (allowlist)
+        let tenantProfileAllowSet = null; // null = tanpa konteks tenant
+        let normPppoeGroupFn = (n) => String(n || '').trim().toLowerCase().replace(/\s+/g, '_');
+        let systemPppoeProfiles = new Set(['isolir', 'default']);
+        try {
+            const {
+                getTenantAllowedPppoeProfileSet,
+                SYSTEM_PROFILES,
+                normalizeGroupname: normPppoeGroup
+            } = require('../utils/tenantPppoeProfileOwnership');
+            normPppoeGroupFn = normPppoeGroup;
+            systemPppoeProfiles = SYSTEM_PROFILES;
+            const allowedSet = await getTenantAllowedPppoeProfileSet();
+            tenantProfileAllowSet = allowedSet;
+            if (allowedSet !== null) {
+                const before = filteredGroupnames.length;
+                const kept = filteredGroupnames.filter((name) => {
+                    const key = normPppoeGroup(name);
+                    if (SYSTEM_PROFILES.has(key)) return true;
+                    return allowedSet.has(key);
+                });
+                filteredGroupnames.length = 0;
+                filteredGroupnames.push(...kept);
+                logger.info(
+                    `[PPPoE profiles] Tenant allowlist: ${before} → ${filteredGroupnames.length} (owned=${allowedSet.size})`
+                );
+            }
+        } catch (allowErr) {
+            logger.warn(`[PPPoE profiles] Tenant filter skip: ${allowErr.message}`);
+        }
+
         // Grup RADIUS untuk suspensi selalu 'isolir' (radusergroup); bisa punya baris hanya di radgroupcheck.
         // Tanpa ini, profil tidak muncul di halaman PPPoE bila belum ada radgroupreply untuk 'isolir'.
         const radiusIsolirGroup = 'isolir';
@@ -8134,6 +8554,132 @@ async function getPPPoEProfilesRadius(options = {}) {
                 filteredGroupnames.sort((a, b) => String(a).localeCompare(String(b)));
                 logger.info(`✅ Menambahkan '${radiusIsolirGroup}' ke daftar profil (ada di RADIUS, sebelumnya tidak dari radgroupreply DISTINCT)`);
             }
+        }
+
+        // Dedup case variants (GRATIS vs gratis) — SQLite DISTINCT is case-sensitive.
+        // Prefer lowercase/normalized name when both exist so UI shows one row.
+        {
+            const byKey = new Map();
+            for (const name of filteredGroupnames) {
+                const key = String(name || '').trim().toLowerCase();
+                if (!key) continue;
+                const prev = byKey.get(key);
+                if (!prev) {
+                    byKey.set(key, name);
+                    continue;
+                }
+                const preferCurrent =
+                    String(name) === key ||
+                    (String(prev) !== key && String(name).localeCompare(String(prev)) < 0);
+                if (preferCurrent) byKey.set(key, name);
+                else {
+                    logger.debug(
+                        `[PPPoE profiles] Skip case-duplicate groupname "${name}" (keep "${prev}")`
+                    );
+                }
+            }
+            const beforeDedup = filteredGroupnames.length;
+            filteredGroupnames.length = 0;
+            filteredGroupnames.push(...byKey.values());
+            if (beforeDedup !== filteredGroupnames.length) {
+                logger.info(
+                    `[PPPoE profiles] Case-dedupe: ${beforeDedup} → ${filteredGroupnames.length}`
+                );
+            }
+        }
+
+        // Dedup logical name per tenant: "Profil 100 Mbps" + "profil_100_mbps" + "t2_profil_100_mbps"
+        // punya display_name sama — tampilkan satu saja.
+        try {
+            const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
+            if (hasTenantContext() && filteredGroupnames.length > 1) {
+                const {
+                    stripTenantProfilePrefix,
+                    normalizeGroupname: normLogical
+                } = require('../utils/tenantPppoeProfileOwnership');
+                const tid = getTenantId();
+                const billingDb = require('./billing').db;
+                const refRows = await new Promise((resolve) => {
+                    billingDb.all(
+                        `SELECT DISTINCT TRIM(pppoe_profile) AS p FROM packages
+                         WHERE tenant_id = ? AND pppoe_profile IS NOT NULL AND TRIM(pppoe_profile) != ''
+                         UNION
+                         SELECT DISTINCT TRIM(pppoe_profile) AS p FROM customers
+                         WHERE tenant_id = ? AND pppoe_profile IS NOT NULL AND TRIM(pppoe_profile) != ''`,
+                        [tid, tid],
+                        (err, rows) => resolve(err ? [] : rows || [])
+                    );
+                });
+                const exactRefs = new Set(
+                    (refRows || []).map((r) => String(r.p || '').trim()).filter(Boolean)
+                );
+                const normRefs = new Set(
+                    [...exactRefs].map((p) => normLogical(p)).filter(Boolean)
+                );
+
+                const byLogical = new Map(); // logicalKey -> [physical names]
+                for (const name of filteredGroupnames) {
+                    const norm = normLogical(name);
+                    if (!norm) continue;
+                    const logical = stripTenantProfilePrefix(norm, tid) || norm;
+                    if (!byLogical.has(logical)) byLogical.set(logical, []);
+                    byLogical.get(logical).push(name);
+                }
+
+                const pickKeeper = (candidates) => {
+                    if (candidates.length === 1) return candidates[0];
+                    // 1) Exact match ke referensi paket/pelanggan
+                    for (const c of candidates) {
+                        if (exactRefs.has(String(c).trim())) return c;
+                    }
+                    // 2) Normalized match ke referensi — utamakan yang ada spasi (nama RADIUS legacy)
+                    const normHits = candidates.filter((c) => normRefs.has(normLogical(c)));
+                    if (normHits.length === 1) return normHits[0];
+                    if (normHits.length > 1) {
+                        const spaced = normHits.filter((c) => String(c).includes(' '));
+                        if (spaced.length) {
+                            spaced.sort((a, b) => String(a).localeCompare(String(b)));
+                            return spaced[0];
+                        }
+                        normHits.sort((a, b) => String(a).localeCompare(String(b)));
+                        return normHits[0];
+                    }
+                    // 3) Utamakan tanpa prefix t{tid}_
+                    const prefix = `t${tid}_`;
+                    const bare = candidates.filter(
+                        (c) => !normLogical(c).startsWith(prefix)
+                    );
+                    const pool = bare.length ? bare : candidates;
+                    const spaced = pool.filter((c) => String(c).includes(' '));
+                    const finalPool = spaced.length ? spaced : pool;
+                    finalPool.sort((a, b) => String(a).localeCompare(String(b)));
+                    return finalPool[0];
+                };
+
+                const keptLogical = [];
+                let dropped = 0;
+                for (const [, candidates] of byLogical) {
+                    const keeper = pickKeeper(candidates);
+                    keptLogical.push(keeper);
+                    dropped += candidates.length - 1;
+                    if (candidates.length > 1) {
+                        logger.info(
+                            `[PPPoE profiles] Logical-dedupe tenant ${tid}: keep "${keeper}" drop [${candidates
+                                .filter((c) => c !== keeper)
+                                .join(', ')}]`
+                        );
+                    }
+                }
+                if (dropped > 0) {
+                    filteredGroupnames.length = 0;
+                    filteredGroupnames.push(...keptLogical);
+                    logger.info(
+                        `[PPPoE profiles] Logical-dedupe: dropped ${dropped} duplicate(s) for tenant ${tid}`
+                    );
+                }
+            }
+        } catch (logicalErr) {
+            logger.warn(`[PPPoE profiles] Logical dedupe skip: ${logicalErr.message}`);
         }
 
         const metadataMap = await getPPPoEProfilesMetadata(conn, filteredGroupnames);
@@ -8410,25 +8956,72 @@ async function getPPPoEProfilesRadius(options = {}) {
             );
             const excludeUsernames = await getPppoeRadcheckExcludeUsernames();
             const pwdPred = sqlRadcheckPasswordPredicate('rc');
-            let assignedGroupsSql = `
+
+            // Isolasi multi-tenant: jangan merge grup dari user tenant lain
+            // (tanpa filter ini, profil tenant lain ikut masuk dropdown edit/tambah user).
+            let tenantUsernamesForMerge = null; // null = tanpa konteks tenant
+            let skipAssignedMerge = false;
+            try {
+                const { getTenantAllowedPppoeUsernames } = require('../utils/tenantPppoeOwnership');
+                tenantUsernamesForMerge = await getTenantAllowedPppoeUsernames();
+                if (tenantUsernamesForMerge !== null && tenantUsernamesForMerge.length === 0) {
+                    skipAssignedMerge = true;
+                    logger.info('[PPPoE profiles RADIUS] mergeAssigned: skip (tenant tidak punya user PPPoE)');
+                }
+            } catch (tenantMergeErr) {
+                logger.warn(
+                    `[PPPoE profiles RADIUS] merge tenant username filter skip: ${tenantMergeErr.message}`
+                );
+            }
+
+            if (!skipAssignedMerge) {
+            try {
+                const assignedList = [];
+                const usernameChunks =
+                    Array.isArray(tenantUsernamesForMerge) && tenantUsernamesForMerge.length > 0
+                        ? (() => {
+                              const chunks = [];
+                              const chunkSize = 200;
+                              for (let i = 0; i < tenantUsernamesForMerge.length; i += chunkSize) {
+                                  chunks.push(tenantUsernamesForMerge.slice(i, i + chunkSize));
+                              }
+                              return chunks;
+                          })()
+                        : [null]; // satu query tanpa filter username (mode non-tenant)
+
+                for (const userChunk of usernameChunks) {
+                    let assignedGroupsSql = `
             SELECT DISTINCT TRIM(rug.groupname) AS gn
             FROM radusergroup rug
             INNER JOIN radcheck rc ON rc.username = rug.username AND ${pwdPred}
             WHERE rug.groupname IS NOT NULL AND TRIM(rug.groupname) != ''
         `;
-            const assignedParams = [];
-            if (excludeUsernames.length > 0) {
-                const ph = excludeUsernames.map(() => '?').join(',');
-                assignedGroupsSql += ` AND rc.username NOT IN (${ph})`;
-                assignedParams.push(...excludeUsernames);
-            }
-            try {
-                const [assignedRows] = await conn.execute(assignedGroupsSql, assignedParams);
-                const assignedList = Array.isArray(assignedRows) ? assignedRows : [];
+                    const assignedParams = [];
+                    if (excludeUsernames.length > 0) {
+                        const ph = excludeUsernames.map(() => '?').join(',');
+                        assignedGroupsSql += ` AND rc.username NOT IN (${ph})`;
+                        assignedParams.push(...excludeUsernames);
+                    }
+                    if (userChunk) {
+                        const ph = userChunk.map(() => '?').join(',');
+                        assignedGroupsSql += ` AND rug.username IN (${ph})`;
+                        assignedParams.push(...userChunk);
+                    }
+                    const [assignedRows] = await conn.execute(assignedGroupsSql, assignedParams);
+                    if (Array.isArray(assignedRows)) assignedList.push(...assignedRows);
+                }
+
                 const missingGn = [];
                 for (const row of assignedList) {
                     const gn = row && row.gn != null ? String(row.gn).trim() : '';
                     if (!gn || existingGroupKeys.has(gn)) continue;
+                    // Safety net: jangan inject profil milik tenant lain ke dropdown
+                    if (tenantProfileAllowSet !== null) {
+                        const key = normPppoeGroupFn(gn);
+                        if (!systemPppoeProfiles.has(key) && !tenantProfileAllowSet.has(key)) {
+                            continue;
+                        }
+                    }
                     existingGroupKeys.add(gn);
                     missingGn.push(gn);
                 }
@@ -8466,6 +9059,7 @@ async function getPPPoEProfilesRadius(options = {}) {
             } catch (mergeErr) {
                 logger.warn(`[PPPoE profiles RADIUS] merge radusergroup: ${mergeErr.message}`);
             }
+            }
         }
 
         profiles.sort((a, b) =>
@@ -8490,31 +9084,47 @@ async function getPPPoEProfilesRadius(options = {}) {
 }
 // Fungsi untuk menambah profile PPPoE ke RADIUS (radgroupreply)
 async function addPPPoEProfileRadius(profileData) {
+    const {
+        claimTenantPppoeProfile,
+        releaseTenantPppoeProfile,
+        normalizeGroupname: normProfile
+    } = require('../utils/tenantPppoeProfileOwnership');
+
     const conn = await getRadiusConnection();
     try {
         // Normalize groupname: lowercase, underscore-separated
-        const groupname = (profileData.name || '').toLowerCase().replace(/\s+/g, '_');
+        const requestedName = normProfile(profileData.name || '');
+        const displayNameRaw = String(profileData.name || '').trim();
         
-        if (!groupname || groupname === '') {
+        if (!requestedName || requestedName === '') {
             await conn.end();
             return { success: false, message: 'Nama profile tidak boleh kosong' };
         }
         
         // Prevent creating reserved profiles
         const reservedNames = ['isolir', 'default'];
-        if (reservedNames.includes(groupname)) {
+        if (reservedNames.includes(requestedName)) {
             await conn.end();
             const isolirHint =
-                groupname === 'isolir'
+                requestedName === 'isolir'
                     ? ' Grup ini dibuat otomatis saat isolir pelanggan (RADIUS) dan muncul di halaman Profile PPPoE bila sudah ada di database — tidak perlu ditambah manual.'
                     : '';
             return {
                 success: false,
-                message: `Profile dengan nama "${groupname}" adalah profile sistem yang tidak dapat dibuat dari form ini.${isolirHint}`
+                message: `Profile dengan nama "${requestedName}" adalah profile sistem yang tidak dapat dibuat dari form ini.${isolirHint}`
             };
         }
+
+        let groupname = requestedName;
+        try {
+            const claim = await claimTenantPppoeProfile(requestedName);
+            groupname = normProfile(claim.groupname || requestedName);
+        } catch (claimErr) {
+            await conn.end();
+            return { success: false, message: claimErr.message };
+        }
         
-        // Check if groupname already exists
+        // Check if physical groupname already exists in RADIUS
         const [existing] = await conn.execute(`
             SELECT COUNT(*) as count
             FROM radgroupreply
@@ -8522,8 +9132,37 @@ async function addPPPoEProfileRadius(profileData) {
         `, [groupname]);
         
         if (existing && existing.length > 0 && existing[0].count > 0) {
-            await conn.end();
-            return { success: false, message: `Profile dengan nama "${groupname}" sudah ada di database RADIUS` };
+            // Nama fisik sudah ada — isolasi ke salinan tenant (RADIUS shared, tanpa tenant_id)
+            const { getTenantId, hasTenantContext } = require('./platform/tenantContext');
+            if (!hasTenantContext()) {
+                await conn.end();
+                return { success: false, message: `Profile dengan nama "${groupname}" sudah ada di database RADIUS` };
+            }
+            const tid = getTenantId();
+            const privateName = normProfile(`t${tid}_${requestedName}`);
+            if (privateName === groupname) {
+                await conn.end();
+                return { success: false, message: `Profile dengan nama "${groupname}" sudah ada di database RADIUS` };
+            }
+            const [privExists] = await conn.execute(`
+                SELECT COUNT(*) as count FROM radgroupreply WHERE groupname = ?
+            `, [privateName]);
+            if (privExists && privExists.length > 0 && privExists[0].count > 0) {
+                await conn.end();
+                return { success: false, message: `Profile dengan nama "${requestedName}" sudah ada untuk tenant ini` };
+            }
+            try {
+                await claimTenantPppoeProfile(privateName);
+                // Lepas klaim nama awal agar tidak ada dual-ownership (requested + t{tid}_…)
+                if (normProfile(requestedName) !== privateName) {
+                    await releaseTenantPppoeProfile(requestedName).catch(() => {});
+                }
+            } catch (e) {
+                await conn.end();
+                return { success: false, message: e.message };
+            }
+            groupname = privateName;
+            logger.info(`[addPPPoEProfileRadius] Auto-isolated RADIUS create: "${requestedName}" → "${groupname}"`);
         }
         
         const sanitize = (value) => {
@@ -8684,7 +9323,8 @@ async function addPPPoEProfileRadius(profileData) {
         
         await savePPPoEProfileMetadata(conn, {
             groupname,
-            displayName: sanitize(profileData.name) || groupname,
+            // Tampilkan nama yang diminta user; groupname fisik bisa ber-prefix tenant
+            displayName: displayNameRaw || requestedName || groupname,
             comment: sanitize(profileData.comment),
             rateLimit: sanitize(profileData['rate-limit'] || profileData.rateLimit),
             localAddress: sanitize(profileData['local-address']),
@@ -8712,7 +9352,7 @@ async function addPPPoEProfileRadius(profileData) {
         
         await conn.end();
         logger.info(`✅ Profile RADIUS berhasil ditambahkan: ${groupname}`);
-        return { success: true, message: `Profile ${groupname} berhasil ditambahkan ke RADIUS` };
+        return { success: true, message: `Profile ${displayNameRaw || requestedName} berhasil ditambahkan ke RADIUS`, groupname };
     } catch (error) {
         await conn.end();
         logger.error(`Error adding PPPoE profile to RADIUS: ${error.message}`);
@@ -8721,6 +9361,46 @@ async function addPPPoEProfileRadius(profileData) {
 }
 // Fungsi untuk edit profile PPPoE di RADIUS (radgroupreply)
 async function editPPPoEProfileRadius(profileData) {
+    const {
+        assertTenantOwnsPppoeProfile,
+        ensureExclusivePppoeProfileForTenant,
+        renameTenantPppoeProfile,
+        normalizeGroupname: normProfile,
+        stripTenantProfilePrefix
+    } = require('../utils/tenantPppoeProfileOwnership');
+    const { hasTenantContext: hasTid, getTenantId } = require('./platform/tenantContext');
+
+    // Ownership / clone-on-conflict SEBELUM buka koneksi utama
+    let oldGroupname = normProfile(profileData.groupname || profileData.id || profileData.name);
+    const requestedNewName = profileData.name ? normProfile(profileData.name) : oldGroupname;
+    let newGroupname = requestedNewName;
+    const displayNameRaw = String(profileData.name || '').trim();
+
+    if (!oldGroupname) {
+        return { success: false, message: 'Groupname tidak ditemukan' };
+    }
+
+    try {
+        await assertTenantOwnsPppoeProfile(oldGroupname);
+        const exclusive = await ensureExclusivePppoeProfileForTenant(oldGroupname);
+        if (exclusive.cloned && exclusive.groupname) {
+            oldGroupname = exclusive.groupname;
+            if (!profileData.name || normProfile(profileData.name) === normProfile(exclusive.from || '')) {
+                newGroupname = exclusive.groupname;
+            }
+        }
+    } catch (ownErr) {
+        return { success: false, message: ownErr.message };
+    }
+
+    // Nama di form = nama logis dari profil terisolasi (t{tid}_xxx) → jangan rename fisik
+    if (hasTid() && newGroupname && newGroupname !== oldGroupname) {
+        const tid = getTenantId();
+        if (stripTenantProfilePrefix(oldGroupname, tid) === newGroupname) {
+            newGroupname = oldGroupname;
+        }
+    }
+
     const conn = await getRadiusConnection();
     try {
         const sanitize = (value) => {
@@ -8728,17 +9408,6 @@ async function editPPPoEProfileRadius(profileData) {
             const trimmed = String(value).trim();
             return trimmed === '' ? null : trimmed;
         };
-
-        // Old groupname (dari id atau groupname)
-        const oldGroupname = profileData.groupname || profileData.id || profileData.name;
-        
-        // New groupname (dari name yang diinput user, normalized)
-        const newGroupname = profileData.name ? profileData.name.toLowerCase().replace(/\s+/g, '_') : oldGroupname;
-        
-        if (!oldGroupname) {
-            await conn.end();
-            return { success: false, message: 'Groupname tidak ditemukan' };
-        }
         
         // Check if old groupname exists
         const [existing] = await conn.execute(`
@@ -8755,19 +9424,101 @@ async function editPPPoEProfileRadius(profileData) {
         // Jika nama berubah, perlu rename groupname di semua tabel terkait
         if (newGroupname && newGroupname !== oldGroupname && newGroupname !== '') {
             logger.info(`Renaming profile from ${oldGroupname} to ${newGroupname}`);
-            
-            // Check if new groupname already exists
+
+            // Klaim kepemilikan dulu (auto-isolasi / display-only jika bentrok)
+            try {
+                const renameResult = await renameTenantPppoeProfile(oldGroupname, newGroupname);
+                if (renameResult.displayOnly || renameResult.groupname === oldGroupname) {
+                    // Pertahankan groupname fisik; display_name tetap dari input user
+                    logger.info(
+                        `[editPPPoEProfileRadius] Keep physical "${oldGroupname}", display="${displayNameRaw || requestedNewName}"` +
+                        (renameResult.conflict ? ` (conflict=${renameResult.conflict})` : '')
+                    );
+                    newGroupname = oldGroupname;
+                } else if (renameResult.groupname) {
+                    newGroupname = normProfile(renameResult.groupname);
+                    if (renameResult.isolated) {
+                        logger.info(
+                            `[editPPPoEProfileRadius] Auto-isolated rename: "${requestedNewName}" → "${newGroupname}"`
+                        );
+                    }
+                }
+            } catch (renameOwnErr) {
+                await conn.end();
+                return { success: false, message: renameOwnErr.message };
+            }
+        }
+
+        // Rename fisik hanya jika nama benar-benar berubah setelah resolusi kepemilikan
+        if (newGroupname && newGroupname !== oldGroupname && newGroupname !== '') {
+            // Jika target fisik sudah ada di RADIUS (bukan profil lama), isolasi lagi
             const [newExists] = await conn.execute(`
                 SELECT COUNT(*) as count
                 FROM radgroupreply
                 WHERE groupname = ?
             `, [newGroupname]);
-            
+
             if (newExists && newExists.length > 0 && newExists[0].count > 0) {
-                await conn.end();
-                return { success: false, message: `Profile dengan nama ${newGroupname} sudah ada` };
+                if (!hasTid()) {
+                    await conn.end();
+                    return { success: false, message: `Profile dengan nama ${newGroupname} sudah ada` };
+                }
+                const tid = getTenantId();
+                const privateName = normProfile(`t${tid}_${requestedNewName}`);
+                const {
+                    claimTenantPppoeProfile,
+                    releaseTenantPppoeProfile
+                } = require('../utils/tenantPppoeProfileOwnership');
+
+                const revertOwnershipToOld = async (claimedName) => {
+                    if (!claimedName || claimedName === oldGroupname) return;
+                    try {
+                        await releaseTenantPppoeProfile(claimedName);
+                        await claimTenantPppoeProfile(oldGroupname);
+                    } catch (revErr) {
+                        logger.warn(`[editPPPoEProfileRadius] revert ownership: ${revErr.message}`);
+                    }
+                };
+
+                if (!privateName || privateName === newGroupname || privateName === oldGroupname) {
+                    logger.warn(
+                        `[editPPPoEProfileRadius] RADIUS name busy, keep physical "${oldGroupname}"`
+                    );
+                    await revertOwnershipToOld(newGroupname);
+                    newGroupname = oldGroupname;
+                } else {
+                    const [privExists] = await conn.execute(`
+                        SELECT COUNT(*) as count FROM radgroupreply WHERE groupname = ?
+                    `, [privateName]);
+                    if (privExists && privExists.length > 0 && privExists[0].count > 0) {
+                        logger.warn(
+                            `[editPPPoEProfileRadius] Isolated name busy, keep physical "${oldGroupname}"`
+                        );
+                        await revertOwnershipToOld(newGroupname);
+                        newGroupname = oldGroupname;
+                    } else {
+                        try {
+                            const renameResult = await renameTenantPppoeProfile(newGroupname, privateName);
+                            if (renameResult.displayOnly || renameResult.groupname === oldGroupname) {
+                                await revertOwnershipToOld(newGroupname);
+                                newGroupname = oldGroupname;
+                            } else {
+                                newGroupname = privateName;
+                                logger.info(
+                                    `[editPPPoEProfileRadius] RADIUS conflict → isolated "${requestedNewName}" to "${newGroupname}"`
+                                );
+                            }
+                        } catch (_) {
+                            await releaseTenantPppoeProfile(newGroupname).catch(() => {});
+                            await claimTenantPppoeProfile(privateName);
+                            newGroupname = privateName;
+                        }
+                    }
+                }
             }
-            
+        }
+
+        if (newGroupname && newGroupname !== oldGroupname && newGroupname !== '') {
             // 1. Copy semua data dari old groupname ke new groupname
             // Copy dari radgroupreply
             const [oldReplyRows] = await conn.execute(`
@@ -8805,18 +9556,44 @@ async function editPPPoEProfileRadius(profileData) {
                 `, [newGroupname, row.attribute, row.op, row.value]);
             }
             
-            // 2. Update radusergroup untuk semua user yang menggunakan groupname lama
-            await conn.execute(`
-                UPDATE radusergroup
-                SET groupname = ?
-                WHERE groupname = ?
-            `, [newGroupname, oldGroupname]);
-            
-            // 3. Delete old groupname
-            await conn.execute(`DELETE FROM radgroupreply WHERE groupname = ?`, [oldGroupname]);
-            await conn.execute(`DELETE FROM radgroupcheck WHERE groupname = ?`, [oldGroupname]);
+            // 2. Update radusergroup HANYA untuk user milik tenant ini (bukan global)
+            if (hasTid()) {
+                const { getTenantAllowedPppoeUsernames } = require('../utils/tenantPppoeOwnership');
+                const allowedUsers = await getTenantAllowedPppoeUsernames();
+                if (Array.isArray(allowedUsers) && allowedUsers.length > 0) {
+                    const chunkSize = 200;
+                    for (let i = 0; i < allowedUsers.length; i += chunkSize) {
+                        const chunk = allowedUsers.slice(i, i + chunkSize);
+                        const placeholders = chunk.map(() => '?').join(',');
+                        await conn.execute(
+                            `UPDATE radusergroup SET groupname = ?
+                             WHERE groupname = ? AND username IN (${placeholders})`,
+                            [newGroupname, oldGroupname, ...chunk]
+                        );
+                    }
+                }
+            } else {
+                await conn.execute(
+                    `UPDATE radusergroup SET groupname = ? WHERE groupname = ?`,
+                    [newGroupname, oldGroupname]
+                );
+            }
 
-            await deletePPPoEProfileMetadata(conn, oldGroupname);
+            // 3. Hapus groupname lama hanya jika tidak ada user RADIUS yang masih memakai
+            const [stillUsed] = await conn.execute(
+                `SELECT COUNT(*) AS c FROM radusergroup WHERE groupname = ?`,
+                [oldGroupname]
+            );
+            const stillCount = stillUsed && stillUsed[0] ? stillUsed[0].c : 0;
+            if (!stillCount) {
+                await conn.execute(`DELETE FROM radgroupreply WHERE groupname = ?`, [oldGroupname]);
+                await conn.execute(`DELETE FROM radgroupcheck WHERE groupname = ?`, [oldGroupname]);
+                await deletePPPoEProfileMetadata(conn, oldGroupname);
+            } else {
+                logger.info(
+                    `Rename profil: menyisakan "${oldGroupname}" di RADIUS (${stillCount} user tenant lain masih memakai)`
+                );
+            }
         }
         
         // Gunakan groupname yang baru untuk update attributes
@@ -9032,7 +9809,7 @@ async function editPPPoEProfileRadius(profileData) {
 
         await savePPPoEProfileMetadata(conn, {
             groupname: groupnameToUpdate,
-            displayName: sanitize(profileData.name) || groupnameToUpdate,
+            displayName: displayNameRaw || requestedNewName || groupnameToUpdate,
             comment: sanitize(profileData.comment),
             rateLimit: rateLimitStr ? rateLimitStr.trim() : sanitize(profileData['rate-limit'] || profileData.rateLimit),
             localAddress: sanitize(profileData['local-address']),
@@ -9051,8 +9828,9 @@ async function editPPPoEProfileRadius(profileData) {
         
         await conn.end();
         const finalGroupname = (newGroupname && newGroupname !== oldGroupname && newGroupname !== '') ? newGroupname : oldGroupname;
-        logger.info(`✅ Profile RADIUS berhasil diupdate: ${finalGroupname}`);
-        return { success: true, message: `Profile ${finalGroupname} berhasil diupdate di RADIUS` };
+        const finalDisplay = displayNameRaw || requestedNewName || finalGroupname;
+        logger.info(`✅ Profile RADIUS berhasil diupdate: ${finalGroupname} (display: ${finalDisplay})`);
+        return { success: true, message: `Profile ${finalDisplay} berhasil diupdate di RADIUS`, groupname: finalGroupname };
     } catch (error) {
         await conn.end();
         logger.error(`Error editing PPPoE profile in RADIUS: ${error.message}`);
@@ -9061,42 +9839,60 @@ async function editPPPoEProfileRadius(profileData) {
 }
 // Fungsi untuk hapus profile PPPoE dari RADIUS (radgroupreply)
 async function deletePPPoEProfileRadius(groupname) {
+    const {
+        assertTenantOwnsPppoeProfile,
+        releaseTenantPppoeProfile,
+        normalizeGroupname: normProfile
+    } = require('../utils/tenantPppoeProfileOwnership');
+
+    const normalized = normProfile(groupname);
+    try {
+        await assertTenantOwnsPppoeProfile(normalized);
+    } catch (ownErr) {
+        return { success: false, message: ownErr.message };
+    }
+
     const conn = await getRadiusConnection();
     try {
-        if (!groupname) {
+        if (!normalized) {
             await conn.end();
             return { success: false, message: 'Groupname tidak boleh kosong' };
         }
+
+        if (normalized === 'isolir' || normalized === 'default') {
+            await conn.end();
+            return { success: false, message: `Profile sistem "${normalized}" tidak dapat dihapus` };
+        }
         
-        // Check if groupname is used by any user
+        // Check if groupname is used by any user (case-insensitive — GRATIS/gratis)
         const [userCheck] = await conn.execute(`
             SELECT COUNT(*) as count
             FROM radusergroup
-            WHERE groupname = ?
-        `, [groupname]);
+            WHERE LOWER(TRIM(groupname)) = LOWER(TRIM(?))
+        `, [normalized]);
         
         if (userCheck && userCheck.length > 0 && userCheck[0].count > 0) {
             await conn.end();
-            return { success: false, message: `Profile ${groupname} masih digunakan oleh ${userCheck[0].count} user. Pindahkan user ke profile lain terlebih dahulu.` };
+            return { success: false, message: `Profile ${normalized} masih digunakan oleh ${userCheck[0].count} user. Pindahkan user ke profile lain terlebih dahulu.` };
         }
         
-        // Delete from radgroupreply
+        // Delete from radgroupreply / radgroupcheck (semua variasi huruf besar-kecil)
         await conn.execute(`
             DELETE FROM radgroupreply
-            WHERE groupname = ?
-        `, [groupname]);
+            WHERE LOWER(TRIM(groupname)) = LOWER(TRIM(?))
+        `, [normalized]);
         
-        // Delete from radgroupcheck
         await conn.execute(`
             DELETE FROM radgroupcheck
-            WHERE groupname = ?
-        `, [groupname]);
+            WHERE LOWER(TRIM(groupname)) = LOWER(TRIM(?))
+        `, [normalized]);
         
-        await deletePPPoEProfileMetadata(conn, groupname);
+        await deletePPPoEProfileMetadata(conn, normalized);
+        await releaseTenantPppoeProfile(normalized);
 
         await conn.end();
-        logger.info(`✅ Profile RADIUS berhasil dihapus: ${groupname}`);
-        return { success: true, message: `Profile ${groupname} berhasil dihapus dari RADIUS` };
+        logger.info(`✅ Profile RADIUS berhasil dihapus: ${normalized}`);
+        return { success: true, message: `Profile ${normalized} berhasil dihapus dari RADIUS` };
     } catch (error) {
         await conn.end();
         logger.error(`Error deleting PPPoE profile from RADIUS: ${error.message}`);
@@ -9105,9 +9901,21 @@ async function deletePPPoEProfileRadius(groupname) {
 }
 // Fungsi untuk mendapatkan detail profile PPPoE dari RADIUS
 async function getPPPoEProfileDetailRadius(groupname) {
+    const {
+        assertTenantOwnsPppoeProfile,
+        normalizeGroupname: normProfile
+    } = require('../utils/tenantPppoeProfileOwnership');
+
+    const normalized = normProfile(groupname);
+    try {
+        await assertTenantOwnsPppoeProfile(normalized);
+    } catch (ownErr) {
+        return { success: false, message: ownErr.message, data: null };
+    }
+
     const conn = await getRadiusConnection();
     try {
-        if (!groupname) {
+        if (!normalized) {
             await conn.end();
             return { success: false, message: 'Groupname tidak boleh kosong', data: null };
         }
@@ -9118,16 +9926,16 @@ async function getPPPoEProfileDetailRadius(groupname) {
             FROM radgroupreply
             WHERE groupname = ?
             ORDER BY attribute
-        `, [groupname]);
+        `, [normalized]);
         
         const [checkRows] = await conn.execute(`
             SELECT attribute, value
             FROM radgroupcheck
             WHERE groupname = ?
             ORDER BY attribute
-        `, [groupname]);
+        `, [normalized]);
 
-        const metadata = await getPPPoEProfileMetadata(conn, groupname);
+        const metadata = await getPPPoEProfileMetadata(conn, normalized);
         
         if (attrRows.length === 0 && checkRows.length === 0 && !metadata) {
             await conn.end();
@@ -9137,9 +9945,9 @@ async function getPPPoEProfileDetailRadius(groupname) {
         // Build profile object
         // Inisialisasi dengan metadata, tapi attribute dari radgroupreply akan override
         const profile = {
-            name: metadata?.display_name || groupname,
-            '.id': groupname,
-            groupname: groupname,
+            name: metadata?.display_name || normalized,
+            '.id': normalized,
+            groupname: normalized,
             'rate-limit': null,
             'session-timeout': null,
             'idle-timeout': null,
@@ -9674,8 +10482,8 @@ async function generateHotspotVouchers(count, prefix, profile, server, limits = 
                                             voucherRecordId = existing.id;
                                         } else {
                                             const insertResult = await runAsync(`
-                                                INSERT INTO voucher_revenue (username, price, profile, created_at, status, notes, server_name, server_metadata)
-                                                VALUES (?, ?, ?, datetime('now','localtime'), ?, ?, ?, ?)
+                                                INSERT INTO voucher_revenue (username, price, profile, created_at, status, notes, server_name, server_metadata, tenant_id)
+                                    VALUES (?, ?, ?, datetime('now','localtime'), ?, ?, ?, ?, ?)
                                             `, [
                                                 username,
                                                 finalPrice,
@@ -9683,7 +10491,8 @@ async function generateHotspotVouchers(count, prefix, profile, server, limits = 
                                                 'unpaid',
                                                 `Voucher Hotspot ${username} - Profile: ${profile}`,
                                                 apiServerNameForVoucher,
-                                                apiServerMetadataForStore
+                                                apiServerMetadataForStore,
+                                                (hasTenantContext() ? getTenantId() : 1)
                                             ]);
                                             voucherRecordId = insertResult ? insertResult.lastID : null;
                                         }
@@ -10397,6 +11206,7 @@ module.exports = {
     connectToMikrotik,
     getMikrotikConnection,
     getMikrotikConnectionForRouter,
+    testMikrotikConnectionForRouter,
     getCachedFullPppSecrets,
     getCachedPppActivePrint,
     clearPppPrintCachesForRouter,
@@ -10502,6 +11312,7 @@ module.exports = {
     unsuspendUserRadius,
     syncPackageLimitsToRadius,
     syncPackageLimitsToMikrotik,
+    ensurePppoeProfileForPackage,
     buildMikrotikRateLimit,
     formatSecondsToDuration,
     durationToSeconds,

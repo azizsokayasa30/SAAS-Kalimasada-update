@@ -248,7 +248,21 @@ class _CollectorReceivePaymentScreenState extends State<CollectorReceivePaymentS
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(body['message']?.toString() ?? 'Pembayaran tersimpan')),
         );
-        Navigator.of(context).pop(true);
+        final paidIds = <int>[];
+        final rawIds = body['paid_invoice_ids'];
+        if (rawIds is List) {
+          for (final v in rawIds) {
+            final id = int.tryParse(v.toString());
+            if (id != null && id > 0) paidIds.add(id);
+          }
+        }
+        if (paidIds.isEmpty) {
+          paidIds.addAll(_selectedIds);
+        }
+        Navigator.of(context).pop(<String, dynamic>{
+          'success': true,
+          'paid_invoice_ids': paidIds,
+        });
         return;
       }
       final errMsg = body['message']?.toString() ?? 'Gagal menyimpan';

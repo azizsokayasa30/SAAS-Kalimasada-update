@@ -5,6 +5,7 @@ const sqlite3 = require('sqlite3').verbose();
 const { adminAuth } = require('./adminAuth');
 const logger = require('../config/logger');
 const { getSettingsWithCache } = require('../config/settingsManager');
+const { tenantIdForInsert, tAnd, tWhere } = require('../config/platform/tenantSqlHelpers');
 
 const dbPath = path.join(__dirname, '../data/billing.db');
 
@@ -47,7 +48,7 @@ const generateInvoiceNumber = () => {
 // List Goods Invoices
 router.get('/', adminAuth, getAppSettings, (req, res) => {
     const db = getDb();
-    db.all(`SELECT * FROM goods_invoices ORDER BY id DESC`, [], (err, invoices) => {
+    db.all(`SELECT * FROM goods_invoices${tWhere()} ORDER BY id DESC`, [], (err, invoices) => {
         db.close();
         if (err) {
             logger.error('Error loading goods invoices:', err);
@@ -66,13 +67,13 @@ router.get('/', adminAuth, getAppSettings, (req, res) => {
 // Detail Goods Invoice
 router.get('/:id/detail', adminAuth, getAppSettings, (req, res) => {
     const db = getDb();
-    db.get(`SELECT * FROM goods_invoices WHERE id = ?`, [req.params.id], (err, invoice) => {
+    db.get(`SELECT * FROM goods_invoices WHERE id = ?${tAnd()}`, [req.params.id], (err, invoice) => {
         if (err || !invoice) {
             db.close();
             return res.status(404).send('Invoice not found');
         }
         
-        db.all(`SELECT * FROM goods_invoice_items WHERE invoice_id = ?`, [invoice.id], (err, items) => {
+        db.all(`SELECT * FROM goods_invoice_items WHERE invoice_id = ?${tAnd()}`, [invoice.id], (err, items) => {
             db.close();
             if (err) {
                 logger.error('Error loading goods invoice items:', err);
@@ -146,14 +147,15 @@ router.post('/api/create', adminAuth, async (req, res) => {
             return { name: item.name, qty, price, total };
         });
 
+        const tenantId = tenantIdForInsert();
         const stmt = db.prepare(`
-            INSERT INTO goods_invoices (invoice_number, customer_name, customer_phone, customer_address, subtotal, tax_amount, total_amount, notes, status)
-            VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'unpaid')
+            INSERT INTO goods_invoices (invoice_number, customer_name, customer_phone, customer_address, subtotal, tax_amount, total_amount, notes, status, tenant_id)
+            VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'unpaid', ?)
         `);
         
         const invNum = invoice_number || `INV-SL-${Date.now()}`;
         
-        stmt.run([invNum, customer_name, customer_phone, customer_address, subtotal, subtotal, notes], function(err) {
+        stmt.run([invNum, customer_name, customer_phone, customer_address, subtotal, subtotal, notes, tenantId], function(err) {
             if (err) {
                 db.run('ROLLBACK');
                 db.close();
@@ -162,15 +164,15 @@ router.post('/api/create', adminAuth, async (req, res) => {
             
             const invoiceId = this.lastID;
             const itemStmt = db.prepare(`
-                INSERT INTO goods_invoice_items (invoice_id, item_name, quantity, unit_price, total_price)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO goods_invoice_items (invoice_id, item_name, quantity, unit_price, total_price, tenant_id)
+                VALUES (?, ?, ?, ?, ?, ?)
             `);
             
             let itemsProcessed = 0;
             let itemError = null;
             
             for (const item of processedItems) {
-                itemStmt.run([invoiceId, item.name, item.qty, item.price, item.total], (err) => {
+                itemStmt.run([invoiceId, item.name, item.qty, item.price, item.total, tenantId], (err) => {
                     if (err) itemError = err;
                     itemsProcessed++;
                     
@@ -197,7 +199,7 @@ router.post('/api/create', adminAuth, async (req, res) => {
 // Delete Goods Invoice
 router.delete('/api/:id', adminAuth, (req, res) => {
     const db = getDb();
-    db.run(`DELETE FROM goods_invoices WHERE id = ?`, [req.params.id], function(err) {
+    db.run(`DELETE FROM goods_invoices WHERE id = ?${tAnd()}`, [req.params.id], function(err) {
         db.close();
         if (err) return res.status(500).json({ error: err.message });
         res.json({ success: true });

@@ -53,7 +53,7 @@ function parseTenant(row) {
 }
 
 const RESERVED_SUBDOMAINS = new Set([
-    'manage', 'management', 'api', 'www', 'admin', 'mail', 'ftp', 'cdn', 'static', 'app', 'billing',
+    'manage', 'management', 'mobile', 'api', 'www', 'admin', 'mail', 'ftp', 'cdn', 'static', 'app', 'billing',
     '__master__',
 ]);
 
@@ -197,6 +197,10 @@ const TENANT_SCOPED_TABLES = [
     'collector_remittance_receipts',
     'voucher_revenue',
     'activity_logs',
+    // Kepemilikan user PPPoE RADIUS (manual/gratis) per tenant
+    'tenant_pppoe_users',
+    // Kepemilikan profil PPPoE RADIUS per tenant
+    'tenant_pppoe_profiles',
 ];
 
 async function tableExists(tableName) {
@@ -346,13 +350,71 @@ async function getTenantBySubdomain(subdomain) {
     return parseTenant(row);
 }
 
-async function getTenantStats(tenantId) {
+/**
+ * Resolve periode statistik tenant dari query/options.
+ * Default: bulan & tahun saat ini. month=all|0 → rekap satu tahun penuh.
+ */
+function resolveStatsPeriod(options = {}) {
+    const now = new Date();
+    const yearRaw = options.year != null && String(options.year).trim() !== ''
+        ? Number(options.year)
+        : now.getFullYear();
+    const year = Number.isFinite(yearRaw) && yearRaw >= 2000 && yearRaw <= 2100
+        ? yearRaw
+        : now.getFullYear();
+
+    const monthRaw = options.month != null && String(options.month).trim() !== ''
+        ? String(options.month).trim().toLowerCase()
+        : String(now.getMonth() + 1);
+    const isFullYear = monthRaw === 'all' || monthRaw === '0';
+    let month = null;
+    if (!isFullYear) {
+        const m = Number(monthRaw);
+        month = Number.isFinite(m) && m >= 1 && m <= 12 ? m : (now.getMonth() + 1);
+    }
+
+    const monthNames = [
+        'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+        'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
+    ];
+    const label = isFullYear
+        ? `Tahun ${year}`
+        : `${monthNames[month - 1]} ${year}`;
+
+    return {
+        year,
+        month: isFullYear ? 'all' : month,
+        isFullYear,
+        label,
+        ymKey: isFullYear ? null : `${year}-${String(month).padStart(2, '0')}`,
+        yearKey: String(year),
+    };
+}
+
+/**
+ * @param {number|string} tenantId
+ * @param {object} [options] - Jika diberikan (atau options.periodFilter=true), filter
+ *   pelanggan baru & tagihan ke periode. Tanpa options: tagihan all-time, baru = bulan ini
+ *   (kompatibel pemanggil lama: dashboard, detail, master).
+ * @param {string|number} [options.month] - 1–12 atau 'all' / 0 untuk satu tahun
+ * @param {string|number} [options.year]
+ * @param {boolean} [options.periodFilter] - paksa filter periode (default true jika month/year ada)
+ */
+async function getTenantStats(tenantId, options = {}) {
     const safeCount = async (table) => {
         if (!(await tableExists(table))) return 0;
         if (!(await tableHasColumn(table, 'tenant_id'))) return 0;
         const row = await dbGet(`SELECT COUNT(*) as c FROM ${table} WHERE tenant_id = ?`, [tenantId]);
         return row?.c || 0;
     };
+
+    const hasExplicitPeriod = options != null && (
+        options.periodFilter === true
+        || (options.month != null && String(options.month).trim() !== '')
+        || (options.year != null && String(options.year).trim() !== '')
+    );
+    const period = hasExplicitPeriod ? resolveStatsPeriod(options) : resolveStatsPeriod({});
+    const filterInvoicesByPeriod = hasExplicitPeriod;
 
     const customers = { total: 0, active: 0, inactive: 0, new: 0 };
     const invoices = { total: 0, paid: 0, unpaid: 0, isolir: 0 };
@@ -368,9 +430,20 @@ async function getTenantStats(tenantId) {
                     ? 'created_at'
                     : null;
 
-        const newExpr = joinExpr
-            ? `SUM(CASE WHEN strftime('%Y-%m', date(${joinExpr})) = strftime('%Y-%m', 'now') THEN 1 ELSE 0 END)`
-            : '0';
+        let newExpr = '0';
+        const customerParams = [];
+        if (joinExpr) {
+            // "Baru" selalu berbasis periode (default: bulan berjalan; atau filter eksplisit)
+            // Urutan ?: CASE dulu, lalu WHERE tenant_id
+            if (period.isFullYear) {
+                newExpr = `SUM(CASE WHEN strftime('%Y', date(${joinExpr})) = ? THEN 1 ELSE 0 END)`;
+                customerParams.push(period.yearKey);
+            } else {
+                newExpr = `SUM(CASE WHEN strftime('%Y-%m', date(${joinExpr})) = ? THEN 1 ELSE 0 END)`;
+                customerParams.push(period.ymKey);
+            }
+        }
+        customerParams.push(tenantId);
 
         const row = await dbGet(
             `SELECT
@@ -380,7 +453,7 @@ async function getTenantStats(tenantId) {
                 ${newExpr} AS new_count
              FROM customers
              WHERE tenant_id = ?`,
-            [tenantId]
+            customerParams
         );
 
         customers.total = row?.total || 0;
@@ -400,6 +473,18 @@ async function getTenantStats(tenantId) {
             ? "SUM(CASE WHEN i.status = 'unpaid' AND c.status IN ('suspended', 'isolir') THEN i.amount ELSE 0 END)"
             : '0';
 
+        const invoiceParams = [tenantId];
+        let periodSql = '';
+        if (filterInvoicesByPeriod) {
+            if (period.isFullYear) {
+                periodSql = ` AND strftime('%Y', i.created_at) = ?`;
+                invoiceParams.push(period.yearKey);
+            } else {
+                periodSql = ` AND strftime('%Y-%m', i.created_at) = ?`;
+                invoiceParams.push(period.ymKey);
+            }
+        }
+
         const row = await dbGet(
             `SELECT
                 COALESCE(SUM(i.amount), 0) AS total,
@@ -408,8 +493,8 @@ async function getTenantStats(tenantId) {
                 COALESCE(${isolirExpr}, 0) AS isolir
              FROM invoices i
              ${joinCustomers}
-             WHERE i.tenant_id = ? AND ${voucherExcl}`,
-            [tenantId]
+             WHERE i.tenant_id = ? AND ${voucherExcl}${periodSql}`,
+            invoiceParams
         );
 
         invoices.total = row?.total || 0;
@@ -422,6 +507,7 @@ async function getTenantStats(tenantId) {
         customers,
         invoices,
         routers: await safeCount('routers'),
+        period: filterInvoicesByPeriod ? period : null,
     };
 }
 
@@ -817,6 +903,7 @@ module.exports = {
     getTenantById,
     getTenantBySubdomain,
     getTenantStats,
+    resolveStatsPeriod,
     getGlobalStats,
     getExtendedGlobalStats,
     createTenant,

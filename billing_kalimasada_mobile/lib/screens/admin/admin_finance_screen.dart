@@ -477,8 +477,26 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
                   for (final collector in collectors)
                     _FinanceRow(
                       title: collector['name']?.toString() ?? 'Kolektor',
-                      subtitle:
-                          'Sudah setor ${_rupiah(collector['sudah_setor'])} • ${_number(collector['pending_payments_count'])} pembayaran',
+                      subtitle: () {
+                        final diterima = _num(
+                          collector['total_diterima_kolektor'] ??
+                              (_num(collector['total_lunas_gross']) +
+                                  _num(collector['total_lunas_transfer'])),
+                        );
+                        final tunggakan = _num(collector['diterima_tunggakan']);
+                        final diskon = _num(collector['total_discount']);
+                        final discPeriode = _num(collector['discount_tagihan_periode']);
+                        final discTunggakan = _num(collector['discount_tunggakan']);
+                        final parts = <String>[
+                          'Diterima ${_rupiah(diterima)}',
+                          if (tunggakan > 0) 'Tunggakan ${_rupiah(tunggakan)}',
+                          if (diskon > 0)
+                            'Diskon ${_rupiah(diskon)}'
+                                '${discPeriode > 0 || discTunggakan > 0 ? ' (periode ${_rupiah(discPeriode)} + tunggakan ${_rupiah(discTunggakan)})' : ''}',
+                          'Belum setor ${_rupiah(collector['pending_amount'])}',
+                        ];
+                        return parts.join(' • ');
+                      }(),
                       trailing: _rupiah(collector['pending_amount']),
                       action: _num(collector['pending_amount']) > 0
                           ? TextButton(

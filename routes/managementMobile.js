@@ -22,6 +22,14 @@ router.get('/api/config', (req, res) => {
     }
 });
 
+router.get('/api/readiness', (req, res) => {
+    try {
+        res.json({ success: true, data: mobileAndroidBuild.readBuildReadiness() });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message || 'Gagal cek kesiapan' });
+    }
+});
+
 router.post('/api/config', async (req, res) => {
     try {
         const body = req.body || {};
@@ -34,7 +42,7 @@ router.post('/api/config', async (req, res) => {
             force_update: body.force_update === true || body.force_update === 'true' || body.force_update === 1,
             flutter_path: body.flutter_path,
             apk_file_name: body.apk_file_name,
-            update_manifest: body.update_manifest !== false,
+            update_manifest: true,
         });
 
         await tenantStore.auditLog({
@@ -54,6 +62,49 @@ router.post('/api/config', async (req, res) => {
     }
 });
 
+router.post('/api/keystore/bootstrap', async (req, res) => {
+    try {
+        const body = req.body || {};
+        const status = mobileAndroidBuild.bootstrapKeystore({ force: body.force === true });
+        await tenantStore.auditLog({
+            actorType: 'SuperAdmin',
+            actorId: req.session.platformAdminId,
+            action: 'mobile_app_keystore_bootstrap',
+            details: { sha256: status.sha256, matches: status.matches_production },
+            ip: req.ip,
+        });
+        res.json({
+            success: true,
+            message: status.matches_production
+                ? 'Keystore siap dipakai untuk build & OTA'
+                : (status.message || 'Keystore diproses'),
+            data: status,
+        });
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message || 'Gagal membuat keystore' });
+    }
+});
+
+router.post('/api/keystore/adopt', async (req, res) => {
+    try {
+        const status = mobileAndroidBuild.adoptCurrentKeystoreAsBaseline();
+        await tenantStore.auditLog({
+            actorType: 'SuperAdmin',
+            actorId: req.session.platformAdminId,
+            action: 'mobile_app_keystore_adopted',
+            details: { sha256: status.sha256 },
+            ip: req.ip,
+        });
+        res.json({
+            success: true,
+            message: 'SHA keystore diadopsi sebagai baseline OTA server ini',
+            data: status,
+        });
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message || 'Gagal mengadopsi keystore' });
+    }
+});
+
 router.get('/api/build-status', (req, res) => {
     try {
         const status = mobileAndroidBuild.readBuildStatus();
@@ -66,6 +117,16 @@ router.get('/api/build-status', (req, res) => {
 router.post('/api/build', async (req, res) => {
     try {
         const body = req.body || {};
+        const readiness = mobileAndroidBuild.readBuildReadiness();
+        if (!readiness.can_build) {
+            const missing = readiness.items.filter((i) => !i.ready).map((i) => i.label);
+            return res.status(400).json({
+                success: false,
+                message: 'Server belum siap build: ' + missing.join(', '),
+                data: readiness,
+            });
+        }
+
         if (body.api_url || body.app_name || body.version_name) {
             mobileAndroidBuild.saveMobileBuildConfig({
                 api_url: body.api_url,
@@ -75,7 +136,7 @@ router.post('/api/build', async (req, res) => {
                 release_notes: body.release_notes,
                 force_update: body.force_update,
                 flutter_path: body.flutter_path,
-                update_manifest: true,
+                update_manifest: false,
             });
         }
 

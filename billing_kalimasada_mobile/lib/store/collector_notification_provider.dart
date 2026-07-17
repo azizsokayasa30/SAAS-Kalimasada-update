@@ -29,6 +29,15 @@ class CollectorNotificationProvider extends ChangeNotifier {
     _pollTimer = null;
   }
 
+  void clear() {
+    stopPolling();
+    _loading = false;
+    _error = null;
+    _items = [];
+    _unreadCount = 0;
+    notifyListeners();
+  }
+
   Future<void> fetchNotifications({bool silent = false}) async {
     if (!silent) {
       if (_loading) return;

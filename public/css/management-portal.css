@@ -767,6 +767,75 @@
   color: var(--badge-warning-text);
 }
 
+/* FreeRADIUS manager: registrasi + live badges */
+.km-fr-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 4.5rem;
+  height: 1.55rem;
+  padding: 0 0.55rem;
+  border-radius: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  vertical-align: middle;
+  text-transform: none;
+}
+
+.km-fr-badge--reg {
+  background: var(--badge-success-bg, rgba(25, 135, 84, 0.25));
+  color: var(--badge-success-text, #75b798);
+}
+
+.km-fr-badge--up {
+  background: var(--badge-success-bg, rgba(25, 135, 84, 0.25));
+  color: var(--badge-success-text, #75b798);
+  animation: km-fr-up-blink 1.4s ease-in-out infinite;
+}
+
+.km-fr-badge--down {
+  background: var(--badge-danger-bg, rgba(220, 53, 69, 0.25));
+  color: var(--badge-danger-text, #ea868f);
+}
+
+.km-fr-badge--off {
+  background: rgba(108, 117, 125, 0.28);
+  color: #adb5bd;
+}
+
+.km-fr-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
+.km-fr-live__detail {
+  font-size: 0.78rem;
+  color: var(--text-muted, #94a3b8);
+  line-height: 1.2;
+}
+
+@keyframes km-fr-up-blink {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.45);
+  }
+  50% {
+    opacity: 0.45;
+    box-shadow: 0 0 0 4px rgba(34, 197, 94, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .km-fr-badge--up {
+    animation: none;
+  }
+}
+
 .btn-km-primary {
   background: linear-gradient(135deg, #0ea5e9, #6366f1);
   border: none;
@@ -2151,6 +2220,83 @@
   letter-spacing: -0.01em;
 }
 
+/* ── Tenant list toolbar (slim filter + actions) ── */
+.km-card--toolbar {
+  padding: 0.55rem 0.85rem;
+  margin-bottom: 0.85rem !important;
+}
+
+.km-tenant-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem 0.75rem;
+}
+
+.km-tenant-toolbar__filters,
+.km-tenant-toolbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.km-tenant-toolbar__filters .form-select {
+  width: auto;
+  min-width: 7.25rem;
+  max-width: 9.5rem;
+  height: 1.85rem;
+  padding-top: 0.15rem;
+  padding-bottom: 0.15rem;
+  font-size: 0.8rem;
+  line-height: 1.2;
+}
+
+.km-tenant-toolbar__filters .form-select[name="year"] {
+  min-width: 4.75rem;
+  max-width: 5.5rem;
+}
+
+.km-tenant-toolbar .btn {
+  height: 1.85rem;
+  padding: 0 0.65rem;
+  font-size: 0.8rem;
+  line-height: 1;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.km-tenant-toolbar__period {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-left: 0.15rem;
+  white-space: nowrap;
+}
+
+@media (max-width: 767.98px) {
+  .km-tenant-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .km-tenant-toolbar__filters .form-select {
+    flex: 1 1 auto;
+    max-width: none;
+  }
+
+  .km-tenant-toolbar__actions {
+    justify-content: stretch;
+  }
+
+  .km-tenant-toolbar__actions .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+}
+
 .km-tenant-table th,
 .km-tenant-table td {
   vertical-align: middle;
@@ -2603,4 +2749,40 @@
   border-radius: 10px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-color);
+}
+
+.km-readiness-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-elevated, transparent);
+}
+
+.km-readiness-banner__main {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.km-readiness-banner.is-ready {
+  border-color: rgba(22, 101, 52, 0.3);
+  color: #166534;
+  background: rgba(22, 101, 52, 0.08);
+}
+
+.km-readiness-banner.is-missing {
+  border-color: rgba(180, 83, 9, 0.35);
+  color: #92400e;
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.km-readiness-banner.is-loading {
+  color: var(--text-muted);
 }

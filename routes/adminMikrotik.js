@@ -142,13 +142,29 @@ function convertToSeconds(value, unit) {
 
 const PPPOE_PAGE_CACHE_MS = 45000;
 const ROUTER_QUERY_TIMEOUT_MS = 9000;
-let _pppoeAdminPageCache = null;
-let _pppoeProfilesApiCache = null;
+/** Cache per tenant key — hindari race overwrite antar tenant. */
+const _pppoeAdminPageCacheByKey = new Map();
+/** Cache API profiles per tenant — jangan share antar tenant. */
+const _pppoeProfilesApiCacheByKey = new Map();
 const PPPOE_PROFILES_CACHE_MS = 60000;
 
+const {
+  getTenantAllowedPppoeUsernames,
+  getTenantAllowedPppoeUsernameSet,
+  claimTenantPppoeUsername,
+  releaseTenantPppoeUsername,
+  renameTenantPppoeUsername,
+  assertTenantOwnsPppoeUsername,
+  ensureTenantPppoeUsersTable
+} = require('../utils/tenantPppoeOwnership');
+
+const {
+  claimTenantPppoeProfile
+} = require('../utils/tenantPppoeProfileOwnership');
+
 function clearPppoeAdminPageCache() {
-  _pppoeAdminPageCache = null;
-  _pppoeProfilesApiCache = null;
+  _pppoeAdminPageCacheByKey.clear();
+  _pppoeProfilesApiCacheByKey.clear();
 }
 
 function getPppoeCacheKey(authMode) {
@@ -158,32 +174,22 @@ function getPppoeCacheKey(authMode) {
 
 function getPppoeAdminPageCache(authMode) {
   const key = getPppoeCacheKey(authMode);
-  if (!_pppoeAdminPageCache) return null;
-  if (_pppoeAdminPageCache.key !== key) return null;
-  if (Date.now() - _pppoeAdminPageCache.ts > PPPOE_PAGE_CACHE_MS) return null;
-  return _pppoeAdminPageCache;
+  const cached = _pppoeAdminPageCacheByKey.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.ts > PPPOE_PAGE_CACHE_MS) {
+    _pppoeAdminPageCacheByKey.delete(key);
+    return null;
+  }
+  return cached;
 }
 
+/** @deprecated use getTenantAllowedPppoeUsernames — retained name for local call sites */
 async function getTenantPppoeUsernames() {
-  const _t = billingManager._tenantWhere();
-  if (!_t.sql) return null;
-  return new Promise((resolve) => {
-    billingManager.db.all(
-      `SELECT DISTINCT TRIM(pppoe_username) AS u FROM customers
-       WHERE pppoe_username IS NOT NULL AND TRIM(pppoe_username) != ''${_t.sql}`,
-      [..._t.params],
-      (err, rows) => {
-        if (err) return resolve([]);
-        resolve((rows || []).map((r) => r.u).filter(Boolean));
-      }
-    );
-  });
+  return getTenantAllowedPppoeUsernames();
 }
 
 async function getTenantPppoeUsernameSet() {
-  const names = await getTenantPppoeUsernames();
-  if (names === null) return null;
-  return new Set(names.map((u) => String(u).toLowerCase().trim()).filter(Boolean));
+  return getTenantAllowedPppoeUsernameSet();
 }
 
 function filterUsersForTenant(users, tenantSet) {
@@ -191,6 +197,72 @@ function filterUsersForTenant(users, tenantSet) {
   return (users || []).filter((u) => {
     const name = String(u?.name || u?.username || '').toLowerCase().trim();
     return name && tenantSet.has(name);
+  });
+}
+
+/**
+ * Mode RADIUS: ALLOWLIST saja — hanya user milik tenant (pelanggan + owned manual).
+ * Jangan pernah load seluruh radcheck lalu denylist tenant lain (itu sumber kebocoran).
+ */
+function mergeRadiusAndBillingUsers(radiusUsers, tenantUsernames, tenantBillingSet) {
+  const map = new Map();
+
+  for (const user of radiusUsers || []) {
+    const name = String(user?.name || '').trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    const isBilling = tenantBillingSet ? tenantBillingSet.has(key) : false;
+    map.set(key, {
+      id: name,
+      name,
+      password: user.password || '',
+      profile: user.profile || 'default',
+      profile_display: user.profile_display || user.profile || 'default',
+      active: !!user.active,
+      nas_name: 'RADIUS',
+      nas_ip: 'RADIUS Server',
+      account_kind: isBilling ? 'pelanggan' : 'gratis',
+    });
+  }
+
+  // Username milik tenant yang belum ada di RADIUS — tetap tampil
+  for (const raw of tenantUsernames || []) {
+    const name = String(raw || '').trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (map.has(key)) continue;
+    const isBilling = tenantBillingSet ? tenantBillingSet.has(key) : true;
+    map.set(key, {
+      id: name,
+      name,
+      password: '',
+      profile: 'default',
+      active: false,
+      nas_name: 'RADIUS',
+      nas_ip: 'Belum di RADIUS',
+      account_kind: isBilling ? 'pelanggan' : 'gratis',
+      missing_radius: true,
+    });
+  }
+
+  return Array.from(map.values()).sort((a, b) =>
+    String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' })
+  );
+}
+
+async function getTenantBillingPppoeUsernameSet() {
+  if (!hasTenantContext()) return null;
+  const _t = billingManager._tenantWhere();
+  return new Promise((resolve) => {
+    billingManager.db.all(
+      `SELECT DISTINCT LOWER(TRIM(pppoe_username)) AS u FROM customers
+       WHERE pppoe_username IS NOT NULL AND TRIM(pppoe_username) != ''${_t.sql}`,
+      [..._t.params],
+      (err, rows) => {
+        if (err) return resolve(new Set());
+        resolve(new Set((rows || []).map((r) => r.u).filter(Boolean)));
+      }
+    );
   });
 }
 
@@ -238,59 +310,63 @@ router.get('/mikrotik', adminAuth, async (req, res) => {
 
     logger.info(`Loading PPPoE users in ${authMode} mode${forceRefresh ? ' (refresh)' : ''}`);
 
+    await ensureTenantPppoeUsersTable();
     const tenantPppoeUsers = await getTenantPppoeUsernames();
     const tenantUserSet =
       tenantPppoeUsers === null
         ? null
         : new Set(tenantPppoeUsers.map((u) => String(u).toLowerCase().trim()).filter(Boolean));
+    const tenantBillingSet = await getTenantBillingPppoeUsernameSet();
     let combined = [];
     let routers = [];
 
     if (authMode === 'radius') {
-      if (tenantPppoeUsers && tenantPppoeUsers.length === 0) {
-        combined = [];
-        logger.info('RADIUS mode: tenant has no PPPoE customers — skip full RADIUS scan');
-      } else {
-      // RADIUS mode: Get users from RADIUS database (scoped to tenant customers)
-      logger.info('RADIUS mode: Loading users from RADIUS database');
+      // RADIUS mode: ALLOWLIST username milik tenant saja (pelanggan + manual owned).
+      // Status online/offline: cek PPP active di Mikrotik milik tenant.
+      logger.info(
+        `RADIUS mode: Loading tenant-scoped PPPoE users ` +
+        `(${tenantPppoeUsers === null ? 'no-tenant-filter' : (tenantPppoeUsers.length + ' allowed')})`
+      );
       try {
-        const tenantRouters = forceRefresh ? await getAllRoutersHelper() : null;
-        const usersRaw = await getPPPoEUsersRadius({
-          allowedUsernames: tenantPppoeUsers,
-          skipMikrotikActive: !forceRefresh,
-          activeRouters: tenantRouters,
-          mikrotikTimeoutMs: ROUTER_QUERY_TIMEOUT_MS,
-          forceRefreshActive: forceRefresh
-        });
-        const users = Array.isArray(usersRaw) ? usersRaw : [];
-        logger.info(`Found ${users.length} users in RADIUS database for tenant scope`);
-        
-        // PENTING: Gunakan Map untuk menghindari duplikasi berdasarkan username
-        const userMap = new Map();
-        users.forEach(user => {
-          if (!userMap.has(user.name)) {
-            userMap.set(user.name, {
-              id: user.name,
-              name: user.name,
-              password: user.password,
-              profile: user.profile || 'default',
-              active: !!user.active,
-              nas_name: 'RADIUS',
-              nas_ip: 'RADIUS Server'
-            });
-          }
-        });
-        
-        combined = Array.from(userMap.values());
-        combined = filterUsersForTenant(combined, tenantUserSet);
-        
-        logger.info(`Mapped ${combined.length} unique users for display (from ${users.length} total users)`);
+        // Konteks tenant aktif + allowlist kosong → 0 user (jangan load seluruh radcheck).
+        if (tenantPppoeUsers !== null && tenantPppoeUsers.length === 0) {
+          combined = [];
+          logger.info('RADIUS mode: tenant has no PPPoE usernames — returning empty list');
+        } else {
+          const tenantRouters = await getAllRoutersHelper();
+          const usersRaw = await getPPPoEUsersRadius({
+            allowedUsernames: tenantPppoeUsers === null ? null : tenantPppoeUsers,
+            skipMikrotikActive: false,
+            activeRouters: tenantRouters,
+            mikrotikTimeoutMs: ROUTER_QUERY_TIMEOUT_MS,
+            forceRefreshActive: forceRefresh
+          });
+          const users = Array.isArray(usersRaw) ? usersRaw : [];
+          // Defense-in-depth: filter lagi di app layer
+          const scopedUsers = filterUsersForTenant(users, tenantUserSet);
+          logger.info(
+            `Found ${users.length} RADIUS users for allowlist` +
+            (tenantUserSet ? ` (${scopedUsers.length} after tenant filter)` : '')
+          );
+
+          combined = mergeRadiusAndBillingUsers(
+            scopedUsers,
+            tenantPppoeUsers || [],
+            tenantBillingSet
+          );
+        }
+
+        logger.info(
+          `Mapped ${combined.length} users for display ` +
+          `(${combined.filter((u) => u.active).length} online, ` +
+          `${combined.filter((u) => u.account_kind === 'gratis').length} gratis/manual, ` +
+          `${combined.filter((u) => u.missing_radius).length} billing belum di RADIUS)`
+        );
       } catch (radiusError) {
         logger.error(`Error loading users from RADIUS: ${radiusError.message}`, radiusError);
         combined = [];
       }
-      }
-      // No routers needed for RADIUS mode
+      // No routers needed for RADIUS mode display columns
     } else {
       routers = await getAllRoutersHelper();
 
@@ -336,14 +412,13 @@ router.get('/mikrotik', adminAuth, async (req, res) => {
     const userStats = computeUserStats(combined);
     logger.info(`Total users to display: ${combined.length}`);
 
-    _pppoeAdminPageCache = {
-      key: getPppoeCacheKey(authMode),
+    _pppoeAdminPageCacheByKey.set(getPppoeCacheKey(authMode), {
       ts: Date.now(),
       authMode,
       combined,
       routers,
       userStats
-    };
+    });
 
     const settings = req.tenantSettings || getSettingsWithCache();
     res.render('adminMikrotik', {
@@ -382,13 +457,19 @@ router.post('/mikrotik/add-user', adminAuth, async (req, res) => {
     const authMode = await getUserAuthModeAsync();
     
     if (authMode === 'radius') {
-      // RADIUS mode: Save to radcheck and radusergroup
+      // RADIUS mode: klaim kepemilikan tenant sebelum tulis ke radcheck bersama
       logger.info('RADIUS mode: Adding user to RADIUS database');
+      try {
+        await claimTenantPppoeUsername(username);
+      } catch (claimErr) {
+        return res.json({ success: false, message: claimErr.message });
+      }
       const result = await addPPPoEUser({ username, password, profile });
       if (result.success) {
         clearPppoeAdminPageCache();
         return res.json({ success: true, message: result.message });
       } else {
+        await releaseTenantPppoeUsername(username).catch(() => {});
         return res.json({ success: false, message: result.message });
       }
     }
@@ -429,8 +510,16 @@ router.post('/mikrotik/edit-user', adminAuth, async (req, res) => {
     const authMode = await getUserAuthModeAsync();
     
     if (authMode === 'radius') {
-      // RADIUS mode: Update in radcheck and radusergroup
-      // id adalah username lama di mode RADIUS
+      // RADIUS mode: id = username lama — wajib milik tenant ini
+      try {
+        await assertTenantOwnsPppoeUsername(id);
+        if (username && String(username).trim() &&
+            String(username).trim().toLowerCase() !== String(id).trim().toLowerCase()) {
+          await renameTenantPppoeUsername(id, username);
+        }
+      } catch (ownErr) {
+        return res.json({ success: false, message: ownErr.message });
+      }
       const result = await editPPPoEUser({ id, username, password, profile });
       if (result.success) {
         clearPppoeAdminPageCache();
@@ -466,10 +555,15 @@ router.post('/mikrotik/delete-user', adminAuth, async (req, res) => {
     const authMode = await getUserAuthModeAsync();
     
     if (authMode === 'radius') {
-      // RADIUS mode: Delete from radcheck and radusergroup
+      try {
+        await assertTenantOwnsPppoeUsername(id);
+      } catch (ownErr) {
+        return res.json({ success: false, message: ownErr.message });
+      }
       logger.info('RADIUS mode: Deleting user from RADIUS database');
       const result = await deletePPPoEUser(id); // In RADIUS mode, id is username
       if (result.success) {
+        await releaseTenantPppoeUsername(id).catch(() => {});
         clearPppoeAdminPageCache();
         return res.json({ success: true, message: result.message });
       } else {
@@ -610,10 +704,12 @@ router.get('/mikrotik/profiles/api', adminAuth, async (req, res) => {
       }
     }
 
-    if (!router_id && !forceRefresh && _pppoeProfilesApiCache
-        && _pppoeProfilesApiCache.authMode === authMode
-        && Date.now() - _pppoeProfilesApiCache.ts < PPPOE_PROFILES_CACHE_MS) {
-      return res.json(_pppoeProfilesApiCache.payload);
+    if (!router_id && !forceRefresh) {
+      const cacheKey = getPppoeCacheKey(authMode);
+      const cached = _pppoeProfilesApiCacheByKey.get(cacheKey);
+      if (cached && Date.now() - cached.ts < PPPOE_PROFILES_CACHE_MS) {
+        return res.json(cached.payload);
+      }
     }
 
     // If router_id is provided, only fetch from that router
@@ -697,7 +793,10 @@ router.get('/mikrotik/profiles/api', adminAuth, async (req, res) => {
             message: `Tidak dapat mengambil profile dari router: ${errors.join(', ')}. Pastikan router dapat diakses dan kredensial benar.`
           };
 
-      _pppoeProfilesApiCache = { ts: Date.now(), authMode, payload };
+      _pppoeProfilesApiCacheByKey.set(getPppoeCacheKey(authMode), {
+        ts: Date.now(),
+        payload
+      });
       return res.json(payload);
     }
   } catch (err) {
@@ -750,6 +849,13 @@ router.post('/mikrotik/add-profile', adminAuth, async (req, res) => {
     
     const result = await addPPPoEProfile(profileData, routerObj);
     if (result.success) {
+      try {
+        const name = result.groupname || (profileData.name || '').toLowerCase().replace(/\s+/g, '_');
+        if (name) await claimTenantPppoeProfile(name);
+      } catch (claimErr) {
+        logger.warn(`[add-profile] claim after create: ${claimErr.message}`);
+      }
+      clearPppoeAdminPageCache();
       res.json({ success: true });
     } else {
       res.json({ success: false, message: result.message || 'Gagal menyimpan profile' });
@@ -778,6 +884,7 @@ router.post('/mikrotik/edit-profile', adminAuth, async (req, res) => {
       logger.info('RADIUS mode: Updating profile in RADIUS database');
       const result = await editPPPoEProfile(profileData);
       if (result.success) {
+        clearPppoeAdminPageCache();
         return res.json({ success: true, message: result.message });
       } else {
         return res.json({ success: false, message: result.message || 'Gagal mengubah profile' });
@@ -795,6 +902,7 @@ router.post('/mikrotik/edit-profile', adminAuth, async (req, res) => {
     
     const result = await editPPPoEProfile(profileData, routerObj);
     if (result.success) {
+      clearPppoeAdminPageCache();
       res.json({ success: true });
     } else {
       res.json({ success: false, message: result.message || 'Gagal mengubah profile' });
@@ -819,6 +927,7 @@ router.post('/mikrotik/delete-profile', adminAuth, async (req, res) => {
       logger.info('RADIUS mode: Deleting profile from RADIUS database');
       const result = await deletePPPoEProfile(id);
       if (result.success) {
+        clearPppoeAdminPageCache();
         return res.json({ success: true, message: result.message });
       } else {
         return res.json({ success: false, message: result.message });
@@ -832,6 +941,7 @@ router.post('/mikrotik/delete-profile', adminAuth, async (req, res) => {
     }
     const result = await deletePPPoEProfile(id, routerObj);
     if (result.success) {
+      clearPppoeAdminPageCache();
       res.json({ success: true });
     } else {
       res.json({ success: false, message: result.message });
@@ -1254,8 +1364,9 @@ router.get('/mikrotik/user-stats', adminAuth, async (req, res) => {
       activeUsers += s.active;
     });
     const offlineUsers = Math.max(totalUsers - activeUsers, 0);
-    const profileCount = _pppoeProfilesApiCache && _pppoeProfilesApiCache.payload && Array.isArray(_pppoeProfilesApiCache.payload.profiles)
-      ? _pppoeProfilesApiCache.payload.profiles.length
+    const profilesCache = _pppoeProfilesApiCacheByKey.get(getPppoeCacheKey(authMode || 'mikrotik'));
+    const profileCount = profilesCache && profilesCache.payload && Array.isArray(profilesCache.payload.profiles)
+      ? profilesCache.payload.profiles.length
       : 0;
 
     res.json({
@@ -2074,34 +2185,43 @@ router.get('/mikrotik/address-pools/api/all', adminAuth, async (req, res) => {
         const result = await getAddressPoolsForRouter(router);
         if (result.success && Array.isArray(result.data)) {
           result.data.forEach(pool => {
-            // Deduplikasi: jika pool dengan nama yang sama sudah ada, gabungkan info router
+            const routerEntry = {
+              id: router.id,
+              name: router.name,
+              nas_ip: router.nas_ip,
+              ranges: pool.ranges || ''
+            };
+            // Deduplikasi by nama: range boleh beda per router (multi-NAS Framed-Pool)
             if (poolMap.has(pool.name)) {
               const existing = poolMap.get(pool.name);
               if (!existing.routers) {
-                existing.routers = [existing.router];
+                existing.routers = [{
+                  ...(existing.router || {}),
+                  ranges: existing.ranges || ''
+                }];
               }
               if (!existing.routers.some(r => r.id === router.id)) {
-                existing.routers.push({
-                  id: router.id,
-                  name: router.name,
-                  nas_ip: router.nas_ip
-                });
+                existing.routers.push(routerEntry);
               }
+              const uniqueRanges = [...new Set(
+                existing.routers.map(r => r.ranges).filter(Boolean)
+              )];
+              existing.ranges = uniqueRanges.length <= 1
+                ? (uniqueRanges[0] || existing.ranges || '')
+                : uniqueRanges.join(' | ');
+              existing.multiRange = uniqueRanges.length > 1;
             } else {
               poolMap.set(pool.name, {
                 name: pool.name,
                 ranges: pool.ranges || '',
+                multiRange: false,
                 comment: pool.comment || '',
                 router: {
                   id: router.id,
                   name: router.name,
                   nas_ip: router.nas_ip
                 },
-                routers: [{
-                  id: router.id,
-                  name: router.name,
-                  nas_ip: router.nas_ip
-                }]
+                routers: [routerEntry]
               });
             }
           });

@@ -181,12 +181,15 @@ class MikrotikIsolationScriptGenerator {
             '/ip firewall filter remove [find where comment~"BILLING-ISOLIR"]',
             '/ip firewall nat remove [find where comment~"BILLING-ISOLIR"]',
             '/ip firewall address-list remove [find where comment~"BILLING-ISOLIR"]',
+            '/ip dns static remove [find where comment~"BILLING-ISOLIR"]',
             '# Cleanup rule isolir generator lama yang bisa mendrop sebelum rule baru.',
             '/ip firewall filter remove [find where comment~"Generate BILLING - Isolir"]',
             '/ip firewall filter remove [find where comment~"isolir-allow"]',
             '/ip firewall filter remove [find where comment~"isolir-block"]',
             '/ip firewall nat remove [find where comment~"Generate BILLING - Isolir"]',
             '/ip firewall nat remove [find where comment~"isolir-redirect"]',
+            '',
+            '/ip dns set allow-remote-requests=yes',
             ''
         );
     }
@@ -233,21 +236,35 @@ class MikrotikIsolationScriptGenerator {
             `/ip pool remove [find where name="${c.isolirPoolName}"]`,
             `/ip pool add name="${c.isolirPoolName}" ranges=${c.poolRange} comment="BILLING-ISOLIR pool"`,
             `/ppp profile remove [find where name="${c.isolirProfile}" and comment~"BILLING-ISOLIR"]`,
-            `/ppp profile add name="${c.isolirProfile}" local-address=${c.localAddress} remote-address=${c.isolirPoolName} only-one=yes comment="BILLING-ISOLIR profile"`,
+            `/ppp profile add name="${c.isolirProfile}" local-address=${c.localAddress} remote-address=${c.isolirPoolName} dns-server=${c.localAddress} only-one=yes comment="BILLING-ISOLIR profile"`,
             ''
         );
     }
 
     addDnsRules() {
         const c = this.config;
+        const captiveHosts = [
+            'captive.apple.com',
+            'www.apple.com',
+            'connectivitycheck.gstatic.com',
+            'clients3.google.com',
+            'www.msftconnecttest.com',
+            'dns.msftncsi.com',
+            'detectportal.firefox.com',
+            'neverssl.com',
+            'example.com'
+        ];
         this.add(
-            '# 4. DNS untuk pelanggan isolir',
-            '# Jika pelanggan memakai DNS router, rule input ini wajib berada sebelum drop input lain.',
-            ...this.filterTop('input', `src-address=${c.isolirRange} protocol=udp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns udp to router"`),
-            ...this.filterTop('input', `src-address=${c.isolirRange} protocol=tcp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns tcp to router"`),
-            '# Jika pelanggan memakai DNS eksternal, forward DNS tetap dibuka agar FQDN WhatsApp bisa resolve.',
+            '# 4. DNS captive portal + allow DNS ke router',
+            '# Host deteksi captive portal diarahkan ke IP server billing agar HP memunculkan halaman isolir.',
+            ...captiveHosts.map((host) => `/ip dns static add name=${host} address=${c.billingServerIp} ttl=30s comment="BILLING-ISOLIR captive ${host}"`),
+            '',
+            '# Urutan insert: drop dulu, lalu allow DNS/billing/WA/established di atasnya.',
+            ...this.filterTop('forward', `src-address=${c.isolirRange} action=drop comment="BILLING-ISOLIR drop all other traffic"`),
             ...this.filterTop('forward', `src-address=${c.isolirRange} protocol=udp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns udp forward"`),
             ...this.filterTop('forward', `src-address=${c.isolirRange} protocol=tcp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns tcp forward"`),
+            ...this.filterTop('input', `src-address=${c.isolirRange} protocol=udp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns udp to router"`),
+            ...this.filterTop('input', `src-address=${c.isolirRange} protocol=tcp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns tcp to router"`),
             ''
         );
     }
@@ -255,13 +272,14 @@ class MikrotikIsolationScriptGenerator {
     addNatRules() {
         const c = this.config;
         this.add(
-            '# 5. NAT: tujuan yang diizinkan tidak diarahkan, HTTP lain dipaksa ke halaman isolir port 8899',
-            '# Urutan command sengaja: redirect dulu, lalu bypass diinsert ke atas redirect.',
+            '# 5. NAT: DNS dipaksa ke router; HTTP dipaksa ke portal isolir (di atas bypass)',
             ...this.natTop('srcnat', `src-address=${c.isolirRange} dst-address=${c.billingServerIp} action=masquerade comment="BILLING-ISOLIR masquerade to billing server"`),
-            ...this.natTop('dstnat', `src-address=${c.isolirRange} protocol=tcp dst-port=80,8080,8000,8888 action=dst-nat to-addresses=${c.billingServerIp} to-ports=${c.isolirPagePort} comment="BILLING-ISOLIR force http to isolir page"`),
             ...this.natTop('dstnat', `src-address=${c.isolirRange} dst-address-list=isolir-allowed-dst protocol=tcp action=accept comment="BILLING-ISOLIR bypass allowed destinations"`),
+            ...this.natTop('dstnat', `src-address=${c.isolirRange} protocol=tcp dst-port=80,8080,8000,8888 action=dst-nat to-addresses=${c.billingServerIp} to-ports=${c.isolirPagePort} comment="BILLING-ISOLIR force http to isolir page"`),
+            ...this.natTop('dstnat', `src-address=${c.isolirRange} protocol=udp dst-port=53 action=redirect to-ports=53 comment="BILLING-ISOLIR force dns udp to router"`),
+            ...this.natTop('dstnat', `src-address=${c.isolirRange} protocol=tcp dst-port=53 action=redirect to-ports=53 comment="BILLING-ISOLIR force dns tcp to router"`),
             '# Catatan HTTPS: browser tidak bisa dipaksa menampilkan halaman HTTP tanpa sertifikat domain tujuan.',
-            '# Karena itu HTTPS non-whitelist diblokir; captive portal/akses HTTP akan menampilkan halaman isolir.',
+            '# HTTPS non-whitelist di-drop; buka http://neverssl.com untuk tes halaman isolir.',
             ''
         );
     }
@@ -270,9 +288,7 @@ class MikrotikIsolationScriptGenerator {
         const c = this.config;
         const billingPorts = Array.from(new Set([c.isolirPagePort, c.billingAppPort, '80', '443'].filter(Boolean))).join(',');
         this.add(
-            '# 6. Firewall forward: allow yang dibutuhkan, lalu drop sisanya',
-            '# Urutan command sengaja: drop dulu, lalu allow diinsert ke atas drop.',
-            ...this.filterTop('forward', `src-address=${c.isolirRange} action=drop comment="BILLING-ISOLIR drop all other traffic"`),
+            '# 6. Firewall forward: allow yang dibutuhkan (di atas drop yang sudah dibuat di langkah DNS)',
             ...this.filterTop('forward', `src-address=${c.isolirRange} dst-address-list=isolir-allowed-dst protocol=tcp dst-port=80,443,5222,5223,5228,4244 action=accept comment="BILLING-ISOLIR allow whatsapp and allowed web"`),
             ...this.filterTop('forward', `src-address=${c.isolirRange} dst-address=${c.billingServerIp} protocol=tcp dst-port=${billingPorts} action=accept comment="BILLING-ISOLIR allow billing app and isolir page"`),
             ...this.filterTop('forward', 'connection-state=established,related action=accept comment="BILLING-ISOLIR allow established"'),
@@ -290,6 +306,7 @@ class MikrotikIsolationScriptGenerator {
             '# 7. Verifikasi',
             ':put "=== BILLING ISOLIR WALLED GARDEN READY ==="',
             `:put "Halaman isolir: http://${c.billingServerIp}:${c.isolirPagePort}/isolir"`,
+            `:put "Tes captive   : http://neverssl.com"`,
             `:put "Portal billing : ${c.billingBaseUrl}"`,
             ':put "Cek address-list: /ip firewall address-list print where comment~\\"BILLING-ISOLIR\\""',
             ':put "Cek filter      : /ip firewall filter print where comment~\\"BILLING-ISOLIR\\""',

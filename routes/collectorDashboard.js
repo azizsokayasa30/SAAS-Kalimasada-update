@@ -125,7 +125,7 @@ router.get('/dashboard', collectorAuth, async (req, res) => {
         const dbPath = path.join(__dirname, '../data/billing.db');
         const db = new sqlite3.Database(dbPath);
         const areaRows = await new Promise((resolve, reject) => {
-            db.all('SELECT DISTINCT area FROM collector_areas WHERE collector_id = ? AND area IS NOT NULL AND area != "" LIMIT 8', [collectorId], (err, rows) => {
+            db.all('SELECT DISTINCT COALESCE(area, area_name) AS area FROM collector_areas WHERE collector_id = ? AND COALESCE(area, area_name) IS NOT NULL AND COALESCE(area, area_name) != "" LIMIT 8', [collectorId], (err, rows) => {
                 if (err) reject(err);
                 else resolve(rows || []);
             });
@@ -188,7 +188,7 @@ router.get('/payment', collectorAuth, async (req, res) => {
             const sql = `
                 SELECT c.* 
                 FROM customers c 
-                INNER JOIN collector_areas ca ON TRIM(IFNULL(c.area, '')) != '' AND TRIM(c.area) = TRIM(ca.area)
+                INNER JOIN collector_areas ca ON TRIM(IFNULL(c.area, '')) != '' AND LOWER(TRIM(c.area)) = LOWER(TRIM(COALESCE(ca.area, ca.area_name)))
                 WHERE ca.collector_id = ? AND LOWER(TRIM(c.status)) IN ('active', 'register')
                 ORDER BY c.name
             `;
@@ -596,6 +596,8 @@ router.post('/api/payment', collectorAuth, collectorPaymentMulterSingle('payment
             success: true,
             message: result.message || 'Payment recorded successfully',
             payment_id: result.payment_id,
+            payment_ids: Array.isArray(result.payment_ids) ? result.payment_ids : [],
+            paid_invoice_ids: Array.isArray(result.paid_invoice_ids) ? result.paid_invoice_ids : [],
             commission_amount: result.commission_amount,
             already_recorded: !!result.already_recorded
         });

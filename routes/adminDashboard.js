@@ -341,6 +341,30 @@ router.get('/dashboard/api/overview', adminAuth, async (req, res) => {
   }
 });
 
+/** Status Baileys per-tenant untuk banner dashboard (tidak di-cache lama). */
+router.get('/dashboard/api/baileys-status', adminAuth, async (req, res) => {
+  try {
+    const tenantId = resolveRequestTenantId(req);
+    if (!tenantId) {
+      return res.json({ success: true, applicable: false, alert: null });
+    }
+    const registry = require('../config/baileys-session-registry');
+    const alert = await registry.getDashboardAlertForTenant(tenantId);
+    if (alert && !alert.connected && alert.hasCreds) {
+      // Dorong reconnect otomatis saat admin membuka dashboard
+      registry.connect(tenantId).catch(() => {});
+    }
+    return res.json({
+      success: true,
+      applicable: !!alert,
+      alert: alert && !alert.connected ? alert : (alert && alert.connected ? { ...alert, message: null } : null)
+    });
+  } catch (err) {
+    console.error('[DASHBOARD] baileys-status:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Gagal cek status Baileys' });
+  }
+});
+
 // Halaman penuh pusat notifikasi admin
 router.get('/dashboard/notifications', adminAuth, async (req, res) => {
   try {

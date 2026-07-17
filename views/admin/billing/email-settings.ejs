@@ -113,24 +113,48 @@
         
         .template-enabled {
             opacity: 1;
-            background-color: #fff !important;
+            background-color: var(--panel-bg, var(--panel, #fff)) !important;
         }
         
         .variable-item {
             display: inline-block;
-            background: #e9ecef;
+            background: #e2e8f0;
             padding: 2px 8px;
             margin: 2px;
             border-radius: 4px;
             font-size: 0.8rem;
-            color: #495057;
+            color: #0f172a !important;
+            border: 1px solid #cbd5e1;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         }
         
         .variable-list {
             margin-bottom: 1rem;
             padding: 0.5rem;
-            background: var(--bg-secondary, #f8f9fa);
+            background: var(--bg-secondary, #f1f5f9);
             border-radius: 5px;
+            border: 1px solid var(--border, #e2e8f0);
+            color: var(--text, #0f172a);
+        }
+
+        .variable-list > strong {
+            color: var(--text, #0f172a) !important;
+        }
+
+        [data-theme="dark"] .variable-item {
+            background: #334155;
+            color: #f1f5f9 !important;
+            border-color: #475569;
+        }
+
+        [data-theme="dark"] .variable-list {
+            background: #1e293b;
+            border-color: #334155;
+            color: #f1f5f9;
+        }
+
+        [data-theme="dark"] .variable-list > strong {
+            color: #f8fafc !important;
         }
     </style>
 

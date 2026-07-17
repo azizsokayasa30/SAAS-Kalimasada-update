@@ -6,6 +6,7 @@
     const settingsOpen = active && String(active).startsWith('settings');
     const financeOpen = active && String(active).startsWith('finance');
     const popOpen = active && String(active).startsWith('pop');
+    const vpnOpen = active && String(active).startsWith('vpn');
   %>
   <div class="km-brand">
     <div class="km-brand-logo-wrap">
@@ -54,6 +55,24 @@
         <a href="/management/pop/radius" class="km-nav-submenu__item km-nav-item--pop-radius <%= active === 'pop-radius' ? 'active' : '' %>">
           <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-shield-check"></i></span>
           <span>Radius Manager</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="km-nav-group <%= vpnOpen ? 'is-open' : '' %>" id="vpnNavGroup">
+      <button type="button" class="km-nav-item km-nav-item--vpn km-nav-btn km-nav-group__toggle <%= vpnOpen ? 'active' : '' %>" aria-expanded="<%= vpnOpen ? 'true' : 'false' %>" aria-controls="vpnSubmenu">
+        <span class="km-nav-icon"><i class="bi bi-shield-lock-fill"></i></span>
+        <span class="km-nav-group__label">VPN Management</span>
+        <i class="bi bi-chevron-down km-nav-group__chevron" aria-hidden="true"></i>
+      </button>
+      <div class="km-nav-submenu" id="vpnSubmenu">
+        <a href="/management/vpn" class="km-nav-submenu__item km-nav-item--vpn-server <%= active === 'vpn-server' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-hdd-network"></i></span>
+          <span>VPN Server</span>
+        </a>
+        <a href="/management/vpn/devices" class="km-nav-submenu__item km-nav-item--vpn-devices <%= active === 'vpn-devices' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-router"></i></span>
+          <span>Perangkat</span>
         </a>
       </div>
     </div>

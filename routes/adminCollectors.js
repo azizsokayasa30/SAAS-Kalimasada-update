@@ -22,6 +22,7 @@ function tFrom(req) {
 // List collectors
 router.get('/', adminAuth, async (req, res) => {
     try {
+        await billingManager._ensureCollectorAreasAreaColumn();
         const t = tFrom(req);
         const dbPath = path.join(__dirname, '../data/billing.db');
         const db = new sqlite3.Database(dbPath);
@@ -31,7 +32,7 @@ router.get('/', adminAuth, async (req, res) => {
                 SELECT c.*, 
                        COUNT(cp.id) as total_payments,
                        COALESCE(SUM(cp.commission_amount), 0) as total_commission,
-                       (SELECT GROUP_CONCAT(area, ', ') FROM collector_areas ca WHERE collector_id = c.id${t.and('ca')}) as assigned_areas
+                       (SELECT GROUP_CONCAT(COALESCE(area, area_name), ', ') FROM collector_areas ca WHERE collector_id = c.id${t.and('ca')}) as assigned_areas
                 FROM collectors c
                 LEFT JOIN collector_payments cp ON c.id = cp.collector_id 
                     AND cp.status = 'completed'
@@ -167,13 +168,14 @@ router.post('/', adminAuth, async (req, res) => {
         
         // Hash password
         const hashedPassword = bcrypt.hashSync(password, 10);
+        const tenantId = tenantIdForInsert();
         
         // Insert new collector
         const collectorId = await new Promise((resolve, reject) => {
             db.run(`
-                INSERT INTO collectors (name, phone, email, address, commission_rate, status, password)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            `, [name, phone, email, address, commission_rate !== undefined && commission_rate !== null && commission_rate !== '' ? commission_rate : 5, status || 'active', hashedPassword], function(err) {
+                INSERT INTO collectors (name, phone, email, address, commission_rate, status, password, tenant_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `, [name, phone, email, address, commission_rate !== undefined && commission_rate !== null && commission_rate !== '' ? commission_rate : 5, status || 'active', hashedPassword, tenantId], function(err) {
                 if (err) reject(err);
                 else resolve(this.lastID);
             });

@@ -236,13 +236,32 @@ class StaticIPSuspensionManager {
 
     /**
      * Metode 3: Suspend menggunakan Bandwidth Limit (Soft Isolation)
+     * Prefer existing package queue cust_<id>; fallback suspended_<ip> for legacy.
      */
     async suspendByBandwidthLimit(customer, reason) {
         try {
-            const mikrotik = await getMikrotikConnectionForCustomer(customer);
+            const customerIP = customer.static_ip || customer.ip_address || customer.assigned_ip;
+            if (!customerIP) {
+                return { success: false, error: 'No static IP' };
+            }
 
-            const queueName = `suspended_${customer.static_ip.replace(/\./g, '_')}`;
             const limitSpeed = getSetting('suspension_bandwidth_limit', '1k/1k'); // Default 1KB/s
+
+            // Prefer package-speed queue cust_<id> if present
+            if (customer.id != null) {
+                try {
+                    const { applySuspensionBandwidthToPackageQueue } = require('./staticIPProvisioning');
+                    const applied = await applySuspensionBandwidthToPackageQueue(customer, limitSpeed, reason);
+                    if (applied && applied.success) {
+                        return { success: true, message: 'Bandwidth limited via package queue', queue: applied.queue };
+                    }
+                } catch (e) {
+                    logger.warn(`Soft-isolir via cust_* queue failed, fallback suspended_*: ${e.message}`);
+                }
+            }
+
+            const mikrotik = await getMikrotikConnectionForCustomer(customer);
+            const queueName = `suspended_${String(customerIP).replace(/\./g, '_')}`;
 
             // Cek apakah queue sudah ada
             const existingQueues = await mikrotik.write('/queue/simple/print', [
@@ -250,20 +269,26 @@ class StaticIPSuspensionManager {
             ]);
 
             if (existingQueues && existingQueues.length > 0) {
-                logger.warn(`Queue ${queueName} already exists`);
-                return { success: true, message: 'Queue already exists' };
+                await mikrotik.write('/queue/simple/set', [
+                    `=.id=${existingQueues[0]['.id']}`,
+                    `=max-limit=${limitSpeed}`,
+                    `=comment=SUSPENDED - ${reason} - ${new Date().toISOString()}`,
+                    '=disabled=no'
+                ]);
+                logger.info(`Updated suspension queue ${queueName} to ${limitSpeed}`);
+                return { success: true, message: 'Queue updated' };
             }
 
             // Buat queue untuk limit bandwidth
             await mikrotik.write('/queue/simple/add', [
                 `=name=${queueName}`,
-                `=target=${customer.static_ip}`,
+                `=target=${customerIP}`,
                 `=max-limit=${limitSpeed}`,
                 `=comment=SUSPENDED - ${reason} - ${new Date().toISOString()}`,
                 '=disabled=no'
             ]);
 
-            logger.info(`Bandwidth limited for IP ${customer.static_ip} to ${limitSpeed}`);
+            logger.info(`Bandwidth limited for IP ${customerIP} to ${limitSpeed}`);
             return { success: true, message: 'Bandwidth limited' };
 
         } catch (error) {
@@ -424,21 +449,29 @@ class StaticIPSuspensionManager {
     async restoreFromBandwidthLimit(customer) {
         try {
             const mikrotik = await getMikrotikConnectionForCustomer(customer);
-            const queueName = `suspended_${customer.static_ip.replace(/\./g, '_')}`;
+            const customerIP = customer.static_ip || customer.ip_address || customer.assigned_ip;
+            let removed = false;
 
-            const queues = await mikrotik.write('/queue/simple/print', [
-                `?name=${queueName}`
-            ]);
-
-            if (queues && queues.length > 0) {
-                await mikrotik.write('/queue/simple/remove', [
-                    `=.id=${queues[0]['.id']}`
+            // Remove legacy suspended_* queue if present
+            if (customerIP) {
+                const queueName = `suspended_${String(customerIP).replace(/\./g, '_')}`;
+                const queues = await mikrotik.write('/queue/simple/print', [
+                    `?name=${queueName}`
                 ]);
-                logger.info(`Removed bandwidth limit queue for ${customer.static_ip}`);
-                return { success: true };
+
+                if (queues && queues.length > 0) {
+                    await mikrotik.write('/queue/simple/remove', [
+                        `=.id=${queues[0]['.id']}`
+                    ]);
+                    logger.info(`Removed bandwidth limit queue for ${customerIP}`);
+                    removed = true;
+                }
             }
 
-            return { success: false, message: 'No bandwidth limit found' };
+            // cust_* package queue is re-provisioned by serviceSuspension after restore
+            return removed
+                ? { success: true }
+                : { success: false, message: 'No legacy suspension queue found' };
 
         } catch (error) {
             logger.error('Error in restoreFromBandwidthLimit:', error);

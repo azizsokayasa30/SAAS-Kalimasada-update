@@ -742,16 +742,44 @@ class _CollectorCustomerDetailPanelState
                     Navigator.pop(context);
                     await Future<void>.delayed(Duration.zero);
                     if (!parent.mounted) return;
-                    final done = await Navigator.of(parent).push<bool>(
-                      MaterialPageRoute<bool>(
+                    final result = await Navigator.of(parent).push<Object?>(
+                      MaterialPageRoute<Object?>(
                         builder: (_) => CollectorReceivePaymentScreen(
                           customerId: cid,
                           customerSnapshot: Map<String, dynamic>.from(row),
                         ),
                       ),
                     );
-                    if (done == true) {
+                    var paidOk = false;
+                    List<int>? paidInvoiceIds;
+                    if (result is Map) {
+                      paidOk = result['success'] == true || result['paid_invoice_ids'] != null;
+                      final raw = result['paid_invoice_ids'];
+                      if (raw is List) {
+                        paidInvoiceIds = raw
+                            .map((e) => int.tryParse(e.toString()))
+                            .whereType<int>()
+                            .where((e) => e > 0)
+                            .toList();
+                      }
+                    } else if (result == true) {
+                      paidOk = true;
+                    }
+                    if (paidOk) {
                       await widget.onRefreshCustomers?.call();
+                    }
+                    if (paidOk && parent.mounted) {
+                      await Navigator.of(parent).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) => CollectorInvoiceReceiptScreen(
+                            customerId: cid,
+                            invoiceIds: paidInvoiceIds,
+                            invoiceId: (paidInvoiceIds != null && paidInvoiceIds.length == 1)
+                                ? paidInvoiceIds.first
+                                : null,
+                          ),
+                        ),
+                      );
                     }
                   },
                   icon: const Icon(Icons.payments_outlined),

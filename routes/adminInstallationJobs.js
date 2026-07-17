@@ -32,6 +32,56 @@ router.use(attachTenantAppSettings);
 const dbPath = path.join(__dirname, '../data/billing.db');
 const db = new sqlite3.Database(dbPath);
 
+const installationJobTableDdl = [
+    `CREATE TABLE IF NOT EXISTS installation_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_number VARCHAR(50) UNIQUE,
+        customer_name VARCHAR(255) NOT NULL,
+        customer_phone VARCHAR(20),
+        customer_address TEXT,
+        customer_id INTEGER,
+        package_id INTEGER,
+        installation_date DATE,
+        installation_time VARCHAR(20),
+        assigned_technician_id INTEGER,
+        status VARCHAR(50) DEFAULT 'scheduled',
+        priority VARCHAR(20) DEFAULT 'normal',
+        notes TEXT,
+        equipment_needed TEXT,
+        estimated_duration INTEGER DEFAULT 120,
+        created_by_admin_id INTEGER,
+        completed_at DATETIME,
+        completion_notes TEXT,
+        customer_latitude DECIMAL(10, 8),
+        customer_longitude DECIMAL(11, 8),
+        created_at DATETIME DEFAULT (datetime('now','localtime')),
+        updated_at DATETIME DEFAULT (datetime('now','localtime')),
+        FOREIGN KEY (package_id) REFERENCES packages(id),
+        FOREIGN KEY (assigned_technician_id) REFERENCES technicians(id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS installation_job_status_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id INTEGER NOT NULL,
+        old_status VARCHAR(50),
+        new_status VARCHAR(50) NOT NULL,
+        changed_by_type VARCHAR(20) NOT NULL,
+        changed_by_id INTEGER NOT NULL,
+        notes TEXT,
+        created_at DATETIME DEFAULT (datetime('now','localtime')),
+        FOREIGN KEY (job_id) REFERENCES installation_jobs(id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS installation_job_equipment (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id INTEGER NOT NULL,
+        equipment_name VARCHAR(255) NOT NULL,
+        quantity INTEGER DEFAULT 1,
+        serial_number VARCHAR(100),
+        status VARCHAR(50) DEFAULT 'prepared',
+        notes TEXT,
+        created_at DATETIME DEFAULT (datetime('now','localtime')),
+        FOREIGN KEY (job_id) REFERENCES installation_jobs(id)
+    )`
+];
 const installationJobSchemaAlters = [
     'ALTER TABLE installation_jobs ADD COLUMN assigned_at DATETIME',
     'ALTER TABLE installation_jobs ADD COLUMN customer_id INTEGER',
@@ -43,6 +93,11 @@ const installationJobSchemaAlters = [
     'ALTER TABLE installation_jobs ADD COLUMN install_ont_sticker_photo_path TEXT'
 ];
 db.serialize(() => {
+    for (const sql of installationJobTableDdl) {
+        db.run(sql, (err) => {
+            if (err) logger.warn('[admin-install-jobs] create table:', err.message);
+        });
+    }
     for (const sql of installationJobSchemaAlters) {
         db.run(sql, (err) => {
             if (err && !/duplicate column/i.test(String(err.message))) {
@@ -389,9 +444,9 @@ router.post('/create', adminAuth, async (req, res) => {
         await new Promise((resolve, reject) => {
             db.run(`
                 INSERT INTO installation_job_status_history (
-                    job_id, old_status, new_status, changed_by_type, changed_by_id, notes
-                ) VALUES (?, NULL, ?, 'admin', ?, ?)
-            `, [jobId, (assigned_technician_id ? 'assigned' : 'scheduled'), req.session.adminUser || 'admin', `Job instalasi dibuat: ${jobNumber}`], (err) => {
+                    job_id, old_status, new_status, changed_by_type, changed_by_id, notes, tenant_id
+                ) VALUES (?, NULL, ?, 'admin', ?, ?, ?)
+            `, [jobId, (assigned_technician_id ? 'assigned' : 'scheduled'), req.session.adminUser || 'admin', `Job instalasi dibuat: ${jobNumber}`, tenantIdForInsert()], (err) => {
                 if (err) reject(err);
                 else resolve();
             });
@@ -676,12 +731,13 @@ router.put('/update/:id', adminAuth, async (req, res) => {
             await new Promise((resolve, reject) => {
                 db.run(`
                     INSERT INTO installation_job_status_history (
-                        job_id, old_status, new_status, changed_by_type, changed_by_id, notes
-                    ) VALUES (?, ?, ?, 'admin', ?, ?)
+                        job_id, old_status, new_status, changed_by_type, changed_by_id, notes, tenant_id
+                    ) VALUES (?, ?, ?, 'admin', ?, ?, ?)
                 `, [
                     jobId, currentJob.status, status, 
                     req.session.adminUser || 'admin',
-                    `Status diubah dari ${currentJob.status} ke ${status}`
+                    `Status diubah dari ${currentJob.status} ke ${status}`,
+                    tenantIdForInsert()
                 ], (err) => {
                     if (err) reject(err);
                     else resolve();
@@ -807,9 +863,9 @@ router.put('/cancel/:id', adminAuth, async (req, res) => {
         await new Promise((resolve, reject) => {
             db.run(`
                 INSERT INTO installation_job_status_history (
-                    job_id, old_status, new_status, changed_by_type, changed_by_id, notes
-                ) VALUES (?, ?, 'cancelled', 'admin', ?, ?)
-            `, [jobId, job.status, req.session.adminUser || 'admin', reason], (err) => {
+                    job_id, old_status, new_status, changed_by_type, changed_by_id, notes, tenant_id
+                ) VALUES (?, ?, 'cancelled', 'admin', ?, ?, ?)
+            `, [jobId, job.status, req.session.adminUser || 'admin', reason, tenantIdForInsert()], (err) => {
                 if (err) reject(err); else resolve();
             });
         });
@@ -855,9 +911,9 @@ router.put('/start/:id', adminAuth, async (req, res) => {
 
         await new Promise((resolve, reject) => {
             db.run(`
-                INSERT INTO installation_job_status_history (job_id, old_status, new_status, changed_by_type, changed_by_id, notes)
-                VALUES (?, ?, 'in_progress', 'admin', ?, ?)
-            `, [jobId, job.status, req.session.adminUser || 'admin', 'Job dimulai'], (err) => {
+                INSERT INTO installation_job_status_history (job_id, old_status, new_status, changed_by_type, changed_by_id, notes, tenant_id)
+                VALUES (?, ?, 'in_progress', 'admin', ?, ?, ?)
+            `, [jobId, job.status, req.session.adminUser || 'admin', 'Job dimulai', tenantIdForInsert()], (err) => {
                 if (err) reject(err); else resolve();
             });
         });
@@ -898,9 +954,9 @@ router.put('/complete/:id', adminAuth, async (req, res) => {
 
         await new Promise((resolve, reject) => {
             db.run(`
-                INSERT INTO installation_job_status_history (job_id, old_status, new_status, changed_by_type, changed_by_id, notes)
-                VALUES (?, ?, 'completed', 'admin', ?, ?)
-            `, [jobId, job.status, req.session.adminUser || 'admin', note], (err) => {
+                INSERT INTO installation_job_status_history (job_id, old_status, new_status, changed_by_type, changed_by_id, notes, tenant_id)
+                VALUES (?, ?, 'completed', 'admin', ?, ?, ?)
+            `, [jobId, job.status, req.session.adminUser || 'admin', note, tenantIdForInsert()], (err) => {
                 if (err) reject(err); else resolve();
             });
         });
@@ -985,12 +1041,13 @@ router.post('/assign/:id', adminAuth, async (req, res) => {
             await new Promise((resolve, reject) => {
                 db.run(`
                     INSERT INTO installation_job_status_history (
-                        job_id, old_status, new_status, changed_by_type, changed_by_id, notes
-                    ) VALUES (?, ?, ?, 'admin', ?, ?)
+                        job_id, old_status, new_status, changed_by_type, changed_by_id, notes, tenant_id
+                    ) VALUES (?, ?, ?, 'admin', ?, ?, ?)
                 `, [
                     jobId, currentJob.status, newStatus,
                     req.session.adminUser || 'admin',
-                    `Teknisi ditugaskan: ID ${technician_id}`
+                    `Teknisi ditugaskan: ID ${technician_id}`,
+                    tenantIdForInsert()
                 ], (err) => {
                     if (err) reject(err);
                     else resolve();

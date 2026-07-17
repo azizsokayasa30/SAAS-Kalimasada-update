@@ -66,6 +66,24 @@ router.post('/routers', adminAuth, async (req, res) => {
   try {
     const { name, nas_ip, nas_identifier, location, pop, port, user, password, genieacs_server_id } = req.body;
     if (!name || !nas_ip || !user || !password) return res.json({ success: false, message: 'Nama, NAS IP, user, dan password wajib diisi' });
+    const { isValidClientName, isValidClientIp, sanitizeClientName } = require('../config/radiusClients');
+    const safeName = String(name).trim();
+    const safeIp = String(nas_ip).trim();
+    if (!isValidClientName(safeName)) {
+      const suggested = sanitizeClientName(safeName);
+      return res.json({
+        success: false,
+        message: suggested
+          ? `Nama NAS tidak valid untuk RADIUS (tanpa spasi/karakter aneh). Contoh: ${suggested}`
+          : 'Nama NAS tidak valid. Gunakan hanya huruf, angka, titik, strip, underscore (tanpa spasi).'
+      });
+    }
+    if (!isValidClientIp(safeIp)) {
+      return res.json({
+        success: false,
+        message: 'NAS IP tidak valid (IPv4 tanpa port, contoh: 10.10.0.5)'
+      });
+    }
     const portToUse = parseInt(port || 8728);
     const genieacsServerId = genieacs_server_id ? parseInt(genieacs_server_id) : null;
     const tenantId = hasTenantContext() ? getTenantId() : 1;
@@ -73,10 +91,28 @@ router.post('/routers', adminAuth, async (req, res) => {
     db.run(
       `INSERT INTO routers (name, nas_ip, nas_identifier, location, pop, port, user, password, genieacs_server_id, tenant_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [name.trim(), nas_ip.trim(), (nas_identifier||'').trim(), (location||'').trim(), (pop||'').trim(), portToUse, user, password, genieacsServerId, tenantId],
+      [safeName, safeIp, (nas_identifier||'').trim(), (location||'').trim(), (pop||'').trim(), portToUse, user, password, genieacsServerId, tenantId],
       function(err) {
         if (err) return res.json({ success: false, message: err.message });
-        res.json({ success: true, id: this.lastID });
+        const newId = this.lastID;
+        // Sinkron NAS ke tabel RADIUS (terisolasi per tenant)
+        setImmediate(async () => {
+          try {
+            const { upsertRadiusNasFromRouter } = require('../config/radiusClients');
+            await upsertRadiusNasFromRouter({
+              id: newId,
+              name: safeName,
+              nas_ip: safeIp,
+              nas_identifier: (nas_identifier || '').trim(),
+              location: (location || '').trim(),
+              password,
+              tenant_id: tenantId
+            }, tenantId);
+          } catch (e) {
+            console.warn('[adminRouters] sync RADIUS nas gagal:', e.message);
+          }
+        });
+        res.json({ success: true, id: newId });
       }
     );
   } catch (e) { res.json({ success: false, message: e.message }); }
@@ -87,16 +123,54 @@ router.post('/routers/:id', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, nas_ip, nas_identifier, location, pop, port, user, password, genieacs_server_id } = req.body;
+    const { isValidClientName, isValidClientIp, sanitizeClientName } = require('../config/radiusClients');
+    const safeName = String(name || '').trim();
+    const safeIp = String(nas_ip || '').trim();
+    if (!safeName || !safeIp || !user || !password) {
+      return res.json({ success: false, message: 'Nama, NAS IP, user, dan password wajib diisi' });
+    }
+    if (!isValidClientName(safeName)) {
+      const suggested = sanitizeClientName(safeName);
+      return res.json({
+        success: false,
+        message: suggested
+          ? `Nama NAS tidak valid untuk RADIUS (tanpa spasi/karakter aneh). Contoh: ${suggested}`
+          : 'Nama NAS tidak valid. Gunakan hanya huruf, angka, titik, strip, underscore (tanpa spasi).'
+      });
+    }
+    if (!isValidClientIp(safeIp)) {
+      return res.json({
+        success: false,
+        message: 'NAS IP tidak valid (IPv4 tanpa port, contoh: 10.10.0.5)'
+      });
+    }
     const portToUse2 = parseInt(port || 8728);
     const genieacsServerId = genieacs_server_id ? parseInt(genieacs_server_id) : null;
     const db = billingManager.db;
     db.run(
       `UPDATE routers SET name=?, nas_ip=?, nas_identifier=?, location=?, pop=?, port=?, user=?, password=?, genieacs_server_id=?
        WHERE id=?${tAnd()}`,
-      [name, nas_ip, nas_identifier, location, pop, portToUse2, user, password, genieacsServerId, id],
+      [safeName, safeIp, nas_identifier, location, pop, portToUse2, user, password, genieacsServerId, id],
       function(err) {
         if (err) return res.json({ success: false, message: err.message });
         if (this.changes === 0) return res.json({ success: false, message: 'Router tidak ditemukan atau bukan milik tenant ini.' });
+        const tenantId = hasTenantContext() ? getTenantId() : null;
+        setImmediate(async () => {
+          try {
+            const { upsertRadiusNasFromRouter } = require('../config/radiusClients');
+            await upsertRadiusNasFromRouter({
+              id: parseInt(id, 10),
+              name: safeName,
+              nas_ip: safeIp,
+              nas_identifier,
+              location,
+              password,
+              tenant_id: tenantId
+            }, tenantId);
+          } catch (e) {
+            console.warn('[adminRouters] sync RADIUS nas (edit) gagal:', e.message);
+          }
+        });
         res.json({ success: true });
       }
     );
@@ -108,18 +182,29 @@ router.post('/routers/:id/delete', adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const db = billingManager.db;
-    db.run(`DELETE FROM routers WHERE id=?${tAnd()}`, [id], function(err) {
-      if (err) return res.json({ success: false, message: err.message });
-      if (this.changes === 0) return res.json({ success: false, message: 'Router tidak ditemukan atau bukan milik tenant ini.' });
-      res.json({ success: true });
+    db.get(`SELECT nas_ip FROM routers WHERE id=?${tAnd()}`, [id], (selErr, row) => {
+      if (selErr) return res.json({ success: false, message: selErr.message });
+      if (!row) return res.json({ success: false, message: 'Router tidak ditemukan atau bukan milik tenant ini.' });
+      const nasIp = row.nas_ip;
+      const tenantId = hasTenantContext() ? getTenantId() : null;
+      db.run(`DELETE FROM routers WHERE id=?${tAnd()}`, [id], function(err) {
+        if (err) return res.json({ success: false, message: err.message });
+        if (this.changes === 0) return res.json({ success: false, message: 'Router tidak ditemukan atau bukan milik tenant ini.' });
+        setImmediate(async () => {
+          try {
+            const { removeRadiusNasByIp } = require('../config/radiusClients');
+            await removeRadiusNasByIp(nasIp, tenantId);
+          } catch (e) {
+            console.warn('[adminRouters] hapus RADIUS nas gagal:', e.message);
+          }
+        });
+        res.json({ success: true });
+      });
     });
   } catch (e) { res.json({ success: false, message: e.message }); }
 });
 
-module.exports = router;
-
-
-// Tambah endpoint test koneksi Mikrotik per NAS
+// Test koneksi Mikrotik per NAS (ephemeral TCP API — bukan ping ICMP)
 router.post('/routers/:id/test', adminAuth, async (req, res) => {
   try {
     const db = billingManager.db;
@@ -127,15 +212,21 @@ router.post('/routers/:id/test', adminAuth, async (req, res) => {
       if (err) return res.json({ success: false, message: err.message });
       if (!row) return res.json({ success: false, message: 'Router tidak ditemukan' });
       try {
-        const { getMikrotikConnectionForRouter, getRouterIdentity } = require('../config/mikrotik');
-        const conn = await getMikrotikConnectionForRouter(row);
-        const identity = await conn.write('/system/identity/print');
-        res.json({ success: true, identity: identity && identity[0] ? identity[0].name || identity[0]['name'] : 'connected', host: row.nas_ip, port: row.port || 8728 });
+        const { testMikrotikConnectionForRouter } = require('../config/mikrotik');
+        const result = await testMikrotikConnectionForRouter(row);
+        res.json(result);
       } catch (e) {
-        res.json({ success: false, message: e.message });
+        res.json({
+          success: false,
+          message: e.message,
+          host: row.nas_ip,
+          port: row.port || 8728
+        });
       }
     });
   } catch (e) {
     res.json({ success: false, message: e.message });
   }
 });
+
+module.exports = router;

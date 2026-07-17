@@ -4,7 +4,7 @@
     <%- include('../../partials/hard-reload') %>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Service Suspension - Admin Portal</title>
+    <title>Penangguhan/Isolir - Admin Portal</title>
     <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
     <link href="/vendor/boxicons/boxicons.min.css" rel="stylesheet">
     <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
@@ -126,6 +126,55 @@
         .action-card i.bi {
             font-size: 2.25rem !important;
         }
+
+        .suspended-card-header {
+            display: flex;
+            flex-wrap: nowrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+        }
+
+        .suspended-card-header h5 {
+            flex: 0 1 auto;
+            min-width: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .suspended-card-tools {
+            display: flex;
+            flex-wrap: nowrap;
+            align-items: center;
+            gap: 0.5rem;
+            flex: 0 0 auto;
+        }
+
+        .suspended-card-tools .suspended-search {
+            width: 220px;
+            flex: 0 0 220px;
+        }
+
+        .suspended-card-tools #refreshTableBtn {
+            flex: 0 0 auto;
+            white-space: nowrap;
+        }
+
+        @media (max-width: 575.98px) {
+            .suspended-card-header {
+                flex-wrap: wrap;
+            }
+
+            .suspended-card-tools {
+                width: 100%;
+            }
+
+            .suspended-card-tools .suspended-search {
+                flex: 1 1 auto;
+                width: auto;
+            }
+        }
     </style>
 
     <%- include('../../partials/theme-head') %>
@@ -140,7 +189,7 @@
             <main class="col-md-10 ms-sm-auto col-lg-10 px-md-4 main-content">
                 <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
                     <h1 class="h2">
-                        <i class="bi bi-shield-x"></i> Service Suspension
+                        <i class="bi bi-shield-x"></i> Penangguhan/Isolir
                     </h1>
                 </div>
 
@@ -148,7 +197,7 @@
                 <div class="row mb-4">
                     <div class="col-12">
                         <div class="suspension-card p-4">
-                            <h4><i class="bi bi-shield-x me-2"></i>Kelola Service Suspension</h4>
+                            <h4><i class="bi bi-shield-x me-2"></i>Kelola Penangguhan/Isolir</h4>
                             <p class="mb-0">Sistem otomatis untuk menonaktifkan layanan pelanggan yang telat bayar menggunakan profile isolir Mikrotik dan mengaktifkan kembali setelah pembayaran.</p>
                         </div>
                     </div>
@@ -204,7 +253,7 @@
                                         <%= autoSuspensionEnabled ? 'AKTIF (ON)' : 'NON-AKTIF (OFF)' %>
                                     </span>
                                 </h4>
-                                <p class="text-muted small mb-0">Isolir otomatis pukul <strong>10:00</strong> (cek harian), restore pukul <strong>11:00</strong>. Tanggal isolir per pelanggan diatur per wilayah di bawah; fallback global tgl <strong><%= appSettings.auto_suspension_day || '25' %></strong> lewat <a href="/admin/settings">Pengaturan Admin</a>.</p>
+                                <p class="text-muted small mb-0">Isolir otomatis pukul <strong>10:00</strong> (cek harian), restore pukul <strong>11:00</strong>. Tanggal isolir per pelanggan diatur per wilayah di bawah.</a>.</p>
                             </div>
                         </div>
                     </div>
@@ -399,11 +448,18 @@
                 <div class="row">
                     <div class="col-12">
                         <div class="card">
-                            <div class="card-header d-flex justify-content-between align-items-center">
-                                <h5 class="mb-0"><i class="bi bi-circle me-2"></i>Pelanggan Suspended</h5>
-                                <button class="btn btn-sm btn-outline-primary" id="refreshTableBtn">
-                                    <i class="bi bi-arrow-clockwise me-1"></i>Refresh
-                                </button>
+                            <div class="card-header suspended-card-header">
+                                <h5 class="mb-0"><i class="bi bi-circle me-2"></i>Pelanggan Suspended/Terisolir</h5>
+                                <div class="suspended-card-tools">
+                                    <div class="input-group input-group-sm suspended-search">
+                                        <span class="input-group-text"><i class="bi bi-search"></i></span>
+                                        <input type="search" class="form-control" id="suspendedSearchInput"
+                                            placeholder="Cari nama..." autocomplete="off">
+                                    </div>
+                                    <button type="button" class="btn btn-sm btn-outline-primary" id="refreshTableBtn">
+                                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                                    </button>
+                                </div>
                             </div>
                             <div class="card-body">
                                 <div class="table-responsive">
@@ -498,40 +554,66 @@
             });
         }
 
+        let suspendedCustomersCache = [];
+
+        function renderSuspendedCustomers(list) {
+            const tbody = $('#suspendedTable tbody');
+            tbody.empty();
+
+            if (!list || list.length === 0) {
+                const q = String($('#suspendedSearchInput').val() || '').trim();
+                const emptyMsg = q
+                    ? `Tidak ada pelanggan suspended dengan nama "${q.replace(/"/g, '')}"`
+                    : 'Tidak ada pelanggan yang suspended';
+                tbody.append(`<tr><td colspan="6" class="text-center text-muted">${emptyMsg}</td></tr>`);
+                return;
+            }
+
+            list.forEach(customer => {
+                const username = String(customer.username || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                const row = `
+                    <tr>
+                        <td>${customer.username || '-'}</td>
+                        <td>${customer.name || '-'}</td>
+                        <td>${customer.phone || '-'}</td>
+                        <td>${customer.package_name || '-'}</td>
+                        <td><span class="badge bg-danger">Suspended</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-restore" onclick="restoreCustomer('${username}')">
+                                <i class="bi bi-check-lg me-1"></i>Restore
+                            </button>
+                        </td>
+                    </tr>
+                `;
+                tbody.append(row);
+            });
+        }
+
+        function filterSuspendedCustomers() {
+            const q = String($('#suspendedSearchInput').val() || '').trim().toLowerCase();
+            if (!q) {
+                renderSuspendedCustomers(suspendedCustomersCache);
+                return;
+            }
+            const filtered = suspendedCustomersCache.filter(c =>
+                String(c.name || '').toLowerCase().includes(q)
+            );
+            renderSuspendedCustomers(filtered);
+        }
+
         // Load suspended customers table
         function loadSuspendedCustomers() {
             $.get('/admin/billing/api/customers', function(response) {
                 const customers = response.customers || response;
-                const suspended = customers.filter(c => c.status === 'suspended');
-                const tbody = $('#suspendedTable tbody');
-                tbody.empty();
-
-                if (suspended.length === 0) {
-                    tbody.append('<tr><td colspan="6" class="text-center text-muted">Tidak ada pelanggan yang suspended</td></tr>');
-                    return;
-                }
-
-                suspended.forEach(customer => {
-                    const row = `
-                        <tr>
-                            <td>${customer.username}</td>
-                            <td>${customer.name}</td>
-                            <td>${customer.phone || '-'}</td>
-                            <td>${customer.package_name || '-'}</td>
-                            <td><span class="badge bg-danger">Suspended</span></td>
-                            <td>
-                                <button class="btn btn-sm btn-restore" onclick="restoreCustomer('${customer.username}')">
-                                    <i class="bi bi-check-lg me-1"></i>Restore
-                                </button>
-                            </td>
-                        </tr>
-                    `;
-                    tbody.append(row);
-                });
+                suspendedCustomersCache = customers.filter(c => c.status === 'suspended');
+                filterSuspendedCustomers();
             }).fail(() => {
+                suspendedCustomersCache = [];
                 $('#suspendedTable tbody').html('<tr><td colspan="6" class="text-center text-danger">Error loading data</td></tr>');
             });
         }
+
+        $('#suspendedSearchInput').on('input', filterSuspendedCustomers);
 
         // Cek pelanggan nunggak
         $('#checkOverdueBtn').click(function() {

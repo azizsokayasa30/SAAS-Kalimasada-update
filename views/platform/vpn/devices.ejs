@@ -1,0 +1,445 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active, adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Perangkat VPN</h2>
+      <p class="km-subtitle">WireGuard &amp; L2TP/IPsec — status koneksi &amp; kualitas ping</p>
+    </div>
+    <div class="d-flex gap-2">
+      <button type="button" class="btn btn-outline-secondary btn-sm px-3" id="refreshStatusBtn">
+        <i class="bi bi-arrow-clockwise me-1"></i> Refresh Status
+      </button>
+      <button type="button" class="btn btn-km-primary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#addPeerModal">
+        <i class="bi bi-plus-lg me-1"></i> Tambah Perangkat
+      </button>
+    </div>
+  </div>
+
+  <%- include('_nav', { vpnSection }) %>
+
+  <% if (!status.wgAvailable) { %>
+    <div class="alert alert-warning">
+      WireGuard belum terdeteksi di host (interface <code><%= status.interfaceName || 'wg0' %></code>).
+      Status peer WG memakai ping; peer L2TP selalu memakai ping. Pasang WireGuard lalu jalankan script VPS dari menu Server.
+    </div>
+  <% } else { %>
+    <div class="alert alert-success py-2">
+      WireGuard terdeteksi — status handshake live dari <code>wg show</code>. Peer L2TP memakai ping.
+    </div>
+  <% } %>
+
+  <% if (flash && flash.success === 'created') { %><div class="alert alert-success">Perangkat berhasil ditambahkan.</div><% } %>
+  <% if (flash && flash.success === 'updated') { %><div class="alert alert-success">Perangkat berhasil diperbarui.</div><% } %>
+  <% if (flash && flash.success === 'deleted') { %><div class="alert alert-success">Perangkat berhasil dihapus.</div><% } %>
+  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+
+  <% if (!wgReady && !l2tpReady) { %>
+    <div class="alert alert-info">
+      Lengkapi <a href="/management/vpn" class="alert-link">pengaturan VPN Server</a>
+      (WireGuard key dan/atau IPsec PSK) agar script MikroTik siap pakai.
+    </div>
+  <% } %>
+
+  <div class="km-card km-card--flush">
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0 km-tenant-table" id="vpnDevicesTable">
+        <thead>
+          <tr>
+            <th>Nama</th>
+            <th>Tenant</th>
+            <th>Protokol</th>
+            <th>RouterOS</th>
+            <th>Tunnel IP</th>
+            <th>Identitas</th>
+            <th>Koneksi</th>
+            <th>Handshake</th>
+            <th>Ping</th>
+            <th>Transfer</th>
+            <th class="text-end">Aksi</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!devices.length) { %>
+            <tr id="emptyDevicesRow"><td colspan="11" class="text-center py-4 text-muted">Belum ada perangkat terdaftar.</td></tr>
+          <% } %>
+          <% devices.forEach(function(d) {
+            const protocol = (d.protocol || 'wireguard');
+            const isL2tp = protocol === 'l2tp';
+            const keyShort = (!isL2tp && d.peer_public_key)
+              ? (d.peer_public_key.slice(0, 8) + '…' + d.peer_public_key.slice(-6))
+              : (isL2tp ? (d.l2tp_username || '—') : '—');
+            let connBadge = 'bg-secondary';
+            if (d.connectionStatus === 'online') connBadge = 'bg-success';
+            else if (d.connectionStatus === 'stale') connBadge = 'bg-warning text-dark';
+            else if (d.connectionStatus === 'offline') connBadge = 'bg-danger';
+
+            let pingBadge = 'bg-secondary';
+            if (d.pingQuality === 'good') pingBadge = 'bg-success';
+            else if (d.pingQuality === 'fair') pingBadge = 'bg-warning text-dark';
+            else if (d.pingQuality === 'poor') pingBadge = 'bg-secondary';
+            else if (d.pingQuality === 'timeout') pingBadge = 'bg-danger';
+
+            const tenantLabel = d.tenant_subdomain || d.tenant_name || null;
+          %>
+            <tr data-peer-id="<%= d.id %>" class="<%= d.is_active ? '' : 'opacity-50' %>">
+              <td class="fw-semibold">
+                <%= d.name %>
+                <% if (!d.is_active) { %><span class="badge bg-secondary ms-1">Nonaktif</span><% } %>
+                <% if (d.notes) { %><div class="small text-muted"><%= d.notes %></div><% } %>
+              </td>
+              <td>
+                <% if (tenantLabel) { %>
+                  <span class="badge bg-info text-dark"><%= tenantLabel %></span>
+                  <% if (d.tenant_name && d.tenant_subdomain && d.tenant_name !== d.tenant_subdomain) { %>
+                    <div class="small text-muted"><%= d.tenant_name %></div>
+                  <% } %>
+                <% } else { %>
+                  <span class="text-muted">Platform</span>
+                <% } %>
+              </td>
+              <td>
+                <% if (isL2tp) { %>
+                  <span class="badge bg-warning text-dark">L2TP</span>
+                <% } else { %>
+                  <span class="badge bg-primary">WireGuard</span>
+                <% } %>
+              </td>
+              <td><code><%= d.routeros_version || (isL2tp ? 'v6' : 'v7') %></code></td>
+              <td><code class="peer-tunnel-ip"><%= d.tunnel_ip %></code></td>
+              <td><code class="small" title="<%= isL2tp ? (d.l2tp_username || '') : (d.peer_public_key || '') %>"><%= keyShort %></code></td>
+              <td class="peer-conn"><span class="badge <%= connBadge %>"><%= d.connectionLabel %></span></td>
+              <td class="peer-handshake small text-muted"><%= isL2tp ? '—' : (d.handshakeAgeLabel || '—') %></td>
+              <td class="peer-ping">
+                <span class="badge <%= pingBadge %>"><%= d.pingLabel %></span>
+                <% if (d.pingMs != null) { %><span class="small text-muted ms-1"><%= d.pingMs %> ms</span><% } %>
+              </td>
+              <td class="peer-transfer small"><%= isL2tp ? '—' : (d.transferLabel || '—') %></td>
+              <td class="text-end text-nowrap">
+                <a href="/management/vpn/peers/<%= d.id %>/mikrotik-script" class="btn btn-sm btn-outline-success" title="Download script MikroTik">
+                  <i class="bi bi-download"></i>
+                </a>
+                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editPeerModal-<%= d.id %>" title="Edit">
+                  <i class="bi bi-pencil"></i>
+                </button>
+                <form method="POST" action="/management/vpn/peers/<%= d.id %>/delete" class="d-inline" onsubmit="return confirm('Hapus perangkat ini?')">
+                  <button type="submit" class="btn btn-sm btn-outline-danger" title="Hapus"><i class="bi bi-trash"></i></button>
+                </form>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<!-- Add Peer Modal -->
+<div class="modal fade km-modal" id="addPeerModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
+    <form method="POST" action="/management/vpn/peers" class="modal-content km-package-modal" id="addPeerForm">
+      <div class="modal-header km-package-modal__header">
+        <div>
+          <h5 class="modal-title mb-0">Tambah Perangkat</h5>
+          <p class="km-package-modal__subtitle mb-0">Pilih versi RouterOS — protokol dipilih otomatis</p>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body km-package-modal__body">
+        <div class="alert alert-info py-2 small mb-3" id="addPeerHint">
+          <strong>v7 → WireGuard</strong>, <strong>v6 → L2TP/IPsec</strong>. Kredensial digenerate otomatis.
+        </div>
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Nama</label>
+            <input type="text" name="name" class="form-control" required placeholder="MikroTik POP-A">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Tenant <span class="text-muted fw-normal">(opsional)</span></label>
+            <select name="tenant_id" class="form-select">
+              <option value="">Platform (tanpa tenant)</option>
+              <% (tenants || []).forEach(function(t) { %>
+                <option value="<%= t.id %>"><%= t.subdomain || t.slug || t.name %> — <%= t.name %></option>
+              <% }) %>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Versi RouterOS</label>
+            <select name="routeros_version" id="addRouterOsVersion" class="form-select" required>
+              <option value="v7" selected>v7 (WireGuard)</option>
+              <option value="v6">v6 (L2TP/IPsec)</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Protokol</label>
+            <input type="hidden" name="protocol" id="addProtocol" value="wireguard">
+            <input type="text" class="form-control" id="addProtocolLabel" value="WireGuard" readonly>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Tunnel IP <span class="text-muted fw-normal">(otomatis)</span></label>
+            <input type="text" name="tunnel_ip" id="addTunnelIp" class="form-control" readonly
+                   value="<%= nextTunnelIp || '' %>" placeholder="Dialokasikan otomatis">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Status</label>
+            <select name="is_active" class="form-select">
+              <option value="1" selected>Aktif</option>
+              <option value="0">Nonaktif</option>
+            </select>
+          </div>
+          <div class="col-md-3 wg-only-fields">
+            <label class="form-label">Keepalive (detik)</label>
+            <input type="number" name="persistent_keepalive" class="form-control" value="25" min="0">
+          </div>
+          <div class="col-12 wg-only-fields">
+            <label class="form-label">Peer Public Key <span class="text-muted fw-normal">(otomatis)</span></label>
+            <div class="input-group">
+              <input type="text" name="peer_public_key" id="addPeerPublicKey" class="form-control font-monospace" placeholder="Klik generate…">
+              <button type="button" class="btn btn-outline-primary" id="btnGeneratePeerKeys" title="Generate ulang keypair">
+                <i class="bi bi-key"></i> Generate
+              </button>
+            </div>
+            <input type="hidden" name="peer_private_key" id="addPeerPrivateKey" value="">
+          </div>
+          <div class="col-md-6 l2tp-only-fields d-none">
+            <label class="form-label">L2TP Username <span class="text-muted fw-normal">(opsional)</span></label>
+            <input type="text" name="l2tp_username" class="form-control" placeholder="Otomatis dari nama">
+          </div>
+          <div class="col-md-6 l2tp-only-fields d-none">
+            <label class="form-label">L2TP Password <span class="text-muted fw-normal">(opsional)</span></label>
+            <input type="text" name="l2tp_password" class="form-control" placeholder="Digenerate otomatis jika kosong">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Catatan</label>
+            <input type="text" name="notes" class="form-control" placeholder="Opsional">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-km-primary">Simpan</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<% devices.forEach(function(d) {
+  const isL2tp = (d.protocol || 'wireguard') === 'l2tp';
+%>
+<div class="modal fade km-modal" id="editPeerModal-<%= d.id %>" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
+    <form method="POST" action="/management/vpn/peers/<%= d.id %>" class="modal-content km-package-modal">
+      <div class="modal-header km-package-modal__header">
+        <div>
+          <h5 class="modal-title mb-0">Edit Perangkat</h5>
+          <p class="km-package-modal__subtitle mb-0"><%= d.name %></p>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body km-package-modal__body">
+        <input type="hidden" name="protocol" value="<%= d.protocol || 'wireguard' %>">
+        <input type="hidden" name="routeros_version" value="<%= d.routeros_version || (isL2tp ? 'v6' : 'v7') %>">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Nama</label>
+            <input type="text" name="name" class="form-control" required value="<%= d.name %>">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Tenant <span class="text-muted fw-normal">(opsional)</span></label>
+            <select name="tenant_id" class="form-select">
+              <option value="" <%= !d.tenant_id ? 'selected' : '' %>>Platform (tanpa tenant)</option>
+              <% (tenants || []).forEach(function(t) { %>
+                <option value="<%= t.id %>" <%= Number(d.tenant_id) === Number(t.id) ? 'selected' : '' %>><%= t.subdomain || t.slug || t.name %> — <%= t.name %></option>
+              <% }) %>
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Protokol</label>
+            <input type="text" class="form-control" value="<%= isL2tp ? 'L2TP/IPsec' : 'WireGuard' %>" readonly>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">RouterOS</label>
+            <input type="text" class="form-control" value="<%= d.routeros_version || (isL2tp ? 'v6' : 'v7') %>" readonly>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Tunnel IP</label>
+            <input type="text" name="tunnel_ip" class="form-control" required value="<%= d.tunnel_ip %>">
+          </div>
+          <% if (!isL2tp) { %>
+          <div class="col-12">
+            <label class="form-label">Peer Public Key</label>
+            <input type="text" name="peer_public_key" class="form-control font-monospace" required value="<%= d.peer_public_key %>">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Allowed IPs</label>
+            <input type="text" name="allowed_ips" class="form-control" value="<%= d.allowed_ips || '' %>">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Keepalive (detik)</label>
+            <input type="number" name="persistent_keepalive" class="form-control" value="<%= d.persistent_keepalive != null ? d.persistent_keepalive : 25 %>" min="0">
+          </div>
+          <% } else { %>
+          <div class="col-md-6">
+            <label class="form-label">L2TP Username</label>
+            <input type="text" name="l2tp_username" class="form-control" value="<%= d.l2tp_username || '' %>" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">L2TP Password</label>
+            <input type="text" name="l2tp_password" class="form-control" value="<%= d.l2tp_password || '' %>" required>
+          </div>
+          <% } %>
+          <div class="col-md-3">
+            <label class="form-label">Status</label>
+            <select name="is_active" class="form-select">
+              <option value="1" <%= d.is_active ? 'selected' : '' %>>Aktif</option>
+              <option value="0" <%= !d.is_active ? 'selected' : '' %>>Nonaktif</option>
+            </select>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Catatan</label>
+            <input type="text" name="notes" class="form-control" value="<%= d.notes || '' %>">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-km-primary">Simpan Perubahan</button>
+      </div>
+    </form>
+  </div>
+</div>
+<% }); %>
+
+<script>
+(function () {
+  function connBadgeClass(status) {
+    if (status === 'online') return 'bg-success';
+    if (status === 'stale') return 'bg-warning text-dark';
+    if (status === 'offline') return 'bg-danger';
+    return 'bg-secondary';
+  }
+  function pingBadgeClass(q) {
+    if (q === 'good') return 'bg-success';
+    if (q === 'fair') return 'bg-warning text-dark';
+    if (q === 'poor') return 'bg-secondary';
+    if (q === 'timeout') return 'bg-danger';
+    return 'bg-secondary';
+  }
+
+  function applyStatus(data) {
+    if (!data || !data.devices) return;
+    data.devices.forEach(function (d) {
+      var row = document.querySelector('tr[data-peer-id="' + d.id + '"]');
+      if (!row) return;
+      var conn = row.querySelector('.peer-conn');
+      if (conn) {
+        conn.innerHTML = '<span class="badge ' + connBadgeClass(d.connectionStatus) + '">' + (d.connectionLabel || '') + '</span>';
+      }
+      var hs = row.querySelector('.peer-handshake');
+      if (hs) hs.textContent = (d.protocol === 'l2tp') ? '—' : (d.handshakeAgeLabel || '—');
+      var ping = row.querySelector('.peer-ping');
+      if (ping) {
+        var ms = d.pingMs != null ? '<span class="small text-muted ms-1">' + d.pingMs + ' ms</span>' : '';
+        ping.innerHTML = '<span class="badge ' + pingBadgeClass(d.pingQuality) + '">' + (d.pingLabel || '') + '</span>' + ms;
+      }
+      var tr = row.querySelector('.peer-transfer');
+      if (tr) tr.textContent = (d.protocol === 'l2tp') ? '—' : (d.transferLabel || '—');
+    });
+  }
+
+  var btn = document.getElementById('refreshStatusBtn');
+  if (btn) {
+    btn.addEventListener('click', function () {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Memuat…';
+      fetch('/management/vpn/api/status')
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.success) applyStatus(data);
+          else alert(data.message || 'Gagal memuat status');
+        })
+        .catch(function () { alert('Gagal memuat status'); })
+        .finally(function () {
+          btn.disabled = false;
+          btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i> Refresh Status';
+        });
+    });
+  }
+
+  function refreshNextIp() {
+    return fetch('/management/vpn/api/next-ip')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var input = document.getElementById('addTunnelIp');
+        if (input && data.success) input.value = data.tunnelIp || '';
+      })
+      .catch(function () {});
+  }
+
+  function generatePeerKeys() {
+    var pub = document.getElementById('addPeerPublicKey');
+    var priv = document.getElementById('addPeerPrivateKey');
+    var btnKeys = document.getElementById('btnGeneratePeerKeys');
+    if (btnKeys) btnKeys.disabled = true;
+    return fetch('/management/vpn/api/generate-peer-keys', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.success) throw new Error(data.message || 'Gagal generate key');
+        if (pub) pub.value = data.publicKey || '';
+        if (priv) priv.value = data.privateKey || '';
+      })
+      .catch(function (err) { alert(err.message || 'Gagal generate key'); })
+      .finally(function () { if (btnKeys) btnKeys.disabled = false; });
+  }
+
+  function syncAddProtocolFields() {
+    var ros = document.getElementById('addRouterOsVersion');
+    var protocol = document.getElementById('addProtocol');
+    var label = document.getElementById('addProtocolLabel');
+    var isV6 = ros && ros.value === 'v6';
+    if (protocol) protocol.value = isV6 ? 'l2tp' : 'wireguard';
+    if (label) label.value = isV6 ? 'L2TP/IPsec' : 'WireGuard';
+    document.querySelectorAll('.wg-only-fields').forEach(function (el) {
+      el.classList.toggle('d-none', !!isV6);
+    });
+    document.querySelectorAll('.l2tp-only-fields').forEach(function (el) {
+      el.classList.toggle('d-none', !isV6);
+    });
+    var pub = document.getElementById('addPeerPublicKey');
+    if (pub) pub.required = !isV6;
+  }
+
+  var rosSelect = document.getElementById('addRouterOsVersion');
+  if (rosSelect) rosSelect.addEventListener('change', syncAddProtocolFields);
+
+  var btnKeys = document.getElementById('btnGeneratePeerKeys');
+  if (btnKeys) btnKeys.addEventListener('click', function () { generatePeerKeys(); });
+
+  var addModal = document.getElementById('addPeerModal');
+  if (addModal) {
+    addModal.addEventListener('show.bs.modal', function () {
+      refreshNextIp();
+      syncAddProtocolFields();
+      var pub = document.getElementById('addPeerPublicKey');
+      var protocol = document.getElementById('addProtocol');
+      if (protocol && protocol.value === 'wireguard' && pub && !pub.value) generatePeerKeys();
+    });
+  }
+
+  var addForm = document.getElementById('addPeerForm');
+  if (addForm) {
+    addForm.addEventListener('submit', function (e) {
+      var protocol = document.getElementById('addProtocol');
+      var pub = document.getElementById('addPeerPublicKey');
+      if (protocol && protocol.value === 'wireguard' && pub && !pub.value.trim()) {
+        e.preventDefault();
+        generatePeerKeys().then(function () {
+          if (pub.value.trim()) addForm.submit();
+        });
+      }
+    });
+  }
+})();
+</script>
+
+<%- include('../partials/footer') %>

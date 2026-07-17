@@ -1,6 +1,7 @@
 /**
  * Built-in WhatsApp notification templates (billing / teknisi / gangguan).
- * Digabung dengan data/whatsapp-templates.json saat runtime.
+ * Digabung dengan override per-tenant (tenant.settings.whatsapp_templates)
+ * atau data/whatsapp-templates.json untuk mode legacy non-tenant.
  */
 const { getSetting } = require('./settingsManager');
 const { getCompanyHeader } = require('./message-templates');
@@ -21,6 +22,13 @@ Tagihan bulanan Anda telah dibuat:
 📦 *Paket:* {package_name} ({package_speed})
 📝 *Catatan:* {notes}
 
+🏦 *Rekening Pembayaran:*
+{Rekening_Pembayaran}
+
+*Cek Status Dan Lakukan Pembayaran Anda Di*
+{customer_portal_url}
+*_Login Dengan No Hp Terdaftar_*
+
 Silakan lakukan pembayaran sebelum tanggal jatuh tempo untuk menghindari denda keterlambatan.
 
 Terima kasih atas kepercayaan Anda.`,
@@ -39,6 +47,13 @@ Tagihan Anda akan jatuh tempo dalam *{days_remaining} hari*:
 📅 *Jatuh Tempo:* {due_date}
 📦 *Paket:* {package_name} ({package_speed})
 
+🏦 *Rekening Pembayaran:*
+{Rekening_Pembayaran}
+
+*Cek Status Dan Lakukan Pembayaran Anda Di*
+{customer_portal_url}
+*_Login Dengan No Hp Terdaftar_*
+
 Mohon persiapkan pembayaran sebelum tanggal jatuh tempo agar layanan tetap lancar.
 
 Terima kasih.`,
@@ -55,6 +70,13 @@ Hari ini (*{due_date}*) adalah tanggal jatuh tempo tagihan Anda:
 📄 *No. Invoice:* {invoice_number}
 💰 *Jumlah:* Rp {amount}
 📦 *Paket:* {package_name} ({package_speed})
+
+🏦 *Rekening Pembayaran:*
+{Rekening_Pembayaran}
+
+*Cek Status Dan Lakukan Pembayaran Anda Di*
+{customer_portal_url}
+*_Login Dengan No Hp Terdaftar_*
 
 Apabila belum melakukan pembayaran, mohon kiranya dapat diselesaikan hari ini. Jika sudah bayar, abaikan pesan ini.
 
@@ -74,7 +96,7 @@ Terima kasih! Pembayaran Anda telah kami terima:
 💳 *Metode Pembayaran:* {payment_method}
 📅 *Tanggal Pembayaran:* {payment_date}
 🔢 *No. Referensi:* {reference_number}
-📦 *Paket:* {package_name} {package_speed}
+📦 *Paket / Rincian:* {package_name} {package_speed}
 
 Layanan internet Anda akan tetap aktif. Terima kasih atas kepercayaan Anda.`,
             enabled: true
@@ -91,6 +113,10 @@ Kami informasikan bahwa sedang terjadi gangguan pada jaringan internet:
 📍 *Area Terdampak:* {affected_area}
 ⏰ *Perkiraan Selesai:* {estimated_resolution}
 📞 *Hotline:* {support_phone}
+
+*Cek Status Di*
+{customer_portal_url}
+*_Login Dengan No Hp Terdaftar_*
 
 Kami sedang bekerja untuk mengatasi masalah ini secepat mungkin. Mohon maaf atas ketidaknyamanannya.
 
@@ -116,10 +142,15 @@ Halo {customer_name},
 
 Layanan internet Anda telah dinonaktifkan karena:
 📋 *Alasan:* {reason}
+📦 *Paket:* {package_name} ({package_speed})
 
 💡 *Cara Mengaktifkan Kembali:*
 1. Lakukan pembayaran tagihan yang tertunggak
 2. Layanan akan aktif otomatis setelah pembayaran dikonfirmasi
+
+*Cek Status Dan Pembayaran Anda Di*
+{customer_portal_url}
+*_Login Dengan No Hp Terdaftar_*
 
 📞 *Butuh Bantuan?*
 Hubungi kami di: ${getSetting('contact_whatsapp', '0813-6888-8498')}
@@ -141,6 +172,10 @@ Selamat! Layanan internet Anda telah diaktifkan kembali.
 • Paket: {package_name}
 • Kecepatan: {package_speed}
 
+*Cek Status Di*
+{customer_portal_url}
+*_Login Dengan No Hp Terdaftar_*
+
 Terima kasih telah melakukan pembayaran tepat waktu.
 
 *${getCompanyHeader()}*
@@ -148,19 +183,19 @@ Info: ${getSetting('contact_whatsapp', '0813-6888-8498')}`,
             enabled: true
         },
         welcome_message: {
-            title: 'Welcome Message',
-            template: `👋 *SELAMAT DATANG*
+            title: 'WA welcome pelanggan baru',
+            template: `📋 *NOTIFIKASI PELANGGAN*
 
 Halo {customer_name},
 
-Selamat datang di layanan internet kami!
+Terima kasih telah menggunakan layanan kami.
 
-📦 *Paket:* {package_name} ({package_speed})
-🌐 *PPPoE Username:* {pppoe_username}
-🔑 *PPPoE Password:* {pppoe_password}
-📞 *Support:* {support_phone}
+Jika ada pertanyaan atau butuh bantuan, silakan hubungi customer service kami.
 
-Terima kasih telah memilih layanan kami.`,
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+{company_header}
+{footer_info}`,
             enabled: true
         },
         installation_job_assigned: {

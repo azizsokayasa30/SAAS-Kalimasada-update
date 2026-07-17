@@ -13,6 +13,7 @@ const db = new sqlite3.Database(dbPath);
 // Billing manager untuk akses data
 const billingManager = require('../config/billing');
 const { addPPPoESecret, getPPPoEProfiles } = require('../config/mikrotik');
+const { hasTenantContext, getTenantId } = require('../config/platform/tenantContext');
 
 function getDb() {
     return typeof billingManager.getDb === 'function' ? billingManager.getDb() : billingManager.db;
@@ -1840,10 +1841,13 @@ async function getPaymentStatsForCollector(collectorId) {
 
 async function recordCollectorPayment(paymentData) {
     return new Promise((resolve, reject) => {
+        const tenantId = hasTenantContext()
+            ? getTenantId()
+            : (paymentData.tenant_id != null ? parseInt(paymentData.tenant_id, 10) : 1);
         const sql = `
             INSERT INTO collector_payments 
-            (collector_id, invoice_id, amount, payment_method, reference_number, notes) 
-            VALUES (?, ?, ?, ?, ?, ?)
+            (collector_id, invoice_id, amount, payment_method, reference_number, notes, tenant_id) 
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         `;
         
         db.run(sql, [
@@ -1852,7 +1856,8 @@ async function recordCollectorPayment(paymentData) {
             paymentData.amount,
             paymentData.payment_method,
             paymentData.reference_number,
-            paymentData.notes
+            paymentData.notes,
+            tenantId
         ], function(err) {
             if (err) {
                 reject(err);

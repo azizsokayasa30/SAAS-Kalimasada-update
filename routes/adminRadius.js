@@ -16,10 +16,16 @@ const {
   parseClientsConfFromDB,
   writeClientsConf,
   writeClientsConfToDB,
+  writeTenantClientsConfToDB,
+  clientBelongsToTenant,
   restartFreeRADIUS,
   validateClient,
+  sanitizeClientName,
+  isValidClientName,
   getRadiusClientsConfReadDiagnostics
 } = require('../config/radiusClients');
+const { getTenantId, hasTenantContext } = require('../config/platform/tenantContext');
+const { tenantSqlFromRequest } = require('../config/platform/tenantSqlHelpers');
 const { backupRadius, restoreRadius, listBackups } = require('../utils/radiusBackup');
 
 // Configure multer for file upload
@@ -43,10 +49,7 @@ const upload = multer({
 // GET: Halaman Setting RADIUS
 router.get('/radius', adminAuth, async (req, res) => {
   try {
-    // Ambil dari database, bukan settings.json
     const settings = await getRadiusConfig();
-    // Force mode RADIUS (100% RADIUS mode)
-    settings.user_auth_mode = 'radius';
     
     // Get list of backups
     let backups = [];
@@ -78,7 +81,7 @@ router.get('/radius', adminAuth, async (req, res) => {
     
     res.render('adminRadius', {
       settings: {
-        user_auth_mode: 'radius', // Always RADIUS mode
+        user_auth_mode: 'radius',
         radius_host: 'localhost',
         radius_user: 'billing',
         radius_password: '',
@@ -95,24 +98,22 @@ router.get('/radius', adminAuth, async (req, res) => {
 // POST: Simpan Setting RADIUS
 router.post('/radius', adminAuth, async (req, res) => {
   try {
-    const { radius_host, radius_user, radius_password, radius_database } = req.body;
+    const { radius_host, radius_user, radius_password, radius_database, user_auth_mode } = req.body;
 
-    // Force mode RADIUS (100% RADIUS mode - tidak ada opsi Mikrotik API)
-    const user_auth_mode = 'radius';
+    // Mode dari form (radius | mikrotik); default radius
+    const mode = String(user_auth_mode || 'radius').toLowerCase() === 'mikrotik'
+      ? 'mikrotik'
+      : 'radius';
 
-    // Simpan ke database (app_settings table)
     await saveRadiusConfig({
-      user_auth_mode: user_auth_mode, // Always 'radius'
+      user_auth_mode: mode,
       radius_host: radius_host ? radius_host.trim() : 'localhost',
       radius_user: radius_user ? radius_user.trim() : 'billing',
       radius_password: radius_password || '',
       radius_database: radius_database ? radius_database.trim() : 'radius'
     });
 
-    // Reload untuk ditampilkan
     const settings = await getRadiusConfig();
-    // Force mode RADIUS (100% RADIUS mode)
-    settings.user_auth_mode = 'radius';
     
     // Get list of backups
     let backups = [];
@@ -128,20 +129,17 @@ router.post('/radius', adminAuth, async (req, res) => {
       backups: backups || [],
       page: 'setting-radius',
       error: null,
-      success: 'Pengaturan RADIUS berhasil disimpan ke database'
+      success: 'Pengaturan RADIUS berhasil disimpan'
     });
   } catch (e) {
     logger.error('Error saving radius config:', e);
     const settings = await getRadiusConfig().catch(() => ({
-      user_auth_mode: 'radius', // Always RADIUS mode
+      user_auth_mode: 'radius',
       radius_host: 'localhost',
       radius_user: 'radius',
       radius_password: '',
       radius_database: 'radius'
     }));
-    
-    // Force mode RADIUS
-    settings.user_auth_mode = 'radius';
     
     // Get list of backups
     let backups = [];
@@ -151,7 +149,7 @@ router.post('/radius', adminAuth, async (req, res) => {
       logger.warn('Error loading backups list:', backupError);
       backups = [];
     }
-    
+
     res.render('adminRadius', {
       settings,
       backups: backups || [],
@@ -223,29 +221,42 @@ router.get('/radius/status', adminAuth, async (req, res) => {
     let overallStatus = 'unknown'; // 'running', 'error', 'not_running'
     let statusMessage = '';
 
-    // Check FreeRADIUS service status
+    // Check FreeRADIUS service status (active / activating crash-loop / inactive)
     try {
-      const { stdout, stderr } = await execAsync('systemctl is-active freeradius', { timeout: 5000 });
-      serviceStatus = stdout.trim();
-      
-      // Check if service is active
-      if (serviceStatus === 'active') {
+      const { stdout } = await execAsync('systemctl is-active freeradius || true', { timeout: 5000 });
+      const raw = String(stdout || '').trim();
+      if (raw === 'active') {
         serviceStatus = 'running';
-      } else if (serviceStatus === 'inactive' || serviceStatus === 'failed') {
+      } else if (raw === 'activating' || raw === 'auto-restart') {
         serviceStatus = 'not_running';
+        serviceError = 'FreeRADIUS crash-loop (activating) — cek clients.conf / journalctl -u freeradius';
+      } else if (raw === 'inactive' || raw === 'failed') {
+        serviceStatus = 'not_running';
+        serviceError = raw ? `systemctl: ${raw}` : null;
       } else {
-        serviceStatus = 'unknown';
+        // Fallback: binary sering bernama freeradius atau radiusd
+        try {
+          const { stdout: pg } = await execAsync(
+            'pgrep -x freeradius >/dev/null && echo running || pgrep -x radiusd >/dev/null && echo running || echo not_running',
+            { timeout: 3000 }
+          );
+          serviceStatus = pg.trim() === 'running' ? 'running' : 'not_running';
+          if (serviceStatus === 'not_running' && raw) {
+            serviceError = `systemctl: ${raw}`;
+          }
+        } catch (_) {
+          serviceStatus = 'not_running';
+          serviceError = raw || 'service check failed';
+        }
       }
     } catch (error) {
       serviceError = error.message;
-      // Try alternative check
       try {
-        const { stdout } = await execAsync('pgrep -x freeradius || echo "not_running"', { timeout: 3000 });
-        if (stdout.trim() === 'not_running') {
-          serviceStatus = 'not_running';
-        } else {
-          serviceStatus = 'running';
-        }
+        const { stdout } = await execAsync(
+          'pgrep -x freeradius >/dev/null && echo running || pgrep -x radiusd >/dev/null && echo running || echo not_running',
+          { timeout: 3000 }
+        );
+        serviceStatus = stdout.trim() === 'running' ? 'running' : 'not_running';
       } catch (altError) {
         serviceStatus = 'not_running';
         serviceError = error.message;
@@ -254,7 +265,6 @@ router.get('/radius/status', adminAuth, async (req, res) => {
 
     // Check database connection
     try {
-      const settings = await getRadiusConfig();
       const conn = await getRadiusConnection();
       const [testRows] = await conn.execute('SELECT 1 as test');
       await conn.end();
@@ -274,9 +284,14 @@ router.get('/radius/status', adminAuth, async (req, res) => {
     if (serviceStatus === 'running' && dbStatus === 'connected') {
       overallStatus = 'running';
       statusMessage = 'RADIUS berjalan normal';
+    } else if (serviceStatus === 'not_running' && dbStatus === 'connected') {
+      overallStatus = 'not_running';
+      statusMessage =
+        'Database RADIUS OK, tetapi service FreeRADIUS tidak berjalan' +
+        (serviceError ? ` (${serviceError})` : '');
     } else if (serviceStatus === 'not_running') {
       overallStatus = 'not_running';
-      statusMessage = 'RADIUS service tidak berjalan';
+      statusMessage = 'RADIUS service tidak berjalan' + (serviceError ? `: ${serviceError}` : '');
     } else if (serviceStatus === 'running' && dbStatus === 'error') {
       overallStatus = 'error';
       statusMessage = 'RADIUS service berjalan tapi ada masalah koneksi database';
@@ -342,34 +357,63 @@ router.get('/radius/test', adminAuth, async (req, res) => {
     const testList = Array.isArray(testRows) ? testRows : [];
     const testResult = testList[0]?.test;
 
-    const [userCount] = await conn.execute(`
-      SELECT COUNT(DISTINCT username) as total
-      FROM radcheck
-      WHERE LOWER(TRIM(attribute)) IN (
-        'cleartext-password','user-password','crypt-password','md5-password',
-        'sha-password','smd5-password','mikrotik-password'
-      )
-    `);
-    const ucList = Array.isArray(userCount) ? userCount : [];
-    const totalUsers = ucList[0]?.total || 0;
+    // Statistik user: ALLOWLIST tenant saja (bukan seluruh radcheck bersama).
+    const {
+      getTenantAllowedPppoeUsernames
+    } = require('../utils/tenantPppoeOwnership');
+    const allowedUsernames = await getTenantAllowedPppoeUsernames();
 
+    let totalUsers = 0;
     let activeConnections = 0;
-    try {
-      const [activeCount] = await conn.execute(`
-      SELECT COUNT(DISTINCT ra.username) as active
-      FROM radacct ra
-      JOIN radcheck rc
-        ON rc.username = ra.username
-       AND LOWER(TRIM(rc.attribute)) IN (
-         'cleartext-password','user-password','crypt-password','md5-password',
-         'sha-password','smd5-password','mikrotik-password'
-       )
-      WHERE (ra.acctstoptime IS NULL OR ra.acctstoptime = '' OR ra.acctstoptime = '0' OR ra.acctstoptime = '0000-00-00 00:00:00')
-    `);
-      const acList = Array.isArray(activeCount) ? activeCount : [];
-      activeConnections = acList[0]?.active || 0;
-    } catch (_) {
+
+    if (allowedUsernames !== null && allowedUsernames.length === 0) {
+      totalUsers = 0;
       activeConnections = 0;
+    } else {
+      const pwdAttrs = [
+        'cleartext-password', 'user-password', 'crypt-password', 'md5-password',
+        'sha-password', 'smd5-password', 'mikrotik-password'
+      ];
+      let totalSql = `
+        SELECT COUNT(DISTINCT username) as total
+        FROM radcheck
+        WHERE LOWER(TRIM(attribute)) IN (${pwdAttrs.map(() => '?').join(',')})
+      `;
+      const totalParams = [...pwdAttrs];
+      if (Array.isArray(allowedUsernames) && allowedUsernames.length > 0) {
+        const normalized = [
+          ...new Set(allowedUsernames.map((u) => String(u).toLowerCase().trim()).filter(Boolean))
+        ];
+        totalSql += ` AND LOWER(TRIM(username)) IN (${normalized.map(() => '?').join(',')})`;
+        totalParams.push(...normalized);
+      }
+      const [userCount] = await conn.execute(totalSql, totalParams);
+      const ucList = Array.isArray(userCount) ? userCount : [];
+      totalUsers = ucList[0]?.total || 0;
+
+      try {
+        let activeSql = `
+          SELECT COUNT(DISTINCT ra.username) as active
+          FROM radacct ra
+          JOIN radcheck rc
+            ON rc.username = ra.username
+           AND LOWER(TRIM(rc.attribute)) IN (${pwdAttrs.map(() => '?').join(',')})
+          WHERE (ra.acctstoptime IS NULL OR ra.acctstoptime = '' OR ra.acctstoptime = '0' OR ra.acctstoptime = '0000-00-00 00:00:00')
+        `;
+        const activeParams = [...pwdAttrs];
+        if (Array.isArray(allowedUsernames) && allowedUsernames.length > 0) {
+          const normalized = [
+            ...new Set(allowedUsernames.map((u) => String(u).toLowerCase().trim()).filter(Boolean))
+          ];
+          activeSql += ` AND LOWER(TRIM(ra.username)) IN (${normalized.map(() => '?').join(',')})`;
+          activeParams.push(...normalized);
+        }
+        const [activeCount] = await conn.execute(activeSql, activeParams);
+        const acList = Array.isArray(activeCount) ? activeCount : [];
+        activeConnections = acList[0]?.active || 0;
+      } catch (_) {
+        activeConnections = 0;
+      }
     }
 
     await conn.end();
@@ -390,7 +434,8 @@ router.get('/radius/test', adminAuth, async (req, res) => {
       statistics: {
         totalUsers: totalUsers,
         activeConnections: activeConnections,
-        offlineUsers: Math.max(totalUsers - activeConnections, 0)
+        offlineUsers: Math.max(totalUsers - activeConnections, 0),
+        scope: allowedUsernames === null ? 'global' : 'tenant'
       },
       testQuery: testResult === 1 ? 'OK' : 'FAILED'
     });
@@ -443,6 +488,19 @@ router.post('/radius/sync-orphan-users', adminAuth, async (req, res) => {
       });
     });
 
+    const ownedPppoePromise = new Promise((resolve) => {
+      billingDb.all(`
+        SELECT DISTINCT username
+        FROM tenant_pppoe_users
+        WHERE username IS NOT NULL AND TRIM(username) != ''
+      `, [], (err, rows) => {
+        if (!err && Array.isArray(rows)) {
+          rows.forEach(r => { if (r.username) allowedUsernames.add(String(r.username).trim()); });
+        }
+        resolve();
+      });
+    });
+
     const membersPromise = new Promise((resolve) => {
       billingDb.all(`
         SELECT DISTINCT hotspot_username
@@ -486,7 +544,7 @@ router.post('/radius/sync-orphan-users', adminAuth, async (req, res) => {
       });
     });
 
-    await Promise.all([customersPromise, membersPromise, memberNormalPromise, vouchersPromise]);
+    await Promise.all([customersPromise, ownedPppoePromise, membersPromise, memberNormalPromise, vouchersPromise]);
     billingDb.close();
 
     // Ambil orphan dari radcheck
@@ -525,11 +583,12 @@ router.post('/radius/sync-orphan-users', adminAuth, async (req, res) => {
       throw txErr;
     }
 
-    // Best-effort disconnect PPPoE on Mikrotik
+    // Best-effort disconnect PPPoE on Mikrotik (hanya NAS milik tenant)
     try {
       const routersDb = new sqlite3.Database(billingDbPath);
+      const t = tenantSqlFromRequest(req);
       const routers = await new Promise((resolve) => {
-        routersDb.all('SELECT * FROM routers ORDER BY id', [], (err, rows) => resolve(rows || []));
+        routersDb.all(`SELECT * FROM routers${t.where()} ORDER BY id`, [], (err, rows) => resolve(rows || []));
       });
       routersDb.close();
 
@@ -611,6 +670,7 @@ router.get('/radius/clients/api', adminAuth, async (req, res) => {
 router.post('/radius/clients/add', adminAuth, async (req, res) => {
   try {
     const { name, ipaddr, secret, nas_type, require_message_authenticator, comment } = req.body;
+    const tenantId = hasTenantContext() ? getTenantId() : null;
 
     // Validate
     const validation = validateClient({ name, ipaddr, secret });
@@ -618,30 +678,39 @@ router.post('/radius/clients/add', adminAuth, async (req, res) => {
       return res.json({ success: false, message: validation.errors.join(', ') });
     }
 
-    // Get existing clients
-    const clients = await parseClientsConfFromDB();
-
-    // Check duplicate name
-    if (clients.some(c => c.name === name.trim())) {
+    // Cek duplikat terhadap SEMUA client (bukan hanya milik tenant)
+    // Nama harus sudah valid (validateClient) — jangan normalisasi diam-diam
+    const safeName = String(name).trim();
+    if (!isValidClientName(safeName)) {
+      return res.json({
+        success: false,
+        message: validateClient({ name, ipaddr, secret }).errors.join(', ')
+      });
+    }
+    const allClients = await parseClientsConfFromDB({ all: true });
+    if (allClients.some(c => c.name === safeName)) {
       return res.json({ success: false, message: 'Client dengan nama tersebut sudah ada' });
     }
-
-    // Check duplicate IP
-    if (clients.some(c => c.ipaddr === ipaddr.trim())) {
+    if (allClients.some(c => c.ipaddr === ipaddr.trim())) {
       return res.json({ success: false, message: 'Client dengan IP tersebut sudah ada' });
     }
 
-    // Add new client
-    clients.push({
-      name: name.trim(),
+    const tenantClients = allClients.filter((c) =>
+      tenantId == null ? true : clientBelongsToTenant(c, tenantId)
+    );
+    tenantClients.push({
+      name: safeName,
       ipaddr: ipaddr.trim(),
       secret: secret.trim(),
       nas_type: nas_type || 'other',
       require_message_authenticator: require_message_authenticator || 'no',
-      comment: comment || null
+      comment: comment || null,
+      tenant_id: tenantId
     });
 
-    const saveResult = await writeClientsConfToDB(clients);
+    const saveResult = tenantId != null
+      ? await writeTenantClientsConfToDB(tenantClients, tenantId)
+      : await writeClientsConfToDB(tenantClients);
     const restartResult = restartFreeRADIUS();
 
     let message = 'Client berhasil ditambahkan';
@@ -651,7 +720,7 @@ router.post('/radius/clients/add', adminAuth, async (req, res) => {
     res.json({
       success: true,
       message,
-      client: clients[clients.length - 1],
+      client: tenantClients[tenantClients.length - 1],
       restart: restartResult,
       save: saveResult
     });
@@ -665,6 +734,7 @@ router.post('/radius/clients/add', adminAuth, async (req, res) => {
 router.post('/radius/clients/edit', adminAuth, async (req, res) => {
   try {
     const { oldName, name, ipaddr, secret, nas_type, require_message_authenticator, comment } = req.body;
+    const tenantId = hasTenantContext() ? getTenantId() : null;
 
     // Validate
     const validation = validateClient({ name, ipaddr, secret });
@@ -672,36 +742,47 @@ router.post('/radius/clients/edit', adminAuth, async (req, res) => {
       return res.json({ success: false, message: validation.errors.join(', ') });
     }
 
-    // Get existing clients
-    const clients = await parseClientsConfFromDB();
-
-    // Find client index
-    const clientIndex = clients.findIndex(c => c.name === oldName);
+    const allClients = await parseClientsConfFromDB({ all: true });
+    const clientIndex = allClients.findIndex(c => c.name === oldName);
     if (clientIndex === -1) {
       return res.json({ success: false, message: 'Client tidak ditemukan' });
     }
-
-    // Check duplicate name (if name changed)
-    if (name !== oldName && clients.some(c => c.name === name.trim() && c.name !== oldName)) {
-      return res.json({ success: false, message: 'Client dengan nama tersebut sudah ada' });
+    if (tenantId != null && !clientBelongsToTenant(allClients[clientIndex], tenantId)) {
+      return res.json({ success: false, message: 'Client bukan milik tenant ini' });
     }
 
-    // Check duplicate IP (if IP changed)
-    if (ipaddr !== clients[clientIndex].ipaddr && clients.some(c => c.ipaddr === ipaddr.trim() && c.name !== oldName)) {
+    const safeName = String(name).trim();
+    if (!isValidClientName(safeName)) {
+      return res.json({
+        success: false,
+        message: validateClient({ name, ipaddr, secret }).errors.join(', ')
+      });
+    }
+    if (safeName !== oldName && allClients.some(c => c.name === safeName && c.name !== oldName)) {
+      return res.json({ success: false, message: 'Client dengan nama tersebut sudah ada' });
+    }
+    if (ipaddr !== allClients[clientIndex].ipaddr && allClients.some(c => c.ipaddr === ipaddr.trim() && c.name !== oldName)) {
       return res.json({ success: false, message: 'Client dengan IP tersebut sudah ada' });
     }
 
-    // Update client
-    clients[clientIndex] = {
-      name: name.trim(),
-      ipaddr: ipaddr.trim(),
-      secret: secret.trim(),
-      nas_type: nas_type || 'other',
-      require_message_authenticator: require_message_authenticator || 'no',
-      comment: comment || null
-    };
+    const tenantClients = allClients
+      .filter((c) => (tenantId == null ? true : clientBelongsToTenant(c, tenantId)))
+      .map((c) => {
+        if (c.name !== oldName) return c;
+        return {
+          name: safeName,
+          ipaddr: ipaddr.trim(),
+          secret: secret.trim(),
+          nas_type: nas_type || 'other',
+          require_message_authenticator: require_message_authenticator || 'no',
+          comment: comment || null,
+          tenant_id: tenantId != null ? tenantId : c.tenant_id
+        };
+      });
 
-    const saveResult = await writeClientsConfToDB(clients);
+    const saveResult = tenantId != null
+      ? await writeTenantClientsConfToDB(tenantClients, tenantId)
+      : await writeClientsConfToDB(tenantClients);
     const restartResult = restartFreeRADIUS();
 
     let message = 'Client berhasil diupdate';
@@ -711,7 +792,7 @@ router.post('/radius/clients/edit', adminAuth, async (req, res) => {
     res.json({
       success: true,
       message,
-      client: clients[clientIndex],
+      client: tenantClients.find((c) => c.name === name.trim()),
       restart: restartResult,
       save: saveResult
     });
@@ -725,22 +806,28 @@ router.post('/radius/clients/edit', adminAuth, async (req, res) => {
 router.post('/radius/clients/delete', adminAuth, async (req, res) => {
   try {
     const { name } = req.body;
+    const tenantId = hasTenantContext() ? getTenantId() : null;
 
     if (!name) {
       return res.json({ success: false, message: 'Client name diperlukan' });
     }
 
-    // Get existing clients
-    const clients = await parseClientsConfFromDB();
-
-    // Filter out the client to delete
-    const filteredClients = clients.filter(c => c.name !== name);
-
-    if (filteredClients.length === clients.length) {
+    const allClients = await parseClientsConfFromDB({ all: true });
+    const target = allClients.find(c => c.name === name);
+    if (!target) {
       return res.json({ success: false, message: 'Client tidak ditemukan' });
     }
+    if (tenantId != null && !clientBelongsToTenant(target, tenantId)) {
+      return res.json({ success: false, message: 'Client bukan milik tenant ini' });
+    }
 
-    const saveResult = await writeClientsConfToDB(filteredClients);
+    const tenantClients = allClients
+      .filter((c) => (tenantId == null ? true : clientBelongsToTenant(c, tenantId)))
+      .filter((c) => c.name !== name);
+
+    const saveResult = tenantId != null
+      ? await writeTenantClientsConfToDB(tenantClients, tenantId)
+      : await writeClientsConfToDB(tenantClients);
     const restartResult = restartFreeRADIUS();
 
     let message = 'Client berhasil dihapus';

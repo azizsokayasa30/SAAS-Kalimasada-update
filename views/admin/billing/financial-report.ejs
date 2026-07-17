@@ -14,7 +14,7 @@
     <link href="/vendor/boxicons/boxicons.min.css" rel="stylesheet">
     <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
     <link href="/css/admin-mobile.css" rel="stylesheet">
-    <link href="/css/finance-modern.css" rel="stylesheet">
+    <link href="/css/finance-modern.css?v=1.0.1" rel="stylesheet">
 
     <%- include('../../partials/theme-head') %>
 </head>
@@ -154,9 +154,9 @@
                                     <% }); %>
                                     <tr class="f-pl-total-row"><td>Total Pengeluaran</td><td class="text-end fw-bold text-danger">Rp <%= Number(financialData.profitLossData.expenses.total || 0).toLocaleString('id-ID') %></td></tr>
                                     
-                                    <tr class="f-pl-category-row" style="background: <%= financialData.profitLossData.netProfit >= 0 ? 'var(--f-info-soft)' : 'var(--f-error-soft)' %>">
+                                    <tr class="f-pl-category-row <%= financialData.profitLossData.netProfit >= 0 ? 'f-pl-net-profit' : 'f-pl-net-loss' %>">
                                         <td>LABA BERSIH</td>
-                                        <td class="text-end fw-bold" style="color: <%= financialData.profitLossData.netProfit >= 0 ? 'var(--f-info)' : 'var(--f-error)' %>">
+                                        <td class="text-end fw-bold f-pl-net-amount">
                                             Rp <%= Number(financialData.profitLossData.netProfit || 0).toLocaleString('id-ID') %>
                                         </td>
                                     </tr>
@@ -225,7 +225,7 @@
                                                 <td class="small"><%= tx.description || tx.notes || '-' %></td>
                                                 <td>
                                                     <div class="d-flex flex-column small text-muted">
-                                                        <span class="fw-bold text-dark"><%= tx.invoice_number || '-' %></span>
+                                                        <span class="fw-bold text-theme"><%= tx.invoice_number || '-' %></span>
                                                         <span><%= tx.customer_name || tx.collector_name || '' %></span>
                                                     </div>
                                                 </td>

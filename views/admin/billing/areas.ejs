@@ -158,9 +158,17 @@
                     <h1><i class="bi bi-geo-alt-fill me-2"></i>Manajemen Area</h1>
                     <p>Kelola area / wilayah layanan pelanggan ISP Anda</p>
                 </div>
-                <button class="btn btn-light fw-semibold" id="btnTambahArea" style="border-radius: 10px; padding: 10px 20px;">
-                    <i class="bi bi-plus-lg me-1"></i> Tambah Area
-                </button>
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <a href="/admin/billing/areas/export.xlsx" class="btn btn-light fw-semibold" style="border-radius: 10px; padding: 10px 16px;" title="Export semua area ke Excel">
+                        <i class="bi bi-file-earmark-spreadsheet me-1"></i> Export
+                    </a>
+                    <button type="button" class="btn btn-light fw-semibold" id="btnImportArea" style="border-radius: 10px; padding: 10px 16px;" title="Import area dari Excel">
+                        <i class="bi bi-cloud-upload me-1"></i> Import
+                    </button>
+                    <button class="btn btn-light fw-semibold" id="btnTambahArea" style="border-radius: 10px; padding: 10px 20px;">
+                        <i class="bi bi-plus-lg me-1"></i> Tambah Area
+                    </button>
+                </div>
             </div>
         </div>
 
@@ -350,8 +358,8 @@
         <div class="modal-box-body">
             <input type="hidden" id="areaId">
             <div class="form-group">
-                <label for="kodeAreaInput">Kode Area <span class="text-muted fst-italic" style="font-weight:400">(opsional, misal: KLM-01)</span></label>
-                <input type="text" id="kodeAreaInput" placeholder="Contoh: KLM-01, BRT-02, TGH-03..." maxlength="20" style="text-transform: uppercase; font-family: monospace; letter-spacing: 0.05em;">
+                <label for="kodeAreaInput">Kode Area <span class="text-muted fst-italic" style="font-weight:400">(opsional — kosongkan untuk auto-generate dari nama)</span></label>
+                <input type="text" id="kodeAreaInput" placeholder="Kosongkan = otomatis, mis. KLIWONAN → KLN" maxlength="20" style="text-transform: uppercase; font-family: monospace; letter-spacing: 0.05em;">
                 <div class="form-error" id="errKodeArea">Kode area sudah digunakan</div>
             </div>
             <div class="form-group">
@@ -405,6 +413,38 @@
     </div>
 </div>
 
+<!-- ===================== MODAL IMPORT ===================== -->
+<div class="modal-overlay" id="modalImportArea">
+    <div class="modal-box" style="max-width: 560px;">
+        <div class="modal-box-header">
+            <h5 class="modal-box-title"><i class="bi bi-cloud-upload me-2 text-primary"></i>Import Area dari Excel</h5>
+            <button type="button" onclick="closeImportModal()" style="background:transparent;border:none;font-size:1.2rem;color:var(--text-tertiary,#64748b);cursor:pointer;">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+        <div class="modal-box-body">
+            <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
+                <a href="/admin/billing/areas/import/template" class="btn btn-outline-success btn-sm" download="template-import-area.xlsx">
+                    <i class="bi bi-download me-1"></i> Unduh Template Excel
+                </a>
+                <small class="text-muted">Format kolom sama dengan Export. Lihat lembar &quot;Petunjuk&quot; di template.</small>
+            </div>
+            <div class="form-group mb-0">
+                <label for="importAreaFile">Pilih File Excel (.xlsx)</label>
+                <input type="file" id="importAreaFile" accept="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx" class="form-control" style="padding:8px 12px;">
+                <small class="text-muted d-block mt-2">Area dengan nama yang sama akan diperbarui. Nama area baru akan ditambahkan otomatis.</small>
+            </div>
+            <div id="importAreaResult" class="mt-3 d-none" style="font-size:0.85rem; padding:12px 14px; border-radius:8px;"></div>
+        </div>
+        <div class="modal-box-footer">
+            <button type="button" class="btn btn-light" onclick="closeImportModal()" style="border-radius:8px;">Batal</button>
+            <button type="button" class="btn btn-primary fw-semibold" id="btnSubmitImportArea" style="border-radius:8px; min-width:120px;">
+                <i class="bi bi-upload me-1"></i> Import
+            </button>
+        </div>
+    </div>
+</div>
+
 <!-- Toast Container -->
 <div class="toast-container-custom" id="toastContainer"></div>
 
@@ -427,6 +467,83 @@ function openTambahModal() {
 }
 
 document.getElementById('btnTambahArea').addEventListener('click', openTambahModal);
+
+// ===================== IMPORT AREA =====================
+function openImportModal() {
+    document.getElementById('importAreaFile').value = '';
+    var result = document.getElementById('importAreaResult');
+    result.classList.add('d-none');
+    result.textContent = '';
+    document.getElementById('modalImportArea').classList.add('show');
+}
+
+function closeImportModal() {
+    document.getElementById('modalImportArea').classList.remove('show');
+}
+
+document.getElementById('btnImportArea').addEventListener('click', openImportModal);
+
+document.getElementById('btnSubmitImportArea').addEventListener('click', async function() {
+    var fileInput = document.getElementById('importAreaFile');
+    var resultEl = document.getElementById('importAreaResult');
+    var btn = this;
+
+    if (!fileInput.files || !fileInput.files[0]) {
+        showToast('Pilih file Excel terlebih dahulu.', 'warning');
+        fileInput.focus();
+        return;
+    }
+
+    var formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Mengimpor...';
+    resultEl.classList.add('d-none');
+
+    try {
+        var res = await fetch('/admin/billing/areas/import', {
+            method: 'POST',
+            body: formData
+        });
+        var data = await res.json();
+
+        if (data.success) {
+            var s = data.summary || {};
+            var msg = (data.message || 'Import berhasil.') +
+                (s.errors && s.errors.length ? '\n\n' + s.errors.slice(0, 5).join('\n') : '');
+            resultEl.style.background = 'rgba(22,163,74,0.1)';
+            resultEl.style.color = '#166534';
+            resultEl.style.border = '1px solid rgba(22,163,74,0.25)';
+            resultEl.textContent = msg;
+            resultEl.classList.remove('d-none');
+            showToast('Import area selesai!', 'success');
+            setTimeout(function() {
+                closeImportModal();
+                var url = new URL(window.location.href);
+                url.searchParams.set('_t', Date.now());
+                window.location.href = url.toString();
+            }, 1200);
+        } else {
+            var errMsg = data.message || 'Gagal import area.';
+            if (data.summary && data.summary.errors && data.summary.errors.length) {
+                errMsg += '\n' + data.summary.errors.slice(0, 5).join('\n');
+            }
+            resultEl.style.background = 'rgba(220,38,38,0.08)';
+            resultEl.style.color = '#b91c1c';
+            resultEl.style.border = '1px solid rgba(220,38,38,0.2)';
+            resultEl.textContent = errMsg;
+            resultEl.classList.remove('d-none');
+            showToast(data.message || 'Import gagal.', 'error');
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-upload me-1"></i> Import';
+        }
+    } catch (e) {
+        showToast('Terjadi kesalahan koneksi.', 'error');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-upload me-1"></i> Import';
+    }
+});
 
 // ===================== MODAL EDIT =====================
 function openEditModalFromBtn(btn) {
@@ -631,6 +748,9 @@ document.getElementById('modalArea').addEventListener('click', function(e) {
 });
 document.getElementById('modalHapus').addEventListener('click', function(e) {
     if (e.target === this) closeHapusModal();
+});
+document.getElementById('modalImportArea').addEventListener('click', function(e) {
+    if (e.target === this) closeImportModal();
 });
 
 // Enter key to save

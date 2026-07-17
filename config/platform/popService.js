@@ -344,6 +344,46 @@ async function listActivePops() {
     );
 }
 
+/**
+ * Pastikan FreeRADIUS lokal di VPS terdaftar di Radius Manager
+ * agar dashboard bisa memonitor mesin FreeRADIUS Kalimasada.
+ */
+async function ensureLocalRadiusServer() {
+    await ensurePopSchema();
+
+    const localHosts = ['127.0.0.1', 'localhost', '::1'];
+    const existingLocal = await tenantStore.dbGet(
+        `SELECT id FROM platform_pop_radius_servers
+         WHERE lower(host) IN (${localHosts.map(() => '?').join(',')})
+         LIMIT 1`,
+        localHosts
+    );
+    if (existingLocal) return getRadiusServerById(existingLocal.id);
+
+    let pop = await tenantStore.dbGet(
+        `SELECT id FROM platform_pops WHERE upper(code) IN ('HQ', 'VPS', 'PUSAT') LIMIT 1`
+    );
+    if (!pop) {
+        pop = await createPop({
+            code: 'HQ',
+            name: 'VPS Pusat',
+            location: 'Central VPS',
+            description: 'POP virtual untuk infrastruktur pusat di VPS management',
+            is_active: '1',
+        });
+    }
+
+    return createRadiusServer({
+        pop_id: pop.id,
+        name: 'FreeRADIUS VPS Pusat',
+        host: '127.0.0.1',
+        auth_port: 1812,
+        acct_port: 1813,
+        description: 'FreeRADIUS lokal di VPS management Kalimasada',
+        is_active: '1',
+    });
+}
+
 module.exports = {
     ensurePopSchema,
     listPops,
@@ -361,5 +401,6 @@ module.exports = {
     createRadiusServer,
     updateRadiusServer,
     deleteRadiusServer,
+    ensureLocalRadiusServer,
     listActivePops,
 };

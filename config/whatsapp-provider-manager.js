@@ -25,30 +25,47 @@ class WhatsAppProviderManager {
 
     async _createProvider(type, options = {}) {
         if (type === 'wablas') {
-            if (!validateWablasConfig()) {
+            const wablasConfig = options.wablasConfig || getWablasConfig();
+            if (!validateWablasConfig(wablasConfig)) {
                 throw new Error('Wablas config is invalid');
             }
-            this.provider = new WablasProvider();
+            this.provider = new WablasProvider(wablasConfig);
             this.providerType = 'wablas';
             await this.provider.initialize();
             return this.provider;
         }
 
         if (type === 'meta') {
-            if (!validateProviderConfig('meta')) {
-                throw new Error('Meta Cloud API config is invalid');
+            const metaConfig = options.metaConfig || null;
+            if (metaConfig) {
+                if (!metaConfig.accessToken || !metaConfig.phoneNumberId) {
+                    throw new Error('Meta Cloud API config is invalid');
+                }
+                this.provider = new MetaProvider(metaConfig);
+            } else {
+                if (!validateProviderConfig('meta')) {
+                    throw new Error('Meta Cloud API config is invalid');
+                }
+                this.provider = new MetaProvider();
             }
-            this.provider = new MetaProvider();
             this.providerType = 'meta';
             await this.provider.initialize();
             return this.provider;
         }
 
         if (type === 'qontak') {
-            if (!validateProviderConfig('qontak')) {
-                throw new Error('Qontak config is invalid');
+            const qontakConfig = options.qontakConfig || null;
+            if (qontakConfig) {
+                if (!qontakConfig.accessToken || !qontakConfig.channelIntegrationId) {
+                    throw new Error('Qontak config is invalid');
+                }
+                this.provider = new QontakProvider(qontakConfig);
+            } else {
+                if (!validateProviderConfig('qontak')) {
+                    throw new Error('Qontak config is invalid');
+                }
+                this.provider = new QontakProvider();
             }
-            this.provider = new QontakProvider();
             this.providerType = 'qontak';
             await this.provider.initialize();
             return this.provider;

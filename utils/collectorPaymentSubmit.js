@@ -180,9 +180,13 @@ async function submitCollectorPayment(opts) {
     }
     if (invoiceTargets.allAlreadyRecorded) {
         const firstExisting = invoiceTargets.existingPaymentIds[0] || null;
+        const paidInvoiceIds = invoiceTargets.targets.map((t) => t.invoiceId).filter(Boolean);
+        const paymentIds = invoiceTargets.existingPaymentIds.filter(Boolean);
         return {
             ok: true,
             payment_id: firstExisting,
+            payment_ids: paymentIds,
+            paid_invoice_ids: paidInvoiceIds,
             commission_amount: commissionAmount,
             already_recorded: true,
             message: 'Pembayaran sudah tercatat sebelumnya (tidak diduplikasi).'
@@ -210,6 +214,8 @@ async function submitCollectorPayment(opts) {
     }
 
     let lastPaymentId = null;
+    const paymentIds = [];
+    const paidInvoiceIds = [];
     let proofAttached = false;
     const baseNotes = notes && String(notes).trim() ? String(notes).trim() : '';
     const discountNote =
@@ -224,6 +230,8 @@ async function submitCollectorPayment(opts) {
         const invoiceId = target.invoiceId;
         if (target.skip) {
             lastPaymentId = target.existingPaymentId || lastPaymentId;
+            if (target.existingPaymentId) paymentIds.push(target.existingPaymentId);
+            if (invoiceId) paidInvoiceIds.push(invoiceId);
             isFirst = false;
             continue;
         }
@@ -232,6 +240,8 @@ async function submitCollectorPayment(opts) {
         const dup = await billingManager.getCollectorPaymentForInvoice(invoiceId, collectorId);
         if (dup) {
             lastPaymentId = dup.id || lastPaymentId;
+            if (dup.id) paymentIds.push(dup.id);
+            if (invoiceId) paidInvoiceIds.push(invoiceId);
             isFirst = false;
             continue;
         }
@@ -248,6 +258,8 @@ async function submitCollectorPayment(opts) {
         });
         lastPaymentId = newPayment?.id || lastPaymentId;
         if (newPayment?.id) {
+            paymentIds.push(newPayment.id);
+            paidInvoiceIds.push(invoiceId);
             if (isTransfer && paymentProofRelativePath && !proofAttached) {
                 await billingManager.updatePaymentProof(newPayment.id, paymentProofRelativePath);
                 proofAttached = true;
@@ -260,17 +272,30 @@ async function submitCollectorPayment(opts) {
     }
 
     // Notifikasi jangan await — blokir respons HTTP (Flutter / fetch) padahal DB sudah selesai.
-    if (lastPaymentId) {
+    if (paymentIds.length > 0) {
+        const notifyPaymentIds = [...paymentIds];
         setImmediate(() => {
             (async () => {
                 try {
-                    await whatsappNotifications.sendPaymentReceivedNotification(lastPaymentId);
+                    if (notifyPaymentIds.length > 1) {
+                        await whatsappNotifications.sendCollectorBatchPaymentReceivedNotification(
+                            notifyPaymentIds
+                        );
+                    } else {
+                        await whatsappNotifications.sendPaymentReceivedNotification(notifyPaymentIds[0]);
+                    }
                 } catch (notificationError) {
                     console.error('Error sending payment WhatsApp (background):', notificationError);
                 }
                 try {
                     const emailNotifications = require('../config/email-notifications');
-                    await emailNotifications.sendPaymentReceivedNotification(lastPaymentId);
+                    if (notifyPaymentIds.length > 1 && typeof emailNotifications.sendCollectorBatchPaymentReceivedNotification === 'function') {
+                        await emailNotifications.sendCollectorBatchPaymentReceivedNotification(
+                            notifyPaymentIds
+                        );
+                    } else {
+                        await emailNotifications.sendPaymentReceivedNotification(notifyPaymentIds[0]);
+                    }
                 } catch (notificationError) {
                     console.error('Error sending payment email (background):', notificationError);
                 }
@@ -332,7 +357,13 @@ async function submitCollectorPayment(opts) {
         status: 'completed'
     });
 
-    return { ok: true, payment_id: paymentId?.id || lastPaymentId, commission_amount: commissionAmount };
+    return {
+        ok: true,
+        payment_id: paymentId?.id || lastPaymentId,
+        payment_ids: paymentIds,
+        paid_invoice_ids: paidInvoiceIds,
+        commission_amount: commissionAmount
+    };
 }
 
 module.exports = {

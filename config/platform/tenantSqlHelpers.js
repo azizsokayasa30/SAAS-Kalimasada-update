@@ -22,9 +22,19 @@ function tWhere(alias = '') {
     return ` WHERE ${col} = ${parseInt(t.params[0], 10)}`;
 }
 
-/** tenant_id untuk INSERT (dengan konteks tenant). */
-function tenantIdForInsert() {
-    return hasTenantContext() ? getTenantId() : 1;
+/**
+ * tenant_id untuk INSERT — tangkap SINKRON sebelum await/callback sqlite.
+ * Prefer billingManager._resolveTenantIdForInsert agar perilaku seragam.
+ */
+function tenantIdForInsert(explicitTenantId = null) {
+    if (explicitTenantId != null && Number.isFinite(Number(explicitTenantId))) {
+        return parseInt(explicitTenantId, 10);
+    }
+    try {
+        return billingManager._resolveTenantIdForInsert(explicitTenantId);
+    } catch (_) {
+        return hasTenantContext() ? getTenantId() : 1;
+    }
 }
 
 /** SQL tenant dari req.tenantId (aman di dalam callback sqlite). */

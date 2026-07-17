@@ -8,7 +8,7 @@ function loadMinimalTenantDefaults() {
     return {
         admin_username: 'admin',
         timezone: 'Asia/Jakarta',
-        user_auth_mode: 'mikrotik',
+        user_auth_mode: 'radius',
         server_port: String(process.env.PORT || '3003'),
         otp_length: '4',
         otp_expiry_minutes: '5',

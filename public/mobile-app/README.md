@@ -1,28 +1,29 @@
-# Pembaruan aplikasi Flutter (Kalimasada Mobile)
+# Mobile App — Build & OTA
 
-Aplikasi memeriksa `GET {API_URL}/api/mobile-adapter/app-update/manifest` (tanpa JWT). Respons memakai `data.version`, `data.build_number`, `data.apk_url`, `data.release_notes`.
+Panel: **Management → Mobile App** (`/management/mobile-app`)
 
-## Build dari panel admin (disarankan)
+Satu APK Flutter unified (`billing_kalimasada_mobile`) untuk semua tenant. Pengguna memilih tenant saat login.
 
-1. Pasang Flutter SDK di `public/mobile-app/flutter-sdk/` (lihat `FLUTTER-SDK-INSTALL.md`).
-2. Buka **Admin → Settingan → Tool Android**, sesuaikan `.env`, versi, nama app.
-3. Klik **Build APK Release** — APK dan `manifest.json` di folder ini diperbarui otomatis untuk OTA.
+## URL
 
-## Cara deploy manual setelah `git pull`
+| Host | Peran |
+|------|--------|
+| `https://mobile.kalimasada-app.com` | Hub API mobile + OTA (`X-Tenant`) |
+| `https://manage.kalimasada-app.com` | Portal Super Admin |
+| `https://{tenant}.kalimasada-app.com` | Web login per tenant |
 
-1. **Bangun APK** (di mesin dev, dari folder `billing_kalimasada_mobile`):
+## Alur singkat
 
-   ```bash
-   flutter build apk --release
-   ```
+1. Pastikan status **Server Siap**.
+2. Isi `API_URL` = `https://mobile.kalimasada-app.com`, nama app, versi, catatan rilis.
+3. **Simpan konfigurasi** lalu **Build APK Release**.
+4. Setelah sukses, unduh APK atau biarkan pengguna update OTA dari dalam app.
 
-2. **Salin APK** ke folder ini dengan nama yang sama dengan `apk_url` di manifest (mis. `kalimasada-mobile-5.8.6.apk`).
+## OTA
 
-3. **Tulis `manifest.json`** di folder ini (file ini di-ignore Git; salin dari `manifest.example.json` lalu sesuaikan versi dan catatan rilis). Contoh `apk_url` relatif ke origin API:
+- Manifest: `https://mobile.kalimasada-app.com/api/mobile-adapter/app-update/manifest`
+- File: `public/mobile-app/manifest.json` + `*.apk`
 
-   - `"apk_url": "/mobile-app/kalimasada-mobile-5.8.6.apk"`  
-     → unduhan dari `https://<host-billing>/mobile-app/kalimasada-mobile-5.8.6.apk`
+## Setup server (sekali)
 
-4. **Restart** proses Node / PM2 agar rute statis `public/` ikut melayani file baru.
-
-Alternatif: isi pengaturan `mobile_app_version`, `mobile_app_build`, `mobile_app_apk_url`, `mobile_app_release_notes` di `settings.json` server — manifest dari file akan dipakai hanya jika `public/mobile-app/manifest.json` tidak valid / kosong (lihat `routes/api/mobileAdapter.js`).
+Lihat `FLUTTER-SDK-INSTALL.md` dan `setup-android-build.sh`.

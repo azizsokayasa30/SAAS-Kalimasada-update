@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { getSetting, setSetting } = require('../config/settingsManager');
-const { getPublicAppBaseUrl } = require('../config/public-endpoint');
+const { getPublicAppBaseUrl, getMobileApiBaseUrl } = require('../config/public-endpoint');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 const MOBILE_DIR = path.join(PROJECT_ROOT, 'billing_kalimasada_mobile');
@@ -20,11 +20,25 @@ const PUB_CACHE_DIR = path.join(PUBLIC_APK_DIR, '.pub-cache');
 const KEYSTORE_DIR = path.join(PUBLIC_APK_DIR, 'keystore');
 const KEYSTORE_FILE = path.join(KEYSTORE_DIR, 'kalimasada.jks');
 const KEY_PROPERTIES_PATH = path.join(MOBILE_DIR, 'android/key.properties');
-/** SHA-256 sertifikat APK produksi 5.9.2 (build Windows) — wajib sama agar bisa update OTA. */
+/** SHA-256 sertifikat APK produksi lama (Windows 5.9.2) — fallback jika settings belum di-set. */
 const PRODUCTION_CERT_SHA256 = 'e2eb457739d49234a2b0bae4123deb166376e102bd6b2a8de666c42b095f0825';
 const MIN_KNOWN_PRODUCTION_BUILD = 91;
 const OTA_LATEST_APK_NAME = 'kalimasada-mobile-latest.apk';
 const BUILD_STATUS_PATH = path.join(PROJECT_ROOT, 'data/mobile-android-build.json');
+
+function getExpectedCertSha256() {
+    const fromSettings = normalizeSha256(getSetting('mobile_android_expected_cert_sha256', '') || '');
+    return fromSettings || PRODUCTION_CERT_SHA256;
+}
+
+function setExpectedCertSha256(sha256) {
+    const n = normalizeSha256(sha256);
+    if (!n || n.length !== 64) {
+        throw new Error('SHA-256 sertifikat tidak valid');
+    }
+    setSetting('mobile_android_expected_cert_sha256', n);
+    return n;
+}
 
 /** APK universal (arm + arm64 + x86_64) — ~70 MB, kompatibel semua perangkat Android. */
 const BUILD_APK_ARGS = ['build', 'apk', '--release', '--no-pub'];
@@ -62,6 +76,7 @@ function readKeystoreConfig() {
 
 function readKeystoreStatus() {
     const cfg = readKeystoreConfig();
+    const expected = getExpectedCertSha256();
     const exists = fs.existsSync(cfg.storeFile);
     if (!exists) {
         return {
@@ -69,21 +84,25 @@ function readKeystoreStatus() {
             path: cfg.storeFile,
             matches_production: false,
             sha256: '',
+            expected_sha256: expected,
+            can_bootstrap: true,
             message:
-                'Keystore belum ada. Salin debug.keystore dari PC Windows (tempat build 5.9.2) ke: public/mobile-app/keystore/kalimasada.jks'
+                'Keystore belum ada. Buat keystore baru dari panel, atau salin file produksi ke public/mobile-app/keystore/kalimasada.jks'
         };
     }
     try {
         const sha256 = readKeystoreCertSha256(cfg.storeFile, cfg.storePassword);
-        const matches = sha256 === PRODUCTION_CERT_SHA256;
+        const matches = sha256 === expected;
         return {
             ready: true,
             path: cfg.storeFile,
             matches_production: matches,
             sha256,
+            expected_sha256: expected,
+            can_bootstrap: false,
             message: matches
-                ? 'Keystore cocok dengan APK produksi — update OTA aman.'
-                : 'Keystore TIDAK sama dengan APK produksi. Ganti file di public/mobile-app/keystore/kalimasada.jks (salin dari PC Windows).'
+                ? 'Keystore cocok — signing & update OTA aman.'
+                : 'Keystore tidak cocok dengan sertifikat yang diharapkan. Ganti file keystore, atau adopsi SHA keystore ini sebagai baseline baru (perangkat lama harus install ulang).'
         };
     } catch (e) {
         return {
@@ -91,21 +110,87 @@ function readKeystoreStatus() {
             path: cfg.storeFile,
             matches_production: false,
             sha256: '',
+            expected_sha256: expected,
+            can_bootstrap: true,
             message: `Keystore tidak bisa dibaca: ${e.message}. Periksa password/alias di settings.`
         };
     }
 }
 
+/**
+ * Buat keystore release baru (sekali) dan jadikan SHA-nya baseline OTA server ini.
+ * Perangkat yang sudah terpasang APK lama (sertifikat berbeda) harus install ulang.
+ */
+function bootstrapKeystore(options = {}) {
+    const cfg = readKeystoreConfig();
+    const force = options.force === true;
+    if (fs.existsSync(cfg.storeFile) && !force) {
+        const st = readKeystoreStatus();
+        if (st.ready && st.matches_production) return st;
+        if (st.ready && st.sha256) {
+            setExpectedCertSha256(st.sha256);
+            return readKeystoreStatus();
+        }
+    }
+
+    const { execFileSync } = require('child_process');
+    if (!fs.existsSync(KEYSTORE_DIR)) fs.mkdirSync(KEYSTORE_DIR, { recursive: true });
+    if (fs.existsSync(cfg.storeFile) && force) {
+        fs.renameSync(cfg.storeFile, `${cfg.storeFile}.bak-${Date.now()}`);
+    }
+
+    execFileSync(
+        'keytool',
+        [
+            '-genkeypair',
+            '-v',
+            '-keystore', cfg.storeFile,
+            '-alias', cfg.keyAlias,
+            '-keyalg', 'RSA',
+            '-keysize', '2048',
+            '-validity', '10000',
+            '-storepass', cfg.storePassword,
+            '-keypass', cfg.keyPassword,
+            '-dname', 'CN=Kalimasada Mobile, OU=Mobile, O=Kalimasada Inti Sarana, L=Jakarta, ST=DKI, C=ID'
+        ],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+
+    const sha256 = readKeystoreCertSha256(cfg.storeFile, cfg.storePassword);
+    setExpectedCertSha256(sha256);
+    setSetting('mobile_android_keystore_path', cfg.storeFile);
+    setSetting('mobile_android_keystore_password', cfg.storePassword);
+    setSetting('mobile_android_key_alias', cfg.keyAlias);
+    setSetting('mobile_android_key_password', cfg.keyPassword);
+
+    return readKeystoreStatus();
+}
+
+function adoptCurrentKeystoreAsBaseline() {
+    const st = readKeystoreStatus();
+    if (!st.ready || !st.sha256) {
+        throw new Error(st.message || 'Keystore belum siap untuk diadopsi');
+    }
+    setExpectedCertSha256(st.sha256);
+    return readKeystoreStatus();
+}
+
 function writeAndroidKeyProperties() {
     const cfg = readKeystoreConfig();
-    const st = readKeystoreStatus();
+    let st = readKeystoreStatus();
     if (!st.ready) {
         throw new Error(st.message);
     }
     if (!st.matches_production) {
-        throw new Error(
-            `${st.message} Path: ${cfg.storeFile}`
-        );
+        // Auto-adopsi sekali jika belum pernah set baseline di settings (server baru).
+        const hasCustomBaseline = !!normalizeSha256(getSetting('mobile_android_expected_cert_sha256', '') || '');
+        if (!hasCustomBaseline && st.sha256) {
+            setExpectedCertSha256(st.sha256);
+            st = readKeystoreStatus();
+        }
+    }
+    if (!st.matches_production) {
+        throw new Error(`${st.message} Path: ${cfg.storeFile}`);
     }
     const dir = path.dirname(KEY_PROPERTIES_PATH);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -179,12 +264,12 @@ function validateBuiltApk(apkPath) {
             const m = out.match(/SHA-256 digest:\s*([a-f0-9]+)/i);
             if (m) {
                 const fp = m[1].toLowerCase();
-                if (fp !== PRODUCTION_CERT_SHA256) {
+                if (fp !== getExpectedCertSha256()) {
                     throw new Error(
-                        'Sertifikat APK tidak sama dengan produksi 5.9.2 — instal/update akan gagal. Periksa keystore.'
+                        'Sertifikat APK tidak sama dengan baseline OTA — instal/update akan gagal. Periksa keystore.'
                     );
                 }
-                appendBuildLog('Sertifikat APK cocok dengan produksi (sama dengan 5.9.2).');
+                appendBuildLog('Sertifikat APK cocok dengan baseline OTA.');
             }
         }
     } catch (e) {
@@ -322,6 +407,107 @@ function writePubspecVersion(versionName, versionCode) {
     return { versionName: vn, versionCode: vc };
 }
 
+function detectJavaHome() {
+    const candidates = [
+        String(process.env.JAVA_HOME || '').trim(),
+        '/usr/lib/jvm/java-17-openjdk-amd64',
+        '/usr/lib/jvm/java-17-openjdk',
+        '/usr/lib/jvm/java-21-openjdk-amd64'
+    ].filter(Boolean);
+    for (const home of candidates) {
+        const javaBin = path.join(home, 'bin/java');
+        if (fs.existsSync(javaBin)) {
+            return { ready: true, path: home, java: javaBin };
+        }
+    }
+    try {
+        const { execFileSync } = require('child_process');
+        const which = execFileSync('which', ['java'], { encoding: 'utf8' }).trim();
+        if (which) return { ready: true, path: process.env.JAVA_HOME || '', java: which };
+    } catch (_) {}
+    return { ready: false, path: '', java: '' };
+}
+
+function detectAndroidSdk() {
+    const candidates = [
+        String(process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || '').trim(),
+        DEFAULT_ANDROID_SDK_PATH
+    ].filter(Boolean);
+    for (const sdk of candidates) {
+        const platformTools = path.join(sdk, 'platform-tools');
+        const hasSdkManager =
+            fs.existsSync(path.join(sdk, 'cmdline-tools/latest/bin/sdkmanager')) ||
+            fs.existsSync(path.join(sdk, 'cmdline-tools/bin/sdkmanager'));
+        const hasPlatforms = fs.existsSync(path.join(sdk, 'platforms'));
+        if (fs.existsSync(sdk) && (hasSdkManager || hasPlatforms || fs.existsSync(platformTools))) {
+            return {
+                ready: hasPlatforms || hasSdkManager,
+                path: sdk,
+                has_sdkmanager: hasSdkManager,
+                has_platforms: hasPlatforms
+            };
+        }
+    }
+    return { ready: false, path: DEFAULT_ANDROID_SDK_PATH, has_sdkmanager: false, has_platforms: false };
+}
+
+function readBuildReadiness() {
+    const flutter = detectFlutterBinary(resolveFlutterPathSetting(getSetting('mobile_android_flutter_path', '')));
+    const java = detectJavaHome();
+    const android = detectAndroidSdk();
+    const keystore = readKeystoreStatus();
+    const envOk = fs.existsSync(ENV_PATH) && !!readEnvApiUrl();
+    const projectOk = fs.existsSync(MOBILE_DIR) && fs.existsSync(PUBSPEC_PATH);
+    const items = [
+        {
+            id: 'project',
+            label: 'Sumber Flutter (billing_kalimasada_mobile)',
+            ready: projectOk,
+            detail: projectOk ? MOBILE_DIR : 'Folder project tidak ditemukan'
+        },
+        {
+            id: 'flutter',
+            label: 'Flutter SDK',
+            ready: !!flutter.exists,
+            detail: flutter.exists ? flutter.path : 'Belum terpasang — lihat public/mobile-app/FLUTTER-SDK-INSTALL.md'
+        },
+        {
+            id: 'java',
+            label: 'Java JDK 17',
+            ready: !!java.ready,
+            detail: java.ready ? (java.path || java.java) : 'Belum terpasang — jalankan setup-android-build.sh'
+        },
+        {
+            id: 'android_sdk',
+            label: 'Android SDK',
+            ready: !!android.ready,
+            detail: android.ready ? android.path : 'Belum terpasang — jalankan public/mobile-app/setup-android-build.sh'
+        },
+        {
+            id: 'keystore',
+            label: 'Keystore signing',
+            ready: !!(keystore.ready && keystore.matches_production),
+            detail: keystore.message
+        },
+        {
+            id: 'env',
+            label: 'File .env (API_URL)',
+            ready: envOk,
+            detail: envOk ? readEnvApiUrl() : 'Belum ada — simpan konfigurasi API_URL dari panel'
+        }
+    ];
+    const ready = items.every((i) => i.ready);
+    return {
+        ready,
+        can_build: ready,
+        items,
+        flutter,
+        java,
+        android_sdk: android,
+        keystore
+    };
+}
+
 function readMobileBuildConfig() {
     const pubspec = fs.existsSync(PUBSPEC_PATH) ? fs.readFileSync(PUBSPEC_PATH, 'utf8') : '';
     const ver = parsePubspecVersion(pubspec);
@@ -336,8 +522,12 @@ function readMobileBuildConfig() {
     const suggestedApi =
         readEnvApiUrl() ||
         String(getSetting('mobile_android_default_api_url', '') || '').trim() ||
+        getMobileApiBaseUrl() ||
         getPublicAppBaseUrl() ||
         '';
+
+    const mobileApiBase = getMobileApiBaseUrl() || getPublicAppBaseUrl();
+    const readiness = readBuildReadiness();
 
     return {
         api_url: suggestedApi,
@@ -352,14 +542,18 @@ function readMobileBuildConfig() {
         flutter_path: resolveFlutterPathSetting(getSetting('mobile_android_flutter_path', '')),
         flutter_path_default: getDefaultFlutterSdkPath(),
         apk_publish_dir: PUBLIC_APK_DIR,
-        ota_manifest_url: `${getPublicAppBaseUrl()}/api/mobile-adapter/app-update/manifest`,
+        ota_manifest_url: `${mobileApiBase}/api/mobile-adapter/app-update/manifest`,
+        mobile_api_base_url: mobileApiBase,
         project_dir: MOBILE_DIR,
         env_path: ENV_PATH,
         pubspec_path: PUBSPEC_PATH,
         manifest_publish_path: manifestPath,
         build_status: readBuildStatus().status || 'idle',
-        flutter_detected: detectFlutterBinary(resolveFlutterPathSetting(getSetting('mobile_android_flutter_path', ''))),
-        keystore: readKeystoreStatus(),
+        flutter_detected: readiness.flutter,
+        java_detected: readiness.java,
+        android_sdk_detected: readiness.android_sdk,
+        keystore: readiness.keystore,
+        readiness,
         min_build_number: resolveMinimumBuildNumber() + 1,
         latest_apk_files: listPublishedApks()
     };
@@ -466,18 +660,47 @@ function saveMobileBuildConfig(input) {
         setSetting('mobile_android_default_api_url', apiUrl);
     }
 
+    if (input.release_notes != null) {
+        setSetting('mobile_app_release_notes', String(input.release_notes || '').trim());
+    }
+
     let manifest = null;
-    if (input.update_manifest !== false) {
+    // Jangan publish OTA rusak: hanya update manifest jika APK target sudah ada,
+    // atau jika update_manifest dipaksa true setelah build sukses.
+    if (input.update_manifest === true) {
         const apkName =
             input.apk_file_name ||
             `kalimasada-mobile-${versionName}.apk`;
-        manifest = writePublishManifest({
-            versionName,
-            versionCode,
-            apkFileName: apkName,
-            releaseNotes: input.release_notes,
-            forceUpdate: input.force_update
-        });
+        const apkPath = path.join(PUBLIC_APK_DIR, apkName);
+        const latestPath = path.join(PUBLIC_APK_DIR, OTA_LATEST_APK_NAME);
+        if (fs.existsSync(apkPath) || fs.existsSync(latestPath) || input.force_publish_manifest === true) {
+            manifest = writePublishManifest({
+                versionName,
+                versionCode,
+                apkFileName: fs.existsSync(apkPath) ? apkName : (fs.existsSync(latestPath) ? OTA_LATEST_APK_NAME : apkName),
+                releaseNotes: input.release_notes,
+                forceUpdate: input.force_update
+            });
+        } else {
+            // Simpan force_update / notes ke settings saja; manifest ditulis saat build selesai.
+            setSetting('mobile_app_version', versionName);
+            setSetting('mobile_app_build', String(versionCode));
+            if (input.force_update != null) {
+                const manifestPath = path.join(PUBLIC_APK_DIR, 'manifest.json');
+                if (fs.existsSync(manifestPath)) {
+                    try {
+                        const existing = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+                        existing.version = versionName;
+                        existing.build_number = versionCode;
+                        existing.release_notes =
+                            String(input.release_notes || '').trim() || existing.release_notes || 'Pembaruan aplikasi mobile.';
+                        existing.force_update = !!input.force_update;
+                        fs.writeFileSync(manifestPath, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+                        manifest = existing;
+                    } catch (_) {}
+                }
+            }
+        }
     }
 
     return {
@@ -594,7 +817,7 @@ async function startAndroidApkBuild(options = {}) {
     }
 
     writeAndroidKeyProperties();
-    appendBuildLog('Keystore produksi OK — signing release dengan sertifikat yang sama seperti 5.9.2');
+    appendBuildLog('Keystore OK — signing release dengan sertifikat baseline OTA');
 
     saveMobileBuildConfig({
         api_url: options.api_url || cfg.api_url,
@@ -606,6 +829,17 @@ async function startAndroidApkBuild(options = {}) {
         flutter_path: options.flutter_path || cfg.flutter_path,
         update_manifest: false
     });
+
+    const readiness = readBuildReadiness();
+    if (!readiness.flutter.exists) {
+        throw new Error(readiness.items.find((i) => i.id === 'flutter')?.detail || 'Flutter SDK belum siap');
+    }
+    if (!readiness.java.ready) {
+        throw new Error('Java JDK 17 belum siap. Jalankan public/mobile-app/setup-android-build.sh');
+    }
+    if (!readiness.android_sdk.ready) {
+        throw new Error('Android SDK belum siap. Jalankan public/mobile-app/setup-android-build.sh');
+    }
 
     appendBuildLog(`Memulai build APK v${versionName}+${versionCode}`);
     appendBuildLog(`Flutter: ${flutterPath}`);
@@ -642,8 +876,9 @@ async function startAndroidApkBuild(options = {}) {
             forceUpdate: !!options.force_update
         });
 
-        const otaApkAbs = `${getPublicAppBaseUrl()}${manifest.apk_url}`;
-        const otaManifestAbs = `${getPublicAppBaseUrl()}/api/mobile-adapter/app-update/manifest`;
+        const mobileApiBase = getMobileApiBaseUrl() || getPublicAppBaseUrl();
+        const otaApkAbs = `${mobileApiBase}${manifest.apk_url}`;
+        const otaManifestAbs = `${mobileApiBase}/api/mobile-adapter/app-update/manifest`;
 
         writeBuildStatus({
             status: 'success',
@@ -677,15 +912,28 @@ async function startAndroidApkBuild(options = {}) {
 }
 
 function cancelActiveBuild() {
+    const st = readBuildStatus();
+    let killed = false;
+
     if (activeBuildChild && !activeBuildChild.killed) {
         try {
             activeBuildChild.kill('SIGTERM');
+            killed = true;
         } catch (_) {}
         activeBuildChild = null;
-        writeBuildStatus({ status: 'cancelled', finished_at: new Date().toISOString() });
-        appendBuildLog('Build dibatalkan.');
+    }
+
+    // Bersihkan status "running" yatim (proses mati / restart server / cancel sebelumnya gagal)
+    if (killed || st.status === 'running') {
+        writeBuildStatus({
+            status: 'cancelled',
+            finished_at: new Date().toISOString(),
+            error: killed ? null : 'Build dibatalkan (proses sudah tidak aktif / status macet).'
+        });
+        appendBuildLog(killed ? 'Build dibatalkan.' : 'Build dibatalkan — status macet dibersihkan.');
         return true;
     }
+
     return false;
 }
 
@@ -697,6 +945,9 @@ module.exports = {
     cancelActiveBuild,
     readKeystoreStatus,
     writeAndroidKeyProperties,
+    bootstrapKeystore,
+    adoptCurrentKeystoreAsBaseline,
+    readBuildReadiness,
     normalizeBuildNumber,
     getDefaultFlutterSdkPath,
     resolveFlutterPathSetting,

@@ -158,6 +158,24 @@
             font-size: 0.95rem;
         }
         html[data-theme="dark"] .cc-row-highlight .cc-rp { color: #ff8a80; }
+        .cc-row-indent .cc-label {
+            padding-left: 0.85rem;
+            font-size: 0.8rem;
+            color: var(--f-muted-foreground);
+        }
+        .cc-row-indent .cc-rp {
+            font-size: 0.85rem;
+            color: var(--f-muted-foreground);
+        }
+        .cc-row-section .cc-label { font-weight: 600; }
+        .cc-block-title {
+            font-size: 0.7rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--f-muted-foreground);
+            margin: 0.15rem 0 0.35rem;
+        }
         .animate-in { animation: f-in 0.4s ease-out forwards; }
         .form-highlight {
             background: linear-gradient(to bottom, var(--f-accent), var(--f-card));
@@ -443,51 +461,64 @@
                                         <div class="collector-card-name"><%= String(collector.name || '—').toUpperCase() %></div>
                                         <div class="collector-card-phone"><%= collector.phone || '—' %></div>
                                     </div>
+                                    <%
+                                        const rp = (n) => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
+                                        const roundRp = (n) => Math.round(Number(n || 0));
+                                        const sudahLunas = roundRp(collector.total_lunas_area);
+                                        const discPeriode = roundRp(collector.discount_tagihan_periode);
+                                        const discTunggakan = roundRp(collector.discount_tunggakan);
+                                        const discTotal = roundRp(collector.total_discount != null ? collector.total_discount : (discPeriode + discTunggakan));
+                                        const diterimaTunggakan = roundRp(collector.diterima_tunggakan);
+                                        const lunasTunai = roundRp(collector.total_lunas_gross);
+                                        const lunasTransfer = roundRp(collector.total_lunas_transfer);
+                                        const sudahSetor = roundRp(collector.sudah_setor);
+                                        const belumSetor = roundRp(collector.pending_amount);
+                                    %>
                                     <div class="collector-card-table">
                                         <div class="cc-row">
                                             <span class="cc-label">Total Tagihan</span>
                                             <span class="cc-mid"><%= collector.count_tagihan_area != null ? collector.count_tagihan_area : 0 %></span>
-                                            <span class="cc-rp">Rp <%= (collector.total_tagihan_area || 0).toLocaleString('id-ID') %></span>
+                                            <span class="cc-rp"><%= rp(collector.total_tagihan_area) %></span>
                                         </div>
                                         <div class="cc-row">
                                             <span class="cc-label">Belum lunas</span>
                                             <span class="cc-mid"><%= collector.total_belum_lunas_count != null ? collector.total_belum_lunas_count : 0 %></span>
-                                            <span class="cc-rp">Rp <%= (collector.total_belum_lunas_amount || 0).toLocaleString('id-ID') %></span>
+                                            <span class="cc-rp"><%= rp(collector.total_belum_lunas_amount) %></span>
                                         </div>
                                         <div class="cc-row">
-                                            <span class="cc-label">Sudah Lunas</span>
+                                            <span class="cc-label" title="Tagihan periode ini yang statusnya sudah lunas (nominal penuh).">Sudah Lunas (tagihan bulan ini)</span>
                                             <span class="cc-mid"><%= collector.count_lunas_area != null ? collector.count_lunas_area : 0 %></span>
-                                            <span class="cc-rp">Rp <%= (collector.total_lunas_area || 0).toLocaleString('id-ID') %></span>
+                                            <span class="cc-rp"><%= rp(sudahLunas) %></span>
                                         </div>
-                                    </div>
-                                    <hr class="cc-split">
-                                    <div class="collector-card-table">
                                         <div class="cc-row">
-                                            <span class="cc-label" title="Pembayaran tunai yang dicatat kolektor (setoran ke kasir). Transfer bank tidak masuk sini.">Lunas Kolektor (tunai)</span>
-                                            <span class="cc-mid is-empty">&nbsp;</span>
-                                            <span class="cc-rp">Rp <%= (collector.total_lunas_gross || 0).toLocaleString('id-ID') %></span>
+                                            <span class="cc-label" title="Pelunasan tagihan bulan sebelumnya yang baru dibayar di periode ini.">Tunggakan (bulan lalu)</span>
+                                            <span class="cc-mid"><%= collector.count_diterima_tunggakan != null ? collector.count_diterima_tunggakan : '' %></span>
+                                            <span class="cc-rp">+ <%= rp(diterimaTunggakan) %></span>
                                         </div>
-                                        <% if ((collector.total_lunas_transfer || 0) > 0) { %>
                                         <div class="cc-row">
-                                            <span class="cc-label text-muted small" title="Pelanggan lunas via transfer bank — langsung ke kantor, bukan kewajiban setoran tunai kolektor.">Lunas via transfer</span>
+                                            <span class="cc-label" title="Total diskon pada pelunasan periode ini.">Diskon</span>
                                             <span class="cc-mid is-empty">&nbsp;</span>
-                                            <span class="cc-rp text-muted">Rp <%= (collector.total_lunas_transfer || 0).toLocaleString('id-ID') %></span>
+                                            <span class="cc-rp">- <%= rp(discTotal) %></span>
                                         </div>
-                                        <% } %>
+                                        <div class="cc-row">
+                                            <span class="cc-label" title="Pembayaran tunai yang dicatat kolektor (setoran ke kasir).">Lunas Kolektor (tunai)</span>
+                                            <span class="cc-mid is-empty">&nbsp;</span>
+                                            <span class="cc-rp"><%= rp(lunasTunai) %></span>
+                                        </div>
+                                        <div class="cc-row">
+                                            <span class="cc-label" title="Pelanggan lunas via transfer bank — langsung ke kantor.">Lunas via transfer</span>
+                                            <span class="cc-mid is-empty">&nbsp;</span>
+                                            <span class="cc-rp"><%= rp(lunasTransfer) %></span>
+                                        </div>
                                         <div class="cc-row">
                                             <span class="cc-label">Sudah setor</span>
                                             <span class="cc-mid is-empty">&nbsp;</span>
-                                            <span class="cc-rp">Rp <%= (collector.sudah_setor || 0).toLocaleString('id-ID') %></span>
-                                        </div>
-                                        <div class="cc-row">
-                                            <span class="cc-label">Komisi</span>
-                                            <span class="cc-mid"><%= collector.commission_rate != null && collector.commission_rate !== undefined ? collector.commission_rate : 5 %>%</span>
-                                            <span class="cc-rp">Rp <%= (collector.total_commission_cash != null ? collector.total_commission_cash : (collector.total_commission || 0)).toLocaleString('id-ID') %></span>
+                                            <span class="cc-rp"><%= rp(sudahSetor) %></span>
                                         </div>
                                         <div class="cc-row cc-row-highlight">
                                             <span class="cc-label">BELUM SETOR</span>
                                             <span class="cc-mid is-empty">&nbsp;</span>
-                                            <span class="cc-rp">Rp <%= (collector.pending_amount || 0).toLocaleString('id-ID') %></span>
+                                            <span class="cc-rp"><%= rp(belumSetor) %></span>
                                         </div>
                                     </div>
 

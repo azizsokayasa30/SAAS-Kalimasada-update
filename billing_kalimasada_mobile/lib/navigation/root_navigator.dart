@@ -38,12 +38,21 @@ class RootNavigator extends StatefulWidget {
 class _RootNavigatorState extends State<RootNavigator>
     with WidgetsBindingObserver {
   bool _updateCheckDone = false;
+  bool _clearedCachesAfterLogout = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkAppUpdateOnce());
+  }
+
+  void _clearTenantScopedCaches() {
+    context.read<CustomerProvider>().clear();
+    context.read<TaskProvider>().clear();
+    context.read<CollectorProvider>().clear();
+    context.read<NotificationProvider>().clear();
+    context.read<CollectorNotificationProvider>().clear();
   }
 
   Future<void> _checkAppUpdateOnce() async {
@@ -79,8 +88,17 @@ class _RootNavigatorState extends State<RootNavigator>
     }
 
     if (auth.token == null) {
+      if (!_clearedCachesAfterLogout) {
+        _clearedCachesAfterLogout = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _clearTenantScopedCaches();
+        });
+      }
       return const ExitConfirmScope(child: LoginScreen());
     }
+
+    _clearedCachesAfterLogout = false;
 
     if (auth.role == 'technician') {
       return const _TechnicianTabs();

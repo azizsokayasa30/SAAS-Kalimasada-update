@@ -187,41 +187,27 @@
             <button class="hamburger d-block d-md-none mb-3" id="hamburgerBtn" aria-label="Menu"><i class="bi bi-list"></i></button>
 
             <h3 class="mb-4">Daftar Profile PPPoE Mikrotik</h3>
-            
-            <!-- Statistik Profile -->
-            <div class="row mb-4">
-                <div class="col-md-3 mb-3">
-                    <div class="card bg-primary text-white">
-                        <div class="card-body text-center">
-                            <h5 class="card-title"><%= profiles.length %></h5>
-                            <p class="card-text">Total Profile</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3 mb-3">
-                    <div class="card bg-success text-white">
-                        <div class="card-body text-center">
-                            <h5 class="card-title"><%= profiles.filter(p => p.default === 'true').length %></h5>
-                            <p class="card-text">Profile Default</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3 mb-3">
-                    <div class="card bg-info text-white">
-                        <div class="card-body text-center">
-                            <h5 class="card-title"><%= profiles.filter(p => p['rate-limit']).length %></h5>
-                            <p class="card-text">Dengan Rate Limit</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-3 mb-3">
-                    <div class="card bg-warning text-white">
-                        <div class="card-body text-center">
-                            <h5 class="card-title"><%= profiles.filter(p => p.comment).length %></h5>
-                            <p class="card-text">Dengan Komentar</p>
-                        </div>
-                    </div>
-                </div>
+
+            <div class="alert alert-info mb-4" role="alert">
+                <h5 class="alert-heading mb-2">
+                    <i class="bi bi-info-circle-fill me-1"></i> Petunjuk Profil PPPoE
+                </h5>
+                <p class="mb-2">
+                    Profil PPPoE dibuat <strong>otomatis</strong> saat Anda memilih paket internet
+                    (menu <strong>Kelola Paket Internet</strong> &rarr; <strong>Pilih</strong> paket).
+                    Langkah Anda selanjutnya: <strong>edit/pilih POOL-IP</strong>
+                    (<code>remote-address</code>) yang sesuai dengan <strong>POOL di MikroTik</strong> Anda.
+                </p>
+                <p class="mb-2">
+                    Jika Anda punya <strong>banyak MikroTik</strong> sekaligus, buat
+                    <strong>nama pool yang sama</strong> di semua MikroTik, namun dengan
+                    <strong>subnet IP yang berbeda</strong> di tiap MikroTik.
+                </p>
+                <hr class="my-2">
+                <p class="mb-0 small">
+                    Tombol <strong>Tambah Profile</strong> tetap tersedia untuk kasus khusus.
+                    Hindari membuat profil yang namanya tidak sesuai paket agar billing dan jaringan tetap sinkron.
+                </p>
             </div>
             
             <button class="btn btn-success mb-3" id="btnTambahProfile">Tambah Profile PPPoE</button>
@@ -231,20 +217,13 @@
             
             <!-- Filter dan Pencarian -->
             <div class="row mb-3">
-                <div class="col-md-6">
+                <div class="col-md-8">
                     <div class="input-group">
                         <span class="input-group-text"><i class="bi bi-search"></i></span>
                         <input type="text" class="form-control" id="searchInput" placeholder="Cari profile...">
                     </div>
                 </div>
-                <div class="col-md-3">
-                    <select class="form-select" id="statusFilter">
-                        <option value="">Semua Status</option>
-                        <option value="default">Default</option>
-                        <option value="custom">Custom</option>
-                    </select>
-                </div>
-                <div class="col-md-3">
+                <div class="col-md-4">
                     <select class="form-select" id="rateFilter">
                         <option value="">Semua Rate</option>
                         <option value="has-rate">Dengan Rate Limit</option>
@@ -490,7 +469,11 @@
                                         <i class="bi bi-arrow-clockwise"></i>
                                     </button>
                                 </div>
-                                <small class="text-muted">Pilih IP pool dari MikroTik yang terdaftar atau ketik manual</small>
+                                <small class="text-muted">
+                                    Isi <strong>nama pool</strong> (bukan CIDR). RADIUS mengirim <code>Framed-Pool</code>;
+                                    masing-masing MikroTik mengalokasikan IP dari <code>/ip pool</code> lokalnya.
+                                    Nama pool boleh sama di beberapa router meski range/subnet berbeda per NAS.
+                                </small>
                             </div>
                         </div>
                         
@@ -984,19 +967,6 @@ $(function() {
          profileTable.search($(this).val()).draw();
      });
 
-     $('#statusFilter').on('change', function() {
-         const status = $(this).val();
-         $.fn.dataTable.ext.search.pop(); // Hapus filter sebelumnya
-         
-         if (status) {
-             $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {
-                 const statusText = data[6]; // Kolom Status
-                 return statusText.includes(status === 'default' ? 'Default' : 'Custom');
-             });
-         }
-         profileTable.draw();
-     });
-
      $('#rateFilter').on('change', function() {
          const rateFilter = $(this).val();
          $.fn.dataTable.ext.search.pop(); // Hapus filter sebelumnya
@@ -1074,16 +1044,27 @@ function loadPoolsFromMikrotik() {
             
             if (response.success && response.pools && response.pools.length > 0) {
                 response.pools.forEach(function(pool) {
-                    const routerInfo = pool.routers && pool.routers.length > 0 
-                        ? ` (${pool.routers.map(r => r.name).join(', ')})` 
-                        : '';
-                    const rangesInfo = pool.ranges ? ` - ${pool.ranges}` : '';
-                    const displayText = `${pool.name}${rangesInfo}${routerInfo}`;
+                    let rangesInfo = '';
+                    if (pool.multiRange && pool.routers && pool.routers.length > 0) {
+                        rangesInfo = ' - ' + pool.routers
+                            .filter(function(r) { return r.ranges; })
+                            .map(function(r) { return r.name + ':' + r.ranges; })
+                            .join(' | ');
+                    } else if (pool.ranges) {
+                        rangesInfo = ' - ' + pool.ranges;
+                    }
+                    const routerInfo = pool.routers && pool.routers.length > 1 && !pool.multiRange
+                        ? ' (' + pool.routers.map(function(r) { return r.name; }).join(', ') + ')'
+                        : (pool.routers && pool.routers.length === 1
+                            ? ' (' + pool.routers[0].name + ')'
+                            : '');
+                    const displayText = pool.name + rangesInfo + routerInfo;
                     
                     const option = document.createElement('option');
                     option.value = pool.name;
                     option.textContent = displayText;
                     option.setAttribute('data-ranges', pool.ranges || '');
+                    option.setAttribute('data-multi-range', pool.multiRange ? '1' : '0');
                     poolSelect.appendChild(option);
                 });
                 

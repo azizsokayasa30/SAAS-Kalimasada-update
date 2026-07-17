@@ -77,8 +77,8 @@
     }
     if (label) {
       label.textContent = total > 0
-        ? up + ' dari ' + total + ' RADIUS server up'
-        : (radius.message || 'Belum ada RADIUS server terdaftar');
+        ? up + ' dari ' + total + ' FreeRADIUS up'
+        : (radius.message || 'Belum ada FreeRADIUS terdaftar');
     }
   }
 

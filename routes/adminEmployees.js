@@ -45,6 +45,19 @@ function normalizePhoneEmployee(raw) {
     return p;
 }
 
+function employeeConstraintError(err) {
+    const msg = String((err && err.message) || '');
+    if (!msg.includes('UNIQUE')) return null;
+    const lower = msg.toLowerCase();
+    if (lower.includes('employees.nik') || lower.includes('(nik)') || /\bnik\b/.test(lower)) {
+        return 'NIK sudah terdaftar. Gunakan NIK lain atau edit data karyawan yang sudah ada.';
+    }
+    if (lower.includes('public_code')) {
+        return 'Kode publik karyawan bentrok. Silakan coba simpan lagi.';
+    }
+    return 'Data bentrok dengan karyawan lain (nilai unik sudah dipakai).';
+}
+
 function phoneVariantsEmployeeNoHp(rawPhone) {
     const norm = normalizePhoneEmployee(rawPhone || '');
     const v = new Set();
@@ -357,7 +370,14 @@ router.post('/api/data', upload.single('foto'), (req, res) => {
     db.run(query, values, function(err) {
         if (err) {
             // Hapus file yang sudah diupload jika db insert gagal
-            if (req.file) fs.unlinkSync(req.file.path);
+            if (req.file) {
+                try { fs.unlinkSync(req.file.path); } catch (_) { /* ignore */ }
+            }
+            const friendly = employeeConstraintError(err);
+            if (friendly) {
+                return res.status(400).json({ success: false, error: friendly });
+            }
+            logger.error('[admin-employees] insert employee:', err);
             return res.status(500).json({ success: false, error: err.message });
         }
         res.json({ success: true, id: this.lastID, message: 'Karyawan berhasil ditambahkan' });
@@ -390,7 +410,14 @@ router.put('/api/data/:id', upload.single('foto'), (req, res) => {
         const values = [nama_lengkap, nik, alamat, no_hp, email, jabatan, tanggal_masuk, status, gaji_pokok || 0, Number.isNaN(normalizedShiftId) ? null : normalizedShiftId, foto_path, id];
         
         db.run(query, values, function(err) {
-            if (err) return res.status(500).json({ success: false, error: err.message });
+            if (err) {
+                const friendly = employeeConstraintError(err);
+                if (friendly) {
+                    return res.status(400).json({ success: false, error: friendly });
+                }
+                logger.error('[admin-employees] update employee:', err);
+                return res.status(500).json({ success: false, error: err.message });
+            }
             res.json({ success: true, message: 'Data karyawan berhasil diupdate' });
         });
     });
@@ -565,16 +592,20 @@ router.put('/api/leave-requests/:id/approve', (req, res) => {
                         }
 
                         const date = dates[index++];
+                        const attendanceTenantId = leaveReq.tenant_id != null
+                            ? Number(leaveReq.tenant_id)
+                            : tenantIdForInsert();
                         db.run(
-                            `INSERT INTO employee_attendance (employee_id, date, status, check_in, check_out, notes)
-                             VALUES (?, ?, ?, NULL, NULL, ?)
+                            `INSERT INTO employee_attendance (employee_id, date, status, check_in, check_out, notes, tenant_id)
+                             VALUES (?, ?, ?, NULL, NULL, ?, ?)
                              ON CONFLICT(employee_id, date) DO UPDATE SET
                                status = excluded.status,
                                notes = excluded.notes,
                                check_in = NULL,
                                check_out = NULL,
+                               tenant_id = excluded.tenant_id,
                                updated_at = datetime('now','localtime')`,
-                            [leaveReq.employee_id, date, attendanceStatus, attendanceNote],
+                            [leaveReq.employee_id, date, attendanceStatus, attendanceNote, attendanceTenantId],
                             (attendanceErr) => {
                                 if (attendanceErr) {
                                     db.run('ROLLBACK');

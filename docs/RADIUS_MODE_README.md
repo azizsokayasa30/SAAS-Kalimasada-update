@@ -115,7 +115,9 @@ Dokumentasi lengkap sudah dibuat:
 - RADIUS server (IP, secret, port)
 - PPPoE server dengan `authentication=radius`
 - Profile fallback (opsional, hanya jika RADIUS tidak mengembalikan profile)
-- IP pool fallback (opsional, hanya jika RADIUS tidak mengembalikan IP)
+- IP pool lokal dengan **nama sama** seperti Remote Address profile billing (`Framed-Pool`); range/subnet **boleh beda per router**
+- `local-address` pada PPP profile se-subnet dengan pool di router tersebut
+- IP pool fallback (opsional, hanya jika RADIUS tidak mengembalikan `Framed-Pool` / IP)
 
 #### Untuk Hotspot:
 - RADIUS server untuk Hotspot (IP, secret, port)
@@ -200,9 +202,39 @@ Untuk detail lebih lengkap, lihat:
 - [ ] Profile sudah dikonfigurasi di database RADIUS
 - [ ] Test login user berhasil
 - [ ] Accounting berjalan dengan baik
+- [ ] FreeRADIUS sudah di-pin untuk username PPPoE literal `@` (`scripts/lib/freeradius-pin-literal-at.sh` di VPS + setiap POP)
+
+## Username PPPoE mengandung `@`
+
+Banyak pelanggan Kalimasada memakai login seperti `user@site` (aman di secret lokal MikroTik). Di FreeRADIUS 3, `@` default diperlakukan seperti realm/email, sehingga auth bisa `Access-Reject`.
+
+Pin yang aman (global, semua tenant):
+
+```bash
+# Di VPS (dan setiap host FreeRADIUS POP / auth):
+sudo bash scripts/lib/freeradius-pin-literal-at.sh
+```
+
+Apa yang dilakukan pin:
+
+1. Nonaktifkan modul `suffix` (tidak memotong `user@realm`)
+2. Pastikan `sql_user_name = "%{User-Name}"` (+ `safe_characters` memuat `@`)
+3. Longgarkan `policy.d/filter` → `filter_username` agar tidak menolak `@` tanpa bentuk email (`user@host.tld`)
+
+**Penting:** sync user DB ke POP (`radius-pop-sync-*`) **tidak** menyalin config FreeRADIUS. Setelah pin di VPS, terapkan juga di POP:
+
+```bash
+sudo bash scripts/radius-pop-pin-literal-at-remote.sh
+# jika sudo POP butuh password, jalankan sekali di POP:
+#   sudo bash ~/radius-sync/freeradius-pin-literal-at.sh
+```
+
+Installer `install-freeradius-billing.sh` / `install-freeradius-local-pop.sh` memanggil pin ini otomatis (jika file `scripts/lib/freeradius-pin-literal-at.sh` tersedia).
+
+Import Excel: hyperlink `mailto:` pada sel PPPoE (karena `@`) dibaca sebagai teks di app (`unwrapExcelCellValue`) agar tidak jadi `[object Object]`.
 
 ---
 
-**Last Updated:** 2024-12-19
-**Version:** 1.0
+**Last Updated:** 2026-07-15
+**Version:** 1.1
 

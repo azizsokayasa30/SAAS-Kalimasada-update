@@ -142,9 +142,11 @@
           <ul class="mb-0">
             <li>Client adalah router/NAS (Network Access Server) yang akan mengirim request autentikasi ke FreeRADIUS</li>
             <li>Setiap client harus memiliki IP address dan secret yang unik</li>
+            <li><strong>Nama client tidak boleh spasi</strong> — hanya huruf, angka, titik, strip, underscore (contoh: <code>BAKTI_PUSAT</code>)</li>
+            <li>IP tidak boleh disertai port (benar: <code>10.10.0.5</code>)</li>
             <li>Secret harus sama dengan yang dikonfigurasi di router Mikrotik</li>
-            <li>Setelah menambah/edit/hapus client, FreeRADIUS akan otomatis direstart</li>
-            <li>File konfigurasi: <code>/etc/freeradius/3.0/clients.conf</code></li>
+            <li>Setelah menambah/edit/hapus client, FreeRADIUS akan otomatis direstart (hanya jika config valid)</li>
+            <li>NAS produksi disimpan di tabel <code>nas</code> SQLite; <code>clients.conf</code> hanya localhost</li>
           </ul>
         </div>
       </div>
@@ -168,16 +170,26 @@
           
           <div class="mb-3">
             <label for="clientName" class="form-label">Nama Client *</label>
-            <input type="text" class="form-control" id="clientName" name="name" required 
-                   placeholder="misal: mikrotik-router-1">
-            <small class="form-text text-muted">Nama unik untuk mengidentifikasi client (bisa nama router)</small>
+            <input type="text" class="form-control" id="clientName" name="name" required
+                   maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*"
+                   title="Hanya huruf, angka, titik, strip, underscore — tanpa spasi"
+                   placeholder="misal: mikrotik-router-1" autocomplete="off"
+                   inputmode="text" spellcheck="false">
+            <small class="form-text text-muted">
+              Wajib aman untuk FreeRADIUS: <strong>huruf, angka, <code>.</code> <code>-</code> <code>_</code> saja</strong> (tanpa spasi).
+              Contoh valid: <code>BAKTI_PUSAT</code>, <code>RO-KRG_MERDEN</code>.
+            </small>
+            <div id="clientNameFeedback" class="invalid-feedback d-block" style="display:none!important"></div>
           </div>
 
           <div class="mb-3">
             <label for="clientIpaddr" class="form-label">IP Address *</label>
-            <input type="text" class="form-control" id="clientIpaddr" name="ipaddr" required 
-                   placeholder="192.168.1.1">
-            <small class="form-text text-muted">IP address router/NAS yang akan mengirim request ke FreeRADIUS</small>
+            <input type="text" class="form-control" id="clientIpaddr" name="ipaddr" required
+                   maxlength="45" pattern="(\d{1,3}\.){3}\d{1,3}|([0-9a-fA-F:]+)"
+                   title="IPv4 tanpa port, contoh 10.10.0.5"
+                   placeholder="10.10.0.5" autocomplete="off" spellcheck="false">
+            <small class="form-text text-muted">IP NAS/tunnel saja — <strong>jangan</strong> sertakan port (salah: <code>10.10.0.5:8728</code>)</small>
+            <div id="clientIpFeedback" class="invalid-feedback d-block" style="display:none!important"></div>
           </div>
 
           <div class="mb-3">
@@ -232,6 +244,79 @@ $(document).ready(function() {
   const form = $('#clientForm');
   let isEditMode = false;
 
+  const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+  const IPV4_RE = /^(\d{1,3}\.){3}\d{1,3}$/;
+  const IPV4_PORT_RE = /^(\d{1,3}\.){3}\d{1,3}:\d+$/;
+
+  function showFieldError($input, $feedback, msg) {
+    $input.addClass('is-invalid').removeClass('is-valid');
+    if ($feedback && $feedback.length) {
+      $feedback.attr('style', '').text(msg || '').toggle(!!msg);
+    }
+  }
+  function clearFieldError($input, $feedback) {
+    $input.removeClass('is-invalid').addClass('is-valid');
+    if ($feedback && $feedback.length) {
+      $feedback.attr('style', 'display:none!important').text('');
+    }
+  }
+
+  function validateNameLive() {
+    const $el = $('#clientName');
+    const $fb = $('#clientNameFeedback');
+    let v = $el.val();
+    // Blok spasi & karakter ilegal saat mengetik — ganti spasi jadi _
+    const filtered = String(v).replace(/\s+/g, '_').replace(/[^A-Za-z0-9._-]/g, '');
+    if (filtered !== v) {
+      const pos = $el[0].selectionStart;
+      $el.val(filtered);
+      try { $el[0].setSelectionRange(Math.max(0, pos - (v.length - filtered.length)), Math.max(0, pos - (v.length - filtered.length))); } catch (_) {}
+      v = filtered;
+    }
+    if (!v) {
+      showFieldError($el, $fb, 'Nama client wajib diisi');
+      return false;
+    }
+    if (!NAME_RE.test(v)) {
+      showFieldError($el, $fb, 'Hanya huruf, angka, titik, strip, underscore — tanpa spasi');
+      return false;
+    }
+    clearFieldError($el, $fb);
+    return true;
+  }
+
+  function validateIpLive() {
+    const $el = $('#clientIpaddr');
+    const $fb = $('#clientIpFeedback');
+    const v = String($el.val() || '').trim();
+    if (!v) {
+      showFieldError($el, $fb, 'IP address wajib diisi');
+      return false;
+    }
+    if (IPV4_PORT_RE.test(v)) {
+      showFieldError($el, $fb, 'Jangan sertakan port — cukup IP saja (contoh: 10.10.0.5)');
+      return false;
+    }
+    if (IPV4_RE.test(v)) {
+      const ok = v.split('.').every(function(p) { const n = parseInt(p, 10); return n >= 0 && n <= 255; });
+      if (!ok) {
+        showFieldError($el, $fb, 'Oktet IPv4 harus 0–255');
+        return false;
+      }
+      clearFieldError($el, $fb);
+      return true;
+    }
+    if (v.includes(':') && !v.includes('.')) {
+      clearFieldError($el, $fb);
+      return true;
+    }
+    showFieldError($el, $fb, 'Format IP tidak valid');
+    return false;
+  }
+
+  $('#clientName').on('input', validateNameLive);
+  $('#clientIpaddr').on('input', validateIpLive);
+
   // Toggle secret visibility
   $(document).on('click', '.toggle-secret', function() {
     const $secretText = $(this).siblings('.secret-text');
@@ -260,6 +345,8 @@ $(document).ready(function() {
     $('#clientNasType').val($btn.data('nas-type') || 'other');
     $('#clientMsgAuth').val($btn.data('msg-auth') || 'no');
     $('#clientComment').val($btn.data('comment') || '');
+    validateNameLive();
+    validateIpLive();
     
     modal.modal('show');
   });
@@ -270,6 +357,8 @@ $(document).ready(function() {
       $('#modalTitle').text('Tambah Client (NAS)');
       form[0].reset();
       $('#oldName').val('');
+      $('#clientName, #clientIpaddr').removeClass('is-invalid is-valid');
+      $('#clientNameFeedback, #clientIpFeedback').attr('style', 'display:none!important').text('');
     }
     isEditMode = false;
   });
@@ -285,7 +374,7 @@ $(document).ready(function() {
         data: JSON.stringify({ name: name }),
         success: function(response) {
           if (response.success) {
-            alert('Client berhasil dihapus' + (response.restart.success ? ' dan FreeRADIUS berhasil direstart' : ''));
+            alert('Client berhasil dihapus' + (response.restart && response.restart.success ? ' dan FreeRADIUS berhasil direstart' : ''));
             location.reload();
           } else {
             alert('Gagal menghapus client: ' + response.message);
@@ -301,6 +390,13 @@ $(document).ready(function() {
   // Form submit
   form.on('submit', function(e) {
     e.preventDefault();
+
+    const nameOk = validateNameLive();
+    const ipOk = validateIpLive();
+    if (!nameOk || !ipOk) {
+      alert('Perbaiki nama/IP client sebelum menyimpan. Nama tanpa spasi; IP tanpa port.');
+      return;
+    }
     
     const formData = {
       name: $('#clientName').val().trim(),
@@ -318,9 +414,8 @@ $(document).ready(function() {
       formData.oldName = oldName;
     }
 
-    // Disable submit button
     const $submitBtn = form.find('button[type="submit"]');
-    $submitBtn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm"></span> Menyimpan...');
+    $submitBtn.prop('disabled', true);
 
     $.ajax({
       url: url,
@@ -328,20 +423,23 @@ $(document).ready(function() {
       contentType: 'application/json',
       data: JSON.stringify(formData),
       success: function(response) {
+        $submitBtn.prop('disabled', false);
         if (response.success) {
-          alert('Client berhasil ' + (oldName ? 'diupdate' : 'ditambahkan') + 
-                (response.restart.success ? ' dan FreeRADIUS berhasil direstart' : ''));
           modal.modal('hide');
+          let msg = response.message || 'Berhasil disimpan';
+          if (response.restart && !response.restart.success) {
+            msg += '\n\nPeringatan restart: ' + (response.restart.message || '');
+          }
+          alert(msg);
           location.reload();
         } else {
-          alert('Gagal menyimpan client: ' + response.message);
-          $submitBtn.prop('disabled', false).html('<i class="bi bi-save"></i> Simpan');
+          alert('Gagal: ' + (response.message || 'unknown'));
         }
       },
       error: function(xhr) {
-        const errorMsg = xhr.responseJSON?.message || 'Error menyimpan client';
-        alert(errorMsg);
-        $submitBtn.prop('disabled', false).html('<i class="bi bi-save"></i> Simpan');
+        $submitBtn.prop('disabled', false);
+        const msg = (xhr.responseJSON && xhr.responseJSON.message) || 'Error menyimpan client';
+        alert(msg);
       }
     });
   });

@@ -27,6 +27,22 @@ class CustomerProvider extends ChangeNotifier {
   num? get listTotalAmount => _listTotalAmount;
   bool get hasMore => _hasMore;
 
+  /// Bersihkan cache saat logout agar data tenant lama tidak tampil di sesi berikutnya.
+  void clear() {
+    _customersFetchGen++;
+    _loading = false;
+    _error = null;
+    _customers = [];
+    _stats = {};
+    _connectionStats = {};
+    _areaOptions = [];
+    _listTotalCount = null;
+    _listTotalAmount = null;
+    _hasMore = true;
+    _page = 1;
+    notifyListeners();
+  }
+
   Future<void> fetchCustomers({
     bool refresh = false,
     String search = '',

@@ -293,7 +293,14 @@ const collectorSync = {
             // Migrate missing columns for collector_payments
             const paymentMigrations = [
                 'ALTER TABLE collector_payments ADD COLUMN collected_at DATETIME',
-                'ALTER TABLE collector_payments ADD COLUMN amount DECIMAL(15,2)'
+                'ALTER TABLE collector_payments ADD COLUMN amount DECIMAL(15,2)',
+                'ALTER TABLE collector_payments ADD COLUMN customer_id INTEGER',
+                'ALTER TABLE collector_payments ADD COLUMN payment_amount DECIMAL(15,2)',
+                'ALTER TABLE collector_payments ADD COLUMN commission_amount DECIMAL(15,2)',
+                'ALTER TABLE collector_payments ADD COLUMN remittance_status TEXT',
+                'ALTER TABLE collector_payments ADD COLUMN remittance_id INTEGER',
+                'ALTER TABLE collector_payments ADD COLUMN reference_number TEXT',
+                'ALTER TABLE collector_payments ADD COLUMN updated_at DATETIME'
             ];
             paymentMigrations.forEach(m => {
                 db.run(m, (err) => {
@@ -302,6 +309,16 @@ const collectorSync = {
                     }
                 });
             });
+            // Backfill customer_id dari invoice (skema lama tanpa kolom / nilai kosong)
+            db.run(
+                `UPDATE collector_payments
+                 SET customer_id = (
+                     SELECT i.customer_id FROM invoices i WHERE i.id = collector_payments.invoice_id
+                 )
+                 WHERE (customer_id IS NULL OR customer_id = 0)
+                   AND invoice_id IS NOT NULL`,
+                () => {}
+            );
         };
         
         sync();
@@ -367,7 +384,7 @@ const employeeSync = {
                 `CREATE TABLE IF NOT EXISTS employees (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     nama_lengkap TEXT NOT NULL,
-                    nik TEXT UNIQUE NOT NULL,
+                    nik TEXT NOT NULL,
                     alamat TEXT,
                     no_hp TEXT,
                     email TEXT,
@@ -379,6 +396,7 @@ const employeeSync = {
                     gaji_pokok DECIMAL(15,2) DEFAULT 0,
                     foto_path TEXT,
                     public_code TEXT,
+                    tenant_id INTEGER NOT NULL DEFAULT 1,
                     created_at DATETIME DEFAULT (datetime('now','localtime')),
                     updated_at DATETIME DEFAULT (datetime('now','localtime')),
                     FOREIGN KEY (area_id) REFERENCES areas(id),
@@ -460,27 +478,152 @@ const employeeSync = {
                 )`
             ];
 
-            tables.forEach(sql => {
-                db.run(sql, (err) => {
-                    if (err) console.error('Failed to ensure employee table:', err.message);
+            db.serialize(() => {
+                for (const sql of tables) {
+                    db.run(sql, (err) => {
+                        if (err) console.error('Failed to ensure employee table:', err.message);
+                    });
+                }
+
+                db.run('ALTER TABLE employees ADD COLUMN shift_id INTEGER', (err) => {
+                    if (err && !err.message.includes('duplicate column')) {
+                        console.error('Failed to add shift_id to employees:', err.message);
+                    }
+                });
+                db.run('ALTER TABLE employees ADD COLUMN public_code TEXT', (err) => {
+                    if (err && !String(err.message).includes('duplicate column')) {
+                        console.error('Failed to add public_code to employees:', err.message);
+                    }
+                });
+                db.run('ALTER TABLE employees ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1', (err) => {
+                    if (err && !String(err.message).includes('duplicate column')) {
+                        console.error('Failed to add tenant_id to employees:', err.message);
+                    }
+                });
+
+                // Drop UNIQUE(nik) global → unik per tenant (tenant_id, nik)
+                db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='employees'`, (err, row) => {
+                    if (err) {
+                        console.error('Failed to inspect employees schema:', err.message);
+                        return ensureEmployeeNikIndexes(db);
+                    }
+                    const sql = String((row && row.sql) || '');
+                    const hasGlobalNikUnique = /nik\s+TEXT\s+UNIQUE/i.test(sql) || /UNIQUE\s*\(\s*nik\s*\)/i.test(sql);
+                    if (!hasGlobalNikUnique) {
+                        return ensureEmployeeNikIndexes(db);
+                    }
+                    console.log('🔄 Migrating employees: UNIQUE(nik) global → (tenant_id, nik)');
+                    db.run('PRAGMA foreign_keys=OFF', () => {
+                        db.run('BEGIN IMMEDIATE', (beginErr) => {
+                            if (beginErr) {
+                                console.error('employees migrate begin failed:', beginErr.message);
+                                db.run('PRAGMA foreign_keys=ON');
+                                return;
+                            }
+                            db.run('DROP TABLE IF EXISTS employees__mt', (dropMtErr) => {
+                                if (dropMtErr) {
+                                    console.error('employees__mt drop failed:', dropMtErr.message);
+                                    db.run('ROLLBACK');
+                                    db.run('PRAGMA foreign_keys=ON');
+                                    return;
+                                }
+                                db.run(`
+                                    CREATE TABLE employees__mt (
+                                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                        nama_lengkap TEXT NOT NULL,
+                                        nik TEXT NOT NULL,
+                                        alamat TEXT,
+                                        no_hp TEXT,
+                                        email TEXT,
+                                        jabatan TEXT,
+                                        area_id INTEGER,
+                                        shift_id INTEGER,
+                                        tanggal_masuk DATE,
+                                        status TEXT DEFAULT 'aktif' CHECK(status IN ('aktif', 'nonaktif')),
+                                        gaji_pokok DECIMAL(15,2) DEFAULT 0,
+                                        foto_path TEXT,
+                                        public_code TEXT,
+                                        tenant_id INTEGER NOT NULL DEFAULT 1,
+                                        created_at DATETIME DEFAULT (datetime('now','localtime')),
+                                        updated_at DATETIME DEFAULT (datetime('now','localtime')),
+                                        FOREIGN KEY (area_id) REFERENCES areas(id),
+                                        FOREIGN KEY (shift_id) REFERENCES attendance_shifts(id)
+                                    )
+                                `, (createErr) => {
+                                    if (createErr) {
+                                        console.error('employees__mt create failed:', createErr.message);
+                                        db.run('ROLLBACK');
+                                        db.run('PRAGMA foreign_keys=ON');
+                                        return;
+                                    }
+                                    db.run(`
+                                        INSERT INTO employees__mt (
+                                            id, nama_lengkap, nik, alamat, no_hp, email, jabatan, area_id, shift_id,
+                                            tanggal_masuk, status, gaji_pokok, foto_path, public_code, tenant_id, created_at, updated_at
+                                        )
+                                        SELECT
+                                            id, nama_lengkap, nik, alamat, no_hp, email, jabatan, area_id, shift_id,
+                                            tanggal_masuk, status, gaji_pokok, foto_path, public_code,
+                                            COALESCE(tenant_id, 1), created_at, updated_at
+                                        FROM employees
+                                    `, (copyErr) => {
+                                        if (copyErr) {
+                                            console.error('employees migrate copy failed:', copyErr.message);
+                                            db.run('ROLLBACK');
+                                            db.run('PRAGMA foreign_keys=ON');
+                                            return;
+                                        }
+                                        db.run('DROP TABLE employees', (dropErr) => {
+                                            if (dropErr) {
+                                                console.error('employees drop failed:', dropErr.message);
+                                                db.run('ROLLBACK');
+                                                db.run('PRAGMA foreign_keys=ON');
+                                                return;
+                                            }
+                                            db.run('ALTER TABLE employees__mt RENAME TO employees', (renameErr) => {
+                                                if (renameErr) {
+                                                    console.error('employees rename failed:', renameErr.message);
+                                                    db.run('ROLLBACK');
+                                                    db.run('PRAGMA foreign_keys=ON');
+                                                    return;
+                                                }
+                                                db.run('COMMIT', (commitErr) => {
+                                                    db.run('PRAGMA foreign_keys=ON');
+                                                    if (commitErr) {
+                                                        console.error('employees migrate commit failed:', commitErr.message);
+                                                        return;
+                                                    }
+                                                    console.log('✅ employees UNIQUE(nik) migrated to per-tenant');
+                                                    ensureEmployeeNikIndexes(db);
+                                                });
+                                            });
+                                        });
+                                    });
+                                });
+                            });
+                        });
+                    });
                 });
             });
-
-            // Migrate older databases that do not have employee shift assignment yet
-            db.run('ALTER TABLE employees ADD COLUMN shift_id INTEGER', (err) => {
-                if (err && !err.message.includes('duplicate column')) {
-                    console.error('Failed to add shift_id to employees:', err.message);
-                }
-            });
-            db.run('ALTER TABLE employees ADD COLUMN public_code TEXT', (err) => {
-                if (err && !String(err.message).includes('duplicate column')) {
-                    console.error('Failed to add public_code to employees:', err.message);
-                }
-            });
-            db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_public_code ON employees(public_code) WHERE public_code IS NOT NULL', (err) => {
-                if (err) console.error('Failed employees public_code index:', err.message);
-            });
         };
+
+        function ensureEmployeeNikIndexes(dbConn) {
+            dbConn.run('CREATE INDEX IF NOT EXISTS idx_employees_tenant_id ON employees(tenant_id)', (err) => {
+                if (err) console.error('Failed employees tenant_id index:', err.message);
+            });
+            dbConn.run(
+                'CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_tenant_nik ON employees(tenant_id, nik)',
+                (err) => {
+                    if (err) console.error('Failed employees (tenant_id, nik) unique index:', err.message);
+                }
+            );
+            dbConn.run(
+                'CREATE UNIQUE INDEX IF NOT EXISTS idx_employees_public_code ON employees(public_code) WHERE public_code IS NOT NULL',
+                (err) => {
+                    if (err) console.error('Failed employees public_code index:', err.message);
+                }
+            );
+        }
         
         sync();
         console.log('🔄 Employee system sync enabled');
@@ -527,21 +670,6 @@ const warehouseSync = {
                     created_at DATETIME DEFAULT (datetime('now','localtime'))
                 )`
             ];
-            tables.forEach((sql) => {
-                db.run(sql, (err) => {
-                    if (err) console.error('Failed to ensure warehouse table:', err.message);
-                });
-            });
-            db.run('ALTER TABLE warehouse_units ADD COLUMN outbound_recipient TEXT', (err) => {
-                if (err && !String(err.message).includes('duplicate column')) {
-                    console.error('Warehouse migrate outbound_recipient:', err.message);
-                }
-            });
-            db.run('ALTER TABLE warehouse_units ADD COLUMN outbound_employee_id INTEGER', (err) => {
-                if (err && !String(err.message).includes('duplicate column')) {
-                    console.error('Warehouse migrate outbound_employee_id:', err.message);
-                }
-            });
             const indexes = [
                 'CREATE INDEX IF NOT EXISTS idx_wh_units_code ON warehouse_units(public_code)',
                 'CREATE INDEX IF NOT EXISTS idx_wh_units_item_status ON warehouse_units(item_id, status)',
@@ -549,10 +677,27 @@ const warehouseSync = {
                 'CREATE INDEX IF NOT EXISTS idx_wh_batches_item ON warehouse_inbound_batches(item_id)',
                 'CREATE INDEX IF NOT EXISTS idx_wh_batches_created ON warehouse_inbound_batches(created_at)'
             ];
-            indexes.forEach((sql) => {
-                db.run(sql, (err) => {
-                    if (err) console.error('Failed to ensure warehouse index:', err.message);
+            db.serialize(() => {
+                for (const sql of tables) {
+                    db.run(sql, (err) => {
+                        if (err) console.error('Failed to ensure warehouse table:', err.message);
+                    });
+                }
+                db.run('ALTER TABLE warehouse_units ADD COLUMN outbound_recipient TEXT', (err) => {
+                    if (err && !String(err.message).includes('duplicate column')) {
+                        console.error('Warehouse migrate outbound_recipient:', err.message);
+                    }
                 });
+                db.run('ALTER TABLE warehouse_units ADD COLUMN outbound_employee_id INTEGER', (err) => {
+                    if (err && !String(err.message).includes('duplicate column')) {
+                        console.error('Warehouse migrate outbound_employee_id:', err.message);
+                    }
+                });
+                for (const sql of indexes) {
+                    db.run(sql, (err) => {
+                        if (err) console.error('Failed to ensure warehouse index:', err.message);
+                    });
+                }
             });
         };
         sync();
@@ -689,7 +834,7 @@ app.use('/platform', (req, res) => {
 
 app.use((req, res, next) => {
   if (isCentralHost(req.get('host')) && req.path === '/') {
-    return res.redirect('/management/dashboard');
+    return res.redirect('/management/login');
   }
   if (isCentralHost(req.get('host')) && req.path === '/login') {
     return res.redirect('/management/login');
@@ -960,12 +1105,20 @@ global.whatsappStatus = {
     status: 'disconnected'
 };
 
-// HAPUS global.appSettings
 // Pastikan direktori sesi WhatsApp ada
-const sessionDir = getSetting('whatsapp_session_path', './whatsapp-session');
-if (!fs.existsSync(sessionDir)) {
-    fs.mkdirSync(sessionDir, { recursive: true });
-    logger.info(`Direktori sesi WhatsApp dibuat: ${sessionDir}`);
+try {
+    const { getBaseSessionPath } = require('./config/baileys-config');
+    const sessionDir = getBaseSessionPath();
+    if (!fs.existsSync(sessionDir)) {
+        fs.mkdirSync(sessionDir, { recursive: true });
+        logger.info(`Direktori sesi WhatsApp dibuat: ${sessionDir}`);
+    }
+} catch (_) {
+    const sessionDir = getSetting('whatsapp_session_path', './whatsapp-session');
+    if (!fs.existsSync(sessionDir)) {
+        fs.mkdirSync(sessionDir, { recursive: true });
+        logger.info(`Direktori sesi WhatsApp dibuat: ${sessionDir}`);
+    }
 }
 
 // Route untuk health check
@@ -989,6 +1142,9 @@ app.get('/whatsapp/status', (req, res) => {
 
 // Redirect root ke portal login terpusat
 app.get('/', (req, res) => {
+  if (isCentralHost(req.get('host'))) {
+    return res.redirect('/management/login');
+  }
   res.redirect('/login');
 });
 
@@ -1284,141 +1440,159 @@ try {
 // Inisialisasi WhatsApp dan PPPoE monitoring
 try {
     // Cek apakah Baileys enabled sebelum connect
-    const { isBaileysEnabled } = require('./config/baileys-config');
+    const { isBaileysEnabled, anyTenantUsesBaileys, listBaileysTenantIds } = require('./config/baileys-config');
     const { isWablasEnabled } = require('./config/wablas-config');
     const { getActiveWhatsAppProvider } = require('./config/whatsapp-provider-settings');
     const hasMikrotikSettings = getSetting('mikrotik_host') && getSetting('mikrotik_user') && getSetting('mikrotik_password');
     const activeProvider = getActiveWhatsAppProvider();
     const useEnhancedPppoeMonitor = isBaileysEnabled() || (activeProvider === 'baileys' && !isWablasEnabled());
-    
-    // Hanya connect jika Baileys enabled atau Wablas tidak enabled
-    if (useEnhancedPppoeMonitor) {
-        whatsapp.connectToWhatsApp().then(sock => {
-        if (sock) {
-            // Set sock instance untuk whatsapp
-            whatsapp.setSock(sock);
-            
-            // Make WhatsApp socket globally available
-            global.whatsappSocket = sock;
-            global.getWhatsAppSocket = () => sock;
 
-            // Set sock instance untuk PPPoE monitoring
-            pppoeMonitor.setSock(sock);
-
-            // Initialize Agent WhatsApp Commands
+    const wireLegacyBotSock = (sock) => {
+        if (!sock) return;
+        whatsapp.setSock(sock);
+        global.whatsappSocket = sock;
+        global.getWhatsAppSocket = () => sock;
+        pppoeMonitor.setSock(sock);
+        try {
             const AgentWhatsAppIntegration = require('./config/agentWhatsAppIntegration');
             const agentWhatsApp = new AgentWhatsAppIntegration(whatsapp);
             agentWhatsApp.initialize();
-            
             console.log('🤖 Agent WhatsApp Commands initialized');
-            pppoeCommands.setSock(sock);
-
-            // Set sock instance untuk GenieACS commands
-            genieacsCommands.setSock(sock);
-
-            // Set sock instance untuk MikroTik commands
-            mikrotikCommands.setSock(sock);
-
-            // Set sock instance untuk RX Power Monitor
-            rxPowerMonitor.setSock(sock);
-            // Set sock instance untuk trouble report
+        } catch (e) {
+            logger.warn('Agent WhatsApp init skip:', e.message);
+        }
+        pppoeCommands.setSock(sock);
+        genieacsCommands.setSock(sock);
+        mikrotikCommands.setSock(sock);
+        rxPowerMonitor.setSock(sock);
+        try {
             const troubleReport = require('./config/troubleReport');
             troubleReport.setSockInstance(sock);
+        } catch (_) { /* optional */ }
+    };
 
-            // Initialize database tables for legacy databases without agent feature
-            const initAgentTables = () => {
-                return new Promise((resolve, reject) => {
-                    try {
-                        // AgentManager sudah memiliki createTables() yang otomatis membuat semua tabel agent
-                        const AgentManager = require('./config/agentManager');
-                        const agentManager = new AgentManager();
-                        console.log('✅ Agent tables created/verified by AgentManager');
-                        resolve();
-                    } catch (error) {
-                        console.error('Error initializing agent tables:', error);
-                        reject(error);
-                    }
-                });
-            };
-
-            // Call init after database connected
-            initAgentTables().then(() => {
-                console.log('Database initialization completed successfully');
-            }).catch((err) => {
-                console.error('Database initialization failed:', err);
+    const runPostWhatsAppInits = () => {
+        const initAgentTables = () => {
+            return new Promise((resolve, reject) => {
+                try {
+                    const AgentManager = require('./config/agentManager');
+                    const agentManager = new AgentManager();
+                    console.log('✅ Agent tables created/verified by AgentManager');
+                    resolve();
+                } catch (error) {
+                    console.error('Error initializing agent tables:', error);
+                    reject(error);
+                }
             });
+        };
 
-            // Initialize PPPoE monitoring jika MikroTik dikonfigurasi
-            if (hasMikrotikSettings) {
-                pppoeMonitor.initializePPPoEMonitoring().then(() => {
-                    logger.info('PPPoE monitoring initialized');
-                }).catch((err) => {
-                    logger.error('Error initializing PPPoE monitoring:', err);
-                });
-            }
-
-            // Initialize Interval Manager (replaces individual monitoring systems)
-            try {
-                const intervalManager = require('./config/intervalManager');
-                intervalManager.initialize();
-                logger.info('Interval Manager initialized with all monitoring systems');
-            } catch (err) {
-                logger.error('Error initializing Interval Manager:', err);
-            }
-
-            try {
-                const { startRadiusMaintenanceSchedule } = require('./config/radiusMaintenance');
-                startRadiusMaintenanceSchedule();
-            } catch (err) {
-                logger.error('Error starting RADIUS maintenance schedule:', err);
-            }
-
-            try {
-                scheduleFieldCompletionCleanup();
-                setImmediate(() => {
-                    cleanupFieldCompletionImages({ aggressive: true, syncDb: true })
-                        .then((r) => {
-                            logger.info(
-                                `[field-completion] Startup cleanup: ${r.deleted} file dihapus (~${Math.round((r.freedBytes || 0) / 1024 / 1024)}MB)`
-                            );
-                        })
-                        .catch((e) => {
-                            logger.warn('[field-completion] Startup cleanup:', e.message);
-                        });
-                });
-            } catch (err) {
-                logger.error('Error starting field-completion cleanup:', err);
-            }
-
-            try {
-                const { closeStaleSqliteRadacctOpenSessions } = require('./config/radiusMysqlAccounting');
-                setImmediate(() => {
-                    closeStaleSqliteRadacctOpenSessions().catch((e) => {
-                        logger.warn('[RADIUS-ACCT] Startup close stale SQLite radacct:', e.message);
-                    });
-                });
-            } catch (err) {
-                logger.warn('[RADIUS-ACCT] Startup maintenance skip:', err.message);
-            }
-            
-            // Initialize License System
-            try {
-                const { initializeLicense } = require('./config/licenseManager');
-                initializeLicense().then(() => {
-                    logger.info('License system initialized');
-                }).catch((err) => {
-                    logger.error('Error initializing License system:', err);
-                });
-            } catch (err) {
-                logger.error('Error loading License Manager:', err);
-            }
-        }
-        }).catch(err => {
-            logger.error('Error connecting to WhatsApp:', err);
+        initAgentTables().then(() => {
+            console.log('Database initialization completed successfully');
+        }).catch((err) => {
+            console.error('Database initialization failed:', err);
         });
-    } else {
-        logger.info('🚫 Baileys disabled and Wablas enabled, skipping Baileys WhatsApp connection');
-    }
+
+        if (hasMikrotikSettings) {
+            pppoeMonitor.initializePPPoEMonitoring().then(() => {
+                logger.info('PPPoE monitoring initialized');
+            }).catch((err) => {
+                logger.error('Error initializing PPPoE monitoring:', err);
+            });
+        }
+
+        try {
+            const intervalManager = require('./config/intervalManager');
+            intervalManager.initialize();
+            logger.info('Interval Manager initialized with all monitoring systems');
+        } catch (err) {
+            logger.error('Error initializing Interval Manager:', err);
+        }
+
+        try {
+            const { startRadiusMaintenanceSchedule } = require('./config/radiusMaintenance');
+            startRadiusMaintenanceSchedule();
+        } catch (err) {
+            logger.error('Error starting RADIUS maintenance schedule:', err);
+        }
+
+        try {
+            scheduleFieldCompletionCleanup();
+            setImmediate(() => {
+                cleanupFieldCompletionImages({ aggressive: true, syncDb: true })
+                    .then((r) => {
+                        logger.info(
+                            `[field-completion] Startup cleanup: ${r.deleted} file dihapus (~${Math.round((r.freedBytes || 0) / 1024 / 1024)}MB)`
+                        );
+                    })
+                    .catch((e) => {
+                        logger.warn('[field-completion] Startup cleanup:', e.message);
+                    });
+            });
+        } catch (err) {
+            logger.error('Error starting field-completion cleanup:', err);
+        }
+
+        try {
+            const { closeStaleSqliteRadacctOpenSessions } = require('./config/radiusMysqlAccounting');
+            setImmediate(() => {
+                closeStaleSqliteRadacctOpenSessions().catch((e) => {
+                    logger.warn('[RADIUS-ACCT] Startup close stale SQLite radacct:', e.message);
+                });
+            });
+        } catch (err) {
+            logger.warn('[RADIUS-ACCT] Startup maintenance skip:', err.message);
+        }
+
+        try {
+            const { initializeLicense } = require('./config/licenseManager');
+            initializeLicense().then(() => {
+                logger.info('License system initialized');
+            }).catch((err) => {
+                logger.error('Error initializing License system:', err);
+            });
+        } catch (err) {
+            logger.error('Error loading License Manager:', err);
+        }
+    };
+
+    (async () => {
+        try {
+            const registry = require('./config/baileys-session-registry');
+            const mig = registry.migrateLegacyOwnerIfNeeded();
+            if (mig.migrated) {
+                logger.info(`✅ Baileys session migrated → tenant-${mig.tenantId} (${mig.sessionDir})`);
+            } else if (mig.tenantId) {
+                logger.info(`ℹ️ Baileys migrate skip: ${mig.reason} (tenant-${mig.tenantId})`);
+            }
+
+            const tenantIds = await listBaileysTenantIds();
+            const needLegacyBot = useEnhancedPppoeMonitor || isBaileysEnabled();
+            const legacyHasCreds = registry.hasCreds(null);
+
+            if (needLegacyBot && legacyHasCreds) {
+                logger.info('📱 Connecting legacy Baileys session for bot/monitors...');
+                try {
+                    const sock = await whatsapp.connectToWhatsApp(null);
+                    wireLegacyBotSock(sock);
+                } catch (err) {
+                    logger.error('Error connecting legacy WhatsApp:', err);
+                }
+            } else if (needLegacyBot && !legacyHasCreds) {
+                logger.info('ℹ️ Legacy Baileys bot session kosong — bot inbound menunggu sesi legacy atau fase-2 tenant sock');
+            }
+
+            if (tenantIds.length > 0) {
+                logger.info(`📱 Stagger Baileys connect untuk ${tenantIds.length} tenant (yang sudah punya creds)`);
+                await registry.startTenantsWithExistingCreds(tenantIds, 12000);
+            } else if (!(await anyTenantUsesBaileys()) && !needLegacyBot) {
+                logger.info('🚫 Tidak ada Baileys tenant/global — skip Baileys connection');
+            }
+        } catch (err) {
+            logger.error('Error deciding/starting Baileys multi-tenant:', err);
+        } finally {
+            runPostWhatsAppInits();
+        }
+    })();
 
     // Jalankan monitor legacy hanya saat monitor PPPoE baru tidak aktif, agar tidak ada polling MikroTik ganda.
     if (hasMikrotikSettings && !useEnhancedPppoeMonitor) {

@@ -74,6 +74,14 @@
                     <i class="bi bi-info-circle me-1"></i>
                     Paket internet dikelola pusat (Master Paket). Pilih paket dari katalog di bawah — Anda tidak bisa membuat paket sendiri.
                 </div>
+                <div class="alert alert-warning">
+                    <i class="bi bi-router me-1"></i>
+                    <strong>Profil PPPoE otomatis</strong> dibuat saat Anda menekan <strong>Pilih</strong> pada paket
+                    (sesuai nama profil &amp; limit bandwidth paket). Setelah itu, buka
+                    <a href="/admin/mikrotik/profiles" class="alert-link">Profile PPPoE</a>
+                    untuk edit/pilih <strong>POOL-IP</strong> agar cocok dengan pool di MikroTik Anda.
+                    Jika punya banyak MikroTik, pakai <strong>nama pool yang sama</strong> di semua perangkat, dengan <strong>subnet berbeda</strong> per MikroTik.
+                </div>
 
                 <% if (packageCatalog && packageCatalog.length) { %>
                 <div class="card mb-4">
@@ -273,7 +281,23 @@
                         <div class="mb-3">
                             <label for="speed" class="form-label">Kecepatan</label>
                             <input type="text" class="form-control" id="speed" name="speed" placeholder="Contoh: 10 Mbps" required>
+                            <small class="form-text text-muted">Dipakai sebagai fallback limit jika upload/download di bawah kosong (mis. queue IP statik).</small>
                         </div>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="download_limit" class="form-label">Download Limit <small class="text-muted">(opsional)</small></label>
+                                    <input type="text" class="form-control" id="download_limit" name="download_limit" placeholder="Contoh: 50M">
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="upload_limit" class="form-label">Upload Limit <small class="text-muted">(opsional)</small></label>
+                                    <input type="text" class="form-control" id="upload_limit" name="upload_limit" placeholder="Contoh: 20M">
+                                </div>
+                            </div>
+                        </div>
+                        <small class="form-text text-muted d-block mb-3">Format Mikrotik: <code>50M</code>, <code>10M</code>. Digunakan untuk profil PPPoE/RADIUS dan queue IP statik.</small>
                         <div class="mb-3">
                             <label for="price" class="form-label">Harga (Sebelum PPN)</label>
                             <input type="number" class="form-control" id="price" name="price" required>
@@ -398,7 +422,23 @@
                         <div class="mb-3">
                             <label for="edit_speed" class="form-label">Kecepatan</label>
                             <input type="text" class="form-control" id="edit_speed" name="speed" required>
+                            <small class="form-text text-muted">Fallback limit jika upload/download kosong.</small>
                         </div>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="edit_download_limit" class="form-label">Download Limit <small class="text-muted">(opsional)</small></label>
+                                    <input type="text" class="form-control" id="edit_download_limit" name="download_limit" placeholder="Contoh: 50M">
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label for="edit_upload_limit" class="form-label">Upload Limit <small class="text-muted">(opsional)</small></label>
+                                    <input type="text" class="form-control" id="edit_upload_limit" name="upload_limit" placeholder="Contoh: 20M">
+                                </div>
+                            </div>
+                        </div>
+                        <small class="form-text text-muted d-block mb-3">Format Mikrotik: <code>50M</code>, <code>10M</code>. Untuk profil PPPoE/RADIUS dan queue IP statik.</small>
                         <div class="mb-3">
                             <label for="edit_price" class="form-label">Harga (Sebelum PPN)</label>
                             <input type="number" class="form-control" id="edit_price" name="price" required>
@@ -1046,6 +1086,8 @@
             const formData = new FormData();
             formData.append('name', $('#name').val().trim());
             formData.append('speed', $('#speed').val().trim());
+            formData.append('download_limit', ($('#download_limit').val() || '').trim());
+            formData.append('upload_limit', ($('#upload_limit').val() || '').trim());
             formData.append('price', parseFloat($('#price').val()));
             formData.append('tax_rate', $('#enable_tax').is(':checked') ? parseFloat($('#tax_rate').val()) : 0);
             formData.append('description', $('#description').val().trim());
@@ -1112,6 +1154,8 @@
                         $('#edit_package_id').val(package.id || '');
                         $('#edit_name').val(package.name || '');
                         $('#edit_speed').val(package.speed || '');
+                        $('#edit_download_limit').val(package.download_limit || '');
+                        $('#edit_upload_limit').val(package.upload_limit || '');
                         $('#edit_price').val(package.price || 0);
                         
                         // Set tax rate and checkbox based on package data
@@ -1206,6 +1250,8 @@
             const formData = new FormData();
             formData.append('name', $('#edit_name').val().trim());
             formData.append('speed', $('#edit_speed').val().trim());
+            formData.append('download_limit', ($('#edit_download_limit').val() || '').trim());
+            formData.append('upload_limit', ($('#edit_upload_limit').val() || '').trim());
             formData.append('price', parseFloat($('#edit_price').val()));
             formData.append('tax_rate', $('#edit_enable_tax').is(':checked') ? parseFloat($('#edit_tax_rate').val()) : 0);
             formData.append('description', $('#edit_description').val().trim());

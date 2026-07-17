@@ -3,6 +3,7 @@ const bcrypt = require('bcrypt');
 const billingManager = require('./billing');
 const { getSettingsWithCache } = require('./settingsManager');
 const logger = require('./logger');
+const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
 
 class AgentManager {
     constructor() {
@@ -218,8 +219,11 @@ class AgentManager {
         return new Promise(async (resolve, reject) => {
             try {
                 const hashedPassword = await bcrypt.hash(agentData.password, 10);
-                const sql = `INSERT INTO agents (username, name, phone, email, password, address, commission_rate, status) 
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+                const tenantId = hasTenantContext()
+                    ? getTenantId()
+                    : (agentData.tenant_id != null ? parseInt(agentData.tenant_id, 10) : 1);
+                const sql = `INSERT INTO agents (username, name, phone, email, password, address, commission_rate, status, tenant_id) 
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
                 const db = this.db;
                 db.run(sql, [
                     agentData.username,
@@ -229,7 +233,8 @@ class AgentManager {
                     hashedPassword,
                     agentData.address || null,
                     agentData.commission_rate || 5.00,
-                    agentData.status || 'active' // default active
+                    agentData.status || 'active', // default active
+                    tenantId
                 ], function(err) {
                     if (err) {
                         reject(err);

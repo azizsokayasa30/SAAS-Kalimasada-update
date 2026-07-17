@@ -154,80 +154,96 @@
                     </div>
                 </div>
 
+                <!-- Month/Year Filter -->
+                <form method="GET" action="/admin/billing/invoice-list" class="mb-3 d-flex align-items-end gap-2 flex-wrap" id="timeFilterForm">
+                    <div>
+                        <label class="form-label small fw-bold text-muted mb-1">Bulan</label>
+                        <select name="month" class="form-select form-select-sm shadow-sm border-primary" style="width: 150px;" onchange="this.form.submit()">
+                            <% const months = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember']; %>
+                            <% for(let i=1; i<=12; i++) { %>
+                                <option value="<%= i %>" <%= typeof selectedMonth !== 'undefined' && selectedMonth == i ? 'selected' : '' %>><%= months[i-1] %></option>
+                            <% } %>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label small fw-bold text-muted mb-1">Tahun</label>
+                        <select name="year" class="form-select form-select-sm shadow-sm border-primary" style="width: 100px;" onchange="this.form.submit()">
+                            <% const currentY = new Date().getFullYear(); %>
+                            <% for(let y=currentY-3; y<=currentY+1; y++) { %>
+                                <option value="<%= y %>" <%= typeof selectedYear !== 'undefined' && selectedYear == y ? 'selected' : '' %>><%= y %></option>
+                            <% } %>
+                        </select>
+                    </div>
+                    <% if (filters.status) { %><input type="hidden" name="status" value="<%= filters.status %>"><% } %>
+                    <% if (filters.type) { %><input type="hidden" name="type" value="<%= filters.type %>"><% } %>
+                    <% if (filters.customer_username) { %><input type="hidden" name="customer_username" value="<%= filters.customer_username %>"><% } %>
+                </form>
+
+                <style>
+                    .summary-card:hover { transform: translateY(-3px); box-shadow: 0 .5rem 1rem rgba(0,0,0,.15)!important; }
+                    .summary-cards-solid .summary-card {
+                        border-left: 0 !important;
+                        border-radius: 14px !important;
+                        overflow: hidden;
+                    }
+                    .summary-cards-solid .summary-card .card-body {
+                        color: #fff !important;
+                        background: transparent !important;
+                    }
+                    .summary-cards-solid .summary-card p,
+                    .summary-cards-solid .summary-card h3,
+                    .summary-cards-solid .summary-card i {
+                        color: #fff !important;
+                    }
+                    .summary-cards-solid .summary-card .text-muted {
+                        color: rgba(255,255,255,0.9) !important;
+                    }
+                    .summary-cards-solid > div:nth-child(1) .summary-card { background-image: linear-gradient(135deg, #6366f1, #4f46e5) !important; }
+                    .summary-cards-solid > div:nth-child(2) .summary-card { background-image: linear-gradient(135deg, #22c55e, #16a34a) !important; }
+                    .summary-cards-solid > div:nth-child(3) .summary-card { background-image: linear-gradient(135deg, #f59e0b, #d97706) !important; }
+                    .summary-cards-solid > div:nth-child(4) .summary-card { background-image: linear-gradient(135deg, #ef4444, #dc2626) !important; }
+                    .summary-card-nominal {
+                        font-size: 0.78rem;
+                        font-weight: 600;
+                        line-height: 1.2;
+                        color: rgba(255, 255, 255, 0.92) !important;
+                    }
+                    .summary-card-nominal-hint {
+                        font-size: 0.62rem;
+                        color: rgba(255, 255, 255, 0.72) !important;
+                    }
+                </style>
+
                 <!-- Summary Cards -->
-                <div class="row mb-4">
-                    <div class="col-md-3">
-                        <div class="card border-primary">
-                            <div class="card-body">
-                                <div class="d-flex align-items-center">
-                                    <div class="me-3">
-                                        <i class="bi bi-receipt text-primary" style="font-size: 2rem;"></i>
-                                    </div>
-                                    <div>
-                                        <div class="h4 text-primary">
-                                            <%= (typeof summary !== 'undefined' ? summary.total : pagination.totalCount) %>
+                <%
+                    const sum = typeof summary !== 'undefined' ? summary : {};
+                    const invoiceSummaryCards = [
+                        { title: 'Total Invoice', value: sum.total || 0, nominal: sum.total_amount || 0, hint: 'semua jenis invoice', icon: 'bi-receipt' },
+                        { title: 'Lunas', value: sum.paid || 0, nominal: sum.paid_amount || 0, hint: 'sesuai filter aktif', icon: 'bi-check-circle-fill' },
+                        { title: 'Belum Bayar', value: sum.unpaid || 0, nominal: sum.unpaid_amount || 0, hint: 'sesuai filter aktif', icon: 'bi-circle' },
+                        { title: 'Terlambat', value: sum.overdue || 0, nominal: sum.overdue_amount || 0, hint: 'belum bayar & lewat jatuh tempo', icon: 'bi-exclamation-circle-fill' }
+                    ];
+                %>
+                <div class="row mb-4 g-3 summary-cards-solid">
+                    <% invoiceSummaryCards.forEach(function(card) { %>
+                        <div class="col-md-3 col-12">
+                            <div class="card border-0 shadow-sm h-100 summary-card" style="border:0 !important; border-radius: 12px;">
+                                <div class="card-body p-3" style="border-radius: 12px;">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <p class="text-muted fw-semibold mb-1" style="font-size:0.75rem;"><%= card.title %></p>
+                                            <h3 class="mb-0 fw-bold mt-2" style="color:#fff !important;"><%= card.value %></h3>
+                                            <div class="summary-card-nominal mt-1">Rp <%= Number(card.nominal || 0).toLocaleString('id-ID') %></div>
+                                            <div class="summary-card-nominal-hint"><%= card.hint %></div>
                                         </div>
-                                        <div class="text-muted">Total Invoice</div>
-                                        <small class="text-muted">Semua jenis invoice</small>
+                                        <div class="rounded-circle d-flex align-items-center justify-content-center" style="width:40px;height:40px;background:rgba(255,255,255,0.22);flex-shrink:0;">
+                                            <i class="bi <%= card.icon %>" style="font-size:1.1rem;color:#fff !important;"></i>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="card border-success">
-                            <div class="card-body">
-                                <div class="d-flex align-items-center">
-                                    <div class="me-3">
-                                        <i class="bi bi-check-circle-fill text-success" style="font-size: 2rem;"></i>
-                                    </div>
-                                    <div>
-                                        <div class="h4 text-success">
-                                            <%= typeof summary !== 'undefined' ? summary.paid : 0 %>
-                                        </div>
-                                        <div class="text-muted">Lunas</div>
-                                        <small class="text-muted">Sesuai filter aktif</small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="card border-warning">
-                            <div class="card-body">
-                                <div class="d-flex align-items-center">
-                                    <div class="me-3">
-                                        <i class="bi bi-circle text-warning" style="font-size: 2rem;"></i>
-                                    </div>
-                                    <div>
-                                        <div class="h4 text-warning">
-                                            <%= typeof summary !== 'undefined' ? summary.unpaid : 0 %>
-                                        </div>
-                                        <div class="text-muted">Belum Bayar</div>
-                                        <small class="text-muted">Sesuai filter aktif</small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="card border-danger">
-                            <div class="card-body">
-                                <div class="d-flex align-items-center">
-                                    <div class="me-3">
-                                        <i class="bi bi-x-lg-circle text-danger" style="font-size: 2rem;"></i>
-                                    </div>
-                                    <div>
-                                        <div class="h4 text-danger">
-                                            <%= typeof summary !== 'undefined' ? summary.overdue : 0 %>
-                                        </div>
-                                        <div class="text-muted">Terlambat</div>
-                                        <small class="text-muted">Belum bayar & lewat jatuh tempo</small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+                    <% }); %>
                 </div>
 
                 <!-- Filters -->
@@ -239,6 +255,8 @@
                     </div>
                     <div class="card-body">
                         <form method="GET" action="/admin/billing/invoice-list" class="row g-3">
+                            <input type="hidden" name="month" value="<%= selectedMonth %>">
+                            <input type="hidden" name="year" value="<%= selectedYear %>">
                             <div class="col-md-3">
                                 <label class="form-label">Status</label>
                                 <select name="status" class="form-control">
@@ -385,9 +403,12 @@
                             <% if (pagination.totalPages > 1) { %>
                                 <nav aria-label="Invoice pagination">
                                     <ul class="pagination justify-content-center">
+                                        <% 
+                                            const pageQs = `status=${encodeURIComponent(filters.status || '')}&type=${encodeURIComponent(filters.type || '')}&customer_username=${encodeURIComponent(filters.customer_username || '')}&month=${selectedMonth}&year=${selectedYear}`;
+                                        %>
                                         <% if (pagination.currentPage > 1) { %>
                                             <li class="page-item">
-                                                <a class="page-link" href="?page=<%= pagination.currentPage - 1 %>&status=<%= filters.status %>&type=<%= filters.type %>&customer_username=<%= filters.customer_username %>">
+                                                <a class="page-link" href="?page=<%= pagination.currentPage - 1 %>&<%= pageQs %>">
                                                     <i class="bi bi-chevron-left"></i>
                                                 </a>
                                             </li>
@@ -395,7 +416,7 @@
                                         
                                         <% for (let i = Math.max(1, pagination.currentPage - 2); i <= Math.min(pagination.totalPages, pagination.currentPage + 2); i++) { %>
                                             <li class="page-item <%= i === pagination.currentPage ? 'active' : '' %>">
-                                                <a class="page-link" href="?page=<%= i %>&status=<%= filters.status %>&type=<%= filters.type %>&customer_username=<%= filters.customer_username %>">
+                                                <a class="page-link" href="?page=<%= i %>&<%= pageQs %>">
                                                     <%= i %>
                                                 </a>
                                             </li>
@@ -403,7 +424,7 @@
                                         
                                         <% if (pagination.currentPage < pagination.totalPages) { %>
                                             <li class="page-item">
-                                                <a class="page-link" href="?page=<%= pagination.currentPage + 1 %>&status=<%= filters.status %>&type=<%= filters.type %>&customer_username=<%= filters.customer_username %>">
+                                                <a class="page-link" href="?page=<%= pagination.currentPage + 1 %>&<%= pageQs %>">
                                                     <i class="bi bi-chevron-right"></i>
                                                 </a>
                                             </li>
@@ -436,10 +457,33 @@
             });
         });
         
-        // Reset filters function
+        // Reset filters function (kembali ke bulan berjalan)
         function resetFilters() {
             window.location.href = '/admin/billing/invoice-list';
         }
+
+        (function forceSolidSummaryCards() {
+            const gradients = [
+                'linear-gradient(135deg, #6366f1, #4f46e5)',
+                'linear-gradient(135deg, #22c55e, #16a34a)',
+                'linear-gradient(135deg, #f59e0b, #d97706)',
+                'linear-gradient(135deg, #ef4444, #dc2626)'
+            ];
+            document.querySelectorAll('.summary-cards-solid .summary-card').forEach((card, idx) => {
+                const gradient = gradients[idx % gradients.length];
+                card.style.setProperty('background', gradient, 'important');
+                card.style.setProperty('background-image', gradient, 'important');
+                card.style.setProperty('border', '0', 'important');
+                const body = card.querySelector('.card-body');
+                if (body) {
+                    body.style.setProperty('background', 'transparent', 'important');
+                    body.style.setProperty('color', '#fff', 'important');
+                }
+                card.querySelectorAll('h3, p, i').forEach((el) => {
+                    el.style.setProperty('color', '#fff', 'important');
+                });
+            });
+        })();
     </script>
 </body>
 </html>

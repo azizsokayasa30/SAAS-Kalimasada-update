@@ -9,6 +9,7 @@ function trimTrailingSlashes(s) {
 /**
  * URL dasar aplikasi untuk klien eksternal (Android, callback, deeplink).
  * Prioritas: PUBLIC_APP_BASE_URL / PUBLIC_API_BASE_URL → PUBLIC_APP_* terpisah → server_host + server_port (settings.json).
+ * Portal management biasanya di manage.{domain}.
  * @returns {string} Tanpa slash di akhir
  */
 function getPublicAppBaseUrl() {
@@ -45,35 +46,66 @@ function getPublicAppBaseUrl() {
 }
 
 /**
+ * URL hub API aplikasi mobile unified (Flutter).
+ * Prioritas: MOBILE_API_BASE_URL → https://{mobile_sub}.{base_domain} → fallback PUBLIC_APP_BASE_URL.
+ * @returns {string} Tanpa slash di akhir
+ */
+function getMobileApiBaseUrl() {
+  const direct = trimTrailingSlashes(process.env.MOBILE_API_BASE_URL || '');
+  if (direct) {
+    if (!/^https?:\/\//i.test(direct)) {
+      return trimTrailingSlashes(`https://${direct.replace(/^\/+/, '')}`);
+    }
+    return direct;
+  }
+
+  try {
+    const { getTenantBaseDomain, getTenantAppScheme } = require('./platform/tenantUrls');
+    const mobileSub = String(process.env.KALIMASADA_MOBILE_API_SUBDOMAIN || 'mobile')
+      .toLowerCase()
+      .trim() || 'mobile';
+    const base = getTenantBaseDomain();
+    if (base) {
+      return trimTrailingSlashes(`${getTenantAppScheme()}://${mobileSub}.${base}`);
+    }
+  } catch (_) { /* ignore */ }
+
+  return getPublicAppBaseUrl();
+}
+
+/**
  * Objek aman untuk dikirim ke klien (tanpa rahasia).
  */
 function getPublicEndpointConfig() {
   const publicAppBaseUrl = getPublicAppBaseUrl();
+  const mobileApiBaseUrl = getMobileApiBaseUrl();
   let scheme = 'http';
   let host = '';
   let port = '';
   try {
-    const u = new URL(publicAppBaseUrl);
+    const u = new URL(mobileApiBaseUrl || publicAppBaseUrl);
     scheme = u.protocol.replace(':', '') || 'http';
     host = u.hostname || '';
     port = u.port || (scheme === 'https' ? '443' : '80');
   } catch (_) {
-    host = publicAppBaseUrl;
+    host = mobileApiBaseUrl || publicAppBaseUrl;
     port = '';
   }
   return {
     publicAppBaseUrl,
+    mobileApiBaseUrl,
     scheme,
     host,
     port: String(port),
     apiBasePath: '/api',
     authLoginPath: '/api/auth/login',
     dataAccessNote:
-      'SQLite billing hanya di server; aplikasi Android harus memakai REST API (base URL di atas), bukan koneksi langsung ke file database.',
+      'SQLite billing hanya di server; aplikasi Android harus memakai REST API (base URL mobile API), bukan koneksi langsung ke file database.',
   };
 }
 
 module.exports = {
   getPublicAppBaseUrl,
+  getMobileApiBaseUrl,
   getPublicEndpointConfig,
 };

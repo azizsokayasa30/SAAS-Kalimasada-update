@@ -79,6 +79,21 @@
             </div>
             <% } %>
 
+            <div id="baileysDisconnectAlert" class="alert alert-warning border-0 shadow-sm d-none mb-4" role="alert">
+                <div class="d-flex flex-wrap align-items-start gap-2 justify-content-between">
+                    <div class="d-flex align-items-start gap-2">
+                        <i class="bi bi-whatsapp fs-4 mt-1" id="baileysAlertIcon"></i>
+                        <div>
+                            <div class="fw-semibold" id="baileysAlertTitle">Status WhatsApp (Baileys)</div>
+                            <div class="small mb-0" id="baileysAlertMessage"></div>
+                        </div>
+                    </div>
+                    <a href="/admin/billing/whatsapp-settings" class="btn btn-sm btn-danger text-white" id="baileysAlertCta">
+                        Buka WhatsApp Settings
+                    </a>
+                </div>
+            </div>
+
             <!-- LICENSE STATUS CARD REMOVED -->
 
             <!-- ====== QUICK ACTION ====== -->
@@ -694,6 +709,44 @@ function sendWaReminderFromBtn(btn) {
 <% if (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) { %>
 <script src="/js/dashboard-overview.js?v=2"></script>
 <% } %>
+<script>
+(function () {
+  var alertEl = document.getElementById('baileysDisconnectAlert');
+  if (!alertEl) return;
+  var titleEl = document.getElementById('baileysAlertTitle');
+  var msgEl = document.getElementById('baileysAlertMessage');
+  var iconEl = document.getElementById('baileysAlertIcon');
+
+  function renderBaileysAlert(payload) {
+    var alert = payload && payload.alert;
+    if (!payload || !payload.applicable || !alert || alert.connected || !alert.message) {
+      alertEl.classList.add('d-none');
+      return;
+    }
+    alertEl.classList.remove('d-none', 'alert-warning', 'alert-danger', 'alert-success');
+    alertEl.classList.add(alert.level === 'danger' ? 'alert-danger' : 'alert-warning');
+    if (titleEl) {
+      titleEl.textContent = alert.needsScan
+        ? 'WhatsApp Baileys terputus — perlu scan QR'
+        : 'WhatsApp Baileys terputus';
+    }
+    if (msgEl) msgEl.textContent = alert.message;
+    if (iconEl) {
+      iconEl.className = 'bi bi-whatsapp fs-4 mt-1 ' + (alert.level === 'danger' ? 'text-danger' : 'text-warning');
+    }
+  }
+
+  function refreshBaileysAlert() {
+    fetch('/admin/dashboard/api/baileys-status', { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(renderBaileysAlert)
+      .catch(function () { /* silent */ });
+  }
+
+  refreshBaileysAlert();
+  setInterval(refreshBaileysAlert, 60000);
+})();
+</script>
 <script>
 (function () {
   function loadScript(src) {

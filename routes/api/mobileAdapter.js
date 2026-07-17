@@ -194,7 +194,7 @@ function ensureFieldOpsTables() {
 }
 ensureFieldOpsTables();
 
-const MIKROTIK_NETWORK_MAP_TIMEOUT_MS = 8000;
+const MIKROTIK_NETWORK_MAP_TIMEOUT_MS = 12000;
 
 function withTimeout(promise, ms, label) {
     return Promise.race([
@@ -247,6 +247,30 @@ function parseCollectorId(req) {
 /** ID numerik teknisi dari JWT (id / sub / user_id) — hindari NaN bila token pakai string non-angka. */
 function parseTechnicianId(req) {
     return parseCollectorId(req);
+}
+
+/**
+ * Tenant aktif untuk query mobile (capture sync sebelum sqlite callback / Promise).
+ * Prefer ALS → req.tenantId → JWT tenantId.
+ */
+function resolveReqTenantId(req) {
+    if (hasTenantContext()) {
+        const tid = getTenantId();
+        if (tid != null && Number.isFinite(Number(tid))) return Number(tid);
+    }
+    if (req && req.tenantId != null && Number.isFinite(Number(req.tenantId))) {
+        return Number(req.tenantId);
+    }
+    const jwtTid = req && req.user && req.user.tenantId;
+    if (jwtTid != null && Number.isFinite(Number(jwtTid))) return Number(jwtTid);
+    return null;
+}
+
+/** Klausa AND tenant_id untuk alias tabel (mis. 'ij', 'o', '' ). */
+function sqlTenantAnd(alias, tenantId) {
+    if (tenantId == null) return { sql: '', params: [] };
+    const col = alias ? `${alias}.tenant_id` : 'tenant_id';
+    return { sql: ` AND ${col} = ?`, params: [tenantId] };
 }
 
 /** SQLite3 kadang mengembalikan BIGINT; JSON.stringify gagal → klien Flutter error. */
@@ -315,7 +339,7 @@ function mapTagSearchCustomerRow(r) {
 }
 
 /** Isi nama area dari tabel master `areas` bila kolom teks pelanggan kosong. */
-function attachAreaNamesFromMaster(customers, cb) {
+function attachAreaNamesFromMaster(customers, cb, tenantId = null) {
     const list = Array.isArray(customers) ? customers.map((c) => ({ ...c })) : [];
     const ids = [
         ...new Set(
@@ -332,9 +356,12 @@ function attachAreaNamesFromMaster(customers, cb) {
         return cb(null, list);
     }
     const placeholders = ids.map(() => '?').join(',');
+    const tid = tenantId != null && Number.isFinite(Number(tenantId)) ? Number(tenantId) : null;
+    const tenantSql = tid != null ? ' AND tenant_id = ?' : '';
+    const params = tid != null ? [...ids, tid] : ids;
     db.all(
-        `SELECT id, nama_area FROM areas WHERE id IN (${placeholders})`,
-        ids,
+        `SELECT id, nama_area FROM areas WHERE id IN (${placeholders})${tenantSql}`,
+        params,
         (err, rows) => {
             if (err) return cb(err);
             const byId = new Map(
@@ -611,6 +638,19 @@ db.run('ALTER TABLE trouble_reports ADD COLUMN customer_id INTEGER', (err) => {
             }
         );
     }
+});
+
+// Kolom teknis penyelesaian tiket (idempotent) — dipakai updateTroubleReportStatus
+[
+    'ALTER TABLE trouble_reports ADD COLUMN odp TEXT',
+    'ALTER TABLE trouble_reports ADD COLUMN sn TEXT',
+    'ALTER TABLE trouble_reports ADD COLUMN signal_level TEXT',
+].forEach((sql) => {
+    db.run(sql, (err) => {
+        if (err && !/duplicate column/i.test(String(err.message))) {
+            logger.warn('[mobile-adapter] trouble_reports tech cols:', err.message);
+        }
+    });
 });
 
 const installJobAlterSql = [
@@ -1147,14 +1187,18 @@ const {
 // --- Customers (pagination) ---
 router.get(['/customers/form-options', '/customers/form-option', '/customers/options'], verifyToken, allowFieldOps, async (req, res) => {
     try {
+        const tenantId = resolveReqTenantId(req);
+        const odpTenant = sqlTenantAnd('', tenantId);
+        const areaTenant = sqlTenantAnd('', tenantId);
         const [packages, odps, areas, profilesResult] = await Promise.all([
             billingManager.getPackages(),
             new Promise((resolve, reject) => {
                 db.all(
                     `SELECT id, name, code, capacity, used_ports, parent_odp_id
                      FROM odps
+                     WHERE 1=1${odpTenant.sql}
                      ORDER BY name`,
-                    [],
+                    odpTenant.params,
                     (err, rows) => (err ? reject(err) : resolve(rows || []))
                 );
             }),
@@ -1162,9 +1206,9 @@ router.get(['/customers/form-options', '/customers/form-option', '/customers/opt
                 db.all(
                     `SELECT id, nama_area, kode_area
                      FROM areas
-                     WHERE nama_area IS NOT NULL AND TRIM(nama_area) != ''
+                     WHERE nama_area IS NOT NULL AND TRIM(nama_area) != ''${areaTenant.sql}
                      ORDER BY nama_area ASC`,
-                    [],
+                    areaTenant.params,
                     (err, rows) => (err ? reject(err) : resolve(rows || []))
                 );
             }),
@@ -1336,8 +1380,12 @@ router.get('/customers', verifyToken, allowFieldOps, async (req, res) => {
     let activePppoeLoginSet = new Set();
     try {
         const { getActivePppoeLoginNamesSet } = require('../../config/mikrotik');
-        // Cache + maxWait: list pelanggan tidak boleh menunggu reconnect MikroTik yang down.
-        activePppoeLoginSet = await getActivePppoeLoginNamesSet({ maxWaitMs: 800 });
+        // Sama sumber online dengan /admin/mikrotik. Cold-start di mikrotik.js menunggu sampai ~10s;
+        // maxWait di sini hanya batas stale-while-revalidate (bukan cold empty → semua Offline).
+        activePppoeLoginSet = await getActivePppoeLoginNamesSet({
+            maxWaitMs: 9000,
+            mikrotikTimeoutMs: 9000
+        });
     } catch (e) {
         logger.warn('[mobile-adapter] customers PPPoE active set:', e.message || e);
     }
@@ -1566,7 +1614,7 @@ router.get('/customers', verifyToken, allowFieldOps, async (req, res) => {
             attachAreaNamesFromMaster(rows || [], (areaErr, result) => {
                 if (areaErr) reject(areaErr);
                 else resolve(result || []);
-            });
+            }, resolveReqTenantId(req));
         });
 
         const list = (enriched || []).map((r) => {
@@ -1612,13 +1660,16 @@ router.get('/customers/:customerId/ppp-session', verifyToken, requireTechnician,
     if (!Number.isFinite(customerId) || customerId <= 0) {
         return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
     }
+    const tenantId = hasTenantContext() ? getTenantId() : (req.tenantId ?? null);
     try {
         const customer = await new Promise((resolve, reject) => {
-            db.get(
-                'SELECT id, pppoe_username, username FROM customers WHERE id = ?',
-                [customerId],
-                (err, row) => (err ? reject(err) : resolve(row || null))
-            );
+            const params = [customerId];
+            let sql = 'SELECT id, pppoe_username, username FROM customers WHERE id = ?';
+            if (tenantId != null) {
+                sql += ' AND tenant_id = ?';
+                params.push(tenantId);
+            }
+            db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row || null)));
         });
         if (!customer) {
             return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
@@ -1748,19 +1799,35 @@ router.get('/customers/:customerId/payment-history', verifyToken, allowFieldOps,
     if (!Number.isFinite(customerId) || customerId <= 0) {
         return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
     }
+    const tenantId = hasTenantContext() ? getTenantId() : (req.tenantId ?? null);
     try {
+        // Pastikan pelanggan milik tenant aktif (cegah IDOR lintas tenant).
+        if (tenantId != null) {
+            const owned = await new Promise((resolve, reject) => {
+                db.get(
+                    'SELECT id FROM customers WHERE id = ? AND tenant_id = ?',
+                    [customerId, tenantId],
+                    (err, row) => (err ? reject(err) : resolve(row || null))
+                );
+            });
+            if (!owned) {
+                return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+            }
+        }
         const rows = await new Promise((resolve, reject) => {
-            db.all(
-                `SELECT i.id, i.invoice_number, i.status, i.amount, i.created_at,
+            const params = [customerId];
+            let sql = `SELECT i.id, i.invoice_number, i.status, i.amount, i.created_at,
                         i.due_date, i.payment_date, i.payment_method, p.name as package_name
                  FROM invoices i
                  LEFT JOIN packages p ON i.package_id = p.id
-                 WHERE i.customer_id = ?
-                 ORDER BY date(COALESCE(i.payment_date, i.due_date, i.created_at, '1970-01-01')) DESC
-                 LIMIT 24`,
-                [customerId],
-                (err, result) => (err ? reject(err) : resolve(result || []))
-            );
+                 WHERE i.customer_id = ?`;
+            if (tenantId != null) {
+                sql += ' AND i.tenant_id = ?';
+                params.push(tenantId);
+            }
+            sql += ` ORDER BY date(COALESCE(i.payment_date, i.due_date, i.created_at, '1970-01-01')) DESC
+                 LIMIT 24`;
+            db.all(sql, params, (err, result) => (err ? reject(err) : resolve(result || [])));
         });
         res.json({ success: true, data: rows });
     } catch (error) {
@@ -1923,14 +1990,14 @@ router.get('/customers/search', verifyToken, allowFieldOps, (req, res) => {
     if (q.length < 1) {
         return res.json({ success: true, data: [] });
     }
-    const like = `%${q.replace(/%/g, '')}%`;
-    const searchParams = [like, like, like, like, like, like, like];
-    let searchWhere = `c.name LIKE ? OR c.phone LIKE ? OR CAST(c.customer_id AS TEXT) LIKE ? OR IFNULL(c.email, '') LIKE ?
-            OR IFNULL(c.area, '') LIKE ? OR IFNULL(ar.nama_area, '') LIKE ? OR IFNULL(ar.kode_area, '') LIKE ?`;
-    if (hasTenantContext()) {
-        searchWhere = `c.tenant_id = ? AND (${searchWhere})`;
-        searchParams.unshift(getTenantId());
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
     }
+    const like = `%${q.replace(/%/g, '')}%`;
+    const searchParams = [tenantId, like, like, like, like, like, like, like];
+    const searchWhere = `c.tenant_id = ? AND (c.name LIKE ? OR c.phone LIKE ? OR CAST(c.customer_id AS TEXT) LIKE ? OR IFNULL(c.email, '') LIKE ?
+            OR IFNULL(c.area, '') LIKE ? OR IFNULL(ar.nama_area, '') LIKE ? OR IFNULL(ar.kode_area, '') LIKE ?)`;
     db.all(
         `SELECT c.id, c.customer_id, c.name, c.phone, c.email, c.status, c.address, c.area_id,
                 c.latitude, c.longitude,
@@ -1938,7 +2005,7 @@ router.get('/customers/search', verifyToken, allowFieldOps, (req, res) => {
                 COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, ar.kode_area, '') AS area,
                 ar.nama_area AS nama_area
          FROM customers c
-         LEFT JOIN areas ar ON c.area_id = ar.id
+         LEFT JOIN areas ar ON c.area_id = ar.id AND ar.tenant_id = c.tenant_id
          LEFT JOIN packages p ON c.package_id = p.id
          WHERE ${searchWhere}
          ORDER BY c.name
@@ -1954,13 +2021,17 @@ router.get('/customers/search', verifyToken, allowFieldOps, (req, res) => {
                 }
                 const data = (enriched || []).map(mapTagSearchCustomerRow);
                 res.json({ success: true, data });
-            });
+            }, tenantId);
         }
     );
 });
 
 /** Batch resolve nama area pelanggan (fallback tag pelanggan teknisi). */
 router.post('/customers/resolve-areas', verifyToken, allowFieldOps, (req, res) => {
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
     const rawIds = req.body && req.body.ids;
     const ids = (Array.isArray(rawIds) ? rawIds : [])
         .map((v) => parseInt(String(v), 10))
@@ -1974,9 +2045,9 @@ router.post('/customers/resolve-areas', verifyToken, allowFieldOps, (req, res) =
         `SELECT c.id, c.area_id,
                 COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, '') AS area
          FROM customers c
-         LEFT JOIN areas ar ON c.area_id = ar.id
-         WHERE c.id IN (${placeholders})`,
-        ids,
+         LEFT JOIN areas ar ON c.area_id = ar.id AND ar.tenant_id = c.tenant_id
+         WHERE c.id IN (${placeholders}) AND c.tenant_id = ?`,
+        [...ids, tenantId],
         (err, rows) => {
             if (err) {
                 logger.error('[mobile-adapter] customers/resolve-areas', err);
@@ -1993,28 +2064,34 @@ router.post('/customers/resolve-areas', verifyToken, allowFieldOps, (req, res) =
                     data[String(id)] = resolveCustomerAreaLabel(row);
                 }
                 res.json({ success: true, data });
-            });
+            }, tenantId);
         }
     );
 });
 
 /** Daftar nama area (teknisi / field ops) — untuk label pencarian tag pelanggan. */
 router.get('/areas/names', verifyToken, allowFieldOps, (req, res) => {
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
     db.all(
         `SELECT MIN(id) AS id, nama_area
          FROM (
              SELECT id, TRIM(nama_area) AS nama_area
              FROM areas
-             WHERE nama_area IS NOT NULL AND TRIM(nama_area) != ''
+             WHERE tenant_id = ?
+               AND nama_area IS NOT NULL AND TRIM(nama_area) != ''
              UNION ALL
              SELECT NULL AS id, TRIM(area) AS nama_area
              FROM customers
-             WHERE area IS NOT NULL AND TRIM(area) != ''
+             WHERE tenant_id = ?
+               AND area IS NOT NULL AND TRIM(area) != ''
          )
          WHERE nama_area IS NOT NULL AND TRIM(nama_area) != ''
          GROUP BY LOWER(nama_area)
          ORDER BY nama_area ASC`,
-        [],
+        [tenantId, tenantId],
         (err, rows) => {
             if (err) {
                 logger.error('[mobile-adapter] areas/names', err);
@@ -2044,10 +2121,13 @@ router.put('/customers/:customerId/location', verifyToken, allowFieldOps, (req, 
     }
 
     const runLocationUpdate = (odpIntId) => {
+        const tenantId = hasTenantContext() ? getTenantId() : (req.tenantId ?? null);
+        const tenantClause = tenantId != null ? ' AND tenant_id = ?' : '';
+        const tenantParams = tenantId != null ? [tenantId] : [];
         if (odpIntId != null && Number.isFinite(odpIntId) && odpIntId > 0) {
             db.run(
-                'UPDATE customers SET latitude = ?, longitude = ?, odp_id = ? WHERE id = ?',
-                [lat, lng, odpIntId, id],
+                `UPDATE customers SET latitude = ?, longitude = ?, odp_id = ? WHERE id = ?${tenantClause}`,
+                [lat, lng, odpIntId, id, ...tenantParams],
                 function (err) {
                     if (err) {
                         return res.status(500).json({ success: false, message: err.message });
@@ -2061,8 +2141,8 @@ router.put('/customers/:customerId/location', verifyToken, allowFieldOps, (req, 
             return;
         }
         db.run(
-            'UPDATE customers SET latitude = ?, longitude = ? WHERE id = ?',
-            [lat, lng, id],
+            `UPDATE customers SET latitude = ?, longitude = ? WHERE id = ?${tenantClause}`,
+            [lat, lng, id, ...tenantParams],
             function (err) {
                 if (err) {
                     return res.status(500).json({ success: false, message: err.message });
@@ -2080,10 +2160,14 @@ router.put('/customers/:customerId/location', verifyToken, allowFieldOps, (req, 
             return runLocationUpdate(null);
         }
         const odpKey = String(odpRaw).trim();
-        db.get(
-            'SELECT id FROM odps WHERE id = ? OR code = ? OR name = ? LIMIT 1',
-            [odpKey, odpKey, odpKey],
-            (eOdp, odpRow) => {
+        const odpTenantId = hasTenantContext() ? getTenantId() : (req.tenantId ?? null);
+        const odpSql = odpTenantId != null
+            ? 'SELECT id FROM odps WHERE (id = ? OR code = ? OR name = ?) AND tenant_id = ? LIMIT 1'
+            : 'SELECT id FROM odps WHERE id = ? OR code = ? OR name = ? LIMIT 1';
+        const odpParams = odpTenantId != null
+            ? [odpKey, odpKey, odpKey, odpTenantId]
+            : [odpKey, odpKey, odpKey];
+        db.get(odpSql, odpParams, (eOdp, odpRow) => {
                 if (eOdp) {
                     return res.status(500).json({ success: false, message: eOdp.message });
                 }
@@ -2095,7 +2179,12 @@ router.put('/customers/:customerId/location', verifyToken, allowFieldOps, (req, 
         );
     };
 
-    db.get('SELECT latitude, longitude FROM customers WHERE id = ?', [id], (err, row) => {
+    const locTenantId = hasTenantContext() ? getTenantId() : (req.tenantId ?? null);
+    const locSql = locTenantId != null
+        ? 'SELECT latitude, longitude FROM customers WHERE id = ? AND tenant_id = ?'
+        : 'SELECT latitude, longitude FROM customers WHERE id = ?';
+    const locParams = locTenantId != null ? [id, locTenantId] : [id];
+    db.get(locSql, locParams, (err, row) => {
         if (err) {
             return res.status(500).json({ success: false, message: err.message });
         }
@@ -2129,9 +2218,11 @@ router.get('/me', verifyToken, requireTechnician, (req, res) => {
         if (row.password) delete row.password;
         const variants = phoneVariantsForEmployeeLookup(req.user.phone || req.user.username || row.phone || '');
         const ph = variants.map(() => '?').join(',');
-        const employeeQuery = variants.length
-            ? `SELECT * FROM employees WHERE (status IS NULL OR LOWER(TRIM(status)) = 'aktif') AND TRIM(no_hp) IN (${ph}) LIMIT 1`
+        const meTenantId = resolveReqTenantId(req);
+        const employeeQuery = variants.length && meTenantId != null
+            ? `SELECT * FROM employees WHERE tenant_id = ? AND (status IS NULL OR LOWER(TRIM(status)) = 'aktif') AND TRIM(no_hp) IN (${ph}) LIMIT 1`
             : null;
+        const employeeParams = employeeQuery ? [meTenantId, ...variants] : [];
 
         const finalize = (employeeRow) => {
             resolveEmployeePhotoPath(db, row, (ePh, relPath) => {
@@ -2170,7 +2261,7 @@ router.get('/me', verifyToken, requireTechnician, (req, res) => {
         if (!employeeQuery) {
             return finalize(null);
         }
-        db.get(employeeQuery, variants, (empErr, empRow) => {
+        db.get(employeeQuery, employeeParams, (empErr, empRow) => {
             if (empErr) {
                 logger.warn('[mobile-adapter] /me employee fallback failed:', empErr.message);
                 return finalize(null);
@@ -2258,13 +2349,17 @@ router.post('/me/photo', verifyToken, requireTechnician, (req, res) => {
 
                     if (!variants.length) return finishOk();
 
+                    const photoTenantId = resolveReqTenantId(req);
+                    if (photoTenantId == null) return finishOk();
+
                     const ph = variants.map(() => '?').join(',');
                     db.get(
                         `SELECT id, foto_path FROM employees
-                         WHERE (status IS NULL OR LOWER(TRIM(status)) = 'aktif')
+                         WHERE tenant_id = ?
+                           AND (status IS NULL OR LOWER(TRIM(status)) = 'aktif')
                            AND TRIM(no_hp) IN (${ph})
                          LIMIT 1`,
-                        variants,
+                        [photoTenantId, ...variants],
                         (empErr, empRow) => {
                             if (empErr || !empRow || !empRow.id) {
                                 if (empErr) {
@@ -2355,13 +2450,14 @@ router.put('/me', verifyToken, requireTechnician, (req, res) => {
             // Sinkronkan juga data karyawan (employees) agar form teknisi konsisten
             // dengan sumber data karyawan yang dipakai sistem absensi.
             const variants = phoneVariantsForEmployeeLookup(req.user.phone || req.user.username || '');
-            if (!variants.length) {
+            const putTenantId = resolveReqTenantId(req);
+            if (!variants.length || putTenantId == null) {
                 return res.json({ success: true, message: 'Profil berhasil diperbarui' });
             }
             const ph = variants.map(() => '?').join(',');
             const selectSql =
-                `SELECT id FROM employees WHERE (status IS NULL OR LOWER(TRIM(status)) = 'aktif') AND TRIM(no_hp) IN (${ph}) LIMIT 1`;
-            db.get(selectSql, variants, (empErr, empRow) => {
+                `SELECT id FROM employees WHERE tenant_id = ? AND (status IS NULL OR LOWER(TRIM(status)) = 'aktif') AND TRIM(no_hp) IN (${ph}) LIMIT 1`;
+            db.get(selectSql, [putTenantId, ...variants], (empErr, empRow) => {
                 if (empErr || !empRow || !empRow.id) {
                     if (empErr) {
                         logger.warn('[mobile-adapter] /me PUT employee lookup failed:', empErr.message);
@@ -2469,6 +2565,10 @@ function sendAttendanceStatusPayload(res, empRow, row, today) {
 }
 
 router.get('/admin/attendance/today', verifyToken, requireAdmin, (req, res) => {
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
     const today = jakartaAttendanceTodayYmd();
     const query = `
         SELECT
@@ -2482,11 +2582,13 @@ router.get('/admin/attendance/today', verifyToken, requireAdmin, (req, res) => {
         LEFT JOIN employee_attendance a
             ON a.employee_id = e.id
             AND a.date = ?
-        WHERE e.status IS NULL OR LOWER(TRIM(e.status)) = 'aktif'
+            AND a.tenant_id = e.tenant_id
+        WHERE e.tenant_id = ?
+          AND (e.status IS NULL OR LOWER(TRIM(e.status)) = 'aktif')
         ORDER BY e.nama_lengkap ASC
     `;
 
-    db.all(query, [today], (err, rows) => {
+    db.all(query, [today, tenantId], (err, rows) => {
         if (err) {
             logger.error('[mobile-adapter] admin/attendance/today', err);
             return res.status(500).json({ success: false, message: err.message });
@@ -2552,8 +2654,12 @@ router.get('/admin/finance/overview', verifyToken, requireAdmin, async (req, res
         ] = await Promise.all([
             billingManager.getAllPaymentsHistory(paymentFilters),
             billingManager.getAllPaymentsHistorySummary(paymentFilters),
-            billingManager.getCollectorsWithPendingAmounts(period.month, period.year),
-            billingManager.getCollectorReportsAreaRowsAndSummary(period.month, period.year, null),
+            billingManager.getCollectorsWithPendingAmounts(period.month, period.year, {
+                tenantId: resolveReqTenantId(req)
+            }),
+            billingManager.getCollectorReportsAreaRowsAndSummary(period.month, period.year, null, {
+                tenantId: resolveReqTenantId(req)
+            }),
             billingManager.getCollectorRemittanceReceipts(40),
             billingManager.getIncomes(period.startDate, period.endDate),
             billingManager.getExpenses(period.startDate, period.endDate),
@@ -2680,6 +2786,10 @@ router.post('/admin/finance/expenses', verifyToken, requireAdmin, async (req, re
 });
 
 router.get('/attendance/status', verifyToken, requireTechnician, (req, res) => {
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
     const variants = phoneVariantsForEmployeeLookup(req.user.phone || req.user.username || '');
     if (!variants.length) {
         return res.json({ success: true, data: null, employee_matched: false });
@@ -2688,10 +2798,12 @@ router.get('/attendance/status', verifyToken, requireTechnician, (req, res) => {
     db.get(
         `SELECT e.id, e.shift_id, s.shift_name, s.check_in_time, s.check_out_time
          FROM employees e
-         LEFT JOIN attendance_shifts s ON e.shift_id = s.id
-         WHERE (e.status IS NULL OR LOWER(TRIM(e.status)) = 'aktif') AND TRIM(e.no_hp) IN (${ph})
+         LEFT JOIN attendance_shifts s ON e.shift_id = s.id AND s.tenant_id = e.tenant_id
+         WHERE e.tenant_id = ?
+           AND (e.status IS NULL OR LOWER(TRIM(e.status)) = 'aktif')
+           AND TRIM(e.no_hp) IN (${ph})
          LIMIT 1`,
-        variants,
+        [tenantId, ...variants],
         (empErr, empRow) => {
             if (empErr) {
                 logger.error('[mobile-adapter] attendance/status employee', empErr);
@@ -2703,8 +2815,8 @@ router.get('/attendance/status', verifyToken, requireTechnician, (req, res) => {
             }
             const today = jakartaAttendanceTodayYmd();
             db.get(
-                'SELECT id, date, check_in, check_out, status, notes FROM employee_attendance WHERE employee_id = ? AND date = ?',
-                [eid, today],
+                'SELECT id, date, check_in, check_out, status, notes FROM employee_attendance WHERE employee_id = ? AND date = ? AND tenant_id = ?',
+                [eid, today, tenantId],
                 (aErr, row) => {
                     if (aErr) {
                         logger.error('[mobile-adapter] attendance/status', aErr);
@@ -2775,14 +2887,20 @@ router.post('/attendance', verifyToken, requireTechnician, (req, res) => {
             message: 'Nomor HP teknisi tidak cocok dengan data karyawan (employees.no_hp). Hubungi admin.'
         });
     }
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
     const ph = variants.map(() => '?').join(',');
     db.get(
         `SELECT e.id, e.shift_id, s.shift_name, s.check_in_time, s.check_out_time
          FROM employees e
-         LEFT JOIN attendance_shifts s ON e.shift_id = s.id
-         WHERE (e.status IS NULL OR LOWER(TRIM(e.status)) = 'aktif') AND TRIM(e.no_hp) IN (${ph})
+         LEFT JOIN attendance_shifts s ON e.shift_id = s.id AND s.tenant_id = e.tenant_id
+         WHERE e.tenant_id = ?
+           AND (e.status IS NULL OR LOWER(TRIM(e.status)) = 'aktif')
+           AND TRIM(e.no_hp) IN (${ph})
          LIMIT 1`,
-        variants,
+        [tenantId, ...variants],
         (empErr, empRow) => {
             if (empErr) {
                 logger.error('[mobile-adapter] attendance employee', empErr);
@@ -2801,6 +2919,7 @@ router.post('/attendance', verifyToken, requireTechnician, (req, res) => {
             logger.info('[mobile-adapter] attendance request', {
                 type,
                 employee_id: eid,
+                tenant_id: tenantId,
                 date: today,
                 mode: type === 'check_in' ? mode : null,
                 photo_len: photoB64.length,
@@ -2808,8 +2927,8 @@ router.post('/attendance', verifyToken, requireTechnician, (req, res) => {
             });
 
             db.get(
-                'SELECT id, check_in, check_out, notes FROM employee_attendance WHERE employee_id = ? AND date = ?',
-                [eid, today],
+                'SELECT id, check_in, check_out, notes FROM employee_attendance WHERE employee_id = ? AND date = ? AND tenant_id = ?',
+                [eid, today, tenantId],
                 (rowErr, row) => {
                     if (rowErr) {
                         logger.error('[mobile-adapter] attendance row', rowErr);
@@ -2821,8 +2940,8 @@ router.post('/attendance', verifyToken, requireTechnician, (req, res) => {
                             return res.status(400).json({ success: false, message: 'Sudah masuk hari ini' });
                         }
                         return db.get(
-                            'SELECT * FROM attendance_settings ORDER BY id DESC LIMIT 1',
-                            [],
+                            'SELECT * FROM attendance_settings WHERE tenant_id = ? ORDER BY id DESC LIMIT 1',
+                            [tenantId],
                             (cfgErr, cfg) => {
                                 if (cfgErr) {
                                     logger.error('[mobile-adapter] attendance gps-config', cfgErr);
@@ -2848,8 +2967,8 @@ router.post('/attendance', verifyToken, requireTechnician, (req, res) => {
                                     const notes = `${noteBase}${extra}${lateMeta}${gpsInfo}`;
                                     if (row && row.id) {
                                         return db.run(
-                                            `UPDATE employee_attendance SET status = 'hadir', check_in = ?, check_out = NULL, notes = ?, updated_at = datetime('now','localtime') WHERE id = ?`,
-                                            [ts, notes, row.id],
+                                            `UPDATE employee_attendance SET status = 'hadir', check_in = ?, check_out = NULL, notes = ?, updated_at = datetime('now','localtime') WHERE id = ? AND tenant_id = ?`,
+                                            [ts, notes, row.id, tenantId],
                                             function (upErr) {
                                                 if (upErr) {
                                                     logger.error('[mobile-adapter] attendance check_in update', upErr);
@@ -2868,8 +2987,8 @@ router.post('/attendance', verifyToken, requireTechnician, (req, res) => {
                                         );
                                     }
                                     return db.run(
-                                        `INSERT INTO employee_attendance (employee_id, date, status, check_in, check_out, notes) VALUES (?, ?, 'hadir', ?, NULL, ?)`,
-                                        [eid, today, ts, notes],
+                                        `INSERT INTO employee_attendance (employee_id, date, status, check_in, check_out, notes, tenant_id) VALUES (?, ?, 'hadir', ?, NULL, ?, ?)`,
+                                        [eid, today, ts, notes, tenantId],
                                         function (insErr) {
                                             if (insErr) {
                                                 logger.error('[mobile-adapter] attendance check_in insert', insErr);
@@ -2893,8 +3012,8 @@ router.post('/attendance', verifyToken, requireTechnician, (req, res) => {
                                 }
 
                                 db.all(
-                                    'SELECT id, branch_name, latitude, longitude FROM attendance_branches ORDER BY id ASC',
-                                    [],
+                                    'SELECT id, branch_name, latitude, longitude FROM attendance_branches WHERE tenant_id = ? ORDER BY id ASC',
+                                    [tenantId],
                                     (brErr, branches) => {
                                         if (brErr) {
                                             logger.error('[mobile-adapter] attendance branches', brErr);
@@ -2994,8 +3113,8 @@ router.post('/attendance', verifyToken, requireTechnician, (req, res) => {
                     }
                     const outNotes = row.notes ? `${row.notes} | ${noteBase}` : noteBase;
                     return db.run(
-                        `UPDATE employee_attendance SET check_out = ?, notes = ?, updated_at = datetime('now','localtime') WHERE id = ?`,
-                        [ts, outNotes, row.id],
+                        `UPDATE employee_attendance SET check_out = ?, notes = ?, updated_at = datetime('now','localtime') WHERE id = ? AND tenant_id = ?`,
+                        [ts, outNotes, row.id, tenantId],
                         function (coErr) {
                             if (coErr) {
                                 logger.error('[mobile-adapter] attendance check_out', coErr);
@@ -3039,11 +3158,19 @@ router.post('/leave-request', verifyToken, requireTechnician, (req, res) => {
             message: 'Nomor HP login tidak cocok dengan data karyawan (employees.no_hp). Hubungi admin.'
         });
     }
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
     const requestedBy = [req.user.phone, req.user.username].filter(Boolean).join(' / ') || 'mobile';
     const ph = variants.map(() => '?').join(',');
     db.get(
-        `SELECT id FROM employees WHERE (status IS NULL OR LOWER(TRIM(status)) = 'aktif') AND TRIM(no_hp) IN (${ph}) LIMIT 1`,
-        variants,
+        `SELECT id FROM employees
+         WHERE tenant_id = ?
+           AND (status IS NULL OR LOWER(TRIM(status)) = 'aktif')
+           AND TRIM(no_hp) IN (${ph})
+         LIMIT 1`,
+        [tenantId, ...variants],
         (empErr, empRow) => {
             if (empErr) {
                 logger.error('[mobile-adapter] leave-request employee', empErr);
@@ -3057,12 +3184,12 @@ router.post('/leave-request', verifyToken, requireTechnician, (req, res) => {
                 });
             }
             const query = `
-                INSERT INTO employee_leave_requests (employee_id, request_type, start_date, end_date, reason, requested_by, status)
-                VALUES (?, ?, ?, ?, ?, ?, 'pending')
+                INSERT INTO employee_leave_requests (employee_id, request_type, start_date, end_date, reason, requested_by, status, tenant_id)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
             `;
             db.run(
                 query,
-                [eid, requestType, startDate, endDate, reason, requestedBy],
+                [eid, requestType, startDate, endDate, reason, requestedBy, tenantId],
                 function (insErr) {
                     if (insErr) {
                         logger.error('[mobile-adapter] leave-request insert', insErr);
@@ -3071,6 +3198,7 @@ router.post('/leave-request', verifyToken, requireTechnician, (req, res) => {
                     logger.info('[mobile-adapter] leave-request ok', {
                         id: this.lastID,
                         employee_id: eid,
+                        tenant_id: tenantId,
                         request_type: requestType,
                         start_date: startDate,
                         end_date: endDate
@@ -3088,14 +3216,22 @@ router.post('/leave-request', verifyToken, requireTechnician, (req, res) => {
 
 /** Riwayat izin/cuti yang sudah diproses admin (30 hari) — tampil di halaman absensi mobile */
 router.get('/leave-requests/recent', verifyToken, requireTechnician, (req, res) => {
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
     const variants = phoneVariantsForEmployeeLookup(req.user.phone || req.user.username || '');
     if (!variants.length) {
         return res.json({ success: true, data: [], employee_matched: false });
     }
     const ph = variants.map(() => '?').join(',');
     db.get(
-        `SELECT id FROM employees WHERE (status IS NULL OR LOWER(TRIM(status)) = 'aktif') AND TRIM(no_hp) IN (${ph}) LIMIT 1`,
-        variants,
+        `SELECT id FROM employees
+         WHERE tenant_id = ?
+           AND (status IS NULL OR LOWER(TRIM(status)) = 'aktif')
+           AND TRIM(no_hp) IN (${ph})
+         LIMIT 1`,
+        [tenantId, ...variants],
         (empErr, empRow) => {
             if (empErr) {
                 logger.error('[mobile-adapter] leave-requests/recent employee', empErr);
@@ -3109,11 +3245,12 @@ router.get('/leave-requests/recent', verifyToken, requireTechnician, (req, res) 
                 `SELECT id, request_type, start_date, end_date, reason, status, approved_at, approval_notes, created_at
                  FROM employee_leave_requests
                  WHERE employee_id = ?
+                   AND tenant_id = ?
                    AND status IN ('approved', 'rejected')
                    AND datetime(COALESCE(approved_at, updated_at, created_at)) >= datetime('now','localtime', '-30 days')
                  ORDER BY datetime(COALESCE(approved_at, updated_at)) DESC
                  LIMIT 50`,
-                [eid],
+                [eid, tenantId],
                 (qErr, rows) => {
                     if (qErr) {
                         logger.error('[mobile-adapter] leave-requests/recent', qErr);
@@ -3128,12 +3265,20 @@ router.get('/leave-requests/recent', verifyToken, requireTechnician, (req, res) 
 
 // --- Dashboard stats ---
 router.get('/dashboard', verifyToken, allowFieldOps, (req, res) => {
+    // Capture tenant sync sebelum sqlite callback (ALS tidak ikut ke callback).
+    const tenantId = hasTenantContext() ? getTenantId() : (req.tenantId ?? null);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
+    const tid = Number(tenantId);
+
     const baseSql = `SELECT
             COUNT(*) AS total_customers,
             SUM(CASE WHEN LOWER(status) = 'active' THEN 1 ELSE 0 END) AS active_customers,
             SUM(CASE WHEN LOWER(status) = 'suspended' THEN 1 ELSE 0 END) AS suspended_customers,
             SUM(CASE WHEN LOWER(status) IN ('inactive','register') THEN 1 ELSE 0 END) AS isolated_customers
-         FROM customers`;
+         FROM customers
+         WHERE tenant_id = ?`;
 
     const sendStats = (row, isolatedOverride) => {
         res.json({
@@ -3150,7 +3295,7 @@ router.get('/dashboard', verifyToken, allowFieldOps, (req, res) => {
         });
     };
 
-    db.get(baseSql, [], (err, row) => {
+    db.get(baseSql, [tid], (err, row) => {
         if (err) {
             logger.error('[mobile-adapter] dashboard:', err);
             return res.status(500).json({ success: false, message: err.message });
@@ -3160,18 +3305,20 @@ router.get('/dashboard', verifyToken, allowFieldOps, (req, res) => {
         if (role === 'technician' && techId) {
             const trMatch = sqlTroubleTicketCustomerMatch('cu', 'tr');
             const gangSql = `SELECT COUNT(DISTINCT id) AS n FROM (
-                SELECT c.id FROM customers c WHERE LOWER(c.status) = 'isolated'
+                SELECT c.id FROM customers c
+                 WHERE LOWER(c.status) = 'isolated' AND c.tenant_id = ?
                 UNION
                 SELECT cu.id FROM customers cu
                 INNER JOIN trouble_reports tr ON ${trMatch}
-                WHERE (
+                WHERE cu.tenant_id = ?
+                  AND (
                         tr.assigned_technician_id = ?
                         OR CAST(tr.assigned_technician_id AS TEXT) = ?
                         OR IFNULL(TRIM(CAST(tr.assigned_technician_id AS TEXT)), '') IN ('', '0')
                       )
                   AND LOWER(IFNULL(tr.status, '')) NOT IN ('closed', 'resolved')
             )`;
-            db.get(gangSql, [techId, String(techId)], (err2, gRow) => {
+            db.get(gangSql, [tid, tid, techId, String(techId)], (err2, gRow) => {
                 if (err2) {
                     logger.error('[mobile-adapter] dashboard gangguan:', err2);
                     return sendStats(row, null);
@@ -3189,6 +3336,12 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
         return res.status(403).json({ success: false, message: 'Hanya admin' });
     }
 
+    const tenantId = hasTenantContext() ? getTenantId() : (req.tenantId ?? null);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
+    const tid = Number(tenantId);
+
     const now = new Date();
     const year = Math.max(2000, parseInt(req.query.year, 10) || now.getFullYear());
     const allYear = String(req.query.month || '').toLowerCase() === 'all' || String(req.query.month || '') === '0';
@@ -3201,7 +3354,8 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
     const sql = `
         SELECT
             (SELECT COUNT(*) FROM customers cu
-             WHERE date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS total_customers,
+             WHERE cu.tenant_id = ?
+               AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS total_customers,
             (SELECT COALESCE(SUM(
                 CASE WHEN p.price IS NOT NULL
                     THEN ROUND(p.price * (1.0 + COALESCE(p.tax_rate, 11.00) / 100.0))
@@ -3210,9 +3364,11 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
             ), 0)
              FROM customers cu
              LEFT JOIN packages p ON p.id = cu.package_id
-             WHERE date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS total_customer_amount,
+             WHERE cu.tenant_id = ?
+               AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS total_customer_amount,
             (SELECT COUNT(*) FROM customers cu
-             WHERE LOWER(COALESCE(cu.status, '')) IN ('active', 'aktif')
+             WHERE cu.tenant_id = ?
+               AND LOWER(COALESCE(cu.status, '')) IN ('active', 'aktif')
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS active_customers,
             (SELECT COALESCE(SUM(
                 CASE WHEN p.price IS NOT NULL
@@ -3222,10 +3378,12 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
             ), 0)
              FROM customers cu
              LEFT JOIN packages p ON p.id = cu.package_id
-             WHERE LOWER(COALESCE(cu.status, '')) IN ('active', 'aktif')
+             WHERE cu.tenant_id = ?
+               AND LOWER(COALESCE(cu.status, '')) IN ('active', 'aktif')
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS active_customer_amount,
             (SELECT COUNT(*) FROM customers
-             WHERE date(COALESCE(join_date, created_at, '1970-01-01')) >= date(?)
+             WHERE tenant_id = ?
+               AND date(COALESCE(join_date, created_at, '1970-01-01')) >= date(?)
                AND date(COALESCE(join_date, created_at, '1970-01-01')) < date(?)) AS new_customers,
             (SELECT COALESCE(SUM(
                 CASE WHEN p.price IS NOT NULL
@@ -3235,58 +3393,70 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
             ), 0)
              FROM customers cu
              LEFT JOIN packages p ON p.id = cu.package_id
-             WHERE date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) >= date(?)
+             WHERE cu.tenant_id = ?
+               AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) >= date(?)
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS new_customer_amount,
             (SELECT COUNT(*) FROM customers cu
-             WHERE LOWER(COALESCE(cu.status, '')) IN ('suspended', 'isolir')
+             WHERE cu.tenant_id = ?
+               AND LOWER(COALESCE(cu.status, '')) IN ('suspended', 'isolir')
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS isolir_customers,
             (SELECT COUNT(*) FROM customers cu
-             WHERE LOWER(COALESCE(cu.status, '')) IN ('inactive', 'nonaktif')
+             WHERE cu.tenant_id = ?
+               AND LOWER(COALESCE(cu.status, '')) IN ('inactive', 'nonaktif')
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS inactive_customers,
             (SELECT COUNT(*) FROM customers cu
-             WHERE LOWER(COALESCE(cu.status, '')) IN ('inactive', 'register')
+             WHERE cu.tenant_id = ?
+               AND LOWER(COALESCE(cu.status, '')) IN ('inactive', 'register')
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS isolir_cuti_customers,
             (SELECT COUNT(*) FROM customers cu
-             WHERE LOWER(COALESCE(cu.status, '')) IN ('berhenti', 'stopped', 'terminated', 'cancelled')
+             WHERE cu.tenant_id = ?
+               AND LOWER(COALESCE(cu.status, '')) IN ('berhenti', 'stopped', 'terminated', 'cancelled')
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS stopped_customers,
 
             (SELECT COUNT(*) FROM invoices i
-             WHERE date(COALESCE(i.created_at, i.due_date, '1970-01-01')) >= date(?)
+             WHERE i.tenant_id = ?
+               AND date(COALESCE(i.created_at, i.due_date, '1970-01-01')) >= date(?)
                AND date(COALESCE(i.created_at, i.due_date, '1970-01-01')) < date(?)
                AND i.status = 'unpaid'
                AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)) AS unpaid_invoices,
             (SELECT COALESCE(SUM(i.amount), 0) FROM invoices i
-             WHERE date(COALESCE(i.created_at, i.due_date, '1970-01-01')) >= date(?)
+             WHERE i.tenant_id = ?
+               AND date(COALESCE(i.created_at, i.due_date, '1970-01-01')) >= date(?)
                AND date(COALESCE(i.created_at, i.due_date, '1970-01-01')) < date(?)
                AND i.status = 'unpaid'
                AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)) AS unpaid_amount,
             (SELECT COUNT(*) FROM invoices i
-             WHERE date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) >= date(?)
+             WHERE i.tenant_id = ?
+               AND date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) >= date(?)
                AND date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) < date(?)
                AND i.status = 'paid'
                AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)) AS paid_invoices,
             (SELECT COALESCE(SUM(i.amount), 0) FROM invoices i
-             WHERE date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) >= date(?)
+             WHERE i.tenant_id = ?
+               AND date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) >= date(?)
                AND date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) < date(?)
                AND i.status = 'paid'
                AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)) AS paid_amount,
 
             (SELECT COUNT(*) FROM payments p
-             WHERE date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
+             WHERE p.tenant_id = ?
+               AND date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
                AND date(COALESCE(p.payment_date, '1970-01-01')) < date(?)
                AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%transfer%'
                AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%online%'
                AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%qris%'
                AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%gateway%') AS cash_transactions,
             (SELECT COALESCE(SUM(p.amount), 0) FROM payments p
-             WHERE date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
+             WHERE p.tenant_id = ?
+               AND date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
                AND date(COALESCE(p.payment_date, '1970-01-01')) < date(?)
                AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%transfer%'
                AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%online%'
                AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%qris%'
                AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%gateway%') AS cash_amount,
             (SELECT COUNT(*) FROM payments p
-             WHERE date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
+             WHERE p.tenant_id = ?
+               AND date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
                AND date(COALESCE(p.payment_date, '1970-01-01')) < date(?)
                AND (
                     LOWER(TRIM(COALESCE(p.payment_method, ''))) LIKE '%transfer%'
@@ -3295,7 +3465,8 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
                  OR LOWER(TRIM(COALESCE(p.payment_method, ''))) LIKE '%gateway%'
                )) AS online_transactions,
             (SELECT COALESCE(SUM(p.amount), 0) FROM payments p
-             WHERE date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
+             WHERE p.tenant_id = ?
+               AND date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
                AND date(COALESCE(p.payment_date, '1970-01-01')) < date(?)
                AND (
                     LOWER(TRIM(COALESCE(p.payment_method, ''))) LIKE '%transfer%'
@@ -3305,23 +3476,26 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
                )) AS online_amount,
 
             (SELECT COUNT(*) FROM invoices i
-             WHERE i.status = 'unpaid' AND date(i.due_date) < date('now', 'localtime')) AS overdue_invoices,
+             WHERE i.tenant_id = ?
+               AND i.status = 'unpaid' AND date(i.due_date) < date('now', 'localtime')) AS overdue_invoices,
             (SELECT COUNT(DISTINCT i.customer_id) FROM invoices i
-             WHERE i.status = 'unpaid' AND date(i.due_date) < date('now', 'localtime')) AS arrears_customers
+             WHERE i.tenant_id = ?
+               AND i.status = 'unpaid' AND date(i.due_date) < date('now', 'localtime')) AS arrears_customers
     `;
     const params = [
-        end, // total_customers: semua pelanggan sebelum bulan berikutnya
-        end, // total_customer_amount
-        end, // active_customers
-        end, // active_customer_amount
-        start, end, // new_customers: hanya bulan terpilih
-        start, end, // new_customer_amount
-        end, // isolir_customers
-        end, // inactive_customers
-        end, // isolir_cuti_customers
-        end, // stopped_customers
+        tid, end, // total_customers
+        tid, end, // total_customer_amount
+        tid, end, // active_customers
+        tid, end, // active_customer_amount
+        tid, start, end, // new_customers
+        tid, start, end, // new_customer_amount
+        tid, end, // isolir_customers
+        tid, end, // inactive_customers
+        tid, end, // isolir_cuti_customers
+        tid, end, // stopped_customers
     ];
-    for (let i = 0; i < 8; i++) params.push(start, end);
+    for (let i = 0; i < 8; i++) params.push(tid, start, end);
+    params.push(tid, tid); // overdue + arrears
 
     db.get(sql, params, (err, row) => {
         if (err) {
@@ -3378,6 +3552,11 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
         return res.status(400).json({ success: false, message: 'ID teknisi tidak valid' });
     }
 
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
+
     const history = String(req.query.history || '') === '1';
     const includePppoePasswords = String(req.query.include_passwords || '') === '1';
     const monthRaw = req.query.month;
@@ -3413,6 +3592,8 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
             ? `(ij.assigned_technician_id = ? OR CAST(ij.assigned_technician_id AS TEXT) = ?) AND LOWER(ij.status) IN ('completed','cancelled')`
             : `${sqlInstallationJobAccessibleByTech('ij')} AND LOWER(ij.status) NOT IN ('completed','cancelled')`;
     const installParams = isAdmin ? [] : [techId, String(techId)];
+    installWhere += ' AND ij.tenant_id = ?';
+    installParams.push(tenantId);
     if (periodStart && periodEnd) {
         installWhere += ` AND date(COALESCE(ij.updated_at, ij.created_at, '1970-01-01')) >= date(?)
             AND date(COALESCE(ij.updated_at, ij.created_at, '1970-01-01')) < date(?)`;
@@ -3423,10 +3604,12 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
         SELECT ij.*, p.name AS package_name,
             COALESCE(
                 (SELECT COALESCE(NULLIF(TRIM(pppoe_username), ''), NULLIF(TRIM(username), ''))
-                 FROM customers WHERE id = ij.customer_id AND NULLIF(ij.customer_id, 0) IS NOT NULL),
+                 FROM customers WHERE id = ij.customer_id AND NULLIF(ij.customer_id, 0) IS NOT NULL
+                   AND tenant_id = ?),
                 (SELECT COALESCE(NULLIF(TRIM(pppoe_username), ''), NULLIF(TRIM(username), ''))
                  FROM customers cu
                  WHERE (ij.customer_id IS NULL OR ij.customer_id = 0)
+                   AND cu.tenant_id = ?
                    AND NULLIF(TRIM(IFNULL(ij.customer_phone, '')), '') IS NOT NULL
                    AND REPLACE(REPLACE(REPLACE(LOWER(TRIM(cu.phone)), ' ', ''), '-', ''), '+', '') =
                        REPLACE(REPLACE(REPLACE(LOWER(TRIM(ij.customer_phone)), ' ', ''), '-', ''), '+', '')
@@ -3439,6 +3622,8 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
         ORDER BY ij.updated_at DESC, ij.created_at DESC
         LIMIT 200
     `;
+    // Param subquery pelanggan (2x tenantId) di depan params WHERE.
+    const installSqlParams = [tenantId, tenantId, ...installParams];
 
     let troubleWhere = isAdmin
         ? history
@@ -3454,13 +3639,15 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
             )
             AND LOWER(status) NOT IN ('closed','resolved')`;
     const troubleParams = isAdmin ? [] : [techId, String(techId)];
+    troubleWhere += ' AND tenant_id = ?';
+    troubleParams.push(tenantId);
     if (periodStart && periodEnd) {
         troubleWhere += ` AND date(COALESCE(updated_at, created_at, '1970-01-01')) >= date(?)
             AND date(COALESCE(updated_at, created_at, '1970-01-01')) < date(?)`;
         troubleParams.push(periodStart, periodEnd);
     }
 
-    db.all(installSql, installParams, (err1, installRows) => {
+    db.all(installSql, installSqlParams, (err1, installRows) => {
         if (err1) {
             logger.error('[mobile-adapter] tasks install:', err1);
             return res.status(500).json({ success: false, message: 'Gagal memuat tugas instalasi' });
@@ -3555,6 +3742,10 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
 });
 
 router.get('/tasks/form-options', verifyToken, allowFieldOps, (req, res) => {
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
     const sql = `
         SELECT
             t.id,
@@ -3567,11 +3758,13 @@ router.get('/tasks/form-options', verifyToken, allowFieldOps, (req, res) => {
         LEFT JOIN employees e
           ON REPLACE(REPLACE(REPLACE(TRIM(IFNULL(e.no_hp, '')), ' ', ''), '-', ''), '+', '') =
              REPLACE(REPLACE(REPLACE(TRIM(IFNULL(t.phone, '')), ' ', ''), '-', ''), '+', '')
+          AND e.tenant_id = t.tenant_id
         WHERE IFNULL(t.is_active, 1) = 1
+          AND t.tenant_id = ?
           AND LOWER(IFNULL(t.role, 'technician')) IN ('technician', 'field_officer', 'admin')
         ORDER BY employee_name COLLATE NOCASE ASC, t.name COLLATE NOCASE ASC
     `;
-    db.all(sql, [], (err, rows) => {
+    db.all(sql, [tenantId], (err, rows) => {
         if (err) {
             logger.error('[mobile-adapter] tasks/form-options:', err);
             return res.status(500).json({ success: false, message: 'Gagal memuat teknisi' });
@@ -3593,6 +3786,10 @@ router.get('/tasks/form-options', verifyToken, allowFieldOps, (req, res) => {
 
 router.post('/tasks/installations', verifyToken, allowFieldOps, async (req, res) => {
     try {
+        const tenantId = resolveReqTenantId(req);
+        if (tenantId == null) {
+            return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+        }
         const body = req.body || {};
         const customerId = parseInt(body.customer_id, 10);
         const packageId = parseInt(body.package_id, 10);
@@ -3618,8 +3815,8 @@ router.post('/tasks/installations', verifyToken, allowFieldOps, async (req, res)
         if (Number.isFinite(customerId) && customerId > 0) {
             customer = await new Promise((resolve, reject) => {
                 db.get(
-                    'SELECT id, name, phone, address, latitude, longitude, package_id FROM customers WHERE id = ?',
-                    [customerId],
+                    'SELECT id, name, phone, address, latitude, longitude, package_id FROM customers WHERE id = ? AND tenant_id = ?',
+                    [customerId, tenantId],
                     (err, row) => (err ? reject(err) : resolve(row))
                 );
             });
@@ -3644,8 +3841,8 @@ router.post('/tasks/installations', verifyToken, allowFieldOps, async (req, res)
         if (hasAssignedTechnician) {
             technician = await new Promise((resolve, reject) => {
                 db.get(
-                    'SELECT id, name, phone, role FROM technicians WHERE id = ? AND IFNULL(is_active, 1) = 1',
-                    [technicianId],
+                    'SELECT id, name, phone, role FROM technicians WHERE id = ? AND IFNULL(is_active, 1) = 1 AND tenant_id = ?',
+                    [technicianId, tenantId],
                     (err, row) => (err ? reject(err) : resolve(row))
                 );
             });
@@ -3658,8 +3855,8 @@ router.post('/tasks/installations', verifyToken, allowFieldOps, async (req, res)
         const psbPrefix = `PSB-${ymd}`;
         const lastJobNumber = await new Promise((resolve, reject) => {
             db.get(
-                'SELECT job_number FROM installation_jobs WHERE job_number LIKE ? ORDER BY job_number DESC LIMIT 1',
-                [`${psbPrefix}%`],
+                'SELECT job_number FROM installation_jobs WHERE job_number LIKE ? AND tenant_id = ? ORDER BY job_number DESC LIMIT 1',
+                [`${psbPrefix}%`, tenantId],
                 (err, row) => (err ? reject(err) : resolve(row ? row.job_number : null))
             );
         });
@@ -3678,8 +3875,8 @@ router.post('/tasks/installations', verifyToken, allowFieldOps, async (req, res)
                     job_number, customer_name, customer_phone, customer_address, customer_id,
                     package_id, installation_date, installation_time, assigned_technician_id,
                     status, priority, notes, equipment_needed, estimated_duration,
-                    customer_latitude, customer_longitude, created_by_admin_id, assigned_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    customer_latitude, customer_longitude, created_by_admin_id, assigned_at, tenant_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
                     jobNumber,
                     customerName,
@@ -3698,7 +3895,8 @@ router.post('/tasks/installations', verifyToken, allowFieldOps, async (req, res)
                     customer ? customer.latitude || null : null,
                     customer ? customer.longitude || null : null,
                     req.user && req.user.id ? req.user.id : null,
-                    assignedAt
+                    assignedAt,
+                    tenantId
                 ],
                 function (err) {
                     if (err) reject(err);
@@ -3709,13 +3907,14 @@ router.post('/tasks/installations', verifyToken, allowFieldOps, async (req, res)
 
         db.run(
             `INSERT INTO installation_job_status_history (
-                job_id, old_status, new_status, changed_by_type, changed_by_id, notes
-            ) VALUES (?, NULL, ?, 'admin', ?, ?)`,
+                job_id, old_status, new_status, changed_by_type, changed_by_id, notes, tenant_id
+            ) VALUES (?, NULL, ?, 'admin', ?, ?, ?)`,
             [
                 jobId,
                 initialStatus,
                 (req.user && req.user.id) || 0,
-                `Job instalasi dibuat dari mobile: ${jobNumber}`
+                `Job instalasi dibuat dari mobile: ${jobNumber}`,
+                tenantId
             ],
             (histErr) => {
                 if (histErr) logger.warn('[mobile-adapter] task history create:', histErr.message);
@@ -3736,8 +3935,9 @@ router.post('/tasks/installations', verifyToken, allowFieldOps, async (req, res)
                     db.all(
                         `SELECT id FROM technicians
                          WHERE is_active = 1
+                           AND tenant_id = ?
                            AND LOWER(IFNULL(role, 'technician')) = 'technician'`,
-                        [],
+                        [tenantId],
                         (err, rows) => (err ? reject(err) : resolve(rows || []))
                     );
                 });
@@ -3765,6 +3965,10 @@ router.post('/tasks/installations', verifyToken, allowFieldOps, async (req, res)
 
 router.post('/tasks/trouble', verifyToken, allowFieldOps, async (req, res) => {
     try {
+        const tenantId = resolveReqTenantId(req);
+        if (tenantId == null) {
+            return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+        }
         const body = req.body || {};
         const name = String(body.name || '').trim();
         const phone = normalizePhone(String(body.phone || '').trim());
@@ -3782,6 +3986,32 @@ router.post('/tasks/trouble', verifyToken, allowFieldOps, async (req, res) => {
                 success: false,
                 message: 'Nama pelapor, nomor telepon, lokasi, dan kategori wajib diisi'
             });
+        }
+
+        // Pastikan teknisi / pelanggan milik tenant aktif (cegah assign lintas tenant).
+        if (Number.isFinite(assignedTechnicianId) && assignedTechnicianId > 0) {
+            const techOk = await new Promise((resolve, reject) => {
+                db.get(
+                    'SELECT id FROM technicians WHERE id = ? AND tenant_id = ? AND IFNULL(is_active, 1) = 1',
+                    [assignedTechnicianId, tenantId],
+                    (err, row) => (err ? reject(err) : resolve(!!row))
+                );
+            });
+            if (!techOk) {
+                return res.status(404).json({ success: false, message: 'Teknisi tidak ditemukan atau tidak aktif' });
+            }
+        }
+        if (Number.isFinite(customerId) && customerId > 0) {
+            const custOk = await new Promise((resolve, reject) => {
+                db.get(
+                    'SELECT id FROM customers WHERE id = ? AND tenant_id = ?',
+                    [customerId, tenantId],
+                    (err, row) => (err ? reject(err) : resolve(!!row))
+                );
+            });
+            if (!custOk) {
+                return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+            }
         }
 
         const { createTroubleReport } = require('../../config/troubleReport');
@@ -3806,8 +4036,9 @@ router.post('/tasks/trouble', verifyToken, allowFieldOps, async (req, res) => {
                     db.all(
                         `SELECT id FROM technicians
                          WHERE is_active = 1
+                           AND tenant_id = ?
                            AND LOWER(IFNULL(role, 'technician')) = 'technician'`,
-                        [],
+                        [tenantId],
                         (err, rows) => (err ? reject(err) : resolve(rows || []))
                     );
                 });
@@ -3916,11 +4147,17 @@ router.get('/performance/week', verifyToken, requireTechnician, (req, res) => {
         return replyPerfEmptyZeros();
     }
 
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
+
     if (isAdmin) {
         const installSqlAdmin = `
         SELECT substr(COALESCE(updated_at, created_at), 1, 10) AS d, COUNT(*) AS c
         FROM installation_jobs
-        WHERE LOWER(status) IN ('completed','cancelled')
+        WHERE tenant_id = ?
+          AND LOWER(status) IN ('completed','cancelled')
           AND substr(COALESCE(updated_at, created_at), 1, 10) >= ?
           AND substr(COALESCE(updated_at, created_at), 1, 10) <= ?
         GROUP BY substr(COALESCE(updated_at, created_at), 1, 10)
@@ -3928,17 +4165,18 @@ router.get('/performance/week', verifyToken, requireTechnician, (req, res) => {
         const troubleSqlAdmin = `
         SELECT substr(COALESCE(updated_at, created_at), 1, 10) AS d, COUNT(*) AS c
         FROM trouble_reports
-        WHERE LOWER(status) IN ('closed','resolved')
+        WHERE tenant_id = ?
+          AND LOWER(status) IN ('closed','resolved')
           AND substr(COALESCE(updated_at, created_at), 1, 10) >= ?
           AND substr(COALESCE(updated_at, created_at), 1, 10) <= ?
         GROUP BY substr(COALESCE(updated_at, created_at), 1, 10)
     `;
-        db.all(installSqlAdmin, [weekStartYmd, weekEndYmd], (aErr1, installAgg) => {
+        db.all(installSqlAdmin, [tenantId, weekStartYmd, weekEndYmd], (aErr1, installAgg) => {
             if (aErr1) {
                 logger.error('[mobile-adapter] performance/week admin install:', aErr1);
                 return res.status(500).json({ success: false, message: 'Gagal memuat performa tugas' });
             }
-            db.all(troubleSqlAdmin, [weekStartYmd, weekEndYmd], (aErr2, troubleAgg) => {
+            db.all(troubleSqlAdmin, [tenantId, weekStartYmd, weekEndYmd], (aErr2, troubleAgg) => {
                 if (aErr2) {
                     logger.error('[mobile-adapter] performance/week admin trouble:', aErr2);
                     return res.status(500).json({ success: false, message: 'Gagal memuat performa tiket' });
@@ -3986,7 +4224,8 @@ router.get('/performance/week', verifyToken, requireTechnician, (req, res) => {
     const installSql = `
         SELECT substr(COALESCE(updated_at, created_at), 1, 10) AS d, COUNT(*) AS c
         FROM installation_jobs
-        WHERE assigned_technician_id = ?
+        WHERE tenant_id = ?
+          AND assigned_technician_id = ?
           AND LOWER(status) IN ('completed','cancelled')
           AND substr(COALESCE(updated_at, created_at), 1, 10) >= ?
           AND substr(COALESCE(updated_at, created_at), 1, 10) <= ?
@@ -3995,19 +4234,20 @@ router.get('/performance/week', verifyToken, requireTechnician, (req, res) => {
     const troubleSql = `
         SELECT substr(COALESCE(updated_at, created_at), 1, 10) AS d, COUNT(*) AS c
         FROM trouble_reports
-        WHERE (assigned_technician_id = ? OR CAST(assigned_technician_id AS TEXT) = ?)
+        WHERE tenant_id = ?
+          AND (assigned_technician_id = ? OR CAST(assigned_technician_id AS TEXT) = ?)
           AND LOWER(status) IN ('closed','resolved')
           AND substr(COALESCE(updated_at, created_at), 1, 10) >= ?
           AND substr(COALESCE(updated_at, created_at), 1, 10) <= ?
         GROUP BY substr(COALESCE(updated_at, created_at), 1, 10)
     `;
 
-    db.all(installSql, [techId, weekStartYmd, weekEndYmd], (err1, installAgg) => {
+    db.all(installSql, [tenantId, techId, weekStartYmd, weekEndYmd], (err1, installAgg) => {
         if (err1) {
             logger.error('[mobile-adapter] performance/week install:', err1);
             return res.status(500).json({ success: false, message: 'Gagal memuat performa tugas' });
         }
-        db.all(troubleSql, [techId, String(techId), weekStartYmd, weekEndYmd], (err2, troubleAgg) => {
+        db.all(troubleSql, [tenantId, techId, String(techId), weekStartYmd, weekEndYmd], (err2, troubleAgg) => {
             if (err2) {
                 logger.error('[mobile-adapter] performance/week trouble:', err2);
                 return res.status(500).json({ success: false, message: 'Gagal memuat performa tiket' });
@@ -4027,9 +4267,10 @@ router.get('/performance/week', verifyToken, requireTechnician, (req, res) => {
                 db.get(
                     `SELECT id FROM employees
                      WHERE (status IS NULL OR LOWER(TRIM(status)) = 'aktif')
+                       AND tenant_id = ?
                        AND TRIM(no_hp) IN (${ph})
                      LIMIT 1`,
-                    variants,
+                    [tenantId, ...variants],
                     (e, empRow) => cb(e, empRow)
                 );
             };
@@ -4090,8 +4331,8 @@ router.get('/performance/week', verifyToken, requireTechnician, (req, res) => {
                 }
                 db.all(
                     `SELECT date, check_in, check_out, status FROM employee_attendance
-                     WHERE employee_id = ? AND date >= ? AND date <= ?`,
-                    [employeeId, weekStartYmd, weekEndYmd],
+                     WHERE employee_id = ? AND tenant_id = ? AND date >= ? AND date <= ?`,
+                    [employeeId, tenantId, weekStartYmd, weekEndYmd],
                     (aErr, rows) => {
                         if (aErr) {
                             logger.error('[mobile-adapter] performance/week attendance:', aErr);
@@ -4120,6 +4361,10 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
     }
     const actorHistoryId = isAdminTask ? 0 : techId;
     const rawStatus = String(status).toLowerCase();
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
 
     if (type === 'INSTALL') {
         const jobId = parseInt(id, 10);
@@ -4137,9 +4382,9 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                 });
             }
             const pickSql = isAdminTask
-                ? `SELECT * FROM installation_jobs WHERE id = ?`
-                : `SELECT * FROM installation_jobs WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')}`;
-            const pickParams = isAdminTask ? [jobId] : [jobId, techId, String(techId)];
+                ? `SELECT * FROM installation_jobs WHERE id = ? AND tenant_id = ?`
+                : `SELECT * FROM installation_jobs WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')} AND tenant_id = ?`;
+            const pickParams = isAdminTask ? [jobId, tenantId] : [jobId, techId, String(techId), tenantId];
             db.get(pickSql, pickParams, (pErr, job) => {
                 if (pErr) {
                     logger.error('[mobile-adapter] install pending get:', pErr);
@@ -4152,16 +4397,16 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                 const newNotes = job.notes ? `${job.notes}\n\n${noteBlock}` : noteBlock;
                 const wallNow = getLocalTimestamp();
                 const updSql = isAdminTask
-                    ? `UPDATE installation_jobs SET status = 'assigned', notes = ?, work_started_at = NULL, updated_at = ? WHERE id = ?`
+                    ? `UPDATE installation_jobs SET status = 'assigned', notes = ?, work_started_at = NULL, updated_at = ? WHERE id = ? AND tenant_id = ?`
                     : `UPDATE installation_jobs SET status = 'assigned', notes = ?, work_started_at = NULL, updated_at = ?,
                          assigned_technician_id = CASE
                             WHEN IFNULL(TRIM(CAST(assigned_technician_id AS TEXT)), '') IN ('', '0') THEN ?
                             ELSE assigned_technician_id
                          END
-                         WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')}`;
+                         WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')} AND tenant_id = ?`;
                 const updParams = isAdminTask
-                    ? [newNotes, wallNow, jobId]
-                    : [newNotes, wallNow, techId, jobId, techId, String(techId)];
+                    ? [newNotes, wallNow, jobId, tenantId]
+                    : [newNotes, wallNow, techId, jobId, techId, String(techId), tenantId];
                 db.run(updSql, updParams, function (uErr) {
                     if (uErr) {
                         return res.status(500).json({ success: false, message: uErr.message });
@@ -4242,9 +4487,9 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
             }
 
             const installPickSql = isAdminTask
-                ? `SELECT * FROM installation_jobs WHERE id = ?`
-                : `SELECT * FROM installation_jobs WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')}`;
-            const installPickParams = isAdminTask ? [jobId] : [jobId, techId, String(techId)];
+                ? `SELECT * FROM installation_jobs WHERE id = ? AND tenant_id = ?`
+                : `SELECT * FROM installation_jobs WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')} AND tenant_id = ?`;
+            const installPickParams = isAdminTask ? [jobId, tenantId] : [jobId, techId, String(techId), tenantId];
 
             db.get(
                 installPickSql,
@@ -4290,12 +4535,12 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                         setCols.push('customer_latitude = ?', 'customer_longitude = ?');
                         uParams.push(compLat, compLng);
                     }
-                    let updInstallSql = `UPDATE installation_jobs SET ${setCols.join(', ')} WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')}`;
+                    let updInstallSql = `UPDATE installation_jobs SET ${setCols.join(', ')} WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')} AND tenant_id = ?`;
                     if (isAdminTask) {
-                        uParams.push(jobId);
-                        updInstallSql = `UPDATE installation_jobs SET ${setCols.join(', ')} WHERE id = ?`;
+                        uParams.push(jobId, tenantId);
+                        updInstallSql = `UPDATE installation_jobs SET ${setCols.join(', ')} WHERE id = ? AND tenant_id = ?`;
                     } else {
-                        uParams.push(jobId, techId, String(techId));
+                        uParams.push(jobId, techId, String(techId), tenantId);
                     }
 
                     db.run(updInstallSql, uParams, async function (uErr) {
@@ -4368,9 +4613,9 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
             // Pakai jam zona aplikasi (bukan SQLite datetime('now','localtime') = UTC) agar durasi di app mobile sinkron.
             const wallNow = getLocalTimestamp();
             const pickInProgSql = isAdminTask
-                ? `SELECT id, status FROM installation_jobs WHERE id = ?`
-                : `SELECT id, status FROM installation_jobs WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')}`;
-            const pickInProgParams = isAdminTask ? [jobId] : [jobId, techId, String(techId)];
+                ? `SELECT id, status FROM installation_jobs WHERE id = ? AND tenant_id = ?`
+                : `SELECT id, status FROM installation_jobs WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')} AND tenant_id = ?`;
+            const pickInProgParams = isAdminTask ? [jobId, tenantId] : [jobId, techId, String(techId), tenantId];
             db.get(pickInProgSql, pickInProgParams, (gErr, jobRow) => {
                 if (gErr) {
                     logger.error('[mobile-adapter] install in_progress pick:', gErr);
@@ -4390,17 +4635,17 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                 const updInProgSql = isAdminTask
                     ? `UPDATE installation_jobs SET status = ?, updated_at = ?,
                      work_started_at = COALESCE(work_started_at, ?)
-                     WHERE id = ?`
+                     WHERE id = ? AND tenant_id = ?`
                     : `UPDATE installation_jobs SET status = ?, updated_at = ?,
                  work_started_at = COALESCE(work_started_at, ?),
                  assigned_technician_id = CASE
                     WHEN IFNULL(TRIM(CAST(assigned_technician_id AS TEXT)), '') IN ('', '0') THEN ?
                     ELSE assigned_technician_id
                  END
-                 WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')}`;
+                 WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')} AND tenant_id = ?`;
                 const updInProgParams = isAdminTask
-                    ? [dbStatus, wallNow, wallNow, jobId]
-                    : [dbStatus, wallNow, wallNow, techId, jobId, techId, String(techId)];
+                    ? [dbStatus, wallNow, wallNow, jobId, tenantId]
+                    : [dbStatus, wallNow, wallNow, techId, jobId, techId, String(techId), tenantId];
                 db.run(updInProgSql, updInProgParams, function (uErr) {
                     if (uErr) {
                         return res.status(500).json({ success: false, message: uErr.message });
@@ -4445,8 +4690,8 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
             const wallNow = getLocalTimestamp();
             db.run(
                 `UPDATE installation_jobs SET status = ?, updated_at = ?
-             WHERE id = ?`,
-                [dbStatus, wallNow, jobId],
+             WHERE id = ? AND tenant_id = ?`,
+                [dbStatus, wallNow, jobId, tenantId],
                 function (err) {
                     if (err) {
                         return res.status(500).json({ success: false, message: err.message });
@@ -4474,8 +4719,8 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                 WHEN ? = 'in_progress' THEN COALESCE(work_started_at, ?)
                 ELSE work_started_at
              END
-             WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')}`,
-            [dbStatus, wallNowOther, techId, dbStatus, wallNowOther, jobId, techId, String(techId)],
+             WHERE id = ? AND ${sqlInstallationJobAccessibleByTech('installation_jobs')} AND tenant_id = ?`,
+            [dbStatus, wallNowOther, techId, dbStatus, wallNowOther, jobId, techId, String(techId), tenantId],
             function (err) {
                 if (err) {
                     return res.status(500).json({ success: false, message: err.message });
@@ -4502,15 +4747,16 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                 });
             }
             const trAccessSql = isAdminTask
-                ? `SELECT id FROM trouble_reports WHERE id = ?`
+                ? `SELECT id FROM trouble_reports WHERE id = ? AND tenant_id = ?`
                 : `SELECT id FROM trouble_reports
                  WHERE id = ?
+                   AND tenant_id = ?
                    AND (
                         assigned_technician_id = ?
                         OR CAST(assigned_technician_id AS TEXT) = ?
                         OR IFNULL(TRIM(CAST(assigned_technician_id AS TEXT)), '') IN ('', '0')
                    )`;
-            const trAccessParams = isAdminTask ? [id] : [id, techId, String(techId)];
+            const trAccessParams = isAdminTask ? [id, tenantId] : [id, tenantId, techId, String(techId)];
             db.get(trAccessSql, trAccessParams, async (aErr, row) => {
                 if (aErr) {
                     logger.error('[mobile-adapter] TR pending access:', aErr);
@@ -4531,8 +4777,8 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                     await new Promise((resolve, reject) => {
                         const wallNow = getLocalTimestamp();
                         db.run(
-                            'UPDATE trouble_reports SET work_started_at = NULL, updated_at = ? WHERE id = ?',
-                            [wallNow, id],
+                            'UPDATE trouble_reports SET work_started_at = NULL, updated_at = ? WHERE id = ? AND tenant_id = ?',
+                            [wallNow, id, tenantId],
                             (e2) => (e2 ? reject(e2) : resolve())
                         );
                     });
@@ -4571,8 +4817,8 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                 db.run(
                     `UPDATE trouble_reports SET status = ?, updated_at = ?,
                      work_started_at = COALESCE(work_started_at, ?)
-                     WHERE id = ?`,
-                    [dbStatus, wallNow, wallNow, id],
+                     WHERE id = ? AND tenant_id = ?`,
+                    [dbStatus, wallNow, wallNow, id, tenantId],
                     done
                 );
                 return;
@@ -4585,12 +4831,13 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                     ELSE assigned_technician_id
                  END
                  WHERE id = ?
+                   AND tenant_id = ?
                    AND (
                         assigned_technician_id = ?
                         OR CAST(assigned_technician_id AS TEXT) = ?
                         OR IFNULL(TRIM(CAST(assigned_technician_id AS TEXT)), '') IN ('', '0')
                    )`,
-                [dbStatus, wallNow, wallNow, techId, id, techId, String(techId)],
+                [dbStatus, wallNow, wallNow, techId, id, tenantId, techId, String(techId)],
                 done
             );
             return;
@@ -4612,15 +4859,16 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
             }
 
             const trPickSql = isAdminTask
-                ? `SELECT id FROM trouble_reports WHERE id = ?`
+                ? `SELECT id FROM trouble_reports WHERE id = ? AND tenant_id = ?`
                 : `SELECT id FROM trouble_reports
                  WHERE id = ?
+                   AND tenant_id = ?
                    AND (
                         assigned_technician_id = ?
                         OR CAST(assigned_technician_id AS TEXT) = ?
                         OR IFNULL(TRIM(CAST(assigned_technician_id AS TEXT)), '') IN ('', '0')
                    )`;
-            const trPickParams = isAdminTask ? [id] : [id, techId, String(techId)];
+            const trPickParams = isAdminTask ? [id, tenantId] : [id, tenantId, techId, String(techId)];
 
             db.get(trPickSql, trPickParams, (qErr, row) => {
                     if (qErr) {
@@ -4639,8 +4887,8 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                             if (wd != null) {
                                 await new Promise((resolve, reject) => {
                                     db.run(
-                                        'UPDATE trouble_reports SET work_duration_seconds = ? WHERE id = ?',
-                                        [wd, id],
+                                        'UPDATE trouble_reports SET work_duration_seconds = ? WHERE id = ? AND tenant_id = ?',
+                                        [wd, id, tenantId],
                                         (e2) => (e2 ? reject(e2) : resolve())
                                     );
                                 });
@@ -4664,8 +4912,8 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
             db.run(
                 `UPDATE trouble_reports
              SET status = ?, updated_at = ?
-             WHERE id = ?`,
-                [dbStatus, wallNow, id],
+             WHERE id = ? AND tenant_id = ?`,
+                [dbStatus, wallNow, id, tenantId],
                 done
             );
             return;
@@ -4680,12 +4928,13 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                     ELSE assigned_technician_id
                  END
              WHERE id = ?
+               AND tenant_id = ?
                AND (
                     assigned_technician_id = ?
                     OR CAST(assigned_technician_id AS TEXT) = ?
                     OR IFNULL(TRIM(CAST(assigned_technician_id AS TEXT)), '') IN ('', '0')
                )`,
-            [dbStatus, wallNow, techId, id, techId, String(techId)],
+            [dbStatus, wallNow, techId, id, tenantId, techId, String(techId)],
             done
         );
         return;
@@ -4795,18 +5044,24 @@ router.post('/notifications/read-all', verifyToken, requireTechnician, (req, res
 
 // --- ODP / jaringan ---
 router.get('/odps', verifyToken, allowFieldOps, (req, res) => {
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
     const includeAll = String(req.query.all || '').trim() === '1';
     const sql = includeAll
         ? `SELECT id, name, code, latitude, longitude, status, capacity, used_ports, address, parent_odp_id
            FROM odps
+           WHERE tenant_id = ?
            ORDER BY name`
         : `SELECT id, name, code, latitude, longitude, status, capacity, used_ports, address, parent_odp_id
            FROM odps
-           WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+           WHERE tenant_id = ?
+             AND latitude IS NOT NULL AND longitude IS NOT NULL
            ORDER BY name`;
     db.all(
         sql,
-        [],
+        [tenantId],
         (err, rows) => {
             if (err) {
                 return res.status(500).json({ success: false, message: err.message });
@@ -4824,12 +5079,18 @@ router.get('/odps', verifyToken, allowFieldOps, (req, res) => {
 // Network map payload for mobile (customers + ODP + cable routes + backbone)
 router.get('/network-map', verifyToken, requireTechnician, async (req, res) => {
     try {
+        const tenantId = resolveReqTenantId(req);
+        if (tenantId == null) {
+            return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+        }
+
         const odps = await new Promise((resolve, reject) => {
             db.all(
                 `SELECT id, name, code, latitude, longitude, status, capacity, used_ports, address, parent_odp_id
                  FROM odps
-                 WHERE latitude IS NOT NULL AND longitude IS NOT NULL`,
-                [],
+                 WHERE tenant_id = ?
+                   AND latitude IS NOT NULL AND longitude IS NOT NULL`,
+                [tenantId],
                 (err, rows) => (err ? reject(err) : resolve(rows || []))
             );
         });
@@ -4838,8 +5099,9 @@ router.get('/network-map', verifyToken, requireTechnician, async (req, res) => {
             db.all(
                 `SELECT id, name, phone, status, latitude, longitude, odp_id, pppoe_username, username
                  FROM customers
-                 WHERE latitude IS NOT NULL AND longitude IS NOT NULL`,
-                [],
+                 WHERE tenant_id = ?
+                   AND latitude IS NOT NULL AND longitude IS NOT NULL`,
+                [tenantId],
                 (err, rows) => (err ? reject(err) : resolve(rows || []))
             );
         });
@@ -4852,9 +5114,11 @@ router.get('/network-map', verifyToken, requireTechnician, async (req, res) => {
                  FROM cable_routes cr
                  JOIN customers c ON c.id = cr.customer_id
                  JOIN odps o ON o.id = cr.odp_id
-                 WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL
+                 WHERE c.tenant_id = ?
+                   AND o.tenant_id = ?
+                   AND c.latitude IS NOT NULL AND c.longitude IS NOT NULL
                    AND o.latitude IS NOT NULL AND o.longitude IS NOT NULL`,
-                [],
+                [tenantId, tenantId],
                 (err, rows) => (err ? reject(err) : resolve(rows || []))
             );
         });
@@ -4867,9 +5131,11 @@ router.get('/network-map', verifyToken, requireTechnician, async (req, res) => {
                  FROM odp_connections oc
                  JOIN odps fo ON fo.id = oc.from_odp_id
                  JOIN odps to2 ON to2.id = oc.to_odp_id
-                 WHERE fo.latitude IS NOT NULL AND fo.longitude IS NOT NULL
+                 WHERE fo.tenant_id = ?
+                   AND to2.tenant_id = ?
+                   AND fo.latitude IS NOT NULL AND fo.longitude IS NOT NULL
                    AND to2.latitude IS NOT NULL AND to2.longitude IS NOT NULL`,
-                [],
+                [tenantId, tenantId],
                 (err, rows) => (err ? reject(err) : resolve(rows || []))
             );
         });
@@ -4894,7 +5160,9 @@ router.get('/network-map', verifyToken, requireTechnician, async (req, res) => {
                     child.longitude AS to_lng
                  FROM odps child
                  INNER JOIN odps p ON p.id = child.parent_odp_id
-                 WHERE child.parent_odp_id IS NOT NULL
+                 WHERE child.tenant_id = ?
+                   AND p.tenant_id = ?
+                   AND child.parent_odp_id IS NOT NULL
                    AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
                    AND child.latitude IS NOT NULL AND child.longitude IS NOT NULL
                    AND NOT EXISTS (
@@ -4902,7 +5170,7 @@ router.get('/network-map', verifyToken, requireTechnician, async (req, res) => {
                        WHERE (oc2.from_odp_id = child.parent_odp_id AND oc2.to_odp_id = child.id)
                           OR (oc2.from_odp_id = child.id AND oc2.to_odp_id = child.parent_odp_id)
                    )`,
-                [],
+                [tenantId, tenantId],
                 (err, rows) => (err ? reject(err) : resolve(rows || []))
             );
         });
@@ -4914,7 +5182,10 @@ router.get('/network-map', verifyToken, requireTechnician, async (req, res) => {
         try {
             const { getActivePppoeLoginNamesSetWithUptimeMap } = require('../../config/mikrotik');
             const batch = await withTimeout(
-                getActivePppoeLoginNamesSetWithUptimeMap(),
+                getActivePppoeLoginNamesSetWithUptimeMap({
+                    maxWaitMs: 9000,
+                    mikrotikTimeoutMs: 9000
+                }),
                 MIKROTIK_NETWORK_MAP_TIMEOUT_MS,
                 'MikroTik PPPoE'
             );
@@ -4930,7 +5201,8 @@ router.get('/network-map', verifyToken, requireTechnician, async (req, res) => {
                 '';
             let pppoeActive = null;
             if (login) {
-                pppoeActive = onlineLoginSet.has(login);
+                const loginKey = String(login).toLowerCase();
+                pppoeActive = onlineLoginSet.has(loginKey) || onlineLoginSet.has(login);
             }
             const networkDown = pppoeActive === false;
             const uptimeDisplay =
@@ -5225,14 +5497,18 @@ router.get('/network-status', verifyToken, requireTechnician, async (req, res) =
 
 router.get('/odps/:odpId', verifyToken, requireTechnician, (req, res) => {
     const odpId = req.params.odpId;
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
     db.get(
         `SELECT o.*,
                 COUNT(CASE WHEN cr.customer_id IS NOT NULL THEN cr.id END) AS connected_customers
          FROM odps o
          LEFT JOIN cable_routes cr ON o.id = cr.odp_id
-         WHERE o.id = ? OR o.code = ?
+         WHERE (o.id = ? OR o.code = ?) AND o.tenant_id = ?
          GROUP BY o.id`,
-        [odpId, odpId],
+        [odpId, odpId, tenantId],
         (err, odp) => {
             if (err || !odp) {
                 return res.status(err ? 500 : 404).json({
@@ -5245,8 +5521,9 @@ router.get('/odps/:odpId', verifyToken, requireTechnician, (req, res) => {
                  FROM cable_routes cr
                  JOIN customers c ON cr.customer_id = c.id
                  WHERE cr.odp_id = ?
+                   AND c.tenant_id = ?
                  ORDER BY cr.port_number, c.name`,
-                [odp.id],
+                [odp.id, tenantId],
                 (e2, routes) => {
                     if (e2) {
                         return res.status(500).json({ success: false, message: e2.message });
@@ -5277,9 +5554,13 @@ router.put('/odps/:odpId/capacity', verifyToken, requireTechnician, (req, res) =
     if (!Number.isFinite(cap) || cap < 1) {
         return res.status(400).json({ success: false, message: 'Kapasitas tidak valid' });
     }
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
     db.get(
-        'SELECT id FROM odps WHERE id = ? OR code = ? OR name = ? LIMIT 1',
-        [odpParam, odpParam, odpParam],
+        'SELECT id FROM odps WHERE (id = ? OR code = ? OR name = ?) AND tenant_id = ? LIMIT 1',
+        [odpParam, odpParam, odpParam, tenantId],
         (err, row) => {
             if (err) {
                 return res.status(500).json({ success: false, message: err.message });
@@ -5288,8 +5569,8 @@ router.put('/odps/:odpId/capacity', verifyToken, requireTechnician, (req, res) =
                 return res.status(404).json({ success: false, message: 'ODP tidak ditemukan' });
             }
             db.run(
-                "UPDATE odps SET capacity = ?, updated_at = datetime('now','localtime') WHERE id = ?",
-                [cap, row.id],
+                "UPDATE odps SET capacity = ?, updated_at = datetime('now','localtime') WHERE id = ? AND tenant_id = ?",
+                [cap, row.id, tenantId],
                 function (e2) {
                     if (e2) {
                         return res.status(500).json({ success: false, message: e2.message });
@@ -5313,8 +5594,12 @@ router.put('/odps/:code/location', verifyToken, requireTechnician, (req, res) =>
         return res.status(400).json({ success: false, message: 'Koordinat tidak valid' });
     }
     const cap = capacity != null ? parseInt(capacity, 10) : null;
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
 
-    db.get('SELECT id FROM odps WHERE code = ?', [code], (err, row) => {
+    db.get('SELECT id FROM odps WHERE code = ? AND tenant_id = ?', [code, tenantId], (err, row) => {
         if (err) {
             return res.status(500).json({ success: false, message: err.message });
         }
@@ -5329,8 +5614,8 @@ router.put('/odps/:code/location', verifyToken, requireTechnician, (req, res) =>
                 sets.push('notes = ?');
                 vals.push(String(notes));
             }
-            vals.push(row.id);
-            db.run(`UPDATE odps SET ${sets.join(', ')} WHERE id = ?`, vals, function (e2) {
+            vals.push(row.id, tenantId);
+            db.run(`UPDATE odps SET ${sets.join(', ')} WHERE id = ? AND tenant_id = ?`, vals, function (e2) {
                 if (e2) {
                     return res.status(500).json({ success: false, message: e2.message });
                 }
@@ -5339,9 +5624,17 @@ router.put('/odps/:code/location', verifyToken, requireTechnician, (req, res) =>
             return;
         }
         db.run(
-            `INSERT INTO odps (name, code, latitude, longitude, capacity, status, notes)
-             VALUES (?, ?, ?, ?, ?, 'active', ?)`,
-            [code, code, lat, lng, Number.isFinite(cap) && cap > 0 ? cap : 8, notes != null ? String(notes) : ''],
+            `INSERT INTO odps (name, code, latitude, longitude, capacity, status, notes, tenant_id)
+             VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`,
+            [
+                code,
+                code,
+                lat,
+                lng,
+                Number.isFinite(cap) && cap > 0 ? cap : 8,
+                notes != null ? String(notes) : '',
+                tenantId
+            ],
             function (e3) {
                 if (e3) {
                     return res.status(500).json({ success: false, message: e3.message });
@@ -5366,6 +5659,10 @@ router.post('/odps/:odpId/assign', verifyToken, requireTechnician, (req, res) =>
     const { port_number, cable_length, cable_type, notes } = body;
     const port = parseInt(port_number, 10);
     const rawCustomer = pickCustomerLookupRaw(body);
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
 
     if (!odpParam) {
         return res.status(400).json({ success: false, message: 'ODP tidak valid' });
@@ -5378,8 +5675,8 @@ router.post('/odps/:odpId/assign', verifyToken, requireTechnician, (req, res) =>
     }
 
     db.get(
-        `SELECT id, latitude, longitude FROM odps WHERE id = ? OR code = ? OR name = ? LIMIT 1`,
-        [odpParam, odpParam, odpParam],
+        `SELECT id, latitude, longitude FROM odps WHERE (id = ? OR code = ? OR name = ?) AND tenant_id = ? LIMIT 1`,
+        [odpParam, odpParam, odpParam, tenantId],
         (errOdp, odpRow) => {
             if (errOdp) {
                 return res.status(500).json({ success: false, message: errOdp.message });
@@ -5404,10 +5701,14 @@ router.post('/odps/:odpId/assign', verifyToken, requireTechnician, (req, res) =>
                     if (idInt == null || !Number.isFinite(idInt) || idInt < 1) {
                         return process.nextTick(() => cb2(null, null));
                     }
-                    db.get('SELECT id FROM customers WHERE id = ?', [idInt], (e0, rowById) => {
-                        if (e0) return cb2(e0);
-                        return cb2(null, rowById);
-                    });
+                    db.get(
+                        'SELECT id FROM customers WHERE id = ? AND tenant_id = ?',
+                        [idInt, tenantId],
+                        (e0, rowById) => {
+                            if (e0) return cb2(e0);
+                            return cb2(null, rowById);
+                        }
+                    );
                 };
 
                 tryByPrimaryKey((e0, rowById) => {
@@ -5415,14 +5716,17 @@ router.post('/odps/:odpId/assign', verifyToken, requireTechnician, (req, res) =>
                     if (rowById) return cb(null, rowById);
                     db.get(
                         `SELECT id FROM customers
-                         WHERE LOWER(TRIM(COALESCE(CAST(customer_id AS TEXT), ''))) = LOWER(TRIM(?))
-                            OR CAST(id AS TEXT) = ?
-                            OR phone = ?
-                            OR REPLACE(REPLACE(phone, ' ', ''), '-', '') = REPLACE(REPLACE(?, ' ', ''), '-', '')
-                            OR username = ?
-                            OR pppoe_username = ?
+                         WHERE tenant_id = ?
+                           AND (
+                                LOWER(TRIM(COALESCE(CAST(customer_id AS TEXT), ''))) = LOWER(TRIM(?))
+                             OR CAST(id AS TEXT) = ?
+                             OR phone = ?
+                             OR REPLACE(REPLACE(phone, ' ', ''), '-', '') = REPLACE(REPLACE(?, ' ', ''), '-', '')
+                             OR username = ?
+                             OR pppoe_username = ?
+                           )
                          LIMIT 1`,
-                        [s, s, s, s, s, s],
+                        [tenantId, s, s, s, s, s, s],
                         cb
                     );
                 });
@@ -5437,7 +5741,12 @@ router.post('/odps/:odpId/assign', verifyToken, requireTechnician, (req, res) =>
                 }
                 const custIntId = custRow.id;
 
-                db.get('SELECT id FROM cable_routes WHERE customer_id = ?', [custIntId], (err, existing) => {
+                db.get(
+                    `SELECT cr.id FROM cable_routes cr
+                     JOIN customers c ON c.id = cr.customer_id
+                     WHERE cr.customer_id = ? AND c.tenant_id = ?`,
+                    [custIntId, tenantId],
+                    (err, existing) => {
                     if (err) {
                         return res.status(500).json({ success: false, message: err.message });
                     }
@@ -5458,8 +5767,11 @@ router.post('/odps/:odpId/assign', verifyToken, requireTechnician, (req, res) =>
                                     return res.status(500).json({ success: false, message: e2.message });
                                 }
                                 db.run(
-                                    "UPDATE odps SET used_ports = (SELECT COUNT(*) FROM cable_routes WHERE odp_id = ? AND status = \"connected\"), updated_at = datetime('now','localtime') WHERE id = ?",
-                                    [odpIntId, odpIntId],
+                                    `UPDATE odps SET used_ports = (
+                                        SELECT COUNT(*) FROM cable_routes WHERE odp_id = ? AND status = "connected"
+                                     ), updated_at = datetime('now','localtime')
+                                     WHERE id = ? AND tenant_id = ?`,
+                                    [odpIntId, odpIntId, tenantId],
                                     () => res.json({ success: true, message: 'Jalur kabel / port berhasil dipasangkan' })
                                 );
                             }
@@ -5472,8 +5784,8 @@ router.post('/odps/:odpId/assign', verifyToken, requireTechnician, (req, res) =>
                     }
 
                     db.get(
-                        'SELECT latitude, longitude FROM customers WHERE id = ?',
-                        [custIntId],
+                        'SELECT latitude, longitude FROM customers WHERE id = ? AND tenant_id = ?',
+                        [custIntId, tenantId],
                         (e3, customer) => {
                             if (e3) {
                                 return res.status(500).json({ success: false, message: e3.message });
@@ -5629,9 +5941,13 @@ router.get('/collector/overview', verifyToken, requireCollector, async (req, res
         const sisaTarget = Math.max(0, targetMonth - terkumpul);
 
         const areaRows = await new Promise((resolve, reject) => {
+            const overviewTenantId = resolveReqTenantId(req);
+            if (overviewTenantId == null) {
+                return resolve([]);
+            }
             db.all(
-                'SELECT DISTINCT area FROM collector_areas WHERE collector_id = ? AND area IS NOT NULL AND area != "" LIMIT 8',
-                [collectorId],
+                'SELECT DISTINCT COALESCE(area, area_name) AS area FROM collector_areas WHERE collector_id = ? AND tenant_id = ? AND COALESCE(area, area_name) IS NOT NULL AND COALESCE(area, area_name) != "" LIMIT 8',
+                [collectorId, overviewTenantId],
                 (err, rows) => {
                     if (err) reject(err);
                     else resolve(rows || []);
@@ -5682,11 +5998,16 @@ router.get('/collector/areas', verifyToken, requireCollector, (req, res) => {
     if (!collectorId) {
         return res.status(400).json({ success: false, message: 'ID kolektor tidak valid' });
     }
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
     db.all(
-        `SELECT DISTINCT area FROM collector_areas
-         WHERE collector_id = ? AND area IS NOT NULL AND TRIM(area) != ''
+        `SELECT DISTINCT COALESCE(area, area_name) AS area FROM collector_areas
+         WHERE collector_id = ? AND tenant_id = ?
+           AND COALESCE(area, area_name) IS NOT NULL AND TRIM(COALESCE(area, area_name)) != ''
          ORDER BY area ASC`,
-        [collectorId],
+        [collectorId, tenantId],
         (err, rows) => {
             if (err) {
                 logger.error('[mobile-adapter] collector/areas', err);
@@ -5752,7 +6073,7 @@ router.get('/collector/customers', verifyToken, requireCollector, async (req, re
                 return res.status(500).json({ success: false, message: areaErr.message || 'Gagal memuat' });
             }
             res.json({ success: true, data: enriched });
-        });
+        }, resolveReqTenantId(req));
     } catch (error) {
         logger.error('[mobile-adapter] collector/customers', error);
         res.status(500).json({ success: false, message: error.message || 'Gagal memuat' });
@@ -6264,6 +6585,8 @@ router.post(
                 success: true,
                 message: savedMsg,
                 payment_id: result.payment_id,
+                payment_ids: Array.isArray(result.payment_ids) ? result.payment_ids : [],
+                paid_invoice_ids: Array.isArray(result.paid_invoice_ids) ? result.paid_invoice_ids : [],
                 commission_amount: result.commission_amount,
                 already_recorded: !!result.already_recorded
             });
@@ -6391,6 +6714,78 @@ async function resolveCollectorPaidReceiptInvoice(customerId, invoiceIdOptional)
     return full;
 }
 
+function parseReceiptInvoiceIdsQuery(query) {
+    const raw = query && (query.invoice_ids != null ? query.invoice_ids : query.invoice_id);
+    if (raw == null || raw === '') return [];
+    if (Array.isArray(raw)) {
+        return raw.map((v) => parseInt(String(v), 10)).filter((n) => Number.isFinite(n) && n > 0);
+    }
+    const s = String(raw).trim();
+    if (!s) return [];
+    if (s.startsWith('[')) {
+        try {
+            const arr = JSON.parse(s);
+            if (Array.isArray(arr)) {
+                return arr.map((v) => parseInt(String(v), 10)).filter((n) => Number.isFinite(n) && n > 0);
+            }
+        } catch (_) {
+            /* fall through */
+        }
+    }
+    return s
+        .split(',')
+        .map((v) => parseInt(String(v).trim(), 10))
+        .filter((n) => Number.isFinite(n) && n > 0);
+}
+
+/**
+ * Resolve satu atau banyak invoice lunas untuk resi kolektor.
+ * Jika hanya satu ID diberikan, otomatis perluas ke sibling yang dibayar dalam sesi yang sama.
+ */
+async function resolveCollectorPaidReceiptInvoices(customerId, query) {
+    const explicitIds = parseReceiptInvoiceIdsQuery(query || {});
+    let ids = [...new Set(explicitIds)];
+
+    if (ids.length === 0) {
+        const latest = await resolveCollectorPaidReceiptInvoice(customerId, null);
+        ids = await billingManager.findSiblingCollectorPaidInvoiceIds(customerId, latest.id);
+    } else if (ids.length === 1) {
+        // Pastikan valid dulu, lalu perluas batch
+        await resolveCollectorPaidReceiptInvoice(customerId, ids[0]);
+        ids = await billingManager.findSiblingCollectorPaidInvoiceIds(customerId, ids[0]);
+    } else {
+        for (const id of ids) {
+            await resolveCollectorPaidReceiptInvoice(customerId, id);
+        }
+    }
+
+    const invoices = [];
+    for (const id of ids) {
+        const full = await billingManager.getInvoiceById(id);
+        if (!full) continue;
+        if (Number(full.customer_id) !== customerId) continue;
+        if (String(full.status || '').toLowerCase() !== 'paid') continue;
+        const paymentTotals = await billingManager.getCollectorReceiptTotalsForInvoice(full.id);
+        invoices.push(sanitizeInvoiceForCollectorReceipt(full, paymentTotals));
+    }
+    if (!invoices.length) {
+        const err = new Error('Belum ada invoice lunas untuk ditampilkan sebagai resi');
+        err.status = 404;
+        throw err;
+    }
+
+    invoices.sort((a, b) => {
+        const da = new Date(a.due_date || a.created_at || 0).getTime();
+        const db = new Date(b.due_date || b.created_at || 0).getTime();
+        return da - db;
+    });
+
+    const batchTotals = await billingManager.getCollectorReceiptTotalsForInvoices(
+        invoices.map((i) => i.id)
+    );
+    return { invoices, batchTotals };
+}
+
 router.get('/collector/customers/:customerId/receipt', verifyToken, requireCollector, async (req, res) => {
     const collectorId = parseCollectorId(req);
     if (!collectorId) {
@@ -6400,20 +6795,40 @@ router.get('/collector/customers/:customerId/receipt', verifyToken, requireColle
     if (!Number.isFinite(customerId) || customerId <= 0) {
         return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
     }
-    const qInv = req.query.invoice_id != null && req.query.invoice_id !== '' ? parseInt(String(req.query.invoice_id), 10) : null;
     try {
         const allowed = await collectorMappedCustomerIds(collectorId);
         if (!allowed.has(customerId)) {
             return res.status(403).json({ success: false, message: 'Pelanggan tidak ada di wilayah Anda' });
         }
 
-        const full = await resolveCollectorPaidReceiptInvoice(customerId, qInv);
-        const paymentTotals = await billingManager.getCollectorReceiptTotalsForInvoice(full.id);
+        const { invoices, batchTotals } = await resolveCollectorPaidReceiptInvoices(customerId, req.query);
+        const primary = invoices[0];
+        const mergedPrimary =
+            invoices.length === 1
+                ? primary
+                : {
+                      ...primary,
+                      discount_amount: batchTotals ? Number(batchTotals.discount_amount) || 0 : 0,
+                      amount_paid: batchTotals ? Number(batchTotals.amount_paid) || 0 : primary.amount_paid,
+                      payment_date: (batchTotals && batchTotals.payment_date) || primary.payment_date,
+                      payment_method: (batchTotals && batchTotals.payment_method) || primary.payment_method
+                  };
 
         res.json({
             success: true,
             data: {
-                invoice: sanitizeInvoiceForCollectorReceipt(full, paymentTotals),
+                invoice: mergedPrimary,
+                invoices,
+                totals: {
+                    invoice_count: invoices.length,
+                    gross_amount: batchTotals ? Number(batchTotals.invoice_amount) || 0 : invoices.reduce((s, i) => s + (Number(i.amount) || 0), 0),
+                    discount_amount: batchTotals ? Number(batchTotals.discount_amount) || 0 : 0,
+                    amount_paid: batchTotals
+                        ? Number(batchTotals.amount_paid) || 0
+                        : invoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0),
+                    payment_method: (batchTotals && batchTotals.payment_method) || primary.payment_method || '',
+                    payment_date: (batchTotals && batchTotals.payment_date) || primary.payment_date || ''
+                },
                 settings: collectorReceiptSettingsForMobile()
             }
         });
@@ -6433,21 +6848,29 @@ router.get('/collector/customers/:customerId/receipt/pdf', verifyToken, requireC
     if (!Number.isFinite(customerId) || customerId <= 0) {
         return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
     }
-    const qInv = req.query.invoice_id != null && req.query.invoice_id !== '' ? parseInt(String(req.query.invoice_id), 10) : null;
     try {
         const allowed = await collectorMappedCustomerIds(collectorId);
         if (!allowed.has(customerId)) {
             return res.status(403).json({ success: false, message: 'Pelanggan tidak ada di wilayah Anda' });
         }
 
-        const full = await resolveCollectorPaidReceiptInvoice(customerId, qInv);
-        const { generateInvoicePdf } = require('../../config/invoicePdf');
-        const pdfResult = await generateInvoicePdf(full.id);
+        const { invoices } = await resolveCollectorPaidReceiptInvoices(customerId, req.query);
+        const { generateInvoicePdf, generateCollectorBatchReceiptPdf } = require('../../config/invoicePdf');
+        let pdfResult;
+        if (invoices.length > 1 && typeof generateCollectorBatchReceiptPdf === 'function') {
+            pdfResult = await generateCollectorBatchReceiptPdf(invoices.map((i) => i.id));
+        } else {
+            pdfResult = await generateInvoicePdf(invoices[0].id);
+        }
         if (!pdfResult || !pdfResult.buffer) {
             return res.status(500).json({ success: false, message: 'Gagal membuat PDF invoice' });
         }
 
-        const fileName = pdfResult.fileName || `Invoice-${full.invoice_number || full.id}.pdf`;
+        const fileName =
+            pdfResult.fileName ||
+            (invoices.length > 1
+                ? `Resi-${invoices.length}-invoice.pdf`
+                : `Invoice-${invoices[0].invoice_number || invoices[0].id}.pdf`);
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${fileName.replace(/"/g, '')}"`);
         res.send(pdfResult.buffer);
@@ -6522,8 +6945,9 @@ router.get('/admin/warehouse/items', verifyToken, requireAdmin, async (req, res)
         const activeOnly = req.query.all !== '1';
         const rows = await dbAllP(
             activeOnly
-                ? `SELECT * FROM warehouse_items WHERE is_active = 1 ORDER BY name COLLATE NOCASE`
-                : `SELECT * FROM warehouse_items ORDER BY is_active DESC, name COLLATE NOCASE`
+                ? `SELECT * FROM warehouse_items WHERE is_active = 1${hasTenantContext() ? ' AND tenant_id = ?' : ''} ORDER BY name COLLATE NOCASE`
+                : `SELECT * FROM warehouse_items${hasTenantContext() ? ' WHERE tenant_id = ?' : ''} ORDER BY is_active DESC, name COLLATE NOCASE`,
+            hasTenantContext() ? [getTenantId()] : []
         );
         res.json({ success: true, items: rows });
     } catch (error) {
@@ -6539,8 +6963,8 @@ router.post('/admin/warehouse/items', verifyToken, requireAdmin, async (req, res
     const low = Math.max(0, parseInt(req.body.low_stock_threshold, 10) || 5);
     try {
         const r = await dbRunP(
-            `INSERT INTO warehouse_items (name, unit, low_stock_threshold, is_active) VALUES (?,?,?,1)`,
-            [name, unit, low]
+            `INSERT INTO warehouse_items (name, unit, low_stock_threshold, is_active, tenant_id) VALUES (?,?,?,1,?)`,
+            [name, unit, low, hasTenantContext() ? getTenantId() : 1]
         );
         res.json({ success: true, id: r.lastID });
     } catch (error) {
@@ -6598,11 +7022,12 @@ router.post('/admin/warehouse/inbound', verifyToken, requireAdmin, async (req, r
     const notes = String(req.body.notes ?? '').trim().slice(0, 500);
     try {
         const now = getLocalTimestamp();
+        const tenantId = hasTenantContext() ? getTenantId() : 1;
         const item = await dbGetP(`SELECT id FROM warehouse_items WHERE id = ? AND is_active = 1`, [itemId]);
         if (!item) return res.status(400).json({ success: false, message: 'Master barang tidak ditemukan atau nonaktif' });
         const { lastID: batchId } = await dbRunP(
-            `INSERT INTO warehouse_inbound_batches (item_id, quantity, reference, notes, created_at) VALUES (?,?,?,?,?)`,
-            [itemId, quantity, reference, notes, now]
+            `INSERT INTO warehouse_inbound_batches (item_id, quantity, reference, notes, created_at, tenant_id) VALUES (?,?,?,?,?,?)`,
+            [itemId, quantity, reference, notes, now, tenantId]
         );
         const units = [];
         for (let i = 0; i < quantity; i++) {
@@ -6611,8 +7036,8 @@ router.post('/admin/warehouse/inbound', verifyToken, requireAdmin, async (req, r
                 try {
                     const code = genWarehousePublicCode();
                     const r = await dbRunP(
-                        `INSERT INTO warehouse_units (item_id, inbound_batch_id, public_code, status, created_at) VALUES (?,?,?, 'in_stock', ?)`,
-                        [itemId, batchId, code, now]
+                        `INSERT INTO warehouse_units (item_id, inbound_batch_id, public_code, status, created_at, tenant_id) VALUES (?,?,?, 'in_stock', ?, ?)`,
+                        [itemId, batchId, code, now, tenantId]
                     );
                     units.push({ id: r.lastID, public_code: code });
                     inserted = true;
@@ -6689,13 +7114,14 @@ router.put('/admin/warehouse/inbound-batches/:id', verifyToken, requireAdmin, as
         } else if (quantity > oldQ) {
             const add = quantity - oldQ;
             const now = getLocalTimestamp();
+            const tenantId = hasTenantContext() ? getTenantId() : 1;
             for (let i = 0; i < add; i++) {
                 let inserted = false;
                 for (let attempt = 0; attempt < 8 && !inserted; attempt++) {
                     try {
                         await dbRunP(
-                            `INSERT INTO warehouse_units (item_id, inbound_batch_id, public_code, status, created_at) VALUES (?,?,?, 'in_stock', ?)`,
-                            [itemId, batchId, genWarehousePublicCode(), now]
+                            `INSERT INTO warehouse_units (item_id, inbound_batch_id, public_code, status, created_at, tenant_id) VALUES (?,?,?, 'in_stock', ?, ?)`,
+                            [itemId, batchId, genWarehousePublicCode(), now, tenantId]
                         );
                         inserted = true;
                     } catch (err) {

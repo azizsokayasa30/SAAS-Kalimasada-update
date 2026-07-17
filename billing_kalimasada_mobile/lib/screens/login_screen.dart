@@ -143,13 +143,15 @@ class _LoginScreenState extends State<LoginScreen> {
     final tenants = result.tenants;
     final normalizedPreferred = preferredSlug?.trim().toLowerCase();
     String? selected;
+    // Jangan auto-pilih tenant pertama — itu bisa tenant lain (kebocoran data).
+    // Hanya preselect jika user punya slug tersimpan / dari credential.
     if (normalizedPreferred != null &&
         normalizedPreferred.isNotEmpty &&
         tenants.any((t) => t.subdomain == normalizedPreferred)) {
       selected = normalizedPreferred;
-    } else if (tenants.isNotEmpty) {
-      selected = tenants.first.subdomain;
-    } else if (normalizedPreferred != null && normalizedPreferred.isNotEmpty) {
+    } else if (normalizedPreferred != null &&
+        normalizedPreferred.isNotEmpty &&
+        tenants.isEmpty) {
       selected = normalizedPreferred;
     }
 

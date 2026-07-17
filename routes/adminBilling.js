@@ -38,6 +38,28 @@ function tWhere(alias = '') {
     return ` WHERE ${col} = ${parseInt(t.params[0], 10)}`;
 }
 
+/**
+ * Scope tenant untuk import pelanggan — wajib diambil SINKRON di awal handler
+ * (setelah await / background job, AsyncLocalStorage sering hilang).
+ */
+function resolveImportTenantScope(req, meta = null) {
+    const { hasTenantContext, getTenantId } = require('../config/platform/tenantContext');
+    const rawId = req?.tenantId
+        ?? req?.tenant?.id
+        ?? meta?.tenant_id
+        ?? (hasTenantContext() ? getTenantId() : null);
+    if (rawId == null || !Number.isFinite(Number(rawId))) {
+        return { tenantId: null, and: () => '', where: () => '' };
+    }
+    const lit = parseInt(rawId, 10);
+    const colFor = (alias = '') => (alias ? `${alias}.tenant_id` : 'tenant_id');
+    return {
+        tenantId: lit,
+        and: (alias = '') => ` AND ${colFor(alias)} = ${lit}`,
+        where: (alias = '') => ` WHERE ${colFor(alias)} = ${lit}`,
+    };
+}
+
 /** Password konfirmasi aksi sensitif: `super_admin_password` di settings jika diisi, else `admin_password`. */
 function verifySuperAdminPassword(plain) {
     const dedicated = String(getSetting('super_admin_password', '') || '').trim();
@@ -287,51 +309,21 @@ async function applyCustomerJoinAndCreatedDates(db, customerId, isoJoinDate) {
 }
 
 // Ensure import can accept duplicate phone numbers by removing UNIQUE constraint on customers.phone.
-// This migration is idempotent and only runs when the table definition still enforces UNIQUE(phone).
+// Also repairs leftover FKs from the old RENAME-based migration (customers_backup_phone_unique_mig).
 const ensureCustomersPhoneNonUnique = async (db) => {
-    const dbGet = (sql, params = []) => new Promise((resolve, reject) => {
-        db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
-    });
-    const dbRun = (sql, params = []) => new Promise((resolve, reject) => {
-        db.run(sql, params, function (err) {
-            if (err) return reject(err);
-            resolve(this);
-        });
-    });
+    const {
+        migrateCustomersPhoneNonUniqueSafe,
+        repairCustomersBackupPhoneUniqueFk
+    } = require('../utils/repairCustomersBackupFk');
 
-    const tableInfo = await dbGet(
-        `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'customers'`
-    );
-    const currentSql = String((tableInfo && tableInfo.sql) || '');
-    if (!/phone\s+TEXT\s+UNIQUE\s+NOT\s+NULL/i.test(currentSql)) return;
-
-    const migratedSql = currentSql.replace(
-        /phone\s+TEXT\s+UNIQUE\s+NOT\s+NULL/i,
-        'phone TEXT NOT NULL'
-    );
-    if (migratedSql === currentSql) return;
-
-    await dbRun('BEGIN IMMEDIATE');
-    try {
-        await dbRun('PRAGMA foreign_keys = OFF');
-        await dbRun(`ALTER TABLE customers RENAME TO customers_backup_phone_unique_mig`);
-        await dbRun(migratedSql);
-
-        const cols = await new Promise((resolve, reject) => {
-            db.all(`PRAGMA table_info(customers_backup_phone_unique_mig)`, [], (err, rows) => {
-                if (err) return reject(err);
-                resolve((rows || []).map((r) => r.name).filter(Boolean));
-            });
-        });
-        const colList = cols.map((c) => `"${c}"`).join(', ');
-        await dbRun(`INSERT INTO customers (${colList}) SELECT ${colList} FROM customers_backup_phone_unique_mig`);
-        await dbRun(`DROP TABLE customers_backup_phone_unique_mig`);
-        await dbRun('PRAGMA foreign_keys = ON');
-        await dbRun('COMMIT');
+    const result = await migrateCustomersPhoneNonUniqueSafe(db, logger);
+    if (result.migrated) {
         logger.warn('[IMPORT] Migrasi customers.phone UNIQUE -> non-UNIQUE selesai');
-    } catch (err) {
-        try { await dbRun('ROLLBACK'); } catch (_) {}
-        throw err;
+    }
+
+    const repair = await repairCustomersBackupPhoneUniqueFk(db, logger);
+    if (repair.repaired.length) {
+        logger.warn(`[IMPORT] FK repair selesai: ${repair.repaired.join(', ')}`);
     }
 };
 
@@ -658,13 +650,14 @@ router.post('/api/collector-payment', adminAuth, async (req, res) => {
         const commissionAmount = Math.round((paymentAmountNum * commissionRate) / 100); // Rounding untuk komisi
         
         // Insert collector payment (ensure legacy 'amount' column is populated)
+        const tenantIdForRow = billingManager._resolveTenantIdForInsert();
         const paymentId = await new Promise((resolve, reject) => {
             db.run(`
                 INSERT INTO collector_payments (
                     collector_id, customer_id, amount, payment_amount, commission_amount,
-                    payment_method, notes, status, collected_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', datetime('now','localtime'))
-            `, [collector_id, customer_id, paymentAmountNum, paymentAmountNum, commissionAmount, payment_method, notes], function(err) {
+                    payment_method, notes, status, collected_at, tenant_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', datetime('now','localtime'), ?)
+            `, [collector_id, customer_id, paymentAmountNum, paymentAmountNum, commissionAmount, payment_method, notes, tenantIdForRow], function(err) {
                 if (err) reject(err);
                 else resolve(this.lastID);
             });
@@ -877,7 +870,7 @@ router.get('/collector-reports', getAppSettings, async (req, res) => {
                            SELECT COALESCE(SUM(i.amount), 0)
                            FROM invoices i
                            JOIN customers cust ON i.customer_id = cust.id
-                           JOIN collector_areas ca ON cust.area = ca.area
+                           JOIN collector_areas ca ON TRIM(IFNULL(cust.area, '')) != '' AND LOWER(TRIM(cust.area)) = LOWER(TRIM(COALESCE(ca.area, ca.area_name)))
                            WHERE ca.collector_id = c.id 
                            AND DATE(i.created_at) >= '${startDate}' AND DATE(i.created_at) <= '${endDate}'
                        ) as total_tagihan_area,
@@ -885,7 +878,7 @@ router.get('/collector-reports', getAppSettings, async (req, res) => {
                            SELECT COALESCE(SUM(i.amount), 0)
                            FROM invoices i
                            JOIN customers cust ON i.customer_id = cust.id
-                           JOIN collector_areas ca ON cust.area = ca.area
+                           JOIN collector_areas ca ON TRIM(IFNULL(cust.area, '')) != '' AND LOWER(TRIM(cust.area)) = LOWER(TRIM(COALESCE(ca.area, ca.area_name)))
                            WHERE ca.collector_id = c.id 
                            AND i.status = 'paid'
                            AND DATE(i.created_at) >= '${startDate}' AND DATE(i.created_at) <= '${endDate}'
@@ -894,7 +887,7 @@ router.get('/collector-reports', getAppSettings, async (req, res) => {
                            SELECT COALESCE(SUM(i.amount), 0)
                            FROM invoices i
                            JOIN customers cust ON i.customer_id = cust.id
-                           JOIN collector_areas ca ON cust.area = ca.area
+                           JOIN collector_areas ca ON TRIM(IFNULL(cust.area, '')) != '' AND LOWER(TRIM(cust.area)) = LOWER(TRIM(COALESCE(ca.area, ca.area_name)))
                            WHERE ca.collector_id = c.id 
                            AND i.status = 'unpaid'
                            AND DATE(i.created_at) >= '${startDate}' AND DATE(i.created_at) <= '${endDate}'
@@ -903,7 +896,7 @@ router.get('/collector-reports', getAppSettings, async (req, res) => {
                            SELECT COUNT(i.id)
                            FROM invoices i
                            JOIN customers cust ON i.customer_id = cust.id
-                           JOIN collector_areas ca ON cust.area = ca.area
+                           JOIN collector_areas ca ON TRIM(IFNULL(cust.area, '')) != '' AND LOWER(TRIM(cust.area)) = LOWER(TRIM(COALESCE(ca.area, ca.area_name)))
                            WHERE ca.collector_id = c.id 
                            AND i.status = 'unpaid'
                            AND DATE(i.created_at) >= '${startDate}' AND DATE(i.created_at) <= '${endDate}'
@@ -1115,7 +1108,7 @@ router.get('/collector-details/:id', getAppSettings, async (req, res) => {
                            SELECT COALESCE(SUM(i.amount), 0)
                            FROM invoices i
                            JOIN customers cust ON i.customer_id = cust.id
-                           JOIN collector_areas ca ON cust.area = ca.area
+                           JOIN collector_areas ca ON TRIM(IFNULL(cust.area, '')) != '' AND LOWER(TRIM(cust.area)) = LOWER(TRIM(COALESCE(ca.area, ca.area_name)))
                            WHERE ca.collector_id = ? 
                            AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
                        ) as total_tagihan_area,
@@ -1123,7 +1116,7 @@ router.get('/collector-details/:id', getAppSettings, async (req, res) => {
                            SELECT COALESCE(SUM(i.amount), 0)
                            FROM invoices i
                            JOIN customers cust ON i.customer_id = cust.id
-                           JOIN collector_areas ca ON cust.area = ca.area
+                           JOIN collector_areas ca ON TRIM(IFNULL(cust.area, '')) != '' AND LOWER(TRIM(cust.area)) = LOWER(TRIM(COALESCE(ca.area, ca.area_name)))
                            WHERE ca.collector_id = ? 
                            AND i.status = 'paid'
                            AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
@@ -1132,7 +1125,7 @@ router.get('/collector-details/:id', getAppSettings, async (req, res) => {
                            SELECT COALESCE(SUM(i.amount), 0)
                            FROM invoices i
                            JOIN customers cust ON i.customer_id = cust.id
-                           JOIN collector_areas ca ON cust.area = ca.area
+                           JOIN collector_areas ca ON TRIM(IFNULL(cust.area, '')) != '' AND LOWER(TRIM(cust.area)) = LOWER(TRIM(COALESCE(ca.area, ca.area_name)))
                            WHERE ca.collector_id = ? 
                            AND i.status = 'unpaid'
                            AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
@@ -1141,7 +1134,7 @@ router.get('/collector-details/:id', getAppSettings, async (req, res) => {
                            SELECT COUNT(i.id)
                            FROM invoices i
                            JOIN customers cust ON i.customer_id = cust.id
-                           JOIN collector_areas ca ON cust.area = ca.area
+                           JOIN collector_areas ca ON TRIM(IFNULL(cust.area, '')) != '' AND LOWER(TRIM(cust.area)) = LOWER(TRIM(COALESCE(ca.area, ca.area_name)))
                            WHERE ca.collector_id = ? 
                            AND i.status = 'unpaid'
                            AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
@@ -1423,6 +1416,12 @@ router.get('/collector-remittance/export.xlsx', getAppSettings, adminAuth, async
             { header: 'Belum lunas (jml)', key: 'blc', width: 14 },
             { header: 'Sudah lunas area (Rp)', key: 'tlrp', width: 20 },
             { header: 'Jml lunas', key: 'cl', width: 11 },
+            { header: 'Diterima kolektor (Rp)', key: 'tdk', width: 20 },
+            { header: 'Dari tagihan periode (Rp)', key: 'dtp', width: 22 },
+            { header: 'Dari tunggakan (Rp)', key: 'dtt', width: 18 },
+            { header: 'Diskon tagihan periode (Rp)', key: 'discP', width: 22 },
+            { header: 'Diskon tunggakan (Rp)', key: 'discT', width: 18 },
+            { header: 'Diskon total (Rp)', key: 'disc', width: 14 },
             { header: 'Lunas kolektor tunai (Rp)', key: 'tlg', width: 24 },
             { header: 'Lunas transfer (Rp)', key: 'tlt', width: 18 },
             { header: 'Sudah setor (Rp)', key: 'ss', width: 18 },
@@ -1440,6 +1439,12 @@ router.get('/collector-remittance/export.xlsx', getAppSettings, adminAuth, async
                 blc: Number(c.total_belum_lunas_count) || 0,
                 tlrp: Number(c.total_lunas_area) || 0,
                 cl: Number(c.count_lunas_area) || 0,
+                tdk: Number(c.total_diterima_kolektor != null ? c.total_diterima_kolektor : ((c.total_lunas_gross || 0) + (c.total_lunas_transfer || 0))) || 0,
+                dtp: Number(c.diterima_tagihan_periode) || 0,
+                dtt: Number(c.diterima_tunggakan) || 0,
+                discP: Number(c.discount_tagihan_periode) || 0,
+                discT: Number(c.discount_tunggakan) || 0,
+                disc: Number(c.total_discount) || 0,
                 tlg: Number(c.total_lunas_gross) || 0,
                 tlt: Number(c.total_lunas_transfer) || 0,
                 ss: Number(c.sudah_setor) || 0,
@@ -1447,7 +1452,7 @@ router.get('/collector-remittance/export.xlsx', getAppSettings, adminAuth, async
                 pend: Number(c.pending_amount) || 0
             });
         });
-        ['tta', 'blrp', 'tlrp', 'tlg', 'tlt', 'ss', 'kom', 'pend'].forEach((k) => {
+        ['tta', 'blrp', 'tlrp', 'tdk', 'dtp', 'dtt', 'discP', 'discT', 'disc', 'tlg', 'tlt', 'ss', 'kom', 'pend'].forEach((k) => {
             wsKol.getColumn(k).numFmt = '"Rp" #,##0';
         });
 
@@ -1522,6 +1527,12 @@ router.get('/collector-remittance/export.csv', getAppSettings, adminAuth, async 
                 'Belum_lunas_jml',
                 'Sudah_lunas_area_Rp',
                 'Jml_lunas',
+                'Diterima_kolektor_Rp',
+                'Dari_tagihan_periode_Rp',
+                'Dari_tunggakan_Rp',
+                'Diskon_tagihan_periode_Rp',
+                'Diskon_tunggakan_Rp',
+                'Diskon_total_Rp',
                 'Lunas_kolektor_tunai_Rp',
                 'Lunas_transfer_Rp',
                 'Sudah_setor_Rp',
@@ -1539,6 +1550,12 @@ router.get('/collector-remittance/export.csv', getAppSettings, adminAuth, async 
                     Number(c.total_belum_lunas_count) || 0,
                     Number(c.total_lunas_area) || 0,
                     Number(c.count_lunas_area) || 0,
+                    Number(c.total_diterima_kolektor != null ? c.total_diterima_kolektor : ((c.total_lunas_gross || 0) + (c.total_lunas_transfer || 0))) || 0,
+                    Number(c.diterima_tagihan_periode) || 0,
+                    Number(c.diterima_tunggakan) || 0,
+                    Number(c.discount_tagihan_periode) || 0,
+                    Number(c.discount_tunggakan) || 0,
+                    Number(c.total_discount) || 0,
                     Number(c.total_lunas_gross) || 0,
                     Number(c.total_lunas_transfer) || 0,
                     Number(c.sudah_setor) || 0,
@@ -2144,12 +2161,17 @@ router.get('/api/revenue/summary', adminAuth, async (req, res) => {
 // Halaman Semua Invoice (Invoice List)
 router.get('/invoice-list', getAppSettings, async (req, res) => {
     try {
-        const { page = 1, limit = 50, status, customer_username, search, type } = req.query;
+        const { page = 1, limit = 50, status, customer_username, search, type, month, year } = req.query;
         const offset = (page - 1) * limit;
         const searchTerm = String(search || customer_username || '').trim();
+
+        const now = new Date();
+        const selectedMonth = Math.min(12, Math.max(1, parseInt(month, 10) || (now.getMonth() + 1)));
+        const selectedYear = parseInt(year, 10) || now.getFullYear();
+        const monthKey = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}`;
         
         // Prepare filters object
-        const filters = {};
+        const filters = { month: monthKey };
         if (status) filters.status = status;
         if (searchTerm) filters.customer_username = searchTerm;
         if (type) filters.type = type;
@@ -2165,18 +2187,25 @@ router.get('/invoice-list', getAppSettings, async (req, res) => {
         res.render('admin/billing/invoice-list', {
             title: 'Semua Invoice',
             invoices,
-            summary: summary || { total: totalCount, paid: 0, unpaid: 0, overdue: 0 },
+            summary: summary || {
+                total: totalCount, paid: 0, unpaid: 0, overdue: 0,
+                total_amount: 0, paid_amount: 0, unpaid_amount: 0, overdue_amount: 0
+            },
             pagination: {
                 currentPage: parseInt(page),
-                totalPages: Math.ceil(totalCount / limit),
+                totalPages: Math.ceil(totalCount / limit) || 1,
                 totalCount,
                 limit: parseInt(limit)
             },
             filters: {
                 status: status || '',
                 customer_username: searchTerm || '',
-                type: type || ''
+                type: type || '',
+                month: selectedMonth,
+                year: selectedYear
             },
+            selectedMonth,
+            selectedYear,
             appSettings: req.appSettings,
             page: 'invoices'
         });
@@ -2193,15 +2222,22 @@ router.get('/invoice-list', getAppSettings, async (req, res) => {
 // Halaman Invoice by Type
 router.get('/invoices-by-type', adminAuth, async (req, res) => {
     try {
+        const { month, year } = req.query;
+        const now = new Date();
+        const selectedMonth = Math.min(12, Math.max(1, parseInt(month, 10) || (now.getMonth() + 1)));
+        const selectedYear = parseInt(year, 10) || now.getFullYear();
+        const monthKey = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}`;
+        const typeOpts = { month: monthKey };
+
         // Get invoices by type
-        const monthlyInvoices = await billingManager.getInvoicesByType('monthly');
-        const voucherInvoices = await billingManager.getInvoicesByType('voucher');
-        const manualInvoices = await billingManager.getInvoicesByType('manual');
+        const monthlyInvoices = await billingManager.getInvoicesByType('monthly', typeOpts);
+        const voucherInvoices = await billingManager.getInvoicesByType('voucher', typeOpts);
+        const manualInvoices = await billingManager.getInvoicesByType('manual', typeOpts);
         
         // Get stats by type
-        const monthlyStats = await billingManager.getInvoiceStatsByType('monthly');
-        const voucherStats = await billingManager.getInvoiceStatsByType('voucher');
-        const manualStats = await billingManager.getInvoiceStatsByType('manual');
+        const monthlyStats = await billingManager.getInvoiceStatsByType('monthly', typeOpts);
+        const voucherStats = await billingManager.getInvoiceStatsByType('voucher', typeOpts);
+        const manualStats = await billingManager.getInvoiceStatsByType('manual', typeOpts);
         
         res.render('admin/billing/invoices-by-type', {
             title: 'Invoice by Type',
@@ -2211,7 +2247,9 @@ router.get('/invoices-by-type', adminAuth, async (req, res) => {
             manualInvoices: manualInvoices.slice(0, 50),
             monthlyStats,
             voucherStats,
-            manualStats
+            manualStats,
+            selectedMonth,
+            selectedYear
         });
     } catch (error) {
         logger.error('Error loading invoices by type:', error);
@@ -2675,12 +2713,34 @@ function formatCustomerExportDate(val) {
 }
 
 /**
+ * Unwrap nilai sel ExcelJS agar hyperlink mailto (`user@site`), richText, dan formula
+ * tidak jadi "[object Object]" saat di-String().
+ */
+function unwrapExcelCellValue(val) {
+    if (val == null || val === '') return '';
+    if (typeof val !== 'object') return val;
+    if (val.richText && Array.isArray(val.richText)) {
+        return val.richText.map((p) => (p && p.text != null ? String(p.text) : '')).join('');
+    }
+    if (Object.prototype.hasOwnProperty.call(val, 'result') && val.result != null) {
+        return unwrapExcelCellValue(val.result);
+    }
+    if (val.text != null) return val.text;
+    if (val.hyperlink != null && typeof val.hyperlink === 'string') {
+        // fallback: mailto:user@host → user@host
+        const m = String(val.hyperlink).match(/^mailto:(.+)$/i);
+        if (m) return m[1];
+    }
+    return val;
+}
+
+/**
  * Setelah baris import lolos validasi: perbaiki hanya Excel (852→0852).
  * 628… dan 085… tetap berbeda — untuk bedakan 2 langganan nomor "sama" format beda.
  */
 function parsePhoneFromSpreadsheetCell(val) {
     if (val == null || val === '') return '';
-    return billingManager.fixExcelStrippedPhoneForStorage(val);
+    return billingManager.fixExcelStrippedPhoneForStorage(unwrapExcelCellValue(val));
 }
 
 /** Batch router + sandi PPPoE (hindari ribuan koneksi RADIUS per baris). */
@@ -2814,9 +2874,12 @@ const CUSTOMER_EXPORT_COLUMNS = [
     { header: 'Harga Paket', key: 'package_price', width: 14 },
     { header: 'Status Layanan', key: 'status', width: 14 },
     { header: 'Status Bayar', key: 'payment_status', width: 14 },
+    { header: 'Mode Koneksi', key: 'connection_type', width: 14 },
     { header: 'PPPoE Username', key: 'pppoe_username', width: 20 },
     { header: 'PPPoE Password', key: 'pppoe_password', width: 18 },
     { header: 'PPPoE Profile', key: 'pppoe_profile', width: 16 },
+    { header: 'Static IP', key: 'static_ip', width: 16 },
+    { header: 'MAC Address', key: 'mac_address', width: 18 },
     { header: 'Router', key: 'router_name', width: 16 },
     { header: 'Router ID', key: 'router_id', width: 10 },
     { header: 'Email', key: 'email', width: 24 },
@@ -2894,6 +2957,19 @@ const CUSTOMER_IMPORT_HEADER_ALIASES = {
     pppoe_password: 'pppoe_password',
     'pppoe profile': 'pppoe_profile',
     pppoe_profile: 'pppoe_profile',
+    'mode koneksi': 'connection_type',
+    'tipe koneksi': 'connection_type',
+    connection_type: 'connection_type',
+    'connection type': 'connection_type',
+    'static ip': 'static_ip',
+    'ip statik': 'static_ip',
+    'ip static': 'static_ip',
+    static_ip: 'static_ip',
+    'assigned ip': 'assigned_ip',
+    assigned_ip: 'assigned_ip',
+    'mac address': 'mac_address',
+    mac_address: 'mac_address',
+    mac: 'mac_address',
     router: 'router_name',
     router_name: 'router_name',
     'router id': 'router_id',
@@ -2926,6 +3002,22 @@ const CUSTOMER_IMPORT_HEADER_ALIASES = {
     'catatan kabel': 'cable_notes',
     cable_notes: 'cable_notes'
 };
+
+/** Resolve import row mode: pppoe | static_ip (backward compatible if Mode Koneksi kosong). */
+function resolveImportConnectionType(raw) {
+    const explicit = String(raw?.connection_type || '').trim().toLowerCase().replace(/[_\s-]+/g, ' ');
+    if (['pppoe', 'ppp'].includes(explicit)) return 'pppoe';
+    if (['static ip', 'static', 'ip static', 'ip statik', 'statik'].includes(explicit) || explicit === 'staticip') {
+        return 'static_ip';
+    }
+    const staticIp = String(raw?.static_ip || raw?.assigned_ip || '').trim();
+    if (staticIp && /^(\d{1,3}\.){3}\d{1,3}$/.test(staticIp)) return 'static_ip';
+    return 'pppoe';
+}
+
+function isValidImportIpv4(value) {
+    return /^(\d{1,3}\.){3}\d{1,3}$/.test(String(value || '').trim());
+}
 
 function buildCustomerImportUnifiedHeaderMap(headerRow) {
     const headerMap = {};
@@ -2964,11 +3056,12 @@ async function buildCustomerImportTemplateWorkbook() {
         fgColor: { argb: 'FFE8F5E9' }
     };
 
+    // Contoh 1: PPPoE
     ws.addRow({
         id: '',
         customer_id: '',
         username: '',
-        name: 'Contoh Pelanggan',
+        name: 'Contoh PPPoE',
         phone: '6281234567890',
         area: 'Wilayah A',
         collector_name: '',
@@ -2976,9 +3069,12 @@ async function buildCustomerImportTemplateWorkbook() {
         package_price: 150000,
         status: 'active',
         payment_status: '',
+        connection_type: 'pppoe',
         pppoe_username: 'userpppoe',
         pppoe_password: 'rahasiaPPP',
         pppoe_profile: 'default',
+        static_ip: '',
+        mac_address: '',
         router_name: '',
         router_id: '',
         email: 'nama@email.com',
@@ -2998,13 +3094,72 @@ async function buildCustomerImportTemplateWorkbook() {
         cable_length: 85,
         port_number: 1,
         cable_status: 'connected',
-        cable_notes: 'Baris contoh — hapus sebelum import produksi'
+        cable_notes: 'Baris contoh PPPoE — hapus sebelum import produksi'
+    });
+
+    // Contoh 2: Static IP
+    ws.addRow({
+        id: '',
+        customer_id: '',
+        username: '',
+        name: 'Contoh Static IP',
+        phone: '6281298765432',
+        area: 'Wilayah B',
+        collector_name: '',
+        package_name: 'Paket 10 Mbps',
+        package_price: 150000,
+        status: 'active',
+        payment_status: '',
+        connection_type: 'static_ip',
+        pppoe_username: '',
+        pppoe_password: '',
+        pppoe_profile: '',
+        static_ip: '192.168.10.50',
+        mac_address: '00:11:22:33:44:55',
+        router_name: '',
+        router_id: '',
+        email: '',
+        address: 'Jl. Contoh No. 2',
+        latitude: '',
+        longitude: '',
+        package_id: '',
+        auto_suspension: 1,
+        billing_day: 15,
+        join_date: '01/06/2020',
+        created_at: '01/06/2020',
+        login_password: '',
+        odp_id: '',
+        renewal_type: 'renewal',
+        fix_date: '',
+        cable_type: 'Fiber Optic',
+        cable_length: 40,
+        port_number: 2,
+        cable_status: 'connected',
+        cable_notes: 'Baris contoh Static IP — hapus sebelum import produksi'
     });
 
     const priceCol = ws.getColumn('package_price');
     if (priceCol) priceCol.numFmt = '#,##0';
     const phoneCol = ws.getColumn('phone');
     if (phoneCol) phoneCol.numFmt = '@';
+
+    // Dropdown Mode Koneksi (pppoe | static_ip)
+    try {
+        const modeCol = ws.getColumn('connection_type');
+        if (modeCol && modeCol.number) {
+            const colLetter = ws.getColumn(modeCol.number).letter;
+            ws.dataValidations.add(`${colLetter}2:${colLetter}5000`, {
+                type: 'list',
+                allowBlank: true,
+                formulae: ['"pppoe,static_ip"'],
+                showErrorMessage: true,
+                errorTitle: 'Mode Koneksi',
+                error: 'Pilih pppoe atau static_ip'
+            });
+        }
+    } catch (e) {
+        logger.warn('Gagal set data validation Mode Koneksi: ' + e.message);
+    }
 
     const help = workbook.addWorksheet('Petunjuk');
     help.getColumn(1).width = 28;
@@ -3014,10 +3169,13 @@ async function buildCustomerImportTemplateWorkbook() {
         ['Nama *', 'Nama lengkap pelanggan (wajib). Sama dengan kolom export.'],
         ['Phone *', 'Nomor HP (wajib). 628… dan 085… disimpan apa adanya (bisa beda langganan). Hanya angka 852… (tanpa 0/62) diperbaiki jadi 0852… karena Excel.'],
         ['Paket *', 'Nama paket sesuai menu Paket (wajib). Boleh isi Package ID sebagai alternatif.'],
+        ['Mode Koneksi *', 'Pilih pppoe atau static_ip. Kosong = otomatis: ada Static IP → static_ip, selain itu pppoe.'],
+        ['PPPoE Username / Password', 'Wajib jika Mode = pppoe. Login PPPoE; jika password diisi sistem push ke RADIUS/Mikrotik.'],
+        ['Static IP / MAC Address', 'Wajib Static IP jika Mode = static_ip (format 192.168.x.x). MAC opsional untuk isolir DHCP. Jangan isi username PPPoE.'],
+        ['PPPoE Profile', 'Profil paket (mode pppoe). Boleh kosong — sistem bisa ambil dari paket.'],
         ['Username', 'Username login portal. Kosong = digenerate dari nomor HP.'],
         ['Login Password', 'Password login portal (bukan PPPoE).'],
         ['Area', 'Nama wilayah / cluster.'],
-        ['PPPoE Username / Password', 'Login PPPoE; jika diisi sistem push ke RADIUS/Mikrotik.'],
         ['Router ID', 'ID router (angka) atau kosong untuk mode RADIUS.'],
         ['Status Layanan', 'active, suspended, register, isolir, dll. Default active.'],
         ['Auto Suspension', '1/ya = aktif, 0/tidak = nonaktif.'],
@@ -3025,7 +3183,7 @@ async function buildCustomerImportTemplateWorkbook() {
         ['Join Date / Created At', 'Tanggal bergabung pelanggan (dd/mm/yyyy). Join Date dan Created At harus sama; import memakai Join Date, jika kosong pakai Created At.'],
         ['ODP ID, Tipe/Panjang Kabel, Port, Status Kabel', 'Opsional; untuk data jalur kabel saat pelanggan baru.'],
         ['Kode Pelanggan, Kolektor, Harga Paket, Status Bayar', 'Kolom dari export — boleh diisi, diabaikan saat import.'],
-        ['', 'Baris 2 sheet Pelanggan adalah CONTOH — hapus sebelum import produksi.'],
+        ['', 'Baris 2–3 sheet Pelanggan adalah CONTOH (PPPoE + Static IP) — hapus sebelum import produksi.'],
         ['', 'Format kolom sama dengan Export XLSX agar mudah bandingkan / restore data.']
     ];
     rows.forEach((r, i) => {
@@ -3073,9 +3231,14 @@ router.get('/export/customers.xlsx', async (req, res) => {
                 package_price: c.package_price != null ? Number(c.package_price) : '',
                 status: c.status || '',
                 payment_status: c.payment_status || '',
+                connection_type: (c.pppoe_username && String(c.pppoe_username).trim())
+                    ? 'pppoe'
+                    : ((c.static_ip || c.assigned_ip) ? 'static_ip' : 'pppoe'),
                 pppoe_username: c.pppoe_username || '',
                 pppoe_password: c.pppoe_password || '',
                 pppoe_profile: c.pppoe_profile || 'default',
+                static_ip: c.static_ip || c.assigned_ip || '',
+                mac_address: c.mac_address || '',
                 router_name: c.router_name || '',
                 router_id: c.router_id || '',
                 email: c.email || '',
@@ -3292,6 +3455,9 @@ function createImportCaptureResponse() {
 }
 
 async function runStagedCustomerImport(req, { buffer, meta, jobId }) {
+    if (!req.tenantId && meta?.tenant_id) {
+        req.tenantId = meta.tenant_id;
+    }
     const priorFile = req.file;
     const headerBackup = {
         fast: req.headers['x-import-fast-mode'],
@@ -3415,6 +3581,7 @@ router.post('/import/customers/stage', upload.single('file'), async (req, res) =
             mime_type: req.file.mimetype || '',
             byte_size: req.file.buffer.length,
             total_rows: summary.total_rows || 0,
+            tenant_id: req.tenantId || req.tenant?.id || null,
             created_at: createdAtIso,
             expires_at: expiresAtIso
         };
@@ -3496,7 +3663,16 @@ router.post('/import/customers/commit/:stageId', async (req, res) => {
         importCommitJobs.set(jobId, job);
         persistCommitJob(job);
 
-        setImmediate(async () => {
+        const importTenant = req.tenant || null;
+        const importTenantId = req.tenantId || meta.tenant_id || null;
+        if (!req.tenantId && importTenantId) {
+            req.tenantId = importTenantId;
+        }
+
+        setImmediate(() => {
+            const { runWithTenant } = require('../config/platform/tenantContext');
+            const tenantForJob = importTenant || (importTenantId ? { id: importTenantId } : null);
+            const runJob = async () => {
             job.status = 'running';
             job.started_at = new Date().toISOString();
             persistCommitJob(job);
@@ -3530,6 +3706,13 @@ router.post('/import/customers/commit/:stageId', async (req, res) => {
             } finally {
                 job.finished_at = new Date().toISOString();
                 persistCommitJob(job);
+            }
+            };
+
+            if (tenantForJob && tenantForJob.id) {
+                runWithTenant(tenantForJob, runJob);
+            } else {
+                runJob();
             }
         });
 
@@ -3604,6 +3787,13 @@ async function runCustomerXlsxImport(req, res) {
     let db = null;
     let dbRun = null;
     let transactionStarted = false;
+    const impT = resolveImportTenantScope(req);
+    if (!impT.tenantId) {
+        return res.status(400).json({
+            success: false,
+            message: 'Konteks tenant tidak ditemukan. Import pelanggan hanya boleh dari panel tenant yang aktif.'
+        });
+    }
     try {
         const importFastMode = String(req.headers['x-import-fast-mode'] || '').trim() === '1';
         const bypassRequested = String(req.headers['x-import-bypass-once'] || '').trim() === '1';
@@ -3625,7 +3815,8 @@ async function runCustomerXlsxImport(req, res) {
 
         const getVal = (row, key) => {
             const col = unifiedHeaderMap[key];
-            return col ? (row.getCell(col).value ?? '') : '';
+            if (!col) return '';
+            return unwrapExcelCellValue(row.getCell(col).value ?? '');
         };
 
         db = require('../config/billing').db;
@@ -3730,6 +3921,10 @@ async function runCustomerXlsxImport(req, res) {
                     area: cellStr('area'),
                     join_date: resolveImportJoinDate(getVal, row),
                     pppoe_profile: String(getVal(row, 'pppoe_profile') || 'default').trim(),
+                    connection_type: cellStr('connection_type'),
+                    static_ip: cellStr('static_ip') || cellStr('assigned_ip'),
+                    assigned_ip: cellStr('assigned_ip') || cellStr('static_ip'),
+                    mac_address: cellStr('mac_address'),
                     status: String(getVal(row, 'status') || 'active').trim(),
                     router_id: getVal(row, 'router_id') ? (isNaN(getVal(row, 'router_id')) ? getVal(row, 'router_id') : Number(getVal(row, 'router_id'))) : null,
                     auto_suspension: (() => {
@@ -3795,7 +3990,7 @@ async function runCustomerXlsxImport(req, res) {
             if (!area) return null;
             return await new Promise((resolve) => {
                 db.get(
-                    `SELECT id FROM areas WHERE LOWER(TRIM(nama_area)) = LOWER(TRIM(?)) LIMIT 1`,
+                    `SELECT id FROM areas WHERE LOWER(TRIM(nama_area)) = LOWER(TRIM(?))${impT.and()} LIMIT 1`,
                     [area],
                     (err, row) => {
                         if (err) return resolve(null);
@@ -3870,36 +4065,83 @@ async function runCustomerXlsxImport(req, res) {
 
                 const resolvedAreaId = await resolveAreaIdByName(raw.area);
 
+                const connType = resolveImportConnectionType(raw);
+                const staticIpVal = String(raw.static_ip || raw.assigned_ip || '').trim();
                 const pppoeUsernameKey = String(raw.pppoe_username || '').trim();
-                if (!pppoeUsernameKey) {
+
+                if (connType === 'static_ip') {
+                    if (!staticIpVal || !isValidImportIpv4(staticIpVal)) {
+                        failed++;
+                        errors.push({
+                            row: r,
+                            name: raw.name || '',
+                            phone: raw.phone || '',
+                            error: 'Mode static_ip wajib isi Static IP valid (contoh: 192.168.1.100)'
+                        });
+                        processedRows++;
+                        reportProgress();
+                        continue;
+                    }
+                } else if (!pppoeUsernameKey) {
                     failed++;
                     errors.push({
                         row: r,
                         name: raw.name || '',
                         phone: raw.phone || '',
-                        error: 'PPPoE username wajib diisi'
+                        error: 'PPPoE username wajib diisi (mode pppoe)'
                     });
                     processedRows++;
                     reportProgress();
                     continue;
                 }
-                const existing = await dbGet(
-                    `SELECT * FROM customers WHERE TRIM(COALESCE(pppoe_username, '')) = ?${tAnd()} LIMIT 1`,
-                    [pppoeUsernameKey]
-                );
+
+                let existing = null;
+                if (connType === 'pppoe' && pppoeUsernameKey) {
+                    existing = await dbGet(
+                        `SELECT * FROM customers WHERE TRIM(COALESCE(pppoe_username, '')) = ?${impT.and()} LIMIT 1`,
+                        [pppoeUsernameKey]
+                    );
+                }
+                if (!existing && phoneStored) {
+                    existing = await dbGet(
+                        `SELECT * FROM customers WHERE TRIM(COALESCE(phone, '')) = ?${impT.and()} LIMIT 1`,
+                        [phoneStored]
+                    );
+                }
+                if (!existing && connType === 'static_ip' && staticIpVal) {
+                    existing = await dbGet(
+                        `SELECT * FROM customers WHERE (TRIM(COALESCE(static_ip, '')) = ? OR TRIM(COALESCE(assigned_ip, '')) = ?)${impT.and()} LIMIT 1`,
+                        [staticIpVal, staticIpVal]
+                    );
+                }
+
                 const customerData = {
+                    tenant_id: impT.tenantId,
                     name: raw.name.trim(),
                     phone: phoneStored,
-                    pppoe_username: raw.pppoe_username ? raw.pppoe_username.trim() : '',
-                    pppoe_password: raw.pppoe_password ? raw.pppoe_password.trim() : '',
+                    pppoe_username: connType === 'static_ip' ? null : (pppoeUsernameKey || ''),
+                    pppoe_password: connType === 'static_ip' ? '' : (raw.pppoe_password ? raw.pppoe_password.trim() : ''),
                     email: raw.email ? raw.email.trim() : '',
                     address: raw.address ? raw.address.trim() : '',
                     package_id: resolvedPackageId,
-                    pppoe_profile: raw.pppoe_profile || 'default',
+                    pppoe_profile: connType === 'static_ip'
+                        ? null
+                        : (raw.pppoe_profile || 'default'),
                     status: raw.status || 'active',
                     auto_suspension: typeof raw.auto_suspension !== 'undefined' ? parseInt(raw.auto_suspension, 10) : 1,
                     billing_day: raw.billing_day ? Math.min(Math.max(parseInt(raw.billing_day, 10), 1), 28) : 15
                 };
+                if (connType === 'static_ip') {
+                    customerData.static_ip = staticIpVal;
+                    customerData.assigned_ip = staticIpVal;
+                    customerData.mac_address = raw.mac_address ? String(raw.mac_address).trim() : null;
+                    customerData.create_pppoe_user = 0;
+                } else if (staticIpVal && isValidImportIpv4(staticIpVal)) {
+                    // Mixed: PPPoE + dedicated IP (Framed-IP)
+                    customerData.static_ip = staticIpVal;
+                    customerData.assigned_ip = staticIpVal;
+                    if (raw.mac_address) customerData.mac_address = String(raw.mac_address).trim();
+                }
                 if (importFastMode) {
                     customerData.__skip_genieacs_sync = true;
                     customerData.__skip_radius_sync = true;
@@ -3921,7 +4163,7 @@ async function runCustomerXlsxImport(req, res) {
 
                 let result;
                 if (existing) {
-                    const beforeSnapshot = importFastMode ? null : await dbGet(`SELECT * FROM customers WHERE id = ?${tAnd()}`, [existing.id]);
+                    const beforeSnapshot = importFastMode ? null : await dbGet(`SELECT * FROM customers WHERE id = ?${impT.and()}`, [existing.id]);
                     result = await billingManager.updateCustomer(existing.phone, customerData);
                     if (raw.join_date) {
                         await applyCustomerJoinAndCreatedDates(db, existing.id, raw.join_date);
@@ -3929,7 +4171,7 @@ async function runCustomerXlsxImport(req, res) {
                     if (beforeSnapshot) opUpdatedBefore.push(beforeSnapshot);
                     updated++;
                     successRows++;
-                    logger.info(`Updated customer: ${raw.name} (${phoneStored})`);
+                    logger.info(`Updated customer: ${raw.name} (${phoneStored}) mode=${connType}`);
                 } else {
                     if (raw.join_date) customerData.join_date = raw.join_date;
                     result = await billingManager.createCustomer(customerData);
@@ -3939,11 +4181,11 @@ async function runCustomerXlsxImport(req, res) {
                     if (result && result.id) opCreatedIds.push(result.id);
                     created++;
                     successRows++;
-                    logger.info(`Created customer: ${raw.name} (${raw.phone}) with ID: ${result.id}`);
+                    logger.info(`Created customer: ${raw.name} (${raw.phone}) with ID: ${result.id} mode=${connType}`);
                 }
 
                 // Handle PPPoE user creation/update if pppoe_username and password provided
-                if (!importFastMode && raw.pppoe_username && raw.pppoe_password) {
+                if (!importFastMode && connType === 'pppoe' && raw.pppoe_username && raw.pppoe_password) {
                     try {
                         const pppoe_username = String(raw.pppoe_username).trim();
                         const pppoe_password = String(raw.pppoe_password).trim();
@@ -3958,7 +4200,7 @@ async function runCustomerXlsxImport(req, res) {
                                 try {
                                     const db = require('../config/billing').db;
                                     return new Promise((resolve, reject) => {
-                                        db.get(('SELECT * FROM routers WHERE id = ?' + tAnd()), [parseInt(routerId)], (err, row) => {
+                                        db.get(('SELECT * FROM routers WHERE id = ?' + impT.and()), [parseInt(routerId)], (err, row) => {
                                             if (err) reject(err);
                                             else resolve(row || null);
                                         });
@@ -4013,16 +4255,75 @@ async function runCustomerXlsxImport(req, res) {
                         // Don't fail the import if PPPoE creation fails, but log the error
                         errors.push({ row: r, error: `PPPoE creation failed: ${pppoeError.message}` });
                     }
+                } else if (!importFastMode && connType === 'static_ip') {
+                    try {
+                        const { provisionStaticIPQueue } = require('../config/staticIPProvisioning');
+                        const customer = await billingManager.getCustomerByPhone(phoneStored);
+                        if (customer && customer.id) {
+                            const pkg = await billingManager.getPackageById(customer.package_id || resolvedPackageId);
+                            const prov = await provisionStaticIPQueue(
+                                {
+                                    id: customer.id,
+                                    static_ip: customer.static_ip || staticIpVal,
+                                    assigned_ip: customer.assigned_ip || staticIpVal,
+                                    username: customer.username
+                                },
+                                pkg
+                            );
+                            if (prov && prov.success) {
+                                logger.info(`[IMPORT] Static IP queue ${prov.queue} ${prov.action} (${prov.maxLimit}) for ${phoneStored}`);
+                            } else if (prov && !prov.skipped) {
+                                logger.warn(`[IMPORT] Static IP queue failed for ${phoneStored}: ${prov.message}`);
+                            }
+                        }
+                    } catch (staticProvErr) {
+                        logger.warn(`[IMPORT] Static IP provision error for ${phoneStored}: ${staticProvErr.message}`);
+                    }
                 } else if (!importFastMode) {
-                    logger.debug(`[IMPORT] Skipping PPPoE user creation for ${raw.phone}: pppoe_username or pppoe_password not provided`);
+                    logger.debug(`[IMPORT] Skipping PPPoE/static provision for ${raw.phone}`);
                 } else {
-                    logger.debug(`[IMPORT] Fast mode enabled: skip PPPoE provisioning for ${raw.phone}`);
+                    logger.debug(`[IMPORT] Fast mode enabled: skip network provisioning for ${raw.phone}`);
                 }
 
-                // Fast mode: skip sinkron RADIUS per baris (import massal jauh lebih cepat).
+                // Fast mode: sync RADIUS eksplisit (create/update di-skip via __skip_radius_sync).
                 if (importFastMode) {
-                    const radiusUsername = (customerData.pppoe_username || (existing && existing.pppoe_username) || '').trim();
-                    if (radiusUsername) radiusSync.skipped++;
+                    const radiusUsername = String(customerData.pppoe_username || (existing && existing.pppoe_username) || '').trim();
+                    const radiusPassword = String(raw.pppoe_password || customerData.pppoe_password || '').trim();
+                    if (!radiusUsername) {
+                        radiusSync.skipped++;
+                    } else if (!radiusPassword) {
+                        radiusSync.skipped++;
+                        logger.warn(`[IMPORT-RADIUS] Skip sync for ${radiusUsername}: password PPPoE kosong`);
+                        errors.push({
+                            row: r,
+                            name: raw && raw.name ? raw.name : '',
+                            phone: phoneStored || (raw && raw.phone ? raw.phone : ''),
+                            error: `RADIUS skip: username ${radiusUsername} tanpa password PPPoE`
+                        });
+                    } else {
+                        radiusSync.attempted++;
+                        try {
+                            const radiusRes = await syncCustomerToRadius(
+                                {
+                                    ...customerData,
+                                    pppoe_username: radiusUsername,
+                                    username: customerData.username || (existing && existing.username) || ''
+                                },
+                                {
+                                    ...customerData,
+                                    pppoe_password: radiusPassword,
+                                    pppoe_profile: customerData.pppoe_profile,
+                                    status: customerData.status
+                                }
+                            );
+                            if (radiusRes && radiusRes.success) radiusSync.success++;
+                            else if (radiusRes && radiusRes.skipped) radiusSync.skipped++;
+                            else radiusSync.failed++;
+                        } catch (radiusErr) {
+                            radiusSync.failed++;
+                            logger.warn(`[IMPORT-RADIUS] Sync failed for ${radiusUsername}: ${radiusErr.message}`);
+                        }
+                    }
                 }
                 processedRows++;
                 reportProgress();
@@ -4310,6 +4611,13 @@ async function runCustomerJsonImport(req, res) {
     let db = null;
     let dbRun = null;
     let transactionStarted = false;
+    const impT = resolveImportTenantScope(req);
+    if (!impT.tenantId) {
+        return res.status(400).json({
+            success: false,
+            message: 'Konteks tenant tidak ditemukan. Import pelanggan hanya boleh dari panel tenant yang aktif.'
+        });
+    }
     try {
         const importFastMode = String(req.headers['x-import-fast-mode'] || '').trim() === '1';
         const bypassRequested = String(req.headers['x-import-bypass-once'] || '').trim() === '1';
@@ -4396,34 +4704,70 @@ async function runCustomerJsonImport(req, res) {
                     failed++; errors.push({ name, phone: raw.phone, error: 'Nomor telepon tidak valid' }); continue;
                 }
 
+                const connType = resolveImportConnectionType(raw);
+                const staticIpVal = String(raw.static_ip || raw.assigned_ip || '').trim();
                 const pppoeUsernameKey = String(raw.pppoe_username || '').trim();
-                if (!pppoeUsernameKey) {
+
+                if (connType === 'static_ip') {
+                    if (!staticIpVal || !isValidImportIpv4(staticIpVal)) {
+                        failed++;
+                        errors.push({ name, phone, error: 'Mode static_ip wajib isi Static IP valid (contoh: 192.168.1.100)' });
+                        continue;
+                    }
+                } else if (!pppoeUsernameKey) {
                     failed++;
-                    errors.push({ name, phone, error: 'PPPoE username wajib diisi' });
+                    errors.push({ name, phone, error: 'PPPoE username wajib diisi (mode pppoe)' });
                     continue;
                 }
-                const existing = await dbGet(
-                    `SELECT * FROM customers WHERE TRIM(COALESCE(pppoe_username, '')) = ?${tAnd()} LIMIT 1`,
-                    [pppoeUsernameKey]
-                );
+
+                let existing = null;
+                if (connType === 'pppoe' && pppoeUsernameKey) {
+                    existing = await dbGet(
+                        `SELECT * FROM customers WHERE TRIM(COALESCE(pppoe_username, '')) = ?${impT.and()} LIMIT 1`,
+                        [pppoeUsernameKey]
+                    );
+                }
+                if (!existing && phone) {
+                    existing = await dbGet(
+                        `SELECT * FROM customers WHERE TRIM(COALESCE(phone, '')) = ?${impT.and()} LIMIT 1`,
+                        [phone]
+                    );
+                }
+                if (!existing && connType === 'static_ip' && staticIpVal) {
+                    existing = await dbGet(
+                        `SELECT * FROM customers WHERE (TRIM(COALESCE(static_ip, '')) = ? OR TRIM(COALESCE(assigned_ip, '')) = ?)${impT.and()} LIMIT 1`,
+                        [staticIpVal, staticIpVal]
+                    );
+                }
                 const optNum = (v) => {
                     if (v === undefined || v === null || v === '') return undefined;
                     const n = typeof v === 'number' ? v : parseFloat(String(v).replace(',', '.'));
                     return Number.isFinite(n) ? n : undefined;
                 };
                 const customerData = {
+                    tenant_id: impT.tenantId,
                     name,
                     phone,
-                    pppoe_username: raw.pppoe_username || '',
-                    pppoe_password: raw.pppoe_password ? String(raw.pppoe_password).trim() : '',
+                    pppoe_username: connType === 'static_ip' ? null : (pppoeUsernameKey || ''),
+                    pppoe_password: connType === 'static_ip' ? '' : (raw.pppoe_password ? String(raw.pppoe_password).trim() : ''),
                     email: raw.email || '',
                     address: raw.address || '',
                     package_id: raw.package_id || null,
-                    pppoe_profile: raw.pppoe_profile || 'default',
+                    pppoe_profile: connType === 'static_ip' ? null : (raw.pppoe_profile || 'default'),
                     status: raw.status || 'active',
                     auto_suspension: raw.auto_suspension !== undefined ? parseInt(raw.auto_suspension, 10) : 1,
                     billing_day: raw.billing_day ? Math.min(Math.max(parseInt(raw.billing_day, 10), 1), 28) : 15
                 };
+                if (connType === 'static_ip') {
+                    customerData.static_ip = staticIpVal;
+                    customerData.assigned_ip = staticIpVal;
+                    customerData.mac_address = raw.mac_address ? String(raw.mac_address).trim() : null;
+                    customerData.create_pppoe_user = 0;
+                } else if (staticIpVal && isValidImportIpv4(staticIpVal)) {
+                    customerData.static_ip = staticIpVal;
+                    customerData.assigned_ip = staticIpVal;
+                    if (raw.mac_address) customerData.mac_address = String(raw.mac_address).trim();
+                }
                 if (importFastMode) {
                     customerData.__skip_genieacs_sync = true;
                     customerData.__skip_radius_sync = true;
@@ -4471,7 +4815,7 @@ async function runCustomerJsonImport(req, res) {
                 }
 
                 // Handle PPPoE user creation/update if pppoe_username and password provided
-                if (!importFastMode && raw.pppoe_username && raw.pppoe_password) {
+                if (!importFastMode && connType === 'pppoe' && raw.pppoe_username && raw.pppoe_password) {
                     try {
                         const pppoe_username = String(raw.pppoe_username).trim();
                         const pppoe_password = String(raw.pppoe_password).trim();
@@ -4486,7 +4830,7 @@ async function runCustomerJsonImport(req, res) {
                                 try {
                                     const db = require('../config/billing').db;
                                     return new Promise((resolve, reject) => {
-                                        db.get(('SELECT * FROM routers WHERE id = ?' + tAnd()), [parseInt(routerId)], (err, row) => {
+                                        db.get(('SELECT * FROM routers WHERE id = ?' + impT.and()), [parseInt(routerId)], (err, row) => {
                                             if (err) reject(err);
                                             else resolve(row || null);
                                         });
@@ -4541,10 +4885,36 @@ async function runCustomerJsonImport(req, res) {
                         // Don't fail the import if PPPoE creation fails, but log the error
                         errors.push({ name, phone, error: `PPPoE creation failed: ${pppoeError.message}` });
                     }
+                } else if (!importFastMode && connType === 'static_ip') {
+                    try {
+                        const { provisionStaticIPQueue } = require('../config/staticIPProvisioning');
+                        const customer = await billingManager.getCustomerByPhone(phone);
+                        if (customer && customer.id) {
+                            const pkg = customer.package_id
+                                ? await billingManager.getPackageById(customer.package_id)
+                                : null;
+                            const prov = await provisionStaticIPQueue(
+                                {
+                                    id: customer.id,
+                                    static_ip: customer.static_ip || staticIpVal,
+                                    assigned_ip: customer.assigned_ip || staticIpVal,
+                                    username: customer.username
+                                },
+                                pkg
+                            );
+                            if (prov && prov.success) {
+                                logger.info(`[IMPORT] Static IP queue ${prov.queue} ${prov.action} (${prov.maxLimit}) for ${phone}`);
+                            } else if (prov && !prov.skipped) {
+                                logger.warn(`[IMPORT] Static IP queue failed for ${phone}: ${prov.message}`);
+                            }
+                        }
+                    } catch (staticProvErr) {
+                        logger.warn(`[IMPORT] Static IP provision error for ${phone}: ${staticProvErr.message}`);
+                    }
                 } else if (!importFastMode) {
-                    logger.debug(`[IMPORT] Skipping PPPoE user creation for ${phone}: pppoe_username or pppoe_password not provided`);
+                    logger.debug(`[IMPORT] Skipping PPPoE/static provision for ${phone}`);
                 } else {
-                    logger.debug(`[IMPORT] Fast mode enabled: skip PPPoE provisioning for ${phone}`);
+                    logger.debug(`[IMPORT] Fast mode enabled: skip network provisioning for ${phone}`);
                 }
 
                 if (importFastMode) {
@@ -5028,25 +5398,121 @@ router.post('/whatsapp-settings/gateway', getAppSettings, async (req, res) => {
             clearSettingsCache();
         }
 
-        try {
-            const { getProviderManager } = require('../config/whatsapp-provider-manager');
-            const providerManager = getProviderManager();
-            if (providerManager.isInitialized()) {
-                await providerManager.switchProvider(providerSettings.activeProvider);
+        // Hot-switch process-wide provider only for legacy/global settings.
+        // Tenant credentials are applied per-send via resolveSendProvider — switching
+        // here would overwrite the shared singleton and break other tenants.
+        if (!tenantId) {
+            try {
+                const { getProviderManager } = require('../config/whatsapp-provider-manager');
+                const { getWablasConfigFromObject } = require('../config/wablas-config');
+                const providerManager = getProviderManager();
+                if (providerManager.isInitialized()) {
+                    const switchOpts = {};
+                    if (providerSettings.activeProvider === 'wablas') {
+                        switchOpts.wablasConfig = getWablasConfigFromObject(providerSettings);
+                    } else if (providerSettings.activeProvider === 'meta') {
+                        switchOpts.metaConfig = providerSettings.meta;
+                    } else if (providerSettings.activeProvider === 'qontak') {
+                        switchOpts.qontakConfig = providerSettings.qontak;
+                    }
+                    await providerManager.switchProvider(providerSettings.activeProvider, switchOpts);
+                }
+            } catch (switchError) {
+                logger.warn('WhatsApp provider saved but could not hot-switch provider:', switchError.message);
             }
-        } catch (switchError) {
-            logger.warn('WhatsApp provider saved but could not hot-switch provider:', switchError.message);
         }
 
         res.json({
             success: true,
             message: 'Pengaturan gateway WhatsApp berhasil disimpan',
             settings: providerSettings,
-            providers: providerSettings.providers
+            providers: providerSettings.providers,
+            diagnosis: await diagnoseActiveProvider(providerSettings)
         });
     } catch (error) {
         logger.error('Error saving WhatsApp gateway settings:', error);
         res.status(500).json({ success: false, message: 'Error saving WhatsApp gateway settings: ' + error.message });
+    }
+});
+
+async function diagnoseActiveProvider(providerSettings) {
+    try {
+        if (!providerSettings || providerSettings.activeProvider !== 'wablas') {
+            return null;
+        }
+        const { getWablasConfigFromObject } = require('../config/wablas-config');
+        const WablasProvider = require('../config/providers/wablas-provider');
+        const provider = new WablasProvider(getWablasConfigFromObject(providerSettings));
+        return await provider.diagnoseConnection();
+    } catch (e) {
+        return {
+            ok: false,
+            connected: false,
+            authOk: false,
+            status: 'error',
+            label: 'Error',
+            issues: [e.message],
+            hints: []
+        };
+    }
+}
+
+/** Tes/diagnosa Wablas dari form (bisa sebelum atau sesudah simpan). */
+router.post('/whatsapp-settings/gateway/diagnose', getAppSettings, async (req, res) => {
+    try {
+        const body = req.body || {};
+        let providerSettings;
+
+        // Prefer payload form; fallback ke settings tersimpan
+        if (body.activeProvider || body.settings || body.wablas) {
+            const { getWhatsAppProviderSettingsFromObject, saveWhatsAppProviderSettingsToObject } = require('../config/whatsapp-provider-settings');
+            const merged = saveWhatsAppProviderSettingsToObject({}, body);
+            providerSettings = getWhatsAppProviderSettingsFromObject(merged);
+        } else {
+            const tenantId = req.session?.tenantId || req.tenantId || null;
+            if (tenantId) {
+                const { getFullSettingsForTenantId } = require('../config/platform/tenantSettingsManager');
+                const { getWhatsAppProviderSettingsFromObject } = require('../config/whatsapp-provider-settings');
+                providerSettings = getWhatsAppProviderSettingsFromObject(await getFullSettingsForTenantId(tenantId));
+            } else {
+                const { getWhatsAppProviderSettings } = require('../config/whatsapp-provider-settings');
+                providerSettings = getWhatsAppProviderSettings();
+            }
+        }
+
+        if (providerSettings.activeProvider !== 'wablas' && !(body.forceWablas || body.settings?.wablas || body.wablas)) {
+            // Tetap diagnosa Wablas jika user menekan tombol di panel Wablas
+            providerSettings = {
+                ...providerSettings,
+                activeProvider: 'wablas',
+                wablas: providerSettings.wablas
+            };
+        }
+
+        const diagnosis = await diagnoseActiveProvider({
+            ...providerSettings,
+            activeProvider: 'wablas'
+        });
+
+        res.json({
+            success: true,
+            connected: !!(diagnosis && diagnosis.connected),
+            diagnosis
+        });
+    } catch (error) {
+        logger.error('Error diagnosing Wablas:', error);
+        res.status(500).json({
+            success: false,
+            connected: false,
+            message: error.message,
+            diagnosis: {
+                ok: false,
+                connected: false,
+                label: 'Error',
+                issues: [error.message],
+                hints: []
+            }
+        });
     }
 });
 
@@ -5245,7 +5711,8 @@ router.post('/email-settings/smtp', async (req, res) => {
 router.get('/whatsapp-settings/templates', async (req, res) => {
     try {
         const whatsappNotifications = require('../config/whatsapp-notifications');
-        const templates = whatsappNotifications.getTemplates();
+        const tenantId = req.session?.tenantId || req.tenantId || null;
+        const templates = await whatsappNotifications.getTemplates(tenantId);
         
         res.json({
             success: true,
@@ -5265,9 +5732,10 @@ router.post('/whatsapp-settings/templates', async (req, res) => {
     try {
         const whatsappNotifications = require('../config/whatsapp-notifications');
         const templateData = req.body;
+        const tenantId = req.session?.tenantId || req.tenantId || null;
         
-        // Update templates (more efficient for multiple updates)
-        const updatedCount = whatsappNotifications.updateTemplates(templateData);
+        // Update templates (isolated per tenant when tenantId is present)
+        const updatedCount = await whatsappNotifications.updateTemplates(templateData, tenantId);
         
         res.json({
             success: true,
@@ -5609,45 +6077,104 @@ router.get('/whatsapp-settings/status', async (req, res) => {
         
         const invoices = await billingManager.getInvoices();
         const pendingInvoices = invoices.filter(i => i.status === 'unpaid');
-        
-        // Get WhatsApp status - cek dari provider manager dulu, lalu fallback ke global
-        let whatsappStatus = { connected: false, status: 'disconnected' };
-        
+
+        const tenantId = req.session?.tenantId || req.tenantId || req.tenant?.id || null;
+        let whatsappStatus = { connected: false, status: 'disconnected', provider: null };
+
         try {
-            // Coba ambil dari provider manager (untuk Wablas/Baileys)
-            const { getProviderManager } = require('../config/whatsapp-provider-manager');
-            const providerManager = getProviderManager();
-            
-            if (providerManager && providerManager.isInitialized()) {
-                const provider = providerManager.getProvider();
-                if (provider) {
-                    const providerStatus = provider.getStatus();
-                    whatsappStatus = {
-                        connected: provider.isConnected() || providerStatus.connected || false,
-                        status: providerStatus.status || (provider.isConnected() ? 'connected' : 'disconnected'),
-                        provider: providerManager.getProviderType()
+            let providerSettings = null;
+            if (tenantId) {
+                const { getFullSettingsForTenantId } = require('../config/platform/tenantSettingsManager');
+                const { getWhatsAppProviderSettingsFromObject } = require('../config/whatsapp-provider-settings');
+                const ts = await getFullSettingsForTenantId(tenantId);
+                providerSettings = getWhatsAppProviderSettingsFromObject(ts);
+            } else {
+                const { getWhatsAppProviderSettings } = require('../config/whatsapp-provider-settings');
+                providerSettings = getWhatsAppProviderSettings();
+            }
+
+            const active = providerSettings?.activeProvider || 'baileys';
+            whatsappStatus.provider = active;
+
+            if (active === 'wablas') {
+                const cfg = providerSettings.wablas || {};
+                const hasKeys = !!(cfg.apiKey && cfg.apiUrl);
+                let diagnosis = null;
+                if (hasKeys || cfg.apiKey || cfg.secretKey) {
+                    try {
+                        const { getWablasConfigFromObject } = require('../config/wablas-config');
+                        const WablasProvider = require('../config/providers/wablas-provider');
+                        const provider = new WablasProvider(getWablasConfigFromObject(providerSettings));
+                        diagnosis = await provider.diagnoseConnection();
+                    } catch (e) {
+                        logger.warn('Wablas diagnose failed:', e.message);
+                        diagnosis = {
+                            ok: false,
+                            connected: false,
+                            authOk: false,
+                            status: 'error',
+                            label: 'Error',
+                            issues: [e.message],
+                            hints: []
+                        };
+                    }
+                } else {
+                    diagnosis = {
+                        ok: false,
+                        connected: false,
+                        authOk: false,
+                        status: 'incomplete',
+                        label: 'Belum dikonfigurasi',
+                        issues: ['API Key / Token Wablas belum diisi'],
+                        hints: ['Isi API URL, Token, dan Secret Key lalu klik Cek Koneksi Wablas.']
                     };
                 }
-            }
-        } catch (providerError) {
-            // Fallback ke whatsapp-core jika provider manager tidak tersedia
-            try {
-                const whatsappCore = require('../config/whatsapp-core');
-                const coreStatus = whatsappCore.getWhatsAppStatus();
-                if (coreStatus) {
-                    whatsappStatus = {
-                        connected: coreStatus.connected || false,
-                        status: coreStatus.status || 'disconnected'
-                    };
+                whatsappStatus = {
+                    connected: !!(diagnosis && diagnosis.connected),
+                    status: diagnosis?.connected ? 'connected' : (diagnosis?.status || 'disconnected'),
+                    provider: 'wablas',
+                    deviceDetail: diagnosis?.device || null,
+                    diagnosis
+                };
+            } else if (active === 'meta') {
+                const cfg = providerSettings.meta || {};
+                const ok = !!(cfg.accessToken && cfg.phoneNumberId);
+                whatsappStatus = {
+                    connected: ok,
+                    status: ok ? 'connected' : 'disconnected',
+                    provider: 'meta'
+                };
+            } else if (active === 'qontak') {
+                const cfg = providerSettings.qontak || {};
+                const ok = !!(cfg.accessToken && cfg.channelIntegrationId);
+                whatsappStatus = {
+                    connected: ok,
+                    status: ok ? 'connected' : 'disconnected',
+                    provider: 'qontak'
+                };
+            } else {
+                // Baileys: status dari registry sesi tenant ini
+                const registry = require('../config/baileys-session-registry');
+                const tid = tenantId ? parseInt(tenantId, 10) : null;
+                const normalizedTid = Number.isFinite(tid) && tid > 0 ? tid : null;
+                const st = registry.getStatus(normalizedTid);
+                whatsappStatus = {
+                    connected: !!(st && st.connected),
+                    status: (st && st.status) || 'disconnected',
+                    provider: 'baileys',
+                    phoneNumber: st?.phoneNumber || null,
+                    sessionDir: st?.sessionDir || null
+                };
+                if (!whatsappStatus.connected && normalizedTid && !registry.hasCreds(normalizedTid)) {
+                    whatsappStatus.status = 'disconnected';
+                } else if (!whatsappStatus.connected && normalizedTid && registry.hasCreds(normalizedTid)) {
+                    // Kick lazy reconnect so status can become connected after refresh
+                    registry.connect(normalizedTid).catch(() => {});
+                    whatsappStatus.status = st?.status === 'qr_code' ? 'qr_code' : 'connecting';
                 }
-            } catch (coreError) {
-                // Final fallback ke global
-                whatsappStatus = global.whatsappStatus || { connected: false, status: 'disconnected' };
             }
-        }
-        
-        // Jika masih belum dapat status, cek global
-        if (!whatsappStatus || (!whatsappStatus.connected && !whatsappStatus.status)) {
+        } catch (statusErr) {
+            logger.warn('WhatsApp status resolve failed:', statusErr.message);
             whatsappStatus = global.whatsappStatus || { connected: false, status: 'disconnected' };
         }
         
@@ -5656,8 +6183,17 @@ router.get('/whatsapp-settings/status', async (req, res) => {
 
         res.json({
             success: true,
-            whatsappStatus: whatsappStatus.connected ? 'Connected' : 'Disconnected',
+            whatsappStatus: whatsappStatus.connected
+                ? 'Connected'
+                : (whatsappStatus.diagnosis?.label
+                    || (whatsappStatus.status === 'connecting' ? 'Connecting' : null)
+                    || (whatsappStatus.status === 'qr_code' ? 'Scan QR' : null)
+                    || 'Disconnected'),
             whatsappProvider: whatsappStatus.provider || getSetting('whatsapp_active_provider', 'baileys'),
+            whatsappDevice: whatsappStatus.deviceDetail || null,
+            whatsappPhone: whatsappStatus.phoneNumber || null,
+            diagnosis: whatsappStatus.diagnosis || null,
+            baileysSessionDir: whatsappStatus.sessionDir || null,
             activeCustomers: activeCustomers.length,
             pendingInvoices: pendingInvoices.length,
             nextReminder: `H-${sched.invoice_notify_days_before} tagihan, H-${sched.reminder_days_before} pengingat, hari H — 09:00`
@@ -5686,7 +6222,8 @@ router.post('/whatsapp-settings/test', async (req, res) => {
                 due_date: '15 Januari 2024',
                 package_name: 'Paket Premium',
                 package_speed: '50 Mbps',
-                notes: 'Tagihan bulanan'
+                notes: 'Tagihan bulanan',
+                customer_portal_url: 'https://contoh.kalimasada-app.com/customer-app/login'
             },
             due_date_reminder: {
                 customer_name: 'Test Customer',
@@ -5695,7 +6232,8 @@ router.post('/whatsapp-settings/test', async (req, res) => {
                 due_date: '15 Januari 2024',
                 days_remaining: '3',
                 package_name: 'Paket Premium',
-                package_speed: '50 Mbps'
+                package_speed: '50 Mbps',
+                customer_portal_url: 'https://contoh.kalimasada-app.com/customer-app/login'
             },
             due_date_reminder_today: {
                 customer_name: 'Test Customer',
@@ -5704,7 +6242,8 @@ router.post('/whatsapp-settings/test', async (req, res) => {
                 due_date: '15 Januari 2024',
                 days_remaining: '0',
                 package_name: 'Paket Premium',
-                package_speed: '50 Mbps'
+                package_speed: '50 Mbps',
+                customer_portal_url: 'https://contoh.kalimasada-app.com/customer-app/login'
             },
             payment_received: {
                 customer_name: 'Test Customer',
@@ -5714,25 +6253,32 @@ router.post('/whatsapp-settings/test', async (req, res) => {
                 payment_date: '10 Januari 2024',
                 reference_number: 'TRX123456',
                 package_name: 'Paket Premium',
-                package_speed: '50 Mbps'
+                package_speed: '50 Mbps',
+                customer_portal_url: 'https://contoh.kalimasada-app.com/customer-app/login'
             },
             service_disruption: {
                 disruption_type: 'Gangguan Jaringan',
                 affected_area: 'Seluruh Area',
                 estimated_resolution: '2 jam',
-                support_phone: getSetting('contact_whatsapp', '0813-6888-8498')
+                support_phone: getSetting('contact_whatsapp', '0813-6888-8498'),
+                customer_portal_url: 'https://contoh.kalimasada-app.com/customer-app/login'
             },
             service_announcement: {
                 announcement_content: 'Pengumuman penting untuk semua pelanggan.'
             },
             service_suspension: {
                 customer_name: 'Test Customer',
-                reason: 'Tagihan terlambat lebih dari 7 hari'
+                reason: 'Tagihan terlambat lebih dari 7 hari',
+                package_name: 'Paket Premium',
+                package_speed: '50 Mbps',
+                username: 'user@test',
+                customer_portal_url: 'https://contoh.kalimasada-app.com/customer-app/login'
             },
             service_restoration: {
                 customer_name: 'Test Customer',
                 package_name: 'Paket Premium',
-                package_speed: '50 Mbps'
+                package_speed: '50 Mbps',
+                customer_portal_url: 'https://contoh.kalimasada-app.com/customer-app/login'
             },
             welcome_message: {
                 customer_name: 'Test Customer',
@@ -5741,7 +6287,10 @@ router.post('/whatsapp-settings/test', async (req, res) => {
                 wifi_password: 'test123456',
                 pppoe_username: 'user@test',
                 pppoe_password: 'pass123',
-                support_phone: getSetting('contact_whatsapp', '0813-6888-8498')
+                support_phone: getSetting('contact_whatsapp', '0813-6888-8498'),
+                company_header: 'CV Lintas Multimedia',
+                footer_info: 'Internet Tanpa Batas',
+                customer_portal_url: 'https://contoh.kalimasada-app.com/customer-app/login'
             },
             installation_job_assigned: {
                 technician_name: 'Teknisi Test',
@@ -5808,12 +6357,27 @@ router.post('/whatsapp-settings/test', async (req, res) => {
         };
 
         const testPayload = testData[templateKey] || {};
-        const result = await whatsappNotifications.testNotification(phoneNumber, templateKey, testPayload);
+        const tenantId = req.session?.tenantId || req.tenantId || null;
+        try {
+            const portalUrl = await whatsappNotifications.getCustomerPortalLoginUrlForTenant(tenantId);
+            if (portalUrl) testPayload.customer_portal_url = portalUrl;
+        } catch (_) { /* keep fallback */ }
+        try {
+            const rekening = await whatsappNotifications.getRekeningPembayaranForTenant(tenantId);
+            if (rekening) testPayload.Rekening_Pembayaran = rekening;
+        } catch (_) { /* keep empty; buildTemplateData will retry */ }
+        const result = await whatsappNotifications.testNotification(phoneNumber, templateKey, testPayload, tenantId);
         
         if (result.success) {
+            const pendingNote = result.pending
+                ? ' Pesan berstatus PENDING di Wablas — cek di dashboard Wablas: device harus Connected (scan QR). Jika device offline, pesan tidak sampai ke nomor tujuan.'
+                : '';
             res.json({
                 success: true,
-                message: 'Test notification sent successfully'
+                pending: !!result.pending,
+                message: (result.wablasMessage || 'Test notification sent successfully') + pendingNote,
+                wablasStatus: result.wablasStatus || null,
+                messageId: result.messageId || null
             });
         } else {
             res.json({
@@ -6225,98 +6789,31 @@ router.post('/packages', imageUpload.single('image'), async (req, res) => {
         const newPackage = await billingManager.createPackage(packageData);
         logger.info(`Package created: ${newPackage.name} with tax_rate: ${newPackage.tax_rate}, router_id: ${newPackage.router_id}`);
         
-        // Auto-sync limits berdasarkan mode (RADIUS atau API)
-        const { getUserAuthModeAsync, syncPackageLimitsToRadius, syncPackageLimitsToMikrotik, getPPPoEProfiles, addPPPoEProfile, buildMikrotikRateLimit } = require('../config/mikrotik');
+        // Auto-sync / create PPPoE profile (RADIUS atau MikroTik)
+        const { ensurePppoeProfileForPackage, getUserAuthModeAsync } = require('../config/mikrotik');
         const authMode = await getUserAuthModeAsync();
-        
         let syncResult = null;
-        if (!billingOnly && authMode === 'radius') {
-            // Sync ke RADIUS (radgroupreply)
+        if (!billingOnly) {
             try {
-                // Convert profile name ke format groupname (lowercase dengan underscore)
-                const groupname = newPackage.pppoe_profile.toLowerCase().replace(/\s+/g, '_');
-                syncResult = await syncPackageLimitsToRadius({
-                    groupname: groupname,
-                    upload_limit: newPackage.upload_limit,
-                    download_limit: newPackage.download_limit,
-                    burst_limit_upload: newPackage.burst_limit_upload,
-                    burst_limit_download: newPackage.burst_limit_download,
-                    burst_threshold: newPackage.burst_threshold,
-                    burst_time: newPackage.burst_time
-                });
-                if (syncResult && syncResult.success) {
-                    logger.info(`✅ Package limits synced to RADIUS for group: ${groupname}`);
+                syncResult = await ensurePppoeProfileForPackage(newPackage);
+                if (syncResult && syncResult.success && syncResult.profileName && newPackage.id &&
+                    String(syncResult.profileName).trim() !== String(newPackage.pppoe_profile || '').trim()) {
+                    try {
+                        await billingManager.updatePackage(newPackage.id, { pppoe_profile: syncResult.profileName });
+                        newPackage.pppoe_profile = syncResult.profileName;
+                    } catch (_) {}
+                }
+                if (syncResult && syncResult.success && !syncResult.skipped) {
+                    logger.info(`✅ Package PPPoE profile ensured (${syncResult.mode}): ${syncResult.profileName}`);
                 }
             } catch (syncError) {
-                logger.warn(`Failed to sync limits to RADIUS: ${syncError.message}`);
-            }
-        } else if (!billingOnly) {
-            // Sync ke Mikrotik (PPPoE profile rate-limit) - hanya jika router_id ada
-            if (newPackage.router_id && newPackage.pppoe_profile) {
-                try {
-                    const sqlite3 = require('sqlite3').verbose();
-                    const db = new sqlite3.Database('./data/billing.db');
-                    const routerObj = await new Promise((resolve, reject) => {
-                        db.get(('SELECT * FROM routers WHERE id=?' + tAnd()), [newPackage.router_id], (err, row) => {
-                            db.close();
-                            if (err) reject(err);
-                            else resolve(row || null);
-                        });
-                    });
-                    
-                    if (routerObj) {
-                        // Check if profile exists
-                        const profilesResult = await getPPPoEProfiles(routerObj);
-                        const profileExists = profilesResult.success && profilesResult.data && 
-                            profilesResult.data.some(p => (p.name || p['name']) === newPackage.pppoe_profile);
-                        
-                        if (profileExists) {
-                            // Update existing profile dengan limits
-                            syncResult = await syncPackageLimitsToMikrotik({
-                                profile_name: newPackage.pppoe_profile,
-                                upload_limit: newPackage.upload_limit,
-                                download_limit: newPackage.download_limit,
-                                burst_limit_upload: newPackage.burst_limit_upload,
-                                burst_limit_download: newPackage.burst_limit_download,
-                                burst_threshold: newPackage.burst_threshold,
-                                burst_time: newPackage.burst_time
-                            }, routerObj);
-                            if (syncResult && syncResult.success) {
-                                logger.info(`✅ Package limits synced to Mikrotik profile: ${newPackage.pppoe_profile}`);
-                            }
-                        } else {
-                            // Create profile baru dengan limits
-                            const rateLimit = buildMikrotikRateLimit({
-                                upload_limit: newPackage.upload_limit,
-                                download_limit: newPackage.download_limit,
-                                burst_limit_upload: newPackage.burst_limit_upload,
-                                burst_limit_download: newPackage.burst_limit_download,
-                                burst_threshold: newPackage.burst_threshold,
-                                burst_time: newPackage.burst_time
-                            });
-                            
-                            const profileData = {
-                                name: newPackage.pppoe_profile,
-                                'remote-address': 'POOL-PPPOE-NEW',
-                                'rate-limit': rateLimit || undefined
-                            };
-                            
-                            const createResult = await addPPPoEProfile(profileData, routerObj);
-                            if (createResult && createResult.success) {
-                                syncResult = { success: true, message: 'Profile created with limits' };
-                                logger.info(`✅ PPPoE profile created with limits: ${newPackage.pppoe_profile}`);
-                            }
-                        }
-                    }
-                } catch (profileError) {
-                    logger.warn(`Failed to sync limits to Mikrotik: ${profileError.message}`);
-                }
+                logger.warn(`Failed to ensure PPPoE profile for package: ${syncError.message}`);
             }
         }
         
         res.json({
             success: true,
-            message: syncResult && syncResult.success 
+            message: syncResult && syncResult.success && !syncResult.skipped
                 ? `Paket berhasil ditambahkan dan limits di-sync ke ${authMode === 'radius' ? 'RADIUS' : 'Mikrotik'}`
                 : 'Paket berhasil ditambahkan',
             package: newPackage,
@@ -6344,10 +6841,29 @@ router.put('/packages/:id', imageUpload.single('image'), async (req, res) => {
                     nas_ip: req.body.nas_ip,
                     pppoe_profile: req.body.pppoe_profile,
                 });
+                let syncResult = null;
+                try {
+                    const { ensurePppoeProfileForPackage } = require('../config/mikrotik');
+                    syncResult = await ensurePppoeProfileForPackage(updated);
+                    if (syncResult && syncResult.profileName && updated &&
+                        String(syncResult.profileName).trim() !== String(updated.pppoe_profile || '').trim()) {
+                        await masterPackageService.updateTenantPackageRouter(getTenantId(), req.params.id, {
+                            router_id: updated.router_id,
+                            nas_ip: updated.nas_ip,
+                            pppoe_profile: syncResult.profileName,
+                        });
+                        updated.pppoe_profile = syncResult.profileName;
+                    }
+                } catch (syncErr) {
+                    logger.warn(`Failed to ensure PPPoE profile after NAS bind: ${syncErr.message}`);
+                }
                 return res.json({
                     success: true,
-                    message: 'Konfigurasi NAS paket diperbarui',
+                    message: syncResult && syncResult.success && !syncResult.skipped
+                        ? `Konfigurasi NAS paket diperbarui dan profil PPPoE di-sync ke ${syncResult.mode === 'radius' ? 'RADIUS' : 'Mikrotik'}`
+                        : 'Konfigurasi NAS paket diperbarui',
                     package: updated,
+                    syncResult,
                 });
             }
             return res.status(403).json({
@@ -6398,98 +6914,31 @@ router.put('/packages/:id', imageUpload.single('image'), async (req, res) => {
         const updatedPackage = await billingManager.updatePackage(id, packageData);
         logger.info(`Package updated: ${updatedPackage.name} with tax_rate: ${updatedPackage.tax_rate}, router_id: ${updatedPackage.router_id}`);
         
-        // Auto-sync limits berdasarkan mode (RADIUS atau API)
-        const { getUserAuthModeAsync, syncPackageLimitsToRadius, syncPackageLimitsToMikrotik, getPPPoEProfiles, addPPPoEProfile, buildMikrotikRateLimit } = require('../config/mikrotik');
+        // Auto-sync / create PPPoE profile (RADIUS atau MikroTik)
+        const { ensurePppoeProfileForPackage, getUserAuthModeAsync } = require('../config/mikrotik');
         const authMode = await getUserAuthModeAsync();
-        
         let syncResult = null;
-        if (!billingOnly && authMode === 'radius') {
-            // Sync ke RADIUS (radgroupreply)
+        if (!billingOnly) {
             try {
-                // Convert profile name ke format groupname (lowercase dengan underscore)
-                const groupname = updatedPackage.pppoe_profile.toLowerCase().replace(/\s+/g, '_');
-                syncResult = await syncPackageLimitsToRadius({
-                    groupname: groupname,
-                    upload_limit: updatedPackage.upload_limit,
-                    download_limit: updatedPackage.download_limit,
-                    burst_limit_upload: updatedPackage.burst_limit_upload,
-                    burst_limit_download: updatedPackage.burst_limit_download,
-                    burst_threshold: updatedPackage.burst_threshold,
-                    burst_time: updatedPackage.burst_time
-                });
-                if (syncResult && syncResult.success) {
-                    logger.info(`✅ Package limits synced to RADIUS for group: ${groupname}`);
+                syncResult = await ensurePppoeProfileForPackage(updatedPackage);
+                if (syncResult && syncResult.success && syncResult.profileName &&
+                    String(syncResult.profileName).trim() !== String(updatedPackage.pppoe_profile || '').trim()) {
+                    try {
+                        await billingManager.updatePackage(id, { pppoe_profile: syncResult.profileName });
+                        updatedPackage.pppoe_profile = syncResult.profileName;
+                    } catch (_) {}
+                }
+                if (syncResult && syncResult.success && !syncResult.skipped) {
+                    logger.info(`✅ Package PPPoE profile ensured (${syncResult.mode}): ${syncResult.profileName}`);
                 }
             } catch (syncError) {
-                logger.warn(`Failed to sync limits to RADIUS: ${syncError.message}`);
-            }
-        } else if (!billingOnly) {
-            // Sync ke Mikrotik (PPPoE profile rate-limit) - hanya jika router_id ada
-            if (updatedPackage.router_id && updatedPackage.pppoe_profile) {
-                try {
-                    const sqlite3 = require('sqlite3').verbose();
-                    const db = new sqlite3.Database('./data/billing.db');
-                    const routerObj = await new Promise((resolve, reject) => {
-                        db.get(('SELECT * FROM routers WHERE id=?' + tAnd()), [updatedPackage.router_id], (err, row) => {
-                            db.close();
-                            if (err) reject(err);
-                            else resolve(row || null);
-                        });
-                    });
-                    
-                    if (routerObj) {
-                        // Check if profile exists
-                        const profilesResult = await getPPPoEProfiles(routerObj);
-                        const profileExists = profilesResult.success && profilesResult.data && 
-                            profilesResult.data.some(p => (p.name || p['name']) === updatedPackage.pppoe_profile);
-                        
-                        if (profileExists) {
-                            // Update existing profile dengan limits
-                            syncResult = await syncPackageLimitsToMikrotik({
-                                profile_name: updatedPackage.pppoe_profile,
-                                upload_limit: updatedPackage.upload_limit,
-                                download_limit: updatedPackage.download_limit,
-                                burst_limit_upload: updatedPackage.burst_limit_upload,
-                                burst_limit_download: updatedPackage.burst_limit_download,
-                                burst_threshold: updatedPackage.burst_threshold,
-                                burst_time: updatedPackage.burst_time
-                            }, routerObj);
-                            if (syncResult && syncResult.success) {
-                                logger.info(`✅ Package limits synced to Mikrotik profile: ${updatedPackage.pppoe_profile}`);
-                            }
-                        } else {
-                            // Create profile baru dengan limits
-                            const rateLimit = buildMikrotikRateLimit({
-                                upload_limit: updatedPackage.upload_limit,
-                                download_limit: updatedPackage.download_limit,
-                                burst_limit_upload: updatedPackage.burst_limit_upload,
-                                burst_limit_download: updatedPackage.burst_limit_download,
-                                burst_threshold: updatedPackage.burst_threshold,
-                                burst_time: updatedPackage.burst_time
-                            });
-                            
-                            const profileData = {
-                                name: updatedPackage.pppoe_profile,
-                                'remote-address': 'POOL-PPPOE-NEW',
-                                'rate-limit': rateLimit || undefined
-                            };
-                            
-                            const createResult = await addPPPoEProfile(profileData, routerObj);
-                            if (createResult && createResult.success) {
-                                syncResult = { success: true, message: 'Profile created with limits' };
-                                logger.info(`✅ PPPoE profile created with limits: ${updatedPackage.pppoe_profile}`);
-                            }
-                        }
-                    }
-                } catch (profileError) {
-                    logger.warn(`Failed to sync limits to Mikrotik: ${profileError.message}`);
-                }
+                logger.warn(`Failed to ensure PPPoE profile for package: ${syncError.message}`);
             }
         }
         
         res.json({
             success: true,
-            message: syncResult && syncResult.success 
+            message: syncResult && syncResult.success && !syncResult.skipped
                 ? `Paket berhasil diupdate dan limits di-sync ke ${authMode === 'radius' ? 'RADIUS' : 'Mikrotik'}`
                 : 'Paket berhasil diupdate',
             package: updatedPackage,
@@ -6571,8 +7020,14 @@ router.post('/packages/select/:masterPackageId', async (req, res) => {
             return res.status(400).json({ success: false, message: 'Konteks tenant tidak ditemukan.' });
         }
         const masterPackageService = require('../config/platform/masterPackageService');
-        await masterPackageService.selectPackageForTenant(getTenantId(), req.params.masterPackageId);
-        res.json({ success: true, message: 'Paket berhasil dipilih dan diaktifkan.' });
+        const selectResult = await masterPackageService.selectPackageForTenant(getTenantId(), req.params.masterPackageId);
+        const syncResult = selectResult && selectResult.syncResult;
+        const message = syncResult && syncResult.success && !syncResult.skipped
+            ? `Paket berhasil dipilih. Profil PPPoE "${syncResult.profileName || ''}" di-sync ke ${syncResult.mode === 'radius' ? 'RADIUS' : 'Mikrotik'}.`
+            : syncResult && syncResult.skipped && syncResult.mode === 'mikrotik'
+            ? 'Paket berhasil dipilih. Bind NAS pada paket lalu profil PPPoE akan dibuat di Mikrotik.'
+            : 'Paket berhasil dipilih dan diaktifkan.';
+        res.json({ success: true, message, syncResult: syncResult || null });
     } catch (error) {
         logger.error('Error selecting master package:', error);
         res.status(400).json({ success: false, message: error.message });
@@ -6635,6 +7090,96 @@ router.delete('/packages/:id', async (req, res) => {
 // AREA MANAGEMENT — CRUD Lengkap
 // ============================================================
 
+/** Buat kandidat kode area dari nama (huruf besar, 3–4 char). */
+function buildAreaCodeCandidate(namaArea) {
+    const clean = String(namaArea || '')
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!clean) return 'AREA';
+    const words = clean.split(' ').filter(Boolean);
+    if (words.length >= 2) {
+        const first = words[0];
+        const last = words[words.length - 1];
+        let base = first.replace(/[AEIOU]/g, '');
+        if (base.length < 2) base = first;
+        return (base.slice(0, 2) + last.charAt(0)).slice(0, 4);
+    }
+    const w = words[0];
+    const cons = w.replace(/[AEIOU]/g, '');
+    if (cons.length >= 3) return cons.slice(0, 3);
+    return w.slice(0, Math.min(4, Math.max(3, w.length)));
+}
+
+/** Beberapa kandidat kode dari nama, untuk menghindari bentrok generik (-2). */
+function buildAreaCodeCandidates(namaArea) {
+    const clean = String(namaArea || '')
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const words = clean.split(' ').filter(Boolean);
+    const out = [];
+    const push = (c) => {
+        const code = String(c || '').replace(/[^A-Z0-9]/g, '').slice(0, 5);
+        if (code && !out.includes(code)) out.push(code);
+    };
+    push(buildAreaCodeCandidate(namaArea));
+    if (words.length >= 2) {
+        const first = words[0];
+        const last = words[words.length - 1];
+        const fCons = first.replace(/[AEIOU]/g, '');
+        const lCons = last.replace(/[AEIOU]/g, '');
+        push((fCons.slice(0, 2) || first.slice(0, 2)) + (lCons.slice(0, 1) || last.charAt(0)));
+        push((fCons.slice(0, 2) || first.slice(0, 2)) + (lCons.slice(0, 2) || last.slice(0, 2)));
+        push(words.map((w) => w.charAt(0)).join(''));
+        push(first.slice(0, 2) + last.slice(0, 2));
+    } else if (words[0]) {
+        push(words[0].slice(0, 4));
+        push(words[0].replace(/[AEIOU]/g, '').slice(0, 4));
+    }
+    return out.length ? out : ['AREA'];
+}
+
+/**
+ * Generate kode_area unik per tenant. `excludeId` untuk mode update.
+ * `usedSet` opsional: Set kode yang sudah "dipesan" di batch yang sama.
+ */
+async function resolveUniqueAreaCode(db, tenantId, namaArea, excludeId = null, usedSet = null) {
+    const tenantAnd = ` AND tenant_id = ${parseInt(tenantId, 10)}`;
+    const isTaken = async (code) => {
+        if (usedSet && usedSet.has(code)) return true;
+        const row = await new Promise((resolve) => {
+            const sql = excludeId
+                ? `SELECT id FROM areas WHERE kode_area = ? COLLATE NOCASE AND id != ?${tenantAnd} LIMIT 1`
+                : `SELECT id FROM areas WHERE kode_area = ? COLLATE NOCASE${tenantAnd} LIMIT 1`;
+            const params = excludeId ? [code, excludeId] : [code];
+            db.get(sql, params, (err, r) => resolve(r || null));
+        });
+        return !!row;
+    };
+    for (const cand of buildAreaCodeCandidates(namaArea)) {
+        if (!(await isTaken(cand))) return cand;
+    }
+    const base = buildAreaCodeCandidate(namaArea) || 'AREA';
+    for (let i = 2; i <= 99; i++) {
+        const suffix = String(i);
+        const code = (base.slice(0, Math.max(1, 4 - suffix.length)) + suffix).toUpperCase();
+        if (!(await isTaken(code))) return code;
+    }
+    return `${base.slice(0, 2)}${Date.now().toString(36).slice(-2)}`.toUpperCase();
+}
+
+function resolveAreaDeskripsi(deskripsi, namaArea) {
+    const d = deskripsi != null ? String(deskripsi).trim() : '';
+    if (d) return d;
+    const nama = String(namaArea || '').trim();
+    return nama || null;
+}
+
 // Helper: Ensure areas table exists + area_id di customers
 async function ensureAreasTable(db) {
     await new Promise((resolve) => db.run(`
@@ -6644,9 +7189,9 @@ async function ensureAreasTable(db) {
             nama_area   TEXT    NOT NULL,
             deskripsi   TEXT,
             status      TEXT    NOT NULL DEFAULT 'aktif',
+            tenant_id   INTEGER NOT NULL DEFAULT 1,
             created_at  TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
-            updated_at  TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
-            UNIQUE(nama_area)
+            updated_at  TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
         )
     `, () => resolve()));
 
@@ -6656,6 +7201,82 @@ async function ensureAreasTable(db) {
         () => resolve() // Abaikan error jika kolom sudah ada
     ));
 
+    // Pastikan tenant_id ada (multi-tenant)
+    await new Promise((resolve) => db.run(
+        `ALTER TABLE areas ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1`,
+        () => resolve()
+    ));
+
+    // Drop UNIQUE(nama_area) global — rebuild sekali jika masih ada di schema.
+    const needsRebuild = await new Promise((resolve) => {
+        db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='areas'`, (err, row) => {
+            const sql = String(row && row.sql || '');
+            resolve(/UNIQUE\s*\(\s*nama_area\s*\)/i.test(sql));
+        });
+    });
+    if (needsRebuild) {
+        await new Promise((resolve, reject) => {
+            db.serialize(() => {
+                db.run('PRAGMA foreign_keys=OFF');
+                db.run('BEGIN IMMEDIATE');
+                db.run('DROP TABLE IF EXISTS areas__mt');
+                db.run(`
+                    CREATE TABLE areas__mt (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                        kode_area   TEXT,
+                        nama_area   TEXT    NOT NULL,
+                        deskripsi   TEXT,
+                        status      TEXT    NOT NULL DEFAULT 'aktif',
+                        tenant_id   INTEGER NOT NULL DEFAULT 1,
+                        created_at  TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
+                        updated_at  TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+                    )
+                `);
+                db.run(`
+                    INSERT INTO areas__mt (id, kode_area, nama_area, deskripsi, status, tenant_id, created_at, updated_at)
+                    SELECT id, kode_area, nama_area, deskripsi, status, COALESCE(tenant_id, 1), created_at, updated_at
+                    FROM areas
+                `, (err) => {
+                    if (err) {
+                        db.run('ROLLBACK');
+                        db.run('PRAGMA foreign_keys=ON');
+                        return reject(err);
+                    }
+                    db.run('DROP TABLE areas', (dropErr) => {
+                        if (dropErr) {
+                            db.run('ROLLBACK');
+                            db.run('PRAGMA foreign_keys=ON');
+                            return reject(dropErr);
+                        }
+                        db.run('ALTER TABLE areas__mt RENAME TO areas');
+                        db.run('CREATE INDEX IF NOT EXISTS idx_areas_tenant_id ON areas(tenant_id)');
+                        db.run('COMMIT', (e2) => {
+                            db.run('PRAGMA foreign_keys=ON');
+                            if (e2) reject(e2); else resolve();
+                        });
+                    });
+                });
+            });
+        }).catch((err) => {
+            logger.warn('[areas] rebuild UNIQUE(nama_area) gagal:', err.message);
+        });
+    }
+
+    await new Promise((resolve) => {
+        db.run(
+            `CREATE UNIQUE INDEX IF NOT EXISTS idx_areas_tenant_nama
+             ON areas(tenant_id, nama_area COLLATE NOCASE)`,
+            () => {
+                db.run(
+                    `CREATE UNIQUE INDEX IF NOT EXISTS idx_areas_tenant_kode
+                     ON areas(tenant_id, kode_area COLLATE NOCASE)
+                     WHERE kode_area IS NOT NULL AND TRIM(kode_area) != ''`,
+                    () => resolve()
+                );
+            }
+        );
+    });
+
     // Tambahkan kolom area_id ke customers jika belum ada
     await new Promise((resolve) => db.run(
         `ALTER TABLE customers ADD COLUMN area_id INTEGER REFERENCES areas(id)`,
@@ -6663,9 +7284,115 @@ async function ensureAreasTable(db) {
     ));
 }
 
+const AREA_EXPORT_COLUMNS = [
+    { header: 'Kode Area', key: 'kode_area', width: 14 },
+    { header: 'Nama Area', key: 'nama_area', width: 28 },
+    { header: 'Deskripsi', key: 'deskripsi', width: 40 },
+    { header: 'Status', key: 'status', width: 12 },
+];
+
+const AREA_IMPORT_HEADER_ALIASES = {
+    'kode area': 'kode_area',
+    kode_area: 'kode_area',
+    kode: 'kode_area',
+    'nama area': 'nama_area',
+    nama_area: 'nama_area',
+    nama: 'nama_area',
+    area: 'nama_area',
+    deskripsi: 'deskripsi',
+    description: 'deskripsi',
+    status: 'status',
+};
+
+function normalizeAreaImportStatus(raw) {
+    const v = String(raw || '').trim().toLowerCase();
+    if (!v) return 'aktif';
+    if (['aktif', 'active', '1', 'ya', 'yes', 'on'].includes(v)) return 'aktif';
+    if (['nonaktif', 'non-aktif', 'inactive', '0', 'tidak', 'no', 'off'].includes(v)) return 'nonaktif';
+    return null;
+}
+
+function buildAreaImportHeaderMap(headerRow) {
+    const headerMap = {};
+    headerRow.eachCell((cell, colNumber) => {
+        const key = String(cell.value || '').toLowerCase().trim();
+        if (key) headerMap[key] = colNumber;
+    });
+    const unified = {};
+    Object.keys(headerMap).forEach((key) => {
+        const normalizedKey = AREA_IMPORT_HEADER_ALIASES[key] || key;
+        unified[normalizedKey] = headerMap[key];
+    });
+    return unified;
+}
+
+function getAreaImportWorksheet(workbook) {
+    return workbook.getWorksheet('Area') || workbook.worksheets[0] || null;
+}
+
+function getAreaImportCellValue(row, headerMap, field) {
+    const col = headerMap[field];
+    if (!col) return '';
+    const cell = row.getCell(col);
+    if (!cell || cell.value == null) return '';
+    const unwrapped = unwrapExcelCellValue(cell.value);
+    if (unwrapped == null || unwrapped === '') return '';
+    return String(unwrapped).trim();
+}
+
+async function buildAreaImportTemplateWorkbook() {
+    const workbook = new ExcelJS.Workbook();
+    const ws = workbook.addWorksheet('Area');
+    try {
+        ws.views = [{ state: 'frozen', ySplit: 1 }];
+    } catch (_) {
+        /* opsional */
+    }
+
+    ws.columns = AREA_EXPORT_COLUMNS.map((col) => ({ ...col }));
+    const headerRow = ws.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE8F5E9' }
+    };
+
+    ws.addRow({
+        kode_area: 'WLA',
+        nama_area: 'Wilayah A',
+        deskripsi: 'Contoh area layanan — hapus baris ini sebelum import produksi',
+        status: 'aktif'
+    });
+
+    const help = workbook.addWorksheet('Petunjuk');
+    help.getColumn(1).width = 22;
+    help.getColumn(2).width = 72;
+    [
+        ['Kolom', 'Penjelasan'],
+        ['Kode Area', 'Opsional. Huruf/angka unik (mis. WLA). Otomatis diubah ke huruf besar.'],
+        ['Nama Area *', 'Wajib. Nama wilayah layanan. Jika sudah ada, baris akan memperbarui data area tersebut.'],
+        ['Deskripsi', 'Opsional. Keterangan tambahan area.'],
+        ['Status', 'aktif atau nonaktif. Kosong = aktif.'],
+        ['', ''],
+        ['Catatan', 'Baris tanpa Nama Area akan dilewati. Kode Area duplikat (selain area yang sama) akan ditolak.']
+    ].forEach((r) => help.addRow(r));
+    help.getRow(1).font = { bold: true };
+
+    return workbook;
+}
+
 // GET /admin/billing/areas — Halaman Manajemen Area
 router.get('/areas', getAppSettings, async (req, res) => {
     try {
+        // Tangkap tenant SINKRON dari req (lebih andal daripada ALS setelah await).
+        const tenantIdLiteral = (() => {
+            const raw = req.tenantId ?? req.tenant?.id;
+            if (raw != null && Number.isFinite(Number(raw))) return parseInt(raw, 10);
+            const t = billingManager._tenantWhere('a');
+            return t.sql ? parseInt(t.params[0], 10) : null;
+        })();
+
         const db = require('../config/billing').db;
         await ensureAreasTable(db);
 
@@ -6678,8 +7405,7 @@ router.get('/areas', getAppSettings, async (req, res) => {
         let whereClauses = [];
         let params = [];
         // Isolasi tenant (areas.tenant_id) sebagai literal integer.
-        const _areaT = billingManager._tenantWhere('a');
-        if (_areaT.sql) { whereClauses.push(`a.tenant_id = ${parseInt(_areaT.params[0], 10)}`); }
+        if (tenantIdLiteral != null) { whereClauses.push(`a.tenant_id = ${tenantIdLiteral}`); }
         if (search)       { whereClauses.push(`a.nama_area LIKE ?`); params.push(`%${search}%`); }
         if (filterStatus) { whereClauses.push(`a.status = ?`);        params.push(filterStatus); }
         const where = whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : '';
@@ -6705,7 +7431,7 @@ router.get('/areas', getAppSettings, async (req, res) => {
                     COUNT(*) as total,
                     SUM(CASE WHEN status='aktif'    THEN 1 ELSE 0 END) as aktif,
                     SUM(CASE WHEN status='nonaktif' THEN 1 ELSE 0 END) as nonaktif
-                FROM areas${tWhere()}
+                FROM areas${tenantIdLiteral != null ? ` WHERE tenant_id = ${tenantIdLiteral}` : ''}
             `, [], (err, row) => resolve(row || { total: 0, aktif: 0, nonaktif: 0 }))),
         ]);
 
@@ -6742,13 +7468,14 @@ router.get('/areas', getAppSettings, async (req, res) => {
 // GET /admin/billing/collector-areas — Mapping Area Kolektor
 router.get('/collector-areas', getAppSettings, async (req, res) => {
     try {
+        await billingManager._ensureCollectorAreasAreaColumn();
         const db = require('../config/billing').db;
 
         // Ambil semua kolektor beserta area mereka
         const collectorsRows = await new Promise((resolve, reject) => {
             db.all(`
                 SELECT c.id, c.name, c.phone, 
-                       (SELECT GROUP_CONCAT(area, ',') FROM collector_areas WHERE collector_id = c.id) as assigned_areas
+                       (SELECT GROUP_CONCAT(COALESCE(area, area_name), ',') FROM collector_areas WHERE collector_id = c.id) as assigned_areas
                 FROM collectors c${tWhere('c')}
                 ORDER BY c.name ASC
             `, (err, rows) => {
@@ -6821,9 +7548,209 @@ router.get('/areas/list', async (req, res) => {
     }
 });
 
+// GET /admin/billing/areas/export.xlsx — Export semua area ke Excel
+router.get('/areas/export.xlsx', adminAuth, async (req, res) => {
+    try {
+        const db = require('../config/billing').db;
+        await ensureAreasTable(db);
+
+        const areas = await new Promise((resolve) =>
+            db.all(
+                `SELECT kode_area, nama_area, deskripsi, status FROM areas${tWhere()} ORDER BY nama_area ASC`,
+                [],
+                (err, rows) => resolve(rows || [])
+            )
+        );
+
+        const workbook = new ExcelJS.Workbook();
+        const ws = workbook.addWorksheet('Area');
+        try {
+            ws.views = [{ state: 'frozen', ySplit: 1 }];
+        } catch (_) {
+            /* opsional */
+        }
+
+        ws.columns = AREA_EXPORT_COLUMNS.map((col) => ({ ...col }));
+        const headerRow = ws.getRow(1);
+        headerRow.font = { bold: true };
+        headerRow.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFE6E6FA' }
+        };
+
+        for (const area of areas) {
+            ws.addRow({
+                kode_area: area.kode_area || '',
+                nama_area: area.nama_area || '',
+                deskripsi: area.deskripsi || '',
+                status: area.status || 'aktif'
+            });
+        }
+
+        const stamp = new Date().toISOString().slice(0, 10);
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="export-area-${stamp}.xlsx"`);
+        await workbook.xlsx.write(res);
+        if (!res.writableEnded) res.end();
+    } catch (error) {
+        logger.error('Error exporting areas (XLSX):', error);
+        if (!res.headersSent) {
+            res.status(500).json({ success: false, message: 'Gagal export area', error: error.message });
+        }
+    }
+});
+
+// GET /admin/billing/areas/import/template — Template Excel impor area
+router.get('/areas/import/template', adminAuth, async (req, res) => {
+    try {
+        const workbook = await buildAreaImportTemplateWorkbook();
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename="template-import-area.xlsx"');
+        await workbook.xlsx.write(res);
+        if (!res.writableEnded) res.end();
+    } catch (error) {
+        logger.error('Error generating area import template:', error);
+        if (!res.headersSent) {
+            res.status(500).json({ success: false, message: 'Gagal membuat template area', error: error.message });
+        }
+    }
+});
+
+// POST /admin/billing/areas/import — Import area dari Excel
+router.post('/areas/import', adminAuth, upload.single('file'), async (req, res) => {
+    try {
+        // Tangkap tenant SINKRON di awal (sebelum await sqlite/excel).
+        const tenantId = billingManager._resolveTenantIdForInsert(req.tenantId ?? req.tenant?.id);
+
+        if (!req.file || !req.file.buffer) {
+            return res.status(400).json({ success: false, message: 'File Excel wajib diunggah.' });
+        }
+
+        const lowerName = String(req.file.originalname || '').toLowerCase();
+        if (!lowerName.endsWith('.xlsx')) {
+            return res.status(400).json({ success: false, message: 'Format file harus .xlsx' });
+        }
+
+        const db = require('../config/billing').db;
+        await ensureAreasTable(db);
+
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(req.file.buffer);
+        const ws = getAreaImportWorksheet(workbook);
+        if (!ws) {
+            return res.status(400).json({ success: false, message: 'Lembar kerja Excel tidak ditemukan.' });
+        }
+
+        const headerMap = buildAreaImportHeaderMap(ws.getRow(1));
+        if (!headerMap.nama_area) {
+            return res.status(400).json({ success: false, message: 'Kolom "Nama Area" tidak ditemukan di baris header.' });
+        }
+
+        const summary = { created: 0, updated: 0, skipped: 0, errors: [] };
+        const usedKodes = new Set();
+
+        for (let rowNum = 2; rowNum <= ws.rowCount; rowNum++) {
+            const row = ws.getRow(rowNum);
+            if (!row || row.cellCount === 0) continue;
+
+            const nama_area = getAreaImportCellValue(row, headerMap, 'nama_area');
+            if (!nama_area) {
+                summary.skipped++;
+                continue;
+            }
+
+            const kodeRaw = getAreaImportCellValue(row, headerMap, 'kode_area');
+            let kode_area = kodeRaw ? kodeRaw.toUpperCase() : null;
+            const deskripsiRaw = getAreaImportCellValue(row, headerMap, 'deskripsi');
+            const statusRaw = getAreaImportCellValue(row, headerMap, 'status');
+            const status = normalizeAreaImportStatus(statusRaw);
+            if (!status) {
+                summary.errors.push(`Baris ${rowNum}: status "${statusRaw}" tidak valid (gunakan aktif/nonaktif).`);
+                continue;
+            }
+
+            const existing = await new Promise((resolve) =>
+                db.get(
+                    `SELECT id, kode_area, deskripsi FROM areas WHERE nama_area = ? COLLATE NOCASE${tAnd()}`,
+                    [nama_area],
+                    (err, r) => resolve(r || null)
+                )
+            );
+
+            if (!kode_area) {
+                const keepExisting = existing && String(existing.kode_area || '').trim();
+                kode_area = keepExisting
+                    ? String(existing.kode_area).trim().toUpperCase()
+                    : await resolveUniqueAreaCode(db, tenantId, nama_area, existing ? existing.id : null, usedKodes);
+            }
+
+            if (kode_area) {
+                const kodeConflict = await new Promise((resolve) =>
+                    db.get(
+                        existing
+                            ? `SELECT id FROM areas WHERE kode_area = ? COLLATE NOCASE AND id != ?${tAnd()}`
+                            : `SELECT id FROM areas WHERE kode_area = ? COLLATE NOCASE${tAnd()}`,
+                        existing ? [kode_area, existing.id] : [kode_area],
+                        (err, r) => resolve(r || null)
+                    )
+                );
+                if (kodeConflict) {
+                    summary.errors.push(`Baris ${rowNum}: kode area "${kode_area}" sudah digunakan.`);
+                    continue;
+                }
+            }
+
+            const deskripsi = resolveAreaDeskripsi(
+                deskripsiRaw || (existing && existing.deskripsi) || null,
+                nama_area
+            );
+            usedKodes.add(kode_area);
+
+            try {
+                if (existing) {
+                    await new Promise((resolve, reject) =>
+                        db.run(
+                            `UPDATE areas SET kode_area=?, nama_area=?, deskripsi=?, status=?, updated_at=datetime('now','localtime') WHERE id=?${tAnd()}`,
+                            [kode_area, nama_area, deskripsi, status, existing.id],
+                            (err) => (err ? reject(err) : resolve())
+                        )
+                    );
+                    summary.updated++;
+                } else {
+                    await new Promise((resolve, reject) =>
+                        db.run(
+                            `INSERT INTO areas (kode_area, nama_area, deskripsi, status, tenant_id) VALUES (?, ?, ?, ?, ?)`,
+                            [kode_area, nama_area, deskripsi, status, tenantId],
+                            (err) => (err ? reject(err) : resolve())
+                        )
+                    );
+                    summary.created++;
+                }
+            } catch (rowErr) {
+                summary.errors.push(`Baris ${rowNum}: ${rowErr.message}`);
+            }
+        }
+
+        const hasErrors = summary.errors.length > 0;
+        res.json({
+            success: !hasErrors || (summary.created + summary.updated) > 0,
+            message: `Import selesai: ${summary.created} baru, ${summary.updated} diperbarui, ${summary.skipped} dilewati${hasErrors ? `, ${summary.errors.length} error` : ''}.`,
+            summary
+        });
+    } catch (error) {
+        logger.error('Error importing areas (XLSX):', error);
+        res.status(500).json({ success: false, message: 'Gagal import area', error: error.message });
+    }
+});
+
 // POST /admin/billing/areas — Tambah area baru
 router.post('/areas', adminAuth, async (req, res) => {
     try {
+        // WAJIB sebelum await apa pun: ALS sering hilang setelah Promise sqlite.
+        const tenantId = billingManager._resolveTenantIdForInsert(req.tenantId ?? req.tenant?.id);
+        const tenantAnd = ` AND tenant_id = ${parseInt(tenantId, 10)}`;
+
         const { kode_area, nama_area, deskripsi, status } = req.body;
         if (!nama_area || !String(nama_area).trim()) {
             return res.status(400).json({ success: false, message: 'Nama area tidak boleh kosong.' });
@@ -6831,29 +7758,31 @@ router.post('/areas', adminAuth, async (req, res) => {
         const db = require('../config/billing').db;
         await ensureAreasTable(db);
 
-        const trimmed      = String(nama_area).trim();
-        const trimmedKode  = kode_area ? String(kode_area).trim().toUpperCase() : null;
+        const trimmed = String(nama_area).trim();
+        let trimmedKode = kode_area ? String(kode_area).trim().toUpperCase() : '';
+        if (!trimmedKode) {
+            trimmedKode = await resolveUniqueAreaCode(db, tenantId, trimmed);
+        }
+        const trimmedDeskripsi = resolveAreaDeskripsi(deskripsi, trimmed);
 
-        // Cek duplikat nama
+        // Cek duplikat nama (scoped ke tenant yang sudah ditangkap)
         const existing = await new Promise((resolve) =>
-            db.get(`SELECT id FROM areas WHERE nama_area = ? COLLATE NOCASE${tAnd()}`, [trimmed], (err, row) => resolve(row))
+            db.get(`SELECT id FROM areas WHERE nama_area = ? COLLATE NOCASE${tenantAnd}`, [trimmed], (err, row) => resolve(row))
         );
         if (existing) return res.status(409).json({ success: false, message: `Area "${trimmed}" sudah ada.` });
 
-        // Cek duplikat kode (jika diisi)
-        if (trimmedKode) {
-            const existingKode = await new Promise((resolve) =>
-                db.get(`SELECT id FROM areas WHERE kode_area = ? COLLATE NOCASE${tAnd()}`, [trimmedKode], (err, row) => resolve(row))
-            );
-            if (existingKode) return res.status(409).json({ success: false, message: `Kode area "${trimmedKode}" sudah digunakan.` });
-        }
+        // Cek duplikat kode
+        const existingKode = await new Promise((resolve) =>
+            db.get(`SELECT id FROM areas WHERE kode_area = ? COLLATE NOCASE${tenantAnd}`, [trimmedKode], (err, row) => resolve(row))
+        );
+        if (existingKode) return res.status(409).json({ success: false, message: `Kode area "${trimmedKode}" sudah digunakan.` });
 
         const id = await new Promise((resolve, reject) =>
-            db.run(`INSERT INTO areas (kode_area, nama_area, deskripsi, status) VALUES (?, ?, ?, ?)`,
-                   [trimmedKode, trimmed, deskripsi || null, status || 'aktif'],
+            db.run(`INSERT INTO areas (kode_area, nama_area, deskripsi, status, tenant_id) VALUES (?, ?, ?, ?, ?)`,
+                   [trimmedKode, trimmed, trimmedDeskripsi, status || 'aktif', tenantId],
                    function(err) { err ? reject(err) : resolve(this.lastID); })
         );
-        res.json({ success: true, message: 'Area berhasil ditambahkan.', id });
+        res.json({ success: true, message: 'Area berhasil ditambahkan.', id, tenant_id: tenantId, kode_area: trimmedKode });
     } catch (error) {
         logger.error('Error creating area:', error);
         res.status(500).json({ success: false, message: error.message });
@@ -6863,35 +7792,39 @@ router.post('/areas', adminAuth, async (req, res) => {
 // PUT /admin/billing/areas/:id — Update area
 router.put('/areas/:id', adminAuth, async (req, res) => {
     try {
+        const tenantId = billingManager._resolveTenantIdForInsert(req.tenantId ?? req.tenant?.id);
+        const tenantAnd = ` AND tenant_id = ${parseInt(tenantId, 10)}`;
         const { id } = req.params;
         const { kode_area, nama_area, deskripsi, status } = req.body;
         if (!nama_area || !String(nama_area).trim()) {
             return res.status(400).json({ success: false, message: 'Nama area tidak boleh kosong.' });
         }
         const db = require('../config/billing').db;
-        const trimmed     = String(nama_area).trim();
-        const trimmedKode = kode_area ? String(kode_area).trim().toUpperCase() : null;
+        const trimmed = String(nama_area).trim();
+        let trimmedKode = kode_area ? String(kode_area).trim().toUpperCase() : '';
+        if (!trimmedKode) {
+            trimmedKode = await resolveUniqueAreaCode(db, tenantId, trimmed, id);
+        }
+        const trimmedDeskripsi = resolveAreaDeskripsi(deskripsi, trimmed);
 
         // Cek duplikat nama (kecuali dirinya sendiri)
         const existing = await new Promise((resolve) =>
-            db.get(`SELECT id FROM areas WHERE nama_area = ? COLLATE NOCASE AND id != ?${tAnd()}`, [trimmed, id], (err, row) => resolve(row))
+            db.get(`SELECT id FROM areas WHERE nama_area = ? COLLATE NOCASE AND id != ?${tenantAnd}`, [trimmed, id], (err, row) => resolve(row))
         );
         if (existing) return res.status(409).json({ success: false, message: `Area "${trimmed}" sudah ada.` });
 
-        // Cek duplikat kode (kecuali dirinya sendiri, jika diisi)
-        if (trimmedKode) {
-            const existingKode = await new Promise((resolve) =>
-                db.get(`SELECT id FROM areas WHERE kode_area = ? COLLATE NOCASE AND id != ?${tAnd()}`, [trimmedKode, id], (err, row) => resolve(row))
-            );
-            if (existingKode) return res.status(409).json({ success: false, message: `Kode area "${trimmedKode}" sudah digunakan.` });
-        }
+        // Cek duplikat kode (kecuali dirinya sendiri)
+        const existingKode = await new Promise((resolve) =>
+            db.get(`SELECT id FROM areas WHERE kode_area = ? COLLATE NOCASE AND id != ?${tenantAnd}`, [trimmedKode, id], (err, row) => resolve(row))
+        );
+        if (existingKode) return res.status(409).json({ success: false, message: `Kode area "${trimmedKode}" sudah digunakan.` });
 
         await new Promise((resolve, reject) =>
-            db.run(`UPDATE areas SET kode_area=?, nama_area=?, deskripsi=?, status=?, updated_at=datetime('now','localtime') WHERE id=?`,
-                   [trimmedKode, trimmed, deskripsi || null, status || 'aktif', id],
+            db.run(`UPDATE areas SET kode_area=?, nama_area=?, deskripsi=?, status=?, updated_at=datetime('now','localtime') WHERE id=?${tenantAnd}`,
+                   [trimmedKode, trimmed, trimmedDeskripsi, status || 'aktif', id],
                    (err) => err ? reject(err) : resolve())
         );
-        res.json({ success: true, message: 'Area berhasil diperbarui.' });
+        res.json({ success: true, message: 'Area berhasil diperbarui.', kode_area: trimmedKode });
     } catch (error) {
         logger.error('Error updating area:', error);
         res.status(500).json({ success: false, message: error.message });
@@ -6901,6 +7834,10 @@ router.put('/areas/:id', adminAuth, async (req, res) => {
 // PATCH /admin/billing/areas/:id/toggle-status — Toggle aktif/nonaktif
 router.patch('/areas/:id/toggle-status', adminAuth, async (req, res) => {
     try {
+        const tenantAnd = (() => {
+            const tid = billingManager._resolveTenantIdForInsert(req.tenantId ?? req.tenant?.id);
+            return ` AND tenant_id = ${parseInt(tid, 10)}`;
+        })();
         const { id } = req.params;
         const { status } = req.body;
         if (!['aktif', 'nonaktif'].includes(status)) {
@@ -6908,7 +7845,7 @@ router.patch('/areas/:id/toggle-status', adminAuth, async (req, res) => {
         }
         const db = require('../config/billing').db;
         await new Promise((resolve, reject) =>
-            db.run(`UPDATE areas SET status=?, updated_at=datetime('now','localtime') WHERE id=?`,
+            db.run(`UPDATE areas SET status=?, updated_at=datetime('now','localtime') WHERE id=?${tenantAnd}`,
                    [status, id], (err) => err ? reject(err) : resolve())
         );
         res.json({ success: true, message: `Area berhasil di${status === 'aktif' ? 'aktifkan' : 'nonaktifkan'}.` });
@@ -7118,6 +8055,22 @@ router.post('/customers', customerPhotoUpload.fields([
                 message: 'Nama, username, telepon, dan paket harus diisi'
             });
         }
+
+        // Tolak simpan ganda (nomor HP sama persis di tenant ini) sebelum hash/insert
+        const tenantIdForCreate = req.tenantId || req.session?.tenantId || req.tenant?.id;
+        if (tenantIdForCreate != null) {
+            const existingByPhone = await billingManager.findCustomerByExactPhoneInTenant(
+                phoneStored,
+                parseInt(tenantIdForCreate, 10)
+            );
+            if (existingByPhone) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Nomor telepon sudah terdaftar',
+                    details: `Nomor ${phoneStored} sudah dipakai oleh ${existingByPhone.name} (ID ${existingByPhone.customer_id}). Buka data pelanggan yang ada, jangan buat ulang.`
+                });
+            }
+        }
         
         // Validate username format
         if (!/^[a-z0-9_]+$/.test(username)) {
@@ -7128,7 +8081,18 @@ router.post('/customers', customerPhotoUpload.fields([
         }
 
         const packageData = await billingManager.getPackageById(package_id);
-        const profileToUse = resolveCustomerPppoeProfile(pppoe_profile, packageData, null);
+        const hasStaticIpIntent = Boolean(
+            (static_ip && String(static_ip).trim()) || (assigned_ip && String(assigned_ip).trim())
+        );
+        const wantsCreatePppoe = ['1', 'true', 'on', 'yes'].includes(
+            String(create_pppoe_user ?? '').toLowerCase()
+        );
+        const hasPppoeUsername = pppoe_username != null && String(pppoe_username).trim() !== '';
+        // Static IP murni (tanpa user PPPoE): jangan isi profil dari paket — selaras impor
+        const pureStaticIp = hasStaticIpIntent && !wantsCreatePppoe && !hasPppoeUsername;
+        const profileToUse = pureStaticIp
+            ? null
+            : resolveCustomerPppoeProfile(pppoe_profile, packageData, null);
 
         // Password portal: default 123456 jika kosong (sesuai kebijakan form tambah pelanggan)
         const bcrypt = require('bcrypt');
@@ -7146,6 +8110,7 @@ router.post('/customers', customerPhotoUpload.fields([
         const initialStatus = allowedNewStatus.includes(statusFromForm) ? statusFromForm : 'active';
 
         const customerData = {
+            tenant_id: req.tenantId || req.session?.tenantId || undefined,
             name,
             username,
             password: hashedPassword,
@@ -7165,14 +8130,14 @@ router.post('/customers', customerPhotoUpload.fields([
                 if (Number.isFinite(v)) return Math.min(Math.max(v, 1), 28);
                 return 15;
             })(),
-            renewal_type: renewal_type || 'renewal',
-            fix_date: renewal_type === 'fix_date' ? (() => {
+            renewal_type: renewal_type || 'fix_date',
+            fix_date: (renewal_type || 'fix_date') === 'fix_date' ? (() => {
                 const v = parseInt(fix_date, 10);
                 if (Number.isFinite(v)) return Math.min(Math.max(v, 1), 28);
                 return 15;
             })() : null,
             static_ip: static_ip || null,
-            assigned_ip: assigned_ip || null,
+            assigned_ip: assigned_ip || static_ip || null,
             mac_address: mac_address || null,
             latitude: latitude !== undefined && latitude !== '' ? parseFloat(latitude) : undefined,
             longitude: longitude !== undefined && longitude !== '' ? parseFloat(longitude) : undefined,
@@ -7300,6 +8265,48 @@ router.post('/customers', customerPhotoUpload.fields([
             pppoeCreate.message = e.message;
         }
 
+        // Optional: provision Mikrotik simple queue for pure static-IP customers (package speed)
+        let staticIpProvision = { attempted: false, success: false, message: '' };
+        try {
+            const {
+                getCustomerStaticIp,
+                provisionStaticIPQueue
+            } = require('../config/staticIPProvisioning');
+            const staticIp = getCustomerStaticIp({
+                static_ip: customerData.static_ip || static_ip,
+                assigned_ip: customerData.assigned_ip || assigned_ip
+            });
+            const pppoeWasCreated = !!(pppoeCreate.attempted && pppoeCreate.created);
+            const hasPppoeUser = !!(result.pppoe_username && String(result.pppoe_username).trim());
+            if (staticIp && !pppoeWasCreated && !hasPppoeUser) {
+                staticIpProvision.attempted = true;
+                const prov = await provisionStaticIPQueue(
+                    {
+                        id: result.id,
+                        static_ip: staticIp,
+                        assigned_ip: customerData.assigned_ip || assigned_ip || staticIp,
+                        username: result.username
+                    },
+                    packageData
+                );
+                staticIpProvision.success = !!(prov && prov.success);
+                staticIpProvision.message = (prov && (prov.message || (prov.success
+                    ? `Queue ${prov.queue} ${prov.action} (${prov.maxLimit})`
+                    : 'Gagal provision queue'))) || '';
+                staticIpProvision.queue = prov?.queue;
+                staticIpProvision.maxLimit = prov?.maxLimit;
+                staticIpProvision.skipped = !!(prov && prov.skipped);
+                if (prov && !prov.success && !prov.skipped) {
+                    logger.warn(`[STATIC-IP-PROVISION] Create customer ${result.id}: ${staticIpProvision.message}`);
+                }
+            }
+        } catch (e) {
+            logger.warn('Gagal provision static IP queue (non-fatal): ' + e.message);
+            staticIpProvision.attempted = true;
+            staticIpProvision.success = false;
+            staticIpProvision.message = e.message;
+        }
+
         if (save_mode === 'save_and_create_task') {
             const prefillInstallationCustomer = {
                 customer_id: result.id,
@@ -7320,6 +8327,7 @@ router.post('/customers', customerPhotoUpload.fields([
                     message: 'Pelanggan berhasil ditambahkan',
                     customer: result,
                     pppoeCreate,
+                    staticIpProvision,
                     prefill_installation: prefillInstallationCustomer,
                     redirect_to_task: '/admin/installations/create?prefill_customer=1'
                 });
@@ -7330,6 +8338,7 @@ router.post('/customers', customerPhotoUpload.fields([
                 message: 'Pelanggan berhasil ditambahkan',
                 customer: result,
                 pppoeCreate,
+                staticIpProvision,
                 redirect_to_task: null
             });
         }
@@ -7767,7 +8776,12 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
             latitude: latitude !== undefined ? parseFloat(latitude) : currentCustomer.latitude,
             longitude: longitude !== undefined ? parseFloat(longitude) : currentCustomer.longitude,
             static_ip: static_ip !== undefined ? static_ip : currentCustomer.static_ip,
-            assigned_ip: assigned_ip !== undefined ? assigned_ip : currentCustomer.assigned_ip,
+            assigned_ip: (() => {
+                if (assigned_ip !== undefined && assigned_ip !== '') return assigned_ip;
+                if (static_ip !== undefined && static_ip !== '') return static_ip;
+                if (assigned_ip !== undefined) return assigned_ip || static_ip || null;
+                return currentCustomer.assigned_ip || currentCustomer.static_ip;
+            })(),
             mac_address: mac_address !== undefined ? mac_address : currentCustomer.mac_address,
             // Cable connection data
             cable_type: cable_type !== undefined ? cable_type : currentCustomer.cable_type,
@@ -8030,11 +9044,65 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
             }
         }
 
+        // Static IP: upsert/remove package-speed simple queue on Mikrotik
+        let staticIpProvision = { attempted: false, success: false, message: '' };
+        try {
+            const {
+                getCustomerStaticIp,
+                provisionStaticIPQueue,
+                removeStaticIPQueue
+            } = require('../config/staticIPProvisioning');
+            const updatedCustomer = await billingManager.getCustomerByPhone(customerData.phone || phone);
+            if (updatedCustomer && updatedCustomer.id) {
+                const newIp = getCustomerStaticIp(updatedCustomer);
+                const oldIp = getCustomerStaticIp(currentCustomer);
+                const hasPppoe = !!(updatedCustomer.pppoe_username && String(updatedCustomer.pppoe_username).trim());
+                const packageChanged = updatedCustomer.package_id !== currentCustomer.package_id;
+                const ipChanged = newIp !== oldIp;
+                const macChanged =
+                    String(updatedCustomer.mac_address || '') !== String(currentCustomer.mac_address || '');
+
+                if (hasPppoe || !newIp) {
+                    if (oldIp || currentCustomer.id) {
+                        staticIpProvision.attempted = true;
+                        const rem = await removeStaticIPQueue(updatedCustomer);
+                        staticIpProvision.success = !!(rem && rem.success);
+                        staticIpProvision.message = rem?.message || (rem?.skipped
+                            ? 'Queue tidak ada / dilewati'
+                            : (rem?.action === 'removed' ? `Queue ${rem.queue} dihapus` : ''));
+                        staticIpProvision.action = rem?.action || (rem?.skipped ? 'skipped' : 'remove');
+                    }
+                } else if (packageChanged || ipChanged || macChanged || !oldIp) {
+                    staticIpProvision.attempted = true;
+                    const pkg = packageRowForProfile || (updatedCustomer.package_id
+                        ? await billingManager.getPackageById(updatedCustomer.package_id)
+                        : null);
+                    const prov = await provisionStaticIPQueue(updatedCustomer, pkg);
+                    staticIpProvision.success = !!(prov && prov.success);
+                    staticIpProvision.message = (prov && (prov.message || (prov.success
+                        ? `Queue ${prov.queue} ${prov.action} (${prov.maxLimit})`
+                        : 'Gagal provision queue'))) || '';
+                    staticIpProvision.queue = prov?.queue;
+                    staticIpProvision.maxLimit = prov?.maxLimit;
+                    staticIpProvision.skipped = !!(prov && prov.skipped);
+                    if (prov && !prov.success && !prov.skipped) {
+                        logger.warn(`[STATIC-IP-PROVISION] Update customer ${updatedCustomer.id}: ${staticIpProvision.message}`);
+                    }
+                }
+            }
+        } catch (e) {
+            logger.warn('Gagal provision/update static IP queue (non-fatal): ' + e.message);
+            staticIpProvision.attempted = true;
+            staticIpProvision.success = false;
+            staticIpProvision.message = e.message;
+        }
+
         res.json({
             success: true,
             message: 'Pelanggan berhasil diupdate',
             customer: result,
-            pppoeCreate
+            pppoeCreate,
+            staticIpProvision
         });
     } catch (error) {
         logger.error('Error updating customer:', error);
@@ -8244,6 +9312,92 @@ router.post('/customers/:phone/accept', async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Gagal accept pelanggan: ' + error.message
+        });
+    }
+});
+
+// Preview template WA welcome pelanggan baru (dari WhatsApp Settings)
+router.get('/customers/:phone/welcome-whatsapp-preview', async (req, res) => {
+    try {
+        const { phone } = req.params;
+        const customer = await billingManager.getCustomerByPhone(phone);
+        if (!customer) {
+            return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+        }
+        if (customer.package_id) {
+            try {
+                const pkg = await billingManager.getPackageById(customer.package_id);
+                if (pkg) {
+                    customer.package_name = pkg.name;
+                    customer.package_speed = pkg.speed || 'N/A';
+                }
+            } catch (_) { /* ignore */ }
+        }
+        const whatsappNotifications = require('../config/whatsapp-notifications');
+        const tenantId = req.session?.tenantId || req.tenantId || customer.tenant_id || null;
+        const preview = await whatsappNotifications.buildWelcomeMessagePreview(customer, { tenantId });
+        if (!preview.success) {
+            return res.json({ success: false, message: preview.error });
+        }
+        return res.json({
+            success: true,
+            phone: customer.phone,
+            customerName: customer.name,
+            preview: preview.preview,
+            templateKey: preview.templateKey,
+            templateTitle: preview.templateTitle,
+            enabled: preview.enabled
+        });
+    } catch (error) {
+        logger.error('Error building welcome WhatsApp preview:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Gagal membuat preview: ' + error.message
+        });
+    }
+});
+
+// Kirim WA welcome pelanggan baru (template dari WhatsApp Settings)
+router.post('/customers/:phone/send-welcome-whatsapp', async (req, res) => {
+    try {
+        const { phone } = req.params;
+        const customer = await billingManager.getCustomerByPhone(phone);
+        if (!customer) {
+            return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+        }
+        if (customer.package_id) {
+            try {
+                const pkg = await billingManager.getPackageById(customer.package_id);
+                if (pkg) {
+                    customer.package_name = pkg.name;
+                    customer.package_speed = pkg.speed || 'N/A';
+                }
+            } catch (_) { /* ignore */ }
+        }
+        const tenantId = req.session?.tenantId || req.tenantId || customer.tenant_id || null;
+        if (tenantId && !customer.tenant_id) customer.tenant_id = tenantId;
+
+        const whatsappNotifications = require('../config/whatsapp-notifications');
+        const result = await whatsappNotifications.sendWelcomeMessage(customer);
+        if (result.success) {
+            return res.json({
+                success: true,
+                message: result.skipped
+                    ? ('Dilewati: ' + (result.reason || 'template/monitor nonaktif'))
+                    : 'Notifikasi welcome WhatsApp berhasil dikirim',
+                skipped: !!result.skipped,
+                pending: !!result.pending
+            });
+        }
+        return res.json({
+            success: false,
+            message: 'Gagal mengirim: ' + (result.error || 'Unknown error')
+        });
+    } catch (error) {
+        logger.error('Error sending welcome WhatsApp:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Gagal mengirim notifikasi: ' + error.message
         });
     }
 });
@@ -9119,15 +10273,43 @@ function getParameterValue(device, parameterName) {
 // API endpoint untuk mendapatkan PPPoE users (dari RADIUS jika mode RADIUS, atau dari Mikrotik jika mode API)
 router.get('/api/pppoe-users', async (req, res) => {
     try {
-        const { getPPPoEUsers, getUserAuthModeAsync } = require('../config/mikrotik');
+        const { getPPPoEUsers, getPPPoEUsersRadius, getUserAuthModeAsync } = require('../config/mikrotik');
+        const {
+            getTenantAllowedPppoeUsernames,
+            getTenantAllowedPppoeUsernameSet
+        } = require('../utils/tenantPppoeOwnership');
         const authMode = await getUserAuthModeAsync();
         
         logger.info(`[API] Fetching PPPoE users in ${authMode} mode`);
-        
-        // getPPPoEUsers() sudah otomatis memilih antara RADIUS atau Mikrotik berdasarkan mode
-        // dan sudah mengembalikan status aktif untuk masing-masing mode
-        const raw = await getPPPoEUsers();
-        const pppoeUsers = Array.isArray(raw) ? raw : [];
+
+        const allowed = await getTenantAllowedPppoeUsernames();
+        const allowedSet = await getTenantAllowedPppoeUsernameSet();
+
+        let pppoeUsers = [];
+        if (allowed !== null && allowed.length === 0) {
+            pppoeUsers = [];
+        } else if (authMode === 'radius') {
+            const raw = await getPPPoEUsersRadius({
+                allowedUsernames: allowed === null ? null : allowed,
+                skipMikrotikActive: true
+            });
+            pppoeUsers = Array.isArray(raw) ? raw : [];
+            if (allowedSet) {
+                pppoeUsers = pppoeUsers.filter((u) => {
+                    const name = String(u?.name || u?.username || '').toLowerCase().trim();
+                    return name && allowedSet.has(name);
+                });
+            }
+        } else {
+            const raw = await getPPPoEUsers();
+            pppoeUsers = Array.isArray(raw) ? raw : [];
+            if (allowedSet) {
+                pppoeUsers = pppoeUsers.filter((u) => {
+                    const name = String(u?.name || u?.username || '').toLowerCase().trim();
+                    return name && allowedSet.has(name);
+                });
+            }
+        }
 
         res.json({
             success: true,
@@ -9870,7 +11052,6 @@ router.post('/invoices/send-whatsapp', async (req, res) => {
             });
         }
         
-        // Get invoice data from database
         const invoice = await billingManager.getInvoiceById(invoiceId);
         if (!invoice) {
             return res.status(404).json({
@@ -9878,121 +11059,64 @@ router.post('/invoices/send-whatsapp', async (req, res) => {
                 message: 'Invoice tidak ditemukan'
             });
         }
-        
-        // Check if this is a member invoice
-        const isMemberInvoice = invoice.member_id !== null && invoice.member_id !== undefined;
-        
-        let customer, packageData, phone, customerName;
-        
-        if (isMemberInvoice) {
-            // Get member data
-            const member = await billingManager.getMemberById(invoice.member_id);
-            if (!member) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Member tidak ditemukan'
-                });
-            }
-            
-            // Get member package
-            packageData = await billingManager.getMemberPackageById(invoice.package_id);
-            phone = member.phone;
-            customerName = member.name;
-        } else {
-            // Get customer data
-            customer = await billingManager.getCustomerById(invoice.customer_id);
-            if (!customer) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Customer tidak ditemukan'
-                });
-            }
-            
-            // Get customer package
-            packageData = await billingManager.getPackageById(invoice.package_id);
-            phone = customer.phone;
-            customerName = customer.name;
-        }
-        
-        if (!phone) {
-            return res.status(400).json({
-                success: false,
-                message: 'Nomor telepon tidak ditemukan'
+
+        const whatsappNotifications = require('../config/whatsapp-notifications');
+        const tenantId = req.session?.tenantId || req.tenantId || invoice.tenant_id || null;
+        const result = await whatsappNotifications.sendManualInvoiceWhatsApp(invoiceId, { tenantId });
+
+        if (result.success) {
+            return res.json({
+                success: true,
+                message: 'Notifikasi WhatsApp berhasil dikirim',
+                templateKey: result.templateKey || null,
+                pending: !!result.pending
             });
         }
-        
-        // Use WhatsApp notification manager with template support
-        const whatsappNotifications = require('../config/whatsapp-notifications');
-        
-        // Determine which notification to send based on invoice status
-        if (invoice.status === 'paid') {
-            // Send payment received notification
-            const payments = await billingManager.getPayments();
-            const payment = payments.find(p => p.invoice_id === invoice.id);
-            
-            const data = {
-                customer_name: customerName,
-                invoice_number: invoice.invoice_number,
-                amount: whatsappNotifications.formatCurrency(invoice.amount),
-                payment_method: payment?.payment_method || 'Manual Admin',
-                payment_date: payment?.payment_date ? whatsappNotifications.formatDate(payment.payment_date) : whatsappNotifications.formatDate(new Date()),
-                reference_number: payment?.reference_number || '-',
-                package_name: packageData?.name || '-',
-                package_speed: packageData?.speed || '-',
-                invoice_id: invoice.id
-            };
-            
-            const result = await whatsappNotifications.sendPaymentReceivedNotification(phone, data);
-            
-            if (result.success) {
-                res.json({
-                    success: true,
-                    message: 'Notifikasi WhatsApp berhasil dikirim'
-                });
-            } else {
-                res.json({
-                    success: false,
-                    message: 'Gagal mengirim notifikasi WhatsApp: ' + (result.error || 'Unknown error')
-                });
-            }
-        } else {
-            // Send invoice created or due date reminder notification
-            if (isMemberInvoice) {
-                const result = await whatsappNotifications.sendMemberInvoiceCreatedNotification(invoice.member_id, invoice.id);
-                
-                if (result.success) {
-                    res.json({
-                        success: true,
-                        message: 'Notifikasi WhatsApp berhasil dikirim'
-                    });
-                } else {
-                    res.json({
-                        success: false,
-                        message: 'Gagal mengirim notifikasi WhatsApp: ' + (result.error || 'Unknown error')
-                    });
-                }
-            } else {
-                const result = await whatsappNotifications.sendInvoiceCreatedNotification(invoice.customer_id, invoice.id);
-                
-                if (result.success) {
-                    res.json({
-                        success: true,
-                        message: 'Notifikasi WhatsApp berhasil dikirim'
-                    });
-                } else {
-                    res.json({
-                        success: false,
-                        message: 'Gagal mengirim notifikasi WhatsApp: ' + (result.error || 'Unknown error')
-                    });
-                }
-            }
-        }
-        
+
+        return res.json({
+            success: false,
+            message: 'Gagal mengirim notifikasi WhatsApp: ' + (result.error || 'Unknown error')
+        });
     } catch (error) {
         logger.error('Error sending WhatsApp notification:', error);
         res.status(500).json({
             success: false,
             message: 'Terjadi kesalahan saat mengirim notifikasi: ' + error.message
+        });
+    }
+});
+
+// Preview pesan WA invoice dari template tenant (bukan teks hardcode di UI)
+router.get('/invoices/:id/whatsapp-preview', async (req, res) => {
+    try {
+        const invoiceId = req.params.id;
+        const invoice = await billingManager.getInvoiceById(invoiceId);
+        if (!invoice) {
+            return res.status(404).json({ success: false, message: 'Invoice tidak ditemukan' });
+        }
+
+        const whatsappNotifications = require('../config/whatsapp-notifications');
+        const tenantId = req.session?.tenantId || req.tenantId || invoice.tenant_id || null;
+        const payload = await whatsappNotifications.buildManualInvoiceWhatsAppPayload(invoiceId, { tenantId });
+
+        if (!payload.success) {
+            return res.json({ success: false, message: payload.error });
+        }
+
+        return res.json({
+            success: true,
+            phone: payload.phone,
+            customerName: payload.customerName,
+            templateKey: payload.templateKey,
+            templateTitle: payload.templateTitle,
+            preview: payload.fullMessage,
+            body: payload.body
+        });
+    } catch (error) {
+        logger.error('Error building WhatsApp invoice preview:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Gagal membuat preview WhatsApp: ' + error.message
         });
     }
 });
@@ -12427,7 +13551,8 @@ router.post('/api/customers/:id/assign-collector', adminAuth, async (req, res) =
                 
                 // If collector_id is provided, insert new assignment
                 if (collector_id) {
-                    db.run('INSERT INTO collector_assignments (collector_id, customer_id) VALUES (?, ?)', [collector_id, id], (err) => {
+                    const tenantIdForRow = billingManager._resolveTenantIdForInsert();
+                    db.run('INSERT INTO collector_assignments (collector_id, customer_id, tenant_id) VALUES (?, ?, ?)', [collector_id, id, tenantIdForRow], (err) => {
                         if (err) reject(err);
                         else resolve();
                     });

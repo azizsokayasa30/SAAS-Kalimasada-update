@@ -17,6 +17,7 @@ const DEFAULT_CONFIG = {
     enabled: true,
     base_domain: getTenantBaseDomain(),
     central_subdomain: process.env.KALIMASADA_CENTRAL_SUBDOMAIN || 'manage',
+    mobile_api_subdomain: process.env.KALIMASADA_MOBILE_API_SUBDOMAIN || 'mobile',
     upstream_host: '127.0.0.1',
     upstream_port: Number(process.env.PORT) || 4555,
     listen_port: 80,
@@ -35,6 +36,9 @@ const DEFAULT_CONFIG = {
     last_applied_at: null,
     last_apply_message: null,
     last_apply_ok: null,
+    /** Apex domain (kalimasada-app.com) untuk website statis, bukan billing/SaaS */
+    apex_reserved_for_web: true,
+    apex_web_root: '/var/www/kalimasada-web',
 };
 
 function ensureDataDir() {
@@ -96,7 +100,11 @@ async function fetchActiveTenantSubdomains() {
 function buildServerNames(cfg, tenantSubdomains = []) {
     const base = sanitizeDomain(cfg.base_domain) || 'kalimasada-app.com';
     const central = String(cfg.central_subdomain || 'manage').toLowerCase().trim();
-    const names = new Set([base, `*.${base}`, `${central}.${base}`]);
+    const mobileApi = String(cfg.mobile_api_subdomain || 'mobile').toLowerCase().trim();
+    const names = new Set([`*.${base}`, `${central}.${base}`, `${mobileApi}.${base}`]);
+    if (!cfg.apex_reserved_for_web) {
+        names.add(base);
+    }
     (tenantSubdomains || cfg.tenant_subdomains || []).forEach((sub) => {
         const s = String(sub || '').toLowerCase().trim();
         if (s) names.add(`${s}.${base}`);
@@ -161,7 +169,9 @@ function parseManualSubdomains(raw) {
 function getMergedSubdomainsForNginx(cfg, tenantSubs = []) {
     const manual = (cfg.manual_subdomains || []).map(sanitizeSubdomainSlug).filter(Boolean);
     const fromTenants = (tenantSubs || []).map(sanitizeSubdomainSlug).filter(Boolean);
-    return [...new Set([...fromTenants, ...manual])];
+    const mobileApi = sanitizeSubdomainSlug(cfg.mobile_api_subdomain || 'mobile');
+    const reserved = mobileApi ? [mobileApi] : [];
+    return [...new Set([...fromTenants, ...manual, ...reserved])];
 }
 
 function resolveProxyHostname(entry, base) {
@@ -235,6 +245,65 @@ function buildAcmeChallengeBlock() {
         default_type "text/plain";
         try_files $uri =404;
     }`;
+}
+
+function buildApexWebServerBlock(cfg, sslReady) {
+    if (!cfg.apex_reserved_for_web) return '';
+    const base = sanitizeDomain(cfg.base_domain) || 'kalimasada-app.com';
+    const apexNames = `${base} www.${base}`;
+    const webRoot = String(cfg.apex_web_root || '/var/www/kalimasada-web').trim();
+    const listen = Number(cfg.listen_port) || 80;
+    const lines = [];
+
+    lines.push('# Website utama (apex domain) — bukan layanan billing/SaaS');
+    if (sslReady) {
+        const sslCheck = getSslCertPaths(cfg);
+        lines.push('server {');
+        lines.push('    listen 443 ssl http2;');
+        lines.push('    listen [::]:443 ssl http2;');
+        lines.push(`    server_name ${apexNames};`);
+        lines.push(`    ssl_certificate ${sslCheck.certPath};`);
+        lines.push(`    ssl_certificate_key ${sslCheck.keyPath};`);
+        lines.push('    ssl_protocols TLSv1.2 TLSv1.3;');
+        lines.push('    ssl_prefer_server_ciphers on;');
+        lines.push(`    root ${webRoot};`);
+        lines.push('    index index.html;');
+        lines.push('');
+        lines.push(buildAcmeChallengeBlock());
+        lines.push('');
+        lines.push('    location / {');
+        lines.push('        try_files $uri $uri/ /index.html;');
+        lines.push('    }');
+        lines.push('}');
+        lines.push('');
+        lines.push('server {');
+        lines.push('    listen 80;');
+        lines.push('    listen [::]:80;');
+        lines.push(`    server_name ${apexNames};`);
+        lines.push('');
+        lines.push(buildAcmeChallengeBlock());
+        lines.push('');
+        lines.push('    location / {');
+        lines.push('        return 301 https://$host$request_uri;');
+        lines.push('    }');
+        lines.push('}');
+    } else {
+        lines.push('server {');
+        lines.push(`    listen ${listen};`);
+        lines.push(`    listen [::]:${listen};`);
+        lines.push(`    server_name ${apexNames};`);
+        lines.push(`    root ${webRoot};`);
+        lines.push('    index index.html;');
+        lines.push('');
+        lines.push(buildAcmeChallengeBlock());
+        lines.push('');
+        lines.push('    location / {');
+        lines.push('        try_files $uri $uri/ /index.html;');
+        lines.push('    }');
+        lines.push('}');
+    }
+    lines.push('');
+    return lines.join('\n');
 }
 
 function buildLanIpServerBlock(cfg, upstreamName) {
@@ -440,6 +509,7 @@ function generateNginxConfig(cfg, tenantSubdomains) {
     lines.push('');
     lines.push('# Routing:');
     lines.push(`#   ${central}.${base}  → Management Portal`);
+    lines.push(`#   ${String(cfg.mobile_api_subdomain || 'mobile').toLowerCase()}.${base}  → Mobile API hub`);
     subs.forEach((sub) => {
         lines.push(`#   ${sub}.${base}  → Tenant: ${sub} (lokal ${host}:${port})`);
     });
@@ -447,7 +517,11 @@ function generateNginxConfig(cfg, tenantSubdomains) {
         lines.push(`#   ${p.hostname}  → Eksternal ${p.upstream_host}:${p.upstream_port}`);
     });
     lines.push(`#   *.${base}         → Wildcard (tenant baru otomatis)`);
-    lines.push(`#   ${base}           → Apex domain`);
+    if (cfg.apex_reserved_for_web) {
+        lines.push(`#   ${base}           → Website utama (statis, bukan SaaS)`);
+    } else {
+        lines.push(`#   ${base}           → Apex domain`);
+    }
     if (cfg.server_ip && cfg.lan_access_enabled !== false) {
         lines.push(`#   http://${cfg.server_ip}/     → Akses LAN (IP langsung)`);
         lines.push(`#   http://${cfg.server_ip}:${port}/  → Node langsung (tanpa nginx)`);
@@ -457,6 +531,12 @@ function generateNginxConfig(cfg, tenantSubdomains) {
     if (customProxyBlocks) {
         lines.push('');
         lines.push(customProxyBlocks.trimEnd());
+    }
+
+    const apexWebBlock = buildApexWebServerBlock(cfg, sslReady);
+    if (apexWebBlock) {
+        lines.push('');
+        lines.push(apexWebBlock.trimEnd());
     }
 
     const lanBlock = buildLanIpServerBlock(cfg, upstreamName);
@@ -495,10 +575,12 @@ async function expandSslForSubdomains(cfg, mergedSubdomains) {
     }
     const base = sanitizeDomain(cfg.base_domain) || 'kalimasada-app.com';
     const central = String(cfg.central_subdomain || 'manage').toLowerCase();
+    const mobileApi = String(cfg.mobile_api_subdomain || 'mobile').toLowerCase();
     const subs = [...new Set([
         ...(mergedSubdomains || []).filter((s) => s && s !== central),
+        mobileApi,
         ...getCustomProxySslSubdomains(cfg),
-    ])];
+    ].filter((s) => s && s !== central))];
     try {
         const { stdout, stderr } = await execFileAsync(expandScript, [
             base,
@@ -633,6 +715,7 @@ function getTenantProxyEntries(tenants, cfg) {
     const base = sanitizeDomain(cfg.base_domain) || 'kalimasada-app.com';
     const scheme = isSslReady(cfg) ? 'https' : 'http';
     const central = String(cfg.central_subdomain || 'manage').toLowerCase();
+    const mobileApi = String(cfg.mobile_api_subdomain || 'mobile').toLowerCase();
     const entries = [
         {
             label: 'Management Portal',
@@ -641,8 +724,15 @@ function getTenantProxyEntries(tenants, cfg) {
             url: `${scheme}://${central}.${base}/management`,
             type: 'central',
         },
+        {
+            label: 'Mobile API',
+            subdomain: mobileApi,
+            hostname: `${mobileApi}.${base}`,
+            url: `${scheme}://${mobileApi}.${base}/api/public/tenants`,
+            type: 'mobile-api',
+        },
     ];
-    const seen = new Set([central]);
+    const seen = new Set([central, mobileApi]);
     (tenants || []).forEach((t) => {
         if (!t.subdomain) return;
         seen.add(t.subdomain);
@@ -833,6 +923,7 @@ function getDnsInstructions(cfg) {
         { type: 'A', host: '@', value: publicIp, note: `Apex ${base}` },
         { type: 'A', host: '*', value: publicIp, note: `Wildcard tenant (*.${base})` },
         { type: 'A', host: cfg.central_subdomain || 'manage', value: publicIp, note: 'Management portal' },
+        { type: 'A', host: cfg.mobile_api_subdomain || 'mobile', value: publicIp, note: 'Mobile API hub (Flutter)' },
         { type: 'hosts', host: `*.${base}`, value: lanIp, note: 'Testing LAN (file hosts di PC)' },
     ];
 }

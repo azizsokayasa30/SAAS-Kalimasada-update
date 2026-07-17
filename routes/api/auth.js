@@ -55,6 +55,28 @@ function generateOTP(phone) {
     return otp;
 }
 
+/**
+ * Tenant aktif saat login/API (dari resolveTenant → ALS / req.tenant).
+ */
+function resolveLoginTenant(req) {
+    if (hasTenantContext()) return getTenant();
+    return req.tenant || null;
+}
+
+function tenantClaims(tenant) {
+    if (!tenant?.id) return {};
+    return {
+        tenantId: tenant.id,
+        tenant: tenant.subdomain || null,
+    };
+}
+
+function userMatchesTenant(row, tenant) {
+    if (!tenant?.id || !row) return false;
+    if (row.tenant_id == null || row.tenant_id === '') return false;
+    return Number(row.tenant_id) === Number(tenant.id);
+}
+
 // Middleware to verify JWT Token
 const verifyToken = (req, res, next) => {
     const token = req.headers['authorization']?.split(' ')[1];
@@ -68,6 +90,18 @@ const verifyToken = (req, res, next) => {
             return res.status(403).json({ success: false, message: 'Failed to authenticate token' });
         }
         req.user = decoded;
+
+        // Isolasi multi-tenant: JWT tidak boleh dipakai lintas tenant (X-Tenant / host).
+        const jwtTenantId = decoded?.tenantId;
+        const reqTenantId = req.tenantId ?? (hasTenantContext() ? getTenant()?.id : null);
+        if (jwtTenantId != null && reqTenantId != null
+            && Number(jwtTenantId) !== Number(reqTenantId)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Sesi tidak berlaku untuk tenant ini. Silakan login ulang.',
+                code: 'TENANT_MISMATCH',
+            });
+        }
         next();
     });
 };
@@ -79,6 +113,14 @@ router.post('/request-otp', async (req, res) => {
     if (!phone) {
         return res.status(400).json({ success: false, message: 'Nomor telepon harus diisi' });
     }
+
+    const tenant = resolveLoginTenant(req);
+    if (!tenant?.id) {
+        return res.status(400).json({
+            success: false,
+            message: 'Kode tenant wajib (header X-Tenant / body.tenant).',
+        });
+    }
     
     const normPhone = normalizePhone(phone);
     const variants = [normPhone, '+' + normPhone, '0' + normPhone.slice(2)];
@@ -88,12 +130,14 @@ router.post('/request-otp', async (req, res) => {
         // Check if phone exists as Customer or Member (Technicians use password only now)
         const user = await new Promise((resolve, reject) => {
             const sql = `
-                SELECT 'customer' as type FROM customers WHERE phone IN (${placeholders}) AND status = 'active'
+                SELECT 'customer' as type FROM customers
+                 WHERE phone IN (${placeholders}) AND status = 'active' AND tenant_id = ?
                 UNION
-                SELECT 'member' as type FROM members WHERE phone IN (${placeholders}) AND status = 'active'
+                SELECT 'member' as type FROM members
+                 WHERE phone IN (${placeholders}) AND status = 'active' AND tenant_id = ?
                 LIMIT 1
             `;
-            db.get(sql, [...variants, ...variants], (err, row) => {
+            db.get(sql, [...variants, tenant.id, ...variants, tenant.id], (err, row) => {
                 if (err) reject(err);
                 else resolve(row);
             });
@@ -128,6 +172,15 @@ router.post('/request-otp', async (req, res) => {
 // API: POST /api/auth/login
 router.post('/login', async (req, res) => {
     const { username, password, otp, phone, role } = req.body;
+    const tenant = resolveLoginTenant(req);
+
+    // Field/mobile login wajib terikat tenant (cegah kebocoran lintas tenant).
+    if (!tenant?.id) {
+        return res.status(400).json({
+            success: false,
+            message: 'Kode tenant wajib (header X-Tenant / body.tenant).',
+        });
+    }
     
     // 1. Check Admin — gunakan settings tenant (sama seperti /login web),
     // bukan settings.json global, supaya password per-tenant (mis. tenant1) valid.
@@ -138,16 +191,13 @@ router.post('/login', async (req, res) => {
         const inputPass = String(password || '').trim();
 
         if (inputUser === adminUsername && inputPass === adminPassword) {
-            const tenant = hasTenantContext() ? getTenant() : (req.tenant || null);
+            const claims = tenantClaims(tenant);
             const tokenPayload = {
                 id: 'admin',
                 username: adminUsername,
                 role: 'admin',
+                ...claims,
             };
-            if (tenant?.id) {
-                tokenPayload.tenantId = tenant.id;
-                tokenPayload.tenant = tenant.subdomain;
-            }
             const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '24h' });
             return res.json({
                 success: true,
@@ -156,8 +206,8 @@ router.post('/login', async (req, res) => {
                     id: 'admin',
                     username: adminUsername,
                     role: 'admin',
-                    tenant: tenant?.subdomain || null,
-                    tenantId: tenant?.id || null,
+                    tenant: tenant.subdomain || null,
+                    tenantId: tenant.id,
                 },
             });
         }
@@ -165,18 +215,29 @@ router.post('/login', async (req, res) => {
 
     // 2. Check Password-based roles (Collector, Agent)
     if (!otp) {
-        // Try Collector
+        // Try Collector — harus milik tenant yang dipilih
         if (!role || role === 'collector') {
             const collector = await new Promise((resolve) => {
-                db.get('SELECT * FROM collectors WHERE (phone = ? OR email = ?) AND status = "active"', [username || phone, username || phone], (err, row) => {
-                    resolve(row);
-                });
+                db.get(
+                    'SELECT * FROM collectors WHERE (phone = ? OR email = ?) AND status = "active" AND tenant_id = ?',
+                    [username || phone, username || phone, tenant.id],
+                    (err, row) => resolve(row)
+                );
             });
 
-            if (collector && collector.password && bcrypt.compareSync(password, collector.password)) {
+            if (collector && userMatchesTenant(collector, tenant)
+                && collector.password && bcrypt.compareSync(password, collector.password)) {
+                const claims = tenantClaims(tenant);
                 const token = jwt.sign(
-                    { id: collector.id, username: collector.phone, phone: collector.phone, name: collector.name, role: 'collector' }, 
-                    JWT_SECRET, 
+                    {
+                        id: collector.id,
+                        username: collector.phone,
+                        phone: collector.phone,
+                        name: collector.name,
+                        role: 'collector',
+                        ...claims,
+                    },
+                    JWT_SECRET,
                     { expiresIn: '24h' }
                 );
                 const userPayload = {
@@ -184,7 +245,9 @@ router.post('/login', async (req, res) => {
                     name: collector.name,
                     role: 'collector',
                     phone: collector.phone,
-                    email: collector.email || null
+                    email: collector.email || null,
+                    tenant: tenant.subdomain || null,
+                    tenantId: tenant.id,
                 };
                 const photoRel = collector.photo_path || collector.foto_path || null;
                 if (photoRel) {
@@ -200,12 +263,34 @@ router.post('/login', async (req, res) => {
                 const result = await agentManager.authenticateAgent(username || phone, password);
                 if (result.success) {
                     const agent = result.agent;
-                    const token = jwt.sign(
-                        { id: agent.id, username: agent.username, phone: agent.phone || agent.username, name: agent.name, role: 'agent' }, 
-                        JWT_SECRET, 
-                        { expiresIn: '24h' }
-                    );
-                    return res.json({ success: true, token, user: { id: agent.id, name: agent.name, role: 'agent' } });
+                    if (agent.tenant_id != null && Number(agent.tenant_id) !== Number(tenant.id)) {
+                        // Agent milik tenant lain — jangan izinkan
+                    } else {
+                        const claims = tenantClaims(tenant);
+                        const token = jwt.sign(
+                            {
+                                id: agent.id,
+                                username: agent.username,
+                                phone: agent.phone || agent.username,
+                                name: agent.name,
+                                role: 'agent',
+                                ...claims,
+                            },
+                            JWT_SECRET,
+                            { expiresIn: '24h' }
+                        );
+                        return res.json({
+                            success: true,
+                            token,
+                            user: {
+                                id: agent.id,
+                                name: agent.name,
+                                role: 'agent',
+                                tenant: tenant.subdomain || null,
+                                tenantId: tenant.id,
+                            },
+                        });
+                    }
                 }
             } catch (e) {}
         }
@@ -220,15 +305,24 @@ router.post('/login', async (req, res) => {
             const techPh = techVariants.map(() => '?').join(',');
             const technician = await new Promise((resolve) => {
                 db.get(
-                    `SELECT * FROM technicians WHERE phone IN (${techPh}) AND is_active = 1`,
-                    techVariants,
+                    `SELECT * FROM technicians WHERE phone IN (${techPh}) AND is_active = 1 AND tenant_id = ?`,
+                    [...techVariants, tenant.id],
                     (err, row) => resolve(row)
                 );
             });
 
-            if (technician && technician.password && bcrypt.compareSync(password, technician.password)) {
+            if (technician && userMatchesTenant(technician, tenant)
+                && technician.password && bcrypt.compareSync(password, technician.password)) {
+                const claims = tenantClaims(tenant);
                 const token = jwt.sign(
-                    { id: technician.id, username: technician.phone, phone: technician.phone, name: technician.name, role: 'technician' },
+                    {
+                        id: technician.id,
+                        username: technician.phone,
+                        phone: technician.phone,
+                        name: technician.name,
+                        role: 'technician',
+                        ...claims,
+                    },
                     JWT_SECRET,
                     { expiresIn: '24h' }
                 );
@@ -243,7 +337,9 @@ router.post('/login', async (req, res) => {
                     notes: technician.notes || '',
                     whatsapp_group_id: technician.whatsapp_group_id || null,
                     join_date: technician.join_date || null,
-                    last_login: technician.last_login || null
+                    last_login: technician.last_login || null,
+                    tenant: tenant.subdomain || null,
+                    tenantId: tenant.id,
                 };
                 let photoRel = null;
                 try {
@@ -267,37 +363,81 @@ router.post('/login', async (req, res) => {
             const placeholders = variants.map(() => '?').join(',');
 
             const customer = await new Promise((resolve) => {
-                db.get(`SELECT * FROM customers WHERE (username = ? OR phone IN (${placeholders}) OR customer_id = ?) AND status = 'active'`,
-                    [username || phone, ...variants, username || phone], (err, row) => resolve(row));
+                db.get(
+                    `SELECT * FROM customers WHERE (username = ? OR phone IN (${placeholders}) OR customer_id = ?) AND status = 'active' AND tenant_id = ?`,
+                    [username || phone, ...variants, username || phone, tenant.id],
+                    (err, row) => resolve(row)
+                );
             });
 
-            if (customer && customer.password && bcrypt.compareSync(password, customer.password)) {
+            if (customer && userMatchesTenant(customer, tenant)
+                && customer.password && bcrypt.compareSync(password, customer.password)) {
+                const claims = tenantClaims(tenant);
                 const token = jwt.sign(
-                    { id: customer.id, username: customer.username, phone: customer.phone, name: customer.name, role: 'customer' },
+                    {
+                        id: customer.id,
+                        username: customer.username,
+                        phone: customer.phone,
+                        name: customer.name,
+                        role: 'customer',
+                        ...claims,
+                    },
                     JWT_SECRET,
                     { expiresIn: '24h' }
                 );
-                return res.json({ success: true, token, user: { id: customer.id, name: customer.name, role: 'customer' } });
+                return res.json({
+                    success: true,
+                    token,
+                    user: {
+                        id: customer.id,
+                        name: customer.name,
+                        role: 'customer',
+                        tenant: tenant.subdomain || null,
+                        tenantId: tenant.id,
+                    },
+                });
             }
 
             // Try Member (password login)
             const member = await new Promise((resolve) => {
-                db.get(`SELECT * FROM members WHERE (username = ? OR phone IN (${placeholders}) OR hotspot_username = ?) AND status = 'active'`,
-                    [username || phone, ...variants, username || phone], (err, row) => resolve(row));
+                db.get(
+                    `SELECT * FROM members WHERE (username = ? OR phone IN (${placeholders}) OR hotspot_username = ?) AND status = 'active' AND tenant_id = ?`,
+                    [username || phone, ...variants, username || phone, tenant.id],
+                    (err, row) => resolve(row)
+                );
             });
 
-            if (member && member.password && bcrypt.compareSync(password, member.password)) {
+            if (member && userMatchesTenant(member, tenant)
+                && member.password && bcrypt.compareSync(password, member.password)) {
+                const claims = tenantClaims(tenant);
                 const token = jwt.sign(
-                    { id: member.id, username: member.username, phone: member.phone, name: member.name, role: 'member' },
+                    {
+                        id: member.id,
+                        username: member.username,
+                        phone: member.phone,
+                        name: member.name,
+                        role: 'member',
+                        ...claims,
+                    },
                     JWT_SECRET,
                     { expiresIn: '24h' }
                 );
-                return res.json({ success: true, token, user: { id: member.id, name: member.name, role: 'member' } });
+                return res.json({
+                    success: true,
+                    token,
+                    user: {
+                        id: member.id,
+                        name: member.name,
+                        role: 'member',
+                        tenant: tenant.subdomain || null,
+                        tenantId: tenant.id,
+                    },
+                });
             }
         }
     }
 
-    // 3. Check OTP-based roles (Technician, Customer, Member)
+    // 3. Check OTP-based roles (Customer, Member)
     if (otp && (phone || username)) {
         const targetPhone = normalizePhone(phone || username);
         const stored = otpStore[targetPhone];
@@ -312,24 +452,44 @@ router.post('/login', async (req, res) => {
         const variants = [targetPhone, '+' + targetPhone, '0' + targetPhone.slice(2)];
         const placeholders = variants.map(() => '?').join(',');
 
-        // Find which role this phone belongs to
+        // Find which role this phone belongs to (scoped ke tenant)
         const user = await new Promise((resolve) => {
             const sql = `
-                SELECT id, name, phone, 'customer' as role FROM customers WHERE phone IN (${placeholders}) AND status = 'active'
+                SELECT id, name, phone, 'customer' as role, tenant_id FROM customers
+                 WHERE phone IN (${placeholders}) AND status = 'active' AND tenant_id = ?
                 UNION
-                SELECT id, name, phone, 'member' as role FROM members WHERE phone IN (${placeholders}) AND status = 'active'
+                SELECT id, name, phone, 'member' as role, tenant_id FROM members
+                 WHERE phone IN (${placeholders}) AND status = 'active' AND tenant_id = ?
                 LIMIT 1
             `;
-            db.get(sql, [...variants, ...variants], (err, row) => resolve(row));
+            db.get(sql, [...variants, tenant.id, ...variants, tenant.id], (err, row) => resolve(row));
         });
 
-        if (user) {
+        if (user && userMatchesTenant(user, tenant)) {
+            const claims = tenantClaims(tenant);
             const token = jwt.sign(
-                { id: user.id, username: user.phone, phone: user.phone, name: user.name, role: user.role }, 
-                JWT_SECRET, 
+                {
+                    id: user.id,
+                    username: user.phone,
+                    phone: user.phone,
+                    name: user.name,
+                    role: user.role,
+                    ...claims,
+                },
+                JWT_SECRET,
                 { expiresIn: '24h' }
             );
-            return res.json({ success: true, token, user: { id: user.id, name: user.name, role: user.role } });
+            return res.json({
+                success: true,
+                token,
+                user: {
+                    id: user.id,
+                    name: user.name,
+                    role: user.role,
+                    tenant: tenant.subdomain || null,
+                    tenantId: tenant.id,
+                },
+            });
         }
     }
 

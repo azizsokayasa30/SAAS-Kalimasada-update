@@ -69,7 +69,7 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
         </div>
         
         <!-- PELANGGAN BILLING -->
-        <% const billingCustomerPages = ['customers', 'packages', 'member-data', 'member-packages', 'areas', 'collector-areas', 'service-suspension']; %>
+        <% const billingCustomerPages = ['customers', 'packages', 'areas', 'collector-areas', 'service-suspension']; %>
         <% const billingCustomerExpanded = typeof page !== 'undefined' && billingCustomerPages.includes(page); %>
         <div class="sb-section">
             <div class="sb-section-title sb-collapsible"
@@ -85,7 +85,7 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
             <div class="collapse <%= billingCustomerExpanded ? 'show' : '' %>" id="billingCustomerCollapse">
                 <a href="/admin/billing/customers" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'customers' ? 'active' : '' %>">
                     <i class="bi bi-person"></i>
-                    <span class="sb-item-text">Pelanggan PPPoE</span>
+                    <span class="sb-item-text">Pelanggan PPPoE + IP</span>
                 </a>
                 <a href="/admin/billing/areas" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'areas' ? 'active' : '' %>">
                     <i class="bi bi-geo-alt-fill"></i>
@@ -97,19 +97,11 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
                 </a>
                 <a href="/admin/billing/packages" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'packages' ? 'active' : '' %>">
                     <i class="bi bi-box-seam"></i>
-                    <span class="sb-item-text">Paket PPPoE</span>
-                </a>
-                <a href="/admin/member/data" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'member-data' ? 'active' : '' %>">
-                    <i class="bi bi-person-check"></i>
-                    <span class="sb-item-text">Pelanggan Member</span>
-                </a>
-                <a href="/admin/member/packages" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'member-packages' ? 'active' : '' %>">
-                    <i class="bi bi-box-seam"></i>
-                    <span class="sb-item-text">Paket Member</span>
+                    <span class="sb-item-text">Paket internet</span>
                 </a>
                 <a href="/admin/billing/service-suspension" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'service-suspension' ? 'active' : '' %>">
                     <i class="bi bi-pause-circle"></i>
-                    <span class="sb-item-text">Penangguhan Layanan</span>
+                    <span class="sb-item-text">Penangguhan/Isolir</span>
                 </a>
             </div>
         </div>

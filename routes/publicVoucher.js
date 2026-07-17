@@ -4,30 +4,34 @@ const { getHotspotProfiles } = require('../config/mikrotik');
 const { getSettingsWithCache } = require('../config/settingsManager');
 const billingManager = require('../config/billing');
 const logger = require('../config/logger');
+const { hasTenantContext, getTenantId } = require('../config/platform/tenantContext');
 
 // Helper function untuk mendapatkan customer_id voucher publik
 async function getVoucherCustomerId() {
     const sqlite3 = require('sqlite3').verbose();
     const db = new sqlite3.Database('./data/billing.db');
+    const tenantId = hasTenantContext() ? getTenantId() : 1;
 
     return new Promise((resolve, reject) => {
-        db.get('SELECT id FROM customers WHERE username = ?', ['voucher_public'], (err, row) => {
+        db.get(
+            'SELECT id FROM customers WHERE username = ? AND tenant_id = ?',
+            ['voucher_public', tenantId],
+            (err, row) => {
             if (err) {
                 reject(err);
             } else if (row) {
                 resolve(row.id);
             } else {
-                // Jika tidak ada, buat customer voucher baru dengan ID yang aman (1021)
+                // Jika tidak ada, buat customer voucher baru per-tenant
                 db.run(`
-                    INSERT INTO customers (id, username, name, phone, email, address, package_id, status, join_date, 
+                    INSERT INTO customers (username, name, phone, email, address, package_id, status, join_date, 
                                           pppoe_username, pppoe_profile, auto_suspension, billing_day, 
-                                          latitude, longitude, created_by_technician_id, static_ip, mac_address, assigned_ip)
+                                          latitude, longitude, created_by_technician_id, static_ip, mac_address, assigned_ip, tenant_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `, [
-                    1021, // ID yang aman, jauh dari range billing (1000+)
                     'voucher_public', 'Voucher Publik', '0000000000', 'voucher@public.com', 'Sistem Voucher Publik',
                     1, 'active', new Date().toISOString(), 'voucher_public', 'voucher', 0, 1,
-                    0, 0, null, null, null, null
+                    0, 0, null, null, null, null, tenantId
                 ], function(err) {
                     if (err) reject(err);
                     else resolve(this.lastID);
@@ -349,10 +353,11 @@ router.post('/purchase', async (req, res) => {
             // Insert invoice secara manual dengan package_id yang sesuai dengan voucher package
             let invoiceDbId;
             const voucherCustomerId = await getVoucherCustomerId();
+            const tenantId = hasTenantContext() ? getTenantId() : 1;
             await new Promise((resolve, reject) => {
-                const sql = `INSERT INTO invoices (customer_id, invoice_number, amount, status, created_at, due_date, notes, package_id, package_name, invoice_type)
-                           VALUES (?, ?, ?, 'pending', datetime('now','localtime'), ?, ?, ?, ?, 'voucher')`;
-                db.run(sql, [voucherCustomerId, invoiceId, totalAmount, dueDate, `Voucher Hotspot ${selectedPackage.name} x${quantity}`, 1, selectedPackage.name], function(err) {
+                const sql = `INSERT INTO invoices (customer_id, invoice_number, amount, status, created_at, due_date, notes, package_id, package_name, invoice_type, tenant_id)
+                           VALUES (?, ?, ?, 'pending', datetime('now','localtime'), ?, ?, ?, ?, 'voucher', ?)`;
+                db.run(sql, [voucherCustomerId, invoiceId, totalAmount, dueDate, `Voucher Hotspot ${selectedPackage.name} x${quantity}`, 1, selectedPackage.name, tenantId], function(err) {
                     if (err) reject(err);
                     else {
                         invoiceDbId = this.lastID;

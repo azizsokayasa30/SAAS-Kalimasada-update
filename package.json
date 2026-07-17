@@ -15,6 +15,7 @@
     "pm2:logs": "pm2 logs billing-kalimasada",
     "doctor:process": "node scripts/doctor-process.js",
     "radius:check": "node scripts/radius-consistency-check.js",
+    "radius:prep-verify": "bash scripts/verify-radius-manager-prep.sh",
     "radius:optimize-sqlite": "node scripts/optimize-radius-sqlite.js",
     "radius:optimize-freeradius": "bash scripts/optimize-freeradius-mass-auth.sh",
     "radius:fix-contention": "node scripts/fix-radius-sqlite-contention.js --yes",

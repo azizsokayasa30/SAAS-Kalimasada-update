@@ -387,14 +387,34 @@ let whatsappStatus = {
 
 function resetWhatsAppSessionDirectory(sessionDir) {
     try {
-        if (fs.existsSync(sessionDir)) {
+        const { getBaseSessionPath } = require('./baileys-config');
+        const base = getBaseSessionPath();
+        const resolved = path.resolve(sessionDir);
+        // Jangan pernah wipe seluruh base jika berisi tenant-* — hanya file legacy
+        if (resolved === path.resolve(base)) {
+            if (!fs.existsSync(base)) {
+                fs.mkdirSync(base, { recursive: true });
+            } else {
+                for (const ent of fs.readdirSync(base, { withFileTypes: true })) {
+                    if (ent.name.startsWith('tenant-')) continue;
+                    fs.rmSync(path.join(base, ent.name), { recursive: true, force: true });
+                }
+            }
+            console.warn(`🧹 Direktori sesi WhatsApp legacy dibersihkan (tenant-* dipertahankan): ${sessionDir}`);
+        } else if (fs.existsSync(sessionDir)) {
             fs.rmSync(sessionDir, { recursive: true, force: true });
             console.warn(`🧹 Direktori sesi WhatsApp dibersihkan: ${sessionDir}`);
+            fs.mkdirSync(sessionDir, { recursive: true });
+        } else {
+            fs.mkdirSync(sessionDir, { recursive: true });
         }
-        fs.mkdirSync(sessionDir, { recursive: true });
     } catch (error) {
         console.error(`Gagal mengatur ulang direktori sesi WhatsApp (${sessionDir}):`, error);
     }
+    try {
+        const { clearOwnerTenantId } = require('./baileys-session-owner');
+        clearOwnerTenantId('session_reset');
+    } catch (_) { /* optional */ }
 }
 
 // Fungsi untuk set instance sock
@@ -534,7 +554,16 @@ function addWatermarkToMessage(message) {
 }
 
 // Update fungsi koneksi WhatsApp dengan penanganan error yang lebih baik
-async function connectToWhatsApp() {
+async function connectToWhatsApp(tenantId = null) {
+    const tid = parseInt(tenantId, 10);
+    const normalizedTid = Number.isFinite(tid) && tid > 0 ? tid : null;
+
+    // Multi-tenant Baileys: sesi terpisah via registry
+    if (normalizedTid) {
+        const registry = require('./baileys-session-registry');
+        return registry.connect(normalizedTid);
+    }
+
     // Cegah multiple connection attempts
     if (isConnecting) {
         console.log('⚠️ Koneksi WhatsApp sedang dalam proses, skip...');
@@ -583,8 +612,9 @@ async function connectToWhatsApp() {
         console.log('Memulai koneksi WhatsApp...');
         await ensureBaileysLoaded();
         
-        // Pastikan direktori sesi ada
-        const sessionDir = getSetting('whatsapp_session_path', './whatsapp-session');
+        // Pastikan direktori sesi ada (legacy root — jangan pakai tenant-*)
+        const { getBaseSessionPath } = require('./baileys-config');
+        const sessionDir = getBaseSessionPath();
         if (!fs.existsSync(sessionDir)) {
             try {
                 fs.mkdirSync(sessionDir, { recursive: true });
@@ -695,6 +725,14 @@ async function connectToWhatsApp() {
                 console.log('✅ WhatsApp terhubung!');
                 isConnecting = false; // Reset flag setelah connected
                 const connectedSince = new Date();
+
+                try {
+                    const { commitPendingOwnerOnConnect, getOwnerTenantId } = require('./baileys-session-owner');
+                    const owner = commitPendingOwnerOnConnect();
+                    console.log(`🔒 Baileys owner tenant: ${owner || getOwnerTenantId() || 'belum di-claim'}`);
+                } catch (ownerErr) {
+                    console.warn('⚠️ Gagal commit Baileys owner:', ownerErr.message);
+                }
                 
                 // Update status global
                 global.whatsappStatus = {
@@ -5054,8 +5092,15 @@ function encodeDeviceId(deviceId) {
 }
 
 // Fungsi untuk mendapatkan status WhatsApp
-function getWhatsAppStatus() {
+function getWhatsAppStatus(tenantId = null) {
     try {
+        const tid = parseInt(tenantId, 10);
+        const normalizedTid = Number.isFinite(tid) && tid > 0 ? tid : null;
+        if (normalizedTid) {
+            const registry = require('./baileys-session-registry');
+            return registry.getStatus(normalizedTid);
+        }
+
         // Gunakan global.whatsappStatus jika tersedia
         if (global.whatsappStatus) {
             return global.whatsappStatus;
@@ -5095,19 +5140,30 @@ function getWhatsAppStatus() {
 }
 
 // Fungsi untuk menghapus sesi WhatsApp
-async function deleteWhatsAppSession() {
+async function deleteWhatsAppSession(tenantId = null) {
     try {
-        const sessionDir = getSetting('whatsapp_session_path', './whatsapp-session');
-        const fs = require('fs');
-        
-        // Hapus direktori sesi secara rekursif agar aman untuk struktur multi-file/subfolder.
-        if (fs.existsSync(sessionDir)) {
-            fs.rmSync(sessionDir, { recursive: true, force: true });
-            console.log(`Direktori sesi WhatsApp dihapus: ${sessionDir}`);
+        const tid = parseInt(tenantId, 10);
+        const normalizedTid = Number.isFinite(tid) && tid > 0 ? tid : null;
+
+        if (normalizedTid) {
+            const registry = require('./baileys-session-registry');
+            await registry.deleteSession(normalizedTid);
+            setTimeout(() => {
+                connectToWhatsApp(normalizedTid).catch(() => {});
+            }, 2000);
+            return { success: true, message: `Sesi WhatsApp tenant ${normalizedTid} berhasil dihapus` };
         }
-        fs.mkdirSync(sessionDir, { recursive: true });
-        
-        console.log('Sesi WhatsApp berhasil dihapus');
+
+        const registry = require('./baileys-session-registry');
+        // Legacy: hapus file root saja, jangan hapus tenant-*
+        await registry.deleteSession(null);
+
+        console.log('Sesi WhatsApp legacy berhasil dihapus');
+
+        try {
+            const { clearOwnerTenantId } = require('./baileys-session-owner');
+            clearOwnerTenantId('session_deleted');
+        } catch (_) { /* optional */ }
         
         // Reset status
         global.whatsappStatus = {
@@ -5118,7 +5174,7 @@ async function deleteWhatsAppSession() {
             status: 'session_deleted'
         };
         
-        // Restart koneksi WhatsApp
+        // Restart koneksi WhatsApp legacy
         if (sock) {
             try {
                 sock.logout();

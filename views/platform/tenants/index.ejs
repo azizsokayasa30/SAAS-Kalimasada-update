@@ -24,12 +24,6 @@ tenants.forEach(function(t) {
       <h2>Kelola Tenant</h2>
       <p class="km-subtitle">Kelola unit operasional billing Kalimasada</p>
     </div>
-    <div class="d-flex flex-wrap gap-2">
-      <a href="#backup-restore" class="btn btn-outline-secondary btn-sm px-3">
-        <i class="bi bi-cloud-arrow-up me-1"></i> Backup &amp; Restore
-      </a>
-      <a href="/management/tenants/new" class="btn btn-km-primary btn-sm px-3"><i class="bi bi-plus-lg me-1"></i> Tambah Tenant</a>
-    </div>
   </div>
 
   <% if (flash && flash.success === 'deleted') { %>
@@ -51,6 +45,46 @@ tenants.forEach(function(t) {
     <div class="alert alert-danger"><%= flash.error %></div>
   <% } %>
 
+  <%
+    const statsFilters = typeof filters !== 'undefined' && filters ? filters : {};
+    const selectedMonth = statsFilters.month != null ? statsFilters.month : (new Date().getMonth() + 1);
+    const selectedYear = statsFilters.year != null ? Number(statsFilters.year) : new Date().getFullYear();
+    const periodLabel = statsFilters.label || '';
+    const monthNamesId = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+    const cyFilter = new Date().getFullYear();
+  %>
+  <div class="km-card km-card--toolbar mb-3">
+    <form method="GET" action="/management/tenants" class="km-tenant-toolbar">
+      <div class="km-tenant-toolbar__filters">
+        <select name="month" class="form-select form-select-sm" aria-label="Bulan" title="Bulan">
+          <option value="all" <%= String(selectedMonth) === 'all' ? 'selected' : '' %>>Satu tahun</option>
+          <% for (let m = 1; m <= 12; m++) { %>
+            <option value="<%= m %>" <%= String(selectedMonth) === String(m) ? 'selected' : '' %>><%= monthNamesId[m - 1] %></option>
+          <% } %>
+        </select>
+        <select name="year" class="form-select form-select-sm" aria-label="Tahun" title="Tahun">
+          <% for (let y = cyFilter - 3; y <= cyFilter + 1; y++) { %>
+            <option value="<%= y %>" <%= selectedYear === y ? 'selected' : '' %>><%= y %></option>
+          <% } %>
+        </select>
+        <button type="submit" class="btn btn-km-primary btn-sm" title="Filter statistik">
+          <i class="bi bi-funnel"></i><span class="km-tenant-toolbar__btn-text"> Filter</span>
+        </button>
+        <% if (periodLabel) { %>
+          <span class="km-tenant-toolbar__period"><%= periodLabel %></span>
+        <% } %>
+      </div>
+      <div class="km-tenant-toolbar__actions">
+        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#backupRestoreModal" title="Backup &amp; Restore">
+          <i class="bi bi-cloud-arrow-up"></i><span class="km-tenant-toolbar__btn-text"> Backup</span>
+        </button>
+        <a href="/management/tenants/new" class="btn btn-km-primary btn-sm" title="Tambah Tenant">
+          <i class="bi bi-plus-lg"></i><span class="km-tenant-toolbar__btn-text"> Tambah</span>
+        </a>
+      </div>
+    </form>
+  </div>
+
   <div class="km-card km-card--flush">
     <div class="table-responsive">
       <table class="table table-hover align-middle mb-0 km-tenant-table">
@@ -61,7 +95,7 @@ tenants.forEach(function(t) {
             <th rowspan="2">Subdomain</th>
             <th rowspan="2">Owner</th>
             <th colspan="4" class="km-th-group km-th-group--customers">Pelanggan</th>
-            <th colspan="4" class="km-th-group km-th-group--invoices">Tagihan</th>
+            <th colspan="4" class="km-th-group km-th-group--invoices">Tagihan <span class="fw-normal" style="opacity:.75;font-size:.75em">(<%= periodLabel %>)</span></th>
             <th rowspan="2" class="text-end km-tenant-table__actions-col">Aksi</th>
           </tr>
           <tr class="km-tenant-table__head-sub">
@@ -119,7 +153,7 @@ tenants.forEach(function(t) {
     <div class="km-report-summary__header">
       <div>
         <h5 class="km-report-summary__title">Ringkasan Keseluruhan</h5>
-        <p class="km-report-summary__subtitle">Total agregat dari <%= tenants.length %> tenant aktif</p>
+        <p class="km-report-summary__subtitle">Total agregat dari <%= tenants.length %> tenant aktif · periode <%= periodLabel %></p>
       </div>
       <span class="km-report-summary__badge"><%= tenants.length %> tenant</span>
     </div>
@@ -158,9 +192,9 @@ tenants.forEach(function(t) {
     </div>
   </section>
   <% } %>
-
-  <%- include('_backup-restore', { backups }) %>
 </main>
+
+<%- include('_backup-restore', { backups }) %>
 
 <% tenants.forEach(function(t) { %>
   <div class="modal fade km-modal" id="deleteModal-<%= t.id %>" tabindex="-1" aria-hidden="true">

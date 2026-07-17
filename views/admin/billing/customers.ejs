@@ -15,7 +15,7 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         .toast-container {
-            z-index: 9999;
+            z-index: 99999 !important;
         }
         .toast {
             min-width: 300px;
@@ -114,6 +114,14 @@
             background-color: #198754 !important;
             border-color: #198754 !important;
             color: #fff !important;
+        }
+        #addCustomerModal .connection-type-switch .btn {
+            font-weight: 500;
+        }
+        #addCustomerModal .connection-type-switch .btn-check:checked + .btn {
+            background-color: var(--bs-primary);
+            border-color: var(--bs-primary);
+            color: #fff;
         }
         #addCustomerModal .btn-save-create-task:hover {
             background-color: #157347 !important;
@@ -822,6 +830,7 @@
                                         <th>Telepon</th>
                                         <th>PPPoE Username</th>
                                         <th>Profil PPPoE</th>
+                                        <th>Static IP</th>
                                         <th>Paket</th>
                                         <th>Area</th>
                                         <th>Kolektor</th>
@@ -850,6 +859,14 @@
                                                 <td>
                                                     <% if (customer.pppoe_profile) { %>
                                                         <span class="badge bg-secondary"><%= customer.pppoe_profile %></span>
+                                                    <% } else { %>
+                                                        <span class="text-muted">-</span>
+                                                    <% } %>
+                                                </td>
+                                                <td>
+                                                    <% const listStaticIp = (customer.static_ip && String(customer.static_ip).trim()) || (customer.assigned_ip && String(customer.assigned_ip).trim()) || ''; %>
+                                                    <% if (listStaticIp) { %>
+                                                        <span class="badge bg-light text-dark" style="font-family: monospace; font-size: 0.85rem;"><%= listStaticIp %></span>
                                                     <% } else { %>
                                                         <span class="text-muted">-</span>
                                                     <% } %>
@@ -885,7 +902,7 @@
                                                         <button type="button" class="btn btn-sm btn-primary" onclick="editCustomer('<%= customer.phone %>')" title="Ubah data pelanggan" aria-label="Ubah pelanggan">
                                                             <i class="bi bi-pencil-fill"></i>
                                                         </button>
-                                                        <button type="button" class="btn btn-sm btn-success" onclick="sendWhatsAppNotification('<%= customer.phone %>', '<%= customer.name %>')" title="Kirim notifikasi tagihan lewat WhatsApp" aria-label="WhatsApp ke pelanggan">
+                                                        <button type="button" class="btn btn-sm btn-success" onclick="sendWhatsAppNotification('<%= customer.phone %>', '<%= customer.name %>')" title="Kirim WA welcome pelanggan baru" aria-label="WhatsApp welcome pelanggan">
                                                             <i class="bi bi-whatsapp"></i>
                                                         </button>
                                                         <button type="button" class="btn btn-sm btn-danger" onclick="deleteCustomer('<%= customer.id %>')" title="Hapus pelanggan dari sistem" aria-label="Hapus pelanggan">
@@ -1072,6 +1089,20 @@
                             <input type="email" class="form-control" id="email" name="email" placeholder="Akan otomatis terisi dari nama (contoh: Test@cvlmedia.my.id)">
                             <small class="form-text text-muted">Email akan digunakan untuk notifikasi. Jika kosong, format otomatis: namapelanggan@gmail.com</small>
                         </div>
+                        <div class="mb-3" id="addConnectionTypeBlock">
+                            <label class="form-label d-block">Tipe koneksi</label>
+                            <div class="btn-group w-100 connection-type-switch" role="group" aria-label="Tipe koneksi pelanggan">
+                                <input type="radio" class="btn-check" name="connection_type" id="connection_type_pppoe" value="pppoe" checked autocomplete="off">
+                                <label class="btn btn-outline-primary" for="connection_type_pppoe">
+                                    <i class="bi bi-router me-1"></i> PPPoE
+                                </label>
+                                <input type="radio" class="btn-check" name="connection_type" id="connection_type_static" value="static_ip" autocomplete="off">
+                                <label class="btn btn-outline-primary" for="connection_type_static">
+                                    <i class="bi bi-hdd-network me-1"></i> IP Statik
+                                </label>
+                            </div>
+                            <small class="form-text text-muted">Pilih salah satu: akun PPPoE atau pelanggan dengan IP tetap.</small>
+                        </div>
                         <div id="addCustomerPppoeBlock">
                         <div class="mb-3">
                             <label for="pppoe_username" class="form-label">PPPoE Username (opsional)</label>
@@ -1104,38 +1135,23 @@
                         </div>
                         </div><!-- /addCustomerPppoeBlock -->
                         
-                        <!-- IP statik: default off -->
-                        <div class="card border-secondary mb-3" id="add_static_ip_card">
-                            <div class="card-header bg-light py-2 d-flex flex-wrap justify-content-between align-items-center gap-2">
-                                <div>
-                                    <h6 class="mb-0"><i class="bi bi-hdd-network me-1"></i>IP statik / MAC</h6>
-                                    <small class="text-muted">Aktifkan hanya jika pelanggan pakai IP tetap</small>
-                                </div>
-                                <div class="form-check form-switch m-0">
-                                    <input class="form-check-input" type="checkbox" id="toggle_static_ip" autocomplete="off">
-                                    <label class="form-check-label small" for="toggle_static_ip">Aktifkan</label>
-                                </div>
+                        <div class="card border-secondary mb-3" id="add_static_ip_card" style="display: none;">
+                            <div class="card-header bg-light py-2">
+                                <h6 class="mb-0"><i class="bi bi-hdd-network me-1"></i>IP Statik / MAC</h6>
+                                <small class="text-muted">IP &amp; MAC pelanggan — kecepatan queue Mikrotik otomatis dari paket</small>
                             </div>
-                            <div class="card-body pt-2" id="static_ip_fields_wrap" style="display: none;">
-                                <div class="row">
-                                    <div class="col-md-6">
-                                        <div class="mb-2">
-                                            <label for="static_ip" class="form-label">Static IP</label>
-                                            <input type="text" class="form-control form-control-sm" id="static_ip" name="static_ip" placeholder="192.168.1.100">
-                                        </div>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <div class="mb-2">
-                                            <label for="assigned_ip" class="form-label">Assigned IP</label>
-                                            <input type="text" class="form-control form-control-sm" id="assigned_ip" name="assigned_ip" placeholder="192.168.1.100">
-                                        </div>
-                                    </div>
+                            <div class="card-body pt-2" id="static_ip_fields_wrap">
+                                <div class="mb-2">
+                                    <label for="static_ip" class="form-label">IP Statik *</label>
+                                    <input type="text" class="form-control form-control-sm" id="static_ip" name="static_ip" placeholder="192.168.1.100">
+                                    <input type="hidden" id="assigned_ip" name="assigned_ip" value="">
+                                    <small class="text-muted">Queue Mikrotik (<code>cust_&lt;id&gt;</code>) dibuat otomatis dari limit/kecepatan paket</small>
                                 </div>
                                 <div class="mb-0">
-                                    <label for="mac_address" class="form-label">MAC address</label>
+                                    <label for="mac_address" class="form-label">MAC address <small class="text-muted">(opsional)</small></label>
                                     <input type="text" class="form-control form-control-sm" id="mac_address" name="mac_address" placeholder="00:11:22:33:44:55" pattern="^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$">
                                 </div>
-                                <small class="text-muted d-block mt-2">Isolir: PPPoE &gt; IP statik (<%= (typeof appSettings !== 'undefined' ? (appSettings.static_ip_suspension_method || 'address_list') : 'address_list') %>) &gt; DHCP/MAC</small>
+                                <small class="text-muted d-block mt-2">Isolir: address-list / DHCP / limit (<%= (typeof appSettings !== 'undefined' ? (appSettings.static_ip_suspension_method || 'address_list') : 'address_list') %>)</small>
                             </div>
                         </div>
                         
@@ -1276,8 +1292,10 @@
                                     <% }); %>
                                 <% } %>
                             </select>
-                            <small class="form-text text-muted">Pilih paket berlangganan untuk pelanggan ini.</small>
-                            <small class="form-text text-primary d-none" id="package_universal_hint"><i class="bi bi-info-circle me-1"></i>Paket jaringan bisa dipakai untuk pelanggan PPPoE atau IP statik.</small>
+                            <small class="form-text text-muted" id="package_help_default">Pilih paket — profil PPPoE &amp; limit kecepatan mengikuti paket.</small>
+                            <small class="form-text text-primary d-none" id="package_universal_hint"><i class="bi bi-info-circle me-1"></i>Paket jaringan: PPPoE → profil otomatis; IP statik → queue Mikrotik otomatis.</small>
+                            <small class="form-text text-success d-none" id="package_pppoe_hint"><i class="bi bi-check-circle me-1"></i>Profil PPPoE &amp; limit bandwidth diambil dari paket.</small>
+                            <small class="form-text text-success d-none" id="package_static_hint"><i class="bi bi-hdd-network me-1"></i>Queue Mikrotik akan dibuat otomatis dari kecepatan/limit paket.</small>
                         </div>
                         <div id="addCustomerPppoeProfileNasBlock">
                         <div class="mb-3">
@@ -1325,12 +1343,12 @@
                         <div class="mb-3">
                             <label for="renewal_type" class="form-label">Tipe Pembaruan</label>
                             <select class="form-control" id="renewal_type" name="renewal_type">
+                                <option value="fix_date" selected>Fix Date - Tanggal jatuh tempo tetap sesuai tanggal yang ditentukan</option>
                                 <option value="renewal">Renewal - Tanggal jatuh tempo mengikuti tanggal pembayaran</option>
-                                <option value="fix_date">Fix Date - Tanggal jatuh tempo tetap sesuai tanggal yang ditentukan</option>
                             </select>
                             <small class="form-text text-muted">Pilih cara perhitungan tanggal jatuh tempo untuk tagihan berikutnya</small>
                         </div>
-                        <div class="mb-3" id="fix_date_container" style="display: none;">
+                        <div class="mb-3" id="fix_date_container">
                             <label for="fix_date" class="form-label">Tanggal Tetap (1-28)</label>
                             <input type="number" class="form-control" id="fix_date" name="fix_date" min="1" max="28" value="15">
                             <small class="form-text text-muted">Tanggal tetap untuk jatuh tempo jika memilih Fix Date. Hanya berlaku jika renewal_type = fix_date</small>
@@ -1432,37 +1450,23 @@
                         <div class="card border-info mb-3">
                             <div class="card-header bg-light">
                                 <h6 class="mb-0"><i class="bi bi-ethernet me-2"></i>Konfigurasi IP Statik (Opsional)</h6>
-                                <small class="text-muted">Untuk pelanggan yang menggunakan IP statik atau DHCP dengan MAC tetap</small>
+                                <small class="text-muted">Tanpa PPPoE: queue Mikrotik otomatis dari kecepatan paket</small>
                             </div>
                             <div class="card-body">
-                                <div class="row">
-                                    <div class="col-md-6">
-                                        <div class="mb-3">
-                                            <label for="edit_static_ip" class="form-label">Static IP Address</label>
-                                            <input type="text" class="form-control" id="edit_static_ip" name="static_ip" placeholder="192.168.1.100">
-                                            <small class="text-muted">IP address tetap untuk pelanggan (format: 192.168.1.100)</small>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <div class="mb-3">
-                                            <label for="edit_assigned_ip" class="form-label">Assigned IP Address</label>
-                                            <input type="text" class="form-control" id="edit_assigned_ip" name="assigned_ip" placeholder="192.168.1.100">
-                                            <small class="text-muted">IP yang di-assign ke pelanggan (bisa sama dengan Static IP)</small>
-                                        </div>
-                                    </div>
+                                <div class="mb-3">
+                                    <label for="edit_static_ip" class="form-label">IP Statik</label>
+                                    <input type="text" class="form-control" id="edit_static_ip" name="static_ip" placeholder="192.168.1.100">
+                                    <input type="hidden" id="edit_assigned_ip" name="assigned_ip" value="">
+                                    <small class="text-muted">Queue <code>cust_&lt;id&gt;</code> di-update otomatis saat simpan (jika tidak ada username PPPoE)</small>
                                 </div>
                                 <div class="mb-3">
                                     <label for="edit_mac_address" class="form-label">MAC Address</label>
                                     <input type="text" class="form-control" id="edit_mac_address" name="mac_address" placeholder="00:11:22:33:44:55" pattern="^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$">
-                                    <small class="text-muted">MAC address perangkat untuk DHCP blocking (format: 00:11:22:33:44:55)</small>
+                                    <small class="text-muted">Opsional — untuk DHCP blocking saat isolir</small>
                                 </div>
-                                <div class="alert alert-info">
+                                <div class="alert alert-info mb-0">
                                     <i class="bi bi-info-circle me-2"></i>
-                                    <strong>Info Sistem Isolir:</strong><br>
-                                    â€¢ Jika ada PPPoE Username: Sistem akan gunakan isolir profile<br>
-                                    â€¢ Jika ada Static IP: Sistem akan gunakan method <strong><%= (typeof appSettings !== 'undefined' ? (appSettings.static_ip_suspension_method || 'address_list') : 'address_list') %></strong><br>
-                                    â€¢ Jika ada MAC Address: Bisa gunakan DHCP blocking<br>
-                                    â€¢ Priority: PPPoE â†’ Static IP â†’ DHCP
+                                    Prioritas isolir: PPPoE → IP statik (<%= (typeof appSettings !== 'undefined' ? (appSettings.static_ip_suspension_method || 'address_list') : 'address_list') %>) → MAC/DHCP
                                 </div>
                             </div>
                         </div>
@@ -1725,6 +1729,11 @@
                             </a>
                             <small class="text-muted">Format kolom sama dengan <strong>Export XLSX</strong> + kolom tambahan restore. Lembar &quot;Petunjuk&quot; menjelaskan tiap kolom.</small>
                         </div>
+                        <div class="alert alert-light border mb-3 py-2 small">
+                            <i class="bi bi-hdd-network me-1"></i>
+                            Template mendukung <strong>Mode Koneksi</strong>: <code>pppoe</code> atau <code>static_ip</code>
+                            (isi kolom Static IP / MAC untuk IP tetap). Dropdown tersedia di template Excel.
+                        </div>
                         <div class="mb-3">
                             <label class="form-label">Pilih File (JSON atau XLSX)</label>
                             <input type="file" id="customersFile" name="file" accept="application/json,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx" class="form-control" required>
@@ -1933,17 +1942,20 @@
                 delete this.dataset.autofillFromName;
             });
 
-            $('#toggle_static_ip').on('change', function () {
-                $('#static_ip_fields_wrap').toggle(this.checked);
-                if (this.checked) {
-                    $('#create_pppoe_user').prop('checked', false).trigger('change');
-                    $('#pppoe_username').val('');
-                    $('#pppoe_password').val('');
-                    $('#addCustomerPppoeBlock').hide();
+            $('input[name="connection_type"]').on('change', function () {
+                const isStatic = $('input[name="connection_type"]:checked').val() === 'static_ip';
+                if (isStatic) {
+                    $('#pppoe_username, #pppoe_password').val('');
+                    $('#pppoe_profile').val('');
+                    $('#create_pppoe_user').prop('checked', false);
                 } else {
                     $('#static_ip, #assigned_ip, #mac_address').val('');
-                    if (typeof updateProfileField === 'function') updateProfileField();
+                    const createCb = document.getElementById('create_pppoe_user');
+                    if (createCb && !createCb.dataset.userToggled) {
+                        createCb.checked = true;
+                    }
                 }
+                if (typeof updateProfileField === 'function') updateProfileField();
             });
             
             // Event listeners for NAS selection changes (Edit Customer form)
@@ -1956,9 +1968,7 @@
                 // Reset NAS selection and filter packages
                 $('#router_id').val('');
                 filterPackagesByNAS('router_id', 'package_id');
-                $('#toggle_static_ip').prop('checked', false);
-                $('#static_ip_fields_wrap').hide();
-                $('#addCustomerPppoeBlock').show();
+                $('#connection_type_pppoe').prop('checked', true);
                 const createCb = document.getElementById('create_pppoe_user');
                 if (createCb) delete createCb.dataset.userToggled;
                 if (typeof updateProfileField === 'function') updateProfileField();
@@ -2045,9 +2055,10 @@
                 $('#addCustomerModal #username, #addCustomerModal #email')
                     .removeAttr('data-autofill-from-name')
                     .removeAttr('data-manual');
-                $('#toggle_static_ip').prop('checked', false);
-                $('#static_ip_fields_wrap').hide();
+                $('#connection_type_pppoe').prop('checked', true);
                 $('#pppoe_password_row').toggle($('#create_pppoe_user').is(':checked'));
+                $('#fix_date_container').show();
+                if (typeof updateProfileField === 'function') updateProfileField();
             });
             
             $('#editCustomerModal').on('hidden.bs.modal', function() {
@@ -2782,16 +2793,24 @@
             if (!packageSelect || !profileInput) return;
             const selectedOption = packageSelect.options[packageSelect.selectedIndex];
             const billingOnly = selectedOption && selectedOption.getAttribute('data-billing-only') === '1';
-            const staticIpOn = document.getElementById('toggle_static_ip') && document.getElementById('toggle_static_ip').checked;
+            const staticIpOn = document.querySelector('input[name="connection_type"]:checked')?.value === 'static_ip';
 
             const pppoeBlock = document.getElementById('addCustomerPppoeBlock');
             const nasProfBlock = document.getElementById('addCustomerPppoeProfileNasBlock');
             const staticCard = document.getElementById('add_static_ip_card');
+            const connTypeBlock = document.getElementById('addConnectionTypeBlock');
             const universalHint = document.getElementById('package_universal_hint');
+            const helpDefault = document.getElementById('package_help_default');
+            const pppoeHint = document.getElementById('package_pppoe_hint');
+            const staticHint = document.getElementById('package_static_hint');
+            if (connTypeBlock) connTypeBlock.style.display = billingOnly ? 'none' : '';
             if (pppoeBlock) pppoeBlock.style.display = (billingOnly || staticIpOn) ? 'none' : '';
-            if (nasProfBlock) nasProfBlock.style.display = billingOnly ? 'none' : '';
-            if (staticCard) staticCard.style.display = billingOnly ? 'none' : '';
+            if (nasProfBlock) nasProfBlock.style.display = (billingOnly || staticIpOn) ? 'none' : '';
+            if (staticCard) staticCard.style.display = (billingOnly || !staticIpOn) ? 'none' : '';
+            if (helpDefault) helpDefault.classList.toggle('d-none', !!packageSelect.value && !billingOnly);
             if (universalHint) universalHint.classList.toggle('d-none', billingOnly || !packageSelect.value);
+            if (pppoeHint) pppoeHint.classList.toggle('d-none', billingOnly || !packageSelect.value || staticIpOn);
+            if (staticHint) staticHint.classList.toggle('d-none', billingOnly || !packageSelect.value || !staticIpOn);
 
             const createCb = document.getElementById('create_pppoe_user');
             if (createCb) {
@@ -2803,11 +2822,14 @@
                     if (!createCb.dataset.userToggled) createCb.checked = true;
                 }
             }
+            $('#pppoe_password_row').css('display', (createCb && createCb.checked) ? '' : 'none');
 
-            if (billingOnly) {
+            if (billingOnly || staticIpOn) {
                 profileInput.value = '';
-                const pu = document.getElementById('pppoe_username');
-                if (pu) pu.value = '';
+                if (billingOnly) {
+                    const pu = document.getElementById('pppoe_username');
+                    if (pu) pu.value = '';
+                }
             } else if (selectedOption && selectedOption.dataset.profile) {
                 profileInput.value = selectedOption.dataset.profile;
             }
@@ -3313,14 +3335,18 @@
             console.log(`âœ… Selected PPPoE user: ${username} (active: ${isActive})`);
         });
 
-        // Add Customer Form
+        // Add Customer Form — kunci anti double-submit (klik ganda / 2 tombol)
         let addCustomerSubmitMode = 'save_only';
+        let addCustomerSubmitting = false;
         $('#addCustomerForm button[type="submit"]').on('click', function() {
             addCustomerSubmitMode = $(this).data('submit-mode') || 'save_only';
         });
 
         $('#addCustomerForm').on('submit', function(e) {
             e.preventDefault();
+            if (addCustomerSubmitting) {
+                return;
+            }
 
             const safeValAdd = (sel) => {
                 const $el = $(sel);
@@ -3343,6 +3369,8 @@
             const createPppoe = $('#create_pppoe_user').is(':checked');
             const pppoeUser = $('#pppoe_username').val().trim();
             const addBillingOnlyPkg = $('#package_id option:selected').attr('data-billing-only') === '1';
+            const connectionType = $('input[name="connection_type"]:checked').val() || 'pppoe';
+            const staticIpEnabled = connectionType === 'static_ip';
             
             if (!name || !username || !phone || !package_id) {
                 showToast('error', 'Nama, username, telepon, dan paket wajib diisi');
@@ -3358,18 +3386,35 @@
                 showToast('error', 'Username hanya boleh berisi huruf kecil, angka, dan underscore');
                 return;
             }
-            if (createPppoe && !addBillingOnlyPkg && !pppoeUser) {
+            if (createPppoe && !addBillingOnlyPkg && !staticIpEnabled && !pppoeUser) {
                 showToast('error', 'Isi PPPoE Username jika ingin membuat user di Mikrotik');
                 return;
             }
+            const staticIpVal = safeValAdd('#static_ip');
+            if (staticIpEnabled && !staticIpVal) {
+                showToast('error', 'IP Statik wajib diisi untuk koneksi IP statik');
+                return;
+            }
+            if (staticIpEnabled && staticIpVal && !/^(\d{1,3}\.){3}\d{1,3}$/.test(staticIpVal)) {
+                showToast('error', 'Format IP Statik tidak valid (contoh: 192.168.1.100)');
+                return;
+            }
+            if (!staticIpEnabled && !addBillingOnlyPkg) {
+                const pkgProfile = $('#package_id option:selected').attr('data-profile') || '';
+                if (!pkgProfile) {
+                    showToast('error', 'Paket ini tidak punya profil PPPoE. Pilih paket berprofil atau mode IP statik.');
+                    return;
+                }
+            }
             
-            // Show loading state
+            // Show loading state — kunci semua tombol submit
+            addCustomerSubmitting = true;
             const submitBtn = $(this).find('button[type="submit"]');
-            const originalText = submitBtn.text();
-            submitBtn.prop('disabled', true).text('Menyimpan...');
+            const originalText = submitBtn.map(function() { return $(this).text(); }).get();
+            submitBtn.prop('disabled', true).each(function() {
+                $(this).text('Menyimpan...');
+            });
             
-            const staticIpEnabled = $('#toggle_static_ip').is(':checked');
-
             // Create FormData for file upload
             const formData = new FormData();
             formData.append('name', name);
@@ -3377,16 +3422,16 @@
             formData.append('phone', phone);
             formData.append('email', safeValAdd('#email'));
             formData.append('password', safeValAdd('#password'));
-            formData.append('pppoe_username', pppoeUser);
+            formData.append('pppoe_username', staticIpEnabled ? '' : pppoeUser);
             formData.append('area_id', safeValAdd('#area_id'));
             formData.append('area', $('#area_id option:selected').text().trim() || safeValAdd('#area'));
             formData.append('address', safeValAdd('#address'));
             formData.append('package_id', package_id);
             formData.append('odp_id', safeValAdd('#odp_id'));
-            formData.append('pppoe_profile', addBillingOnlyPkg ? '' : (safeValAdd('#pppoe_profile') || 'default'));
+            formData.append('pppoe_profile', (addBillingOnlyPkg || staticIpEnabled) ? '' : (safeValAdd('#pppoe_profile') || 'default'));
             formData.append('auto_suspension', safeValAdd('#auto_suspension'));
-            formData.append('create_pppoe_user', createPppoe ? 1 : 0);
-            formData.append('pppoe_password', safeValAdd('#pppoe_password'));
+            formData.append('create_pppoe_user', (createPppoe && !staticIpEnabled) ? 1 : 0);
+            formData.append('pppoe_password', staticIpEnabled ? '' : safeValAdd('#pppoe_password'));
             formData.append('billing_day', (function() {
                 const v = parseInt($('#billing_day').val(), 10);
                 if (Number.isFinite(v)) return Math.min(Math.max(v, 1), 28);
@@ -3400,8 +3445,8 @@
             })() : '');
             formData.append('latitude', safeValAdd('#latitude'));
             formData.append('longitude', safeValAdd('#longitude'));
-            formData.append('static_ip', staticIpEnabled ? safeValAdd('#static_ip') : '');
-            formData.append('assigned_ip', staticIpEnabled ? safeValAdd('#assigned_ip') : '');
+            formData.append('static_ip', staticIpEnabled ? staticIpVal : '');
+            formData.append('assigned_ip', staticIpEnabled ? staticIpVal : '');
             formData.append('mac_address', staticIpEnabled ? safeValAdd('#mac_address') : '');
             formData.append('cable_type', safeValAdd('#cable_type'));
             formData.append('cable_length', safeIntAdd('#cable_length'));
@@ -3452,15 +3497,29 @@
                         return;
                     }
                     setTimeout(() => {
-                        showToast('success', 'Pelanggan berhasil ditambahkan');
+                        let msg = 'Pelanggan berhasil ditambahkan';
+                        if (data.pppoeCreate && data.pppoeCreate.created) {
+                            msg += ' · PPPoE OK';
+                        }
+                        if (data.staticIpProvision && data.staticIpProvision.attempted) {
+                            if (data.staticIpProvision.success) {
+                                msg += ' · Queue IP: ' + (data.staticIpProvision.maxLimit || 'OK');
+                            } else if (!data.staticIpProvision.skipped) {
+                                showToast('warning', 'Pelanggan tersimpan, tapi queue Mikrotik gagal: ' + (data.staticIpProvision.message || 'unknown'));
+                            }
+                        }
+                        showToast('success', msg);
                         setTimeout(() => location.reload(), 1000);
                     }, 300);
                 } else {
                     // Tampilkan error message dengan details jika ada
                     const errorMsg = data.message || 'Gagal menambahkan pelanggan';
                     const errorDetails = data.details || '';
-                    const fullMessage = errorDetails ? `${errorMsg}\n\n${errorDetails}` : errorMsg;
                     showToast('error', errorMsg, errorDetails);
+                    addCustomerSubmitting = false;
+                    submitBtn.prop('disabled', false).each(function(i) {
+                        $(this).text(originalText[i] || 'Simpan');
+                    });
                 }
             })
             .catch(error => {
@@ -3471,9 +3530,10 @@
                 } else {
                     showToast('error', error.message || 'Terjadi kesalahan saat menambahkan pelanggan');
                 }
-            })
-            .finally(() => {
-                submitBtn.prop('disabled', false).text(originalText);
+                addCustomerSubmitting = false;
+                submitBtn.prop('disabled', false).each(function(i) {
+                    $(this).text(originalText[i] || 'Simpan');
+                });
             });
         });
 
@@ -3482,12 +3542,6 @@
             const show = $(this).is(':checked');
             this.dataset.userToggled = '1';
             $('#pppoe_password_row').css('display', show ? '' : 'none');
-            if (show) {
-                $('#toggle_static_ip').prop('checked', false);
-                $('#static_ip_fields_wrap').hide();
-                $('#static_ip, #assigned_ip, #mac_address').val('');
-                $('#addCustomerPppoeBlock').show();
-            }
         });
 
         // Generate password button
@@ -3560,8 +3614,8 @@
                             $('#edit_fix_date_container').hide();
                         }
                         // Fill static IP fields
-                        $('#edit_static_ip').val(customer.static_ip || '');
-                        $('#edit_assigned_ip').val(customer.assigned_ip || '');
+                        $('#edit_static_ip').val(customer.static_ip || customer.assigned_ip || '');
+                        $('#edit_assigned_ip').val(customer.static_ip || customer.assigned_ip || '');
                         $('#edit_mac_address').val(customer.mac_address || '');
                         // Fill cable connection fields
                         $('#edit_cable_type').val(customer.cable_type || '');
@@ -3696,7 +3750,7 @@
             formData.append('latitude', safeVal('#edit_latitude'));
             formData.append('longitude', safeVal('#edit_longitude'));
             formData.append('static_ip', safeVal('#edit_static_ip'));
-            formData.append('assigned_ip', safeVal('#edit_assigned_ip'));
+            formData.append('assigned_ip', safeVal('#edit_static_ip'));
             formData.append('mac_address', safeVal('#edit_mac_address'));
             formData.append('cable_type', safeVal('#edit_cable_type'));
             formData.append('cable_length', safeInt('#edit_cable_length') || '');
@@ -3742,7 +3796,15 @@
             .then(data => {
                 if (data.success) {
                     setTimeout(() => {
-                        showToast('success', 'Pelanggan berhasil diupdate');
+                        let msg = 'Pelanggan berhasil diupdate';
+                        if (data.staticIpProvision && data.staticIpProvision.attempted) {
+                            if (data.staticIpProvision.success) {
+                                msg += ' · Queue IP: ' + (data.staticIpProvision.maxLimit || data.staticIpProvision.action || 'OK');
+                            } else if (!data.staticIpProvision.skipped) {
+                                showToast('warning', 'Data tersimpan, queue Mikrotik: ' + (data.staticIpProvision.message || 'gagal'));
+                            }
+                        }
+                        showToast('success', msg);
                         setTimeout(() => location.reload(), 1000);
                     }, 300);
                 } else {
@@ -3768,21 +3830,49 @@
         // Delete customer
         async function deleteCustomer(id) {
             if (!confirm('Apakah Anda yakin ingin menghapus pelanggan ini?')) return;
-            
+
+            showToast('info', 'Menghapus pelanggan...', 'Mohon tunggu sebentar');
+
             try {
-                const response = await fetch(`/admin/billing/customers/id/${id}`, {
-                    method: 'DELETE'
+                const response = await fetch(`/admin/billing/customers/id/${encodeURIComponent(id)}`, {
+                    method: 'DELETE',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
                 });
-                
-                const result = await response.json();
-                if (result.success) {
-                    showToast(result.message, 'success');
-                    setTimeout(() => window.location.reload(), 2000);
-                } else {
-                    showToast(result.message, 'error');
+
+                let result = null;
+                const raw = await response.text();
+                try {
+                    result = raw ? JSON.parse(raw) : null;
+                } catch (_) {
+                    result = null;
                 }
+
+                if (response.ok && result && result.success) {
+                    // Simpan pesan lalu reload — toast sebelum reload sering tidak sempat terbaca
+                    try {
+                        sessionStorage.setItem('customersFlash', JSON.stringify({
+                            type: 'success',
+                            message: result.message || 'Pelanggan berhasil dihapus',
+                            ts: Date.now()
+                        }));
+                    } catch (_) { /* ignore */ }
+                    showToast('success', result.message || 'Pelanggan berhasil dihapus');
+                    setTimeout(() => { window.location.reload(); }, 600);
+                    return;
+                }
+
+                const errMsg = (result && result.message)
+                    || (response.status === 401 || response.status === 403
+                        ? 'Sesi berakhir. Silakan login ulang.'
+                        : `Gagal menghapus pelanggan (HTTP ${response.status})`);
+                showToast('error', errMsg);
             } catch (error) {
-                showToast('Terjadi kesalahan saat menghapus data', 'error');
+                console.error('deleteCustomer error:', error);
+                showToast('error', 'Terjadi kesalahan saat menghapus data', error.message || '');
             }
         }
 
@@ -4394,50 +4484,85 @@
                 details = arg3;
             } else {
                 message = arg1 || '';
-                type = arg2 || 'info'; 
+                type = (arg2 === 'error' ? 'danger' : (arg2 || 'info'));
                 details = arg3;
             }
 
-            const toastContainer = document.getElementById('toastContainer') || createToastContainer();
-            
-            // Build message dengan details jika ada
-            let messageHtml = `<strong>${message}</strong>`;
-            if (details) {
-                messageHtml += `<br><small style="opacity: 0.9;">${details}</small>`;
-            }
-            
-            const toastHtml = `
-                <div class="toast align-items-center text-white bg-${type} border-0" role="alert" aria-live="assertive" aria-atomic="true" style="min-width: 300px; max-width: 500px;">
-                    <div class="d-flex">
-                        <div class="toast-body">
-                            ${messageHtml}
+            try {
+                const toastContainer = document.getElementById('toastContainer') || createToastContainer();
+                
+                // Build message dengan details jika ada
+                let messageHtml = `<strong>${escapeHtmlToast(message)}</strong>`;
+                if (details) {
+                    messageHtml += `<br><small style="opacity: 0.9;">${escapeHtmlToast(details)}</small>`;
+                }
+                
+                const toastHtml = `
+                    <div class="toast align-items-center text-white bg-${type} border-0" role="alert" aria-live="assertive" aria-atomic="true" style="min-width: 300px; max-width: 500px;">
+                        <div class="d-flex">
+                            <div class="toast-body">
+                                ${messageHtml}
+                            </div>
+                            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
                         </div>
-                        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
                     </div>
-                </div>
-            `;
-            
-            toastContainer.insertAdjacentHTML('beforeend', toastHtml);
-            const toastElement = toastContainer.lastElementChild;
-            const toast = new bootstrap.Toast(toastElement, {
-                delay: (type === 'danger' || type === 'error') ? 8000 : 5000 // Error toast lebih lama
-            });
-            toast.show();
-            
-            // Remove toast element after it's hidden
-            toastElement.addEventListener('hidden.bs.toast', () => {
-                toastElement.remove();
-            });
+                `;
+                
+                toastContainer.insertAdjacentHTML('beforeend', toastHtml);
+                const toastElement = toastContainer.lastElementChild;
+                if (window.bootstrap && bootstrap.Toast) {
+                    const toast = new bootstrap.Toast(toastElement, {
+                        delay: (type === 'danger' || type === 'error') ? 8000 : 5000
+                    });
+                    toast.show();
+                    toastElement.addEventListener('hidden.bs.toast', () => {
+                        toastElement.remove();
+                    });
+                } else {
+                    // Fallback jika Bootstrap Toast tidak tersedia
+                    toastElement.style.display = 'block';
+                    toastElement.classList.add('show');
+                    setTimeout(() => toastElement.remove(), 5000);
+                }
+            } catch (e) {
+                console.error('showToast failed:', e);
+                try { alert((message || 'Notifikasi') + (details ? '\n' + details : '')); } catch (_) { /* ignore */ }
+            }
+        }
+
+        function escapeHtmlToast(str) {
+            return String(str == null ? '' : str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
         }
 
         function createToastContainer() {
             const container = document.createElement('div');
             container.id = 'toastContainer';
             container.className = 'toast-container position-fixed top-0 end-0 p-3';
-            container.style.zIndex = '9999';
+            container.style.zIndex = '99999';
             document.body.appendChild(container);
             return container;
         }
+
+        // Tampilkan flash setelah hapus pelanggan (reload)
+        (function showCustomersFlash() {
+            try {
+                const raw = sessionStorage.getItem('customersFlash');
+                if (!raw) return;
+                sessionStorage.removeItem('customersFlash');
+                const flash = JSON.parse(raw);
+                if (!flash || !flash.message) return;
+                if (flash.ts && (Date.now() - flash.ts) > 30000) return;
+                setTimeout(() => {
+                    showToast(flash.type || 'success', flash.message);
+                }, 400);
+            } catch (e) {
+                console.warn('[customers] flash toast', e);
+            }
+        })();
 
         /** Dibuka dari dashboard admin (permintaan ubah paket portal) — ?editPhone=... */
         window.editCustomerFromPortalRequest = editCustomer;
@@ -4457,76 +4582,78 @@
             }
         })();
 
-        // WhatsApp Notification Functions
+        // WhatsApp Notification Functions — template "WA welcome pelanggan baru"
         let currentNotificationData = null;
 
-        function sendWhatsAppNotification(phone, name) {
-            // Set customer data in modal
+        async function sendWhatsAppNotification(phone, name) {
             document.getElementById('waPhoneNumber').value = phone;
             document.getElementById('waCustomerName').value = name;
-            
-            // Generate a default message preview for customer notification
-            const messagePreview = `ðŸ“‹ *NOTIFIKASI PELANGGAN*
-
-Halo ${name},
-
-Terima kasih telah menggunakan layanan kami.
-
-Jika ada pertanyaan atau butuh bantuan, silakan hubungi customer service kami.
-
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
-
-CV Lintas Multimedia
-Internet Tanpa Batas`;
-
             document.getElementById('notificationPreview').innerHTML = `
                 <div class="card">
-                    <div class="card-header">
-                        <h6 class="mb-0">Preview Pesan:</h6>
-                    </div>
-                    <div class="card-body">
-                        <pre style="white-space: pre-wrap; font-size: 14px;">${messagePreview}</pre>
-                    </div>
+                    <div class="card-body text-muted small">Memuat template dari WhatsApp Settings…</div>
                 </div>
             `;
-
-            // Set current notification data
-            currentNotificationData = {
-                phoneNumber: phone,
-                customerName: name,
-                status: 'unpaid',
-                amount: 0,
-                dueDate: new Date().toISOString().split('T')[0],
-                invoiceNumber: `CUST-${Date.now()}`,
-                packageName: 'Paket Internet'
-            };
-            
-            // Show modal
+            currentNotificationData = { phoneNumber: phone, customerName: name };
             $('#whatsappModal').modal('show');
+
+            try {
+                const res = await fetch('/admin/billing/customers/' + encodeURIComponent(phone) + '/welcome-whatsapp-preview');
+                const data = await res.json();
+                if (!data.success) {
+                    document.getElementById('notificationPreview').innerHTML = `
+                        <div class="alert alert-danger mb-0">${(data.message || 'Gagal memuat template').replace(/</g, '&lt;')}</div>
+                    `;
+                    currentNotificationData = null;
+                    return;
+                }
+                const title = data.templateTitle || 'WA welcome pelanggan baru';
+                const enabledNote = data.enabled === false
+                    ? '<div class="alert alert-warning py-2 small mb-2">Template nonaktif di WhatsApp Settings — pengiriman mungkin dilewati.</div>'
+                    : '';
+                document.getElementById('notificationPreview').innerHTML = `
+                    ${enabledNote}
+                    <div class="card">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h6 class="mb-0">Preview: ${title.replace(/</g, '&lt;')}</h6>
+                            <a href="/admin/billing/whatsapp-settings" class="small">Edit template</a>
+                        </div>
+                        <div class="card-body">
+                            <pre style="white-space: pre-wrap; font-size: 14px; margin:0;">${String(data.preview || '').replace(/</g, '&lt;')}</pre>
+                        </div>
+                    </div>
+                `;
+                currentNotificationData = {
+                    phoneNumber: phone,
+                    customerName: name,
+                    preview: data.preview
+                };
+            } catch (err) {
+                document.getElementById('notificationPreview').innerHTML = `
+                    <div class="alert alert-danger mb-0">Gagal memuat preview template</div>
+                `;
+                currentNotificationData = null;
+            }
         }
 
-        // Confirm send WhatsApp notification
+        // Confirm send WhatsApp notification (welcome template)
         document.getElementById('confirmSendWA').addEventListener('click', function() {
-            if (!currentNotificationData) return;
+            if (!currentNotificationData || !currentNotificationData.phoneNumber) return;
 
             const btn = this;
             const originalText = btn.innerHTML;
             btn.disabled = true;
             btn.innerHTML = '<i class="bi bi-circle bx-spin"></i> Mengirim...';
 
-            fetch('/admin/billing/invoices/send-whatsapp', {
+            const phone = currentNotificationData.phoneNumber;
+            fetch('/admin/billing/customers/' + encodeURIComponent(phone) + '/send-welcome-whatsapp', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(currentNotificationData)
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
             })
-            .then(response => {
-                return response.json().then(data => ({ response, data }));
-            })
-            .then(({ response, data }) => {
+            .then(response => response.json().then(data => ({ response, data })))
+            .then(({ data }) => {
                 if (data.success) {
-                    showToast('success', 'Notifikasi Terkirim', 'Notifikasi WhatsApp berhasil dikirim');
+                    showToast('success', 'Notifikasi Terkirim', data.message || 'Notifikasi WhatsApp berhasil dikirim');
                     $('#whatsappModal').modal('hide');
                 } else {
                     showToast('error', 'Gagal Mengirim', data.message || 'Gagal mengirim notifikasi WhatsApp');
@@ -4537,7 +4664,6 @@ Internet Tanpa Batas`;
                 showToast('error', 'Error', 'Terjadi kesalahan saat mengirim notifikasi');
             })
             .finally(() => {
-                // Reset button
                 btn.disabled = false;
                 btn.innerHTML = originalText;
             });

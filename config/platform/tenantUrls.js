@@ -29,6 +29,11 @@ function getTenantLoginUrl(subdomain) {
     return `${getTenantAppScheme()}://${getTenantHostname(subdomain)}/login`;
 }
 
+/** Portal pelanggan (customer-app) per subdomain tenant. */
+function getCustomerPortalLoginUrl(subdomain) {
+    return `${getTenantAppScheme()}://${getTenantHostname(subdomain)}/customer-app/login`;
+}
+
 function getDevTenantLoginUrl(subdomain) {
     try {
         const { getPublicAppBaseUrl } = require('../public-endpoint');
@@ -47,5 +52,6 @@ module.exports = {
     getTenantAppScheme,
     getTenantHostname,
     getTenantLoginUrl,
+    getCustomerPortalLoginUrl,
     getDevTenantLoginUrl,
 };

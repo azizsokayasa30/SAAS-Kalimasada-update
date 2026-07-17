@@ -1,10 +1,12 @@
 'use strict';
 
 const net = require('net');
+const os = require('os');
 const { exec } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
 const tenantStore = require('./tenantStore');
+const popService = require('./popService');
 const { getMikrotikConnectionForRouter } = require('../mikrotik');
 const { getRadiusSqliteFileDiagnostics } = require('../radiusSQLite');
 const { getSetting } = require('../settingsManager');
@@ -37,61 +39,103 @@ function probeHostPort(host, port) {
     });
 }
 
-async function listRadiusNasRows() {
+function getLocalHostSet() {
+    const hosts = new Set(['127.0.0.1', 'localhost', '::1']);
     try {
-        const { getRadiusConnection } = require('../radiusSQLite');
-        const conn = await getRadiusConnection();
-        const [rows] = await conn.execute(
-            'SELECT nasname, shortname, description FROM nas ORDER BY nasname ASC'
-        );
-        await conn.end();
-        return Array.isArray(rows) ? rows : [];
+        const ifaces = os.networkInterfaces();
+        for (const entries of Object.values(ifaces || {})) {
+            for (const entry of entries || []) {
+                if (entry && entry.address) hosts.add(String(entry.address).toLowerCase());
+            }
+        }
     } catch (_) {
-        return [];
+        /* ignore */
+    }
+    return hosts;
+}
+
+function isLocalRadiusHost(host) {
+    const h = String(host || '').trim().toLowerCase();
+    if (!h) return false;
+    return getLocalHostSet().has(h);
+}
+
+async function pingHost(host) {
+    const trimmed = String(host || '').trim();
+    if (!trimmed) return false;
+    const safeHost = trimmed.replace(/[^a-zA-Z0-9.:_-]/g, '');
+    if (!safeHost || safeHost !== trimmed) return false;
+    try {
+        await execAsync(`ping -c 1 -W 1 ${safeHost}`, { timeout: 2500 });
+        return true;
+    } catch (_) {
+        return false;
     }
 }
 
-async function buildRadiusServerStats(networkNas) {
-    const nasRows = await listRadiusNasRows();
-    const probeByIp = new Map();
-    for (const item of networkNas?.items || []) {
-        const ip = String(item.nas_ip || '').trim();
-        if (ip) probeByIp.set(ip, item);
+async function probeFreeRadiusServer(server) {
+    const host = String(server.host || '').trim();
+    const name = server.name || host || 'FreeRADIUS';
+    const base = {
+        id: server.id,
+        name,
+        host,
+        pop_id: server.pop_id,
+        pop_code: server.pop_code,
+        pop_name: server.pop_name,
+        auth_port: server.auth_port || 1812,
+        acct_port: server.acct_port || 1813,
+        is_active: Number(server.is_active) === 1,
+    };
+
+    if (!base.is_active) {
+        return { ...base, status: 'down', detail: 'Nonaktif' };
     }
 
-    let items = [];
-    if (nasRows.length) {
-        items = await Promise.all(
-            nasRows.map(async (row) => {
-                const ip = String(row.nasname || '').trim();
-                const name = row.shortname || row.description || ip || 'RADIUS Server';
-                const matched = probeByIp.get(ip);
-                if (matched) {
-                    return {
-                        ip,
-                        name,
-                        status: matched.status === 'online' ? 'up' : 'down',
-                    };
-                }
-                const reachable = await probeHostPort(ip, 8728);
-                return { ip, name, status: reachable ? 'up' : 'down' };
-            })
-        );
-    } else {
-        items = (networkNas?.items || []).map((item) => ({
-            ip: item.nas_ip,
-            name: item.name,
-            status: item.status === 'online' ? 'up' : 'down',
-        }));
+    if (isLocalRadiusHost(host)) {
+        const service = await checkRadiusServiceStatus();
+        const up = service.status === 'running';
+        return {
+            ...base,
+            status: up ? 'up' : 'down',
+            detail: up ? 'Service FreeRADIUS aktif' : 'Service FreeRADIUS tidak berjalan',
+        };
     }
 
-    const up = items.filter((item) => item.status === 'up').length;
-    const down = items.filter((item) => item.status === 'down').length;
+    // Remote POP FreeRADIUS: host reachable via ICMP, fallback SSH
+    const reachable = (await pingHost(host)) || (await probeHostPort(host, 22));
+    return {
+        ...base,
+        status: reachable ? 'up' : 'down',
+        detail: reachable ? 'Host FreeRADIUS merespons' : 'Host FreeRADIUS tidak merespons',
+    };
+}
+
+async function buildRadiusServerStats() {
+    try {
+        await popService.ensureLocalRadiusServer();
+    } catch (err) {
+        console.warn('[dashboardMetrics] ensureLocalRadiusServer:', err.message);
+    }
+
+    let servers = [];
+    try {
+        servers = await popService.listRadiusServers();
+    } catch (err) {
+        console.warn('[dashboardMetrics] listRadiusServers:', err.message);
+        servers = [];
+    }
+
+    const items = await Promise.all(servers.map((server) => probeFreeRadiusServer(server)));
+    const monitored = items.filter((item) => item.is_active);
+    const up = monitored.filter((item) => item.status === 'up').length;
+    const down = monitored.filter((item) => item.status === 'down').length;
 
     return {
-        total: items.length,
+        total: monitored.length,
         up,
         down,
+        inactive: items.length - monitored.length,
         items,
     };
 }
@@ -257,14 +301,29 @@ async function checkRadiusServiceStatus() {
         return { status: 'unknown', error: null, platform: 'windows' };
     }
     try {
-        const { stdout } = await execAsync('systemctl is-active freeradius', { timeout: 5000 });
-        const raw = stdout.trim();
+        const { stdout } = await execAsync('systemctl is-active freeradius || true', { timeout: 5000 });
+        const raw = String(stdout || '').trim();
         if (raw === 'active') return { status: 'running', error: null };
+        if (raw === 'activating' || raw === 'auto-restart') {
+            return { status: 'not_running', error: 'FreeRADIUS crash-loop (activating)' };
+        }
         if (raw === 'inactive' || raw === 'failed') return { status: 'not_running', error: null };
-        return { status: 'unknown', error: null };
+        try {
+            const { stdout: pg } = await execAsync(
+                'pgrep -x freeradius >/dev/null && echo running || pgrep -x radiusd >/dev/null && echo running || echo not_running',
+                { timeout: 3000 }
+            );
+            if (pg.trim() === 'running') return { status: 'running', error: null };
+            return { status: 'not_running', error: raw || null };
+        } catch (altError) {
+            return { status: 'not_running', error: altError.message || raw || null };
+        }
     } catch (error) {
         try {
-            const { stdout } = await execAsync('pgrep -x freeradius || echo "not_running"', { timeout: 3000 });
+            const { stdout } = await execAsync(
+                'pgrep -x freeradius >/dev/null && echo running || pgrep -x radiusd >/dev/null && echo running || echo not_running',
+                { timeout: 3000 }
+            );
             if (stdout.trim() === 'not_running') {
                 return { status: 'not_running', error: error.message };
             }
@@ -451,7 +510,7 @@ async function getDashboardMetrics() {
         getLiveNetworkMetrics(),
     ]);
 
-    const servers = await buildRadiusServerStats(network.nas);
+    const servers = await buildRadiusServerStats();
 
     return {
         success: true,
@@ -469,4 +528,5 @@ module.exports = {
     getDashboardMetrics,
     getRadiusHealth,
     getLiveNetworkMetrics,
+    buildRadiusServerStats,
 };

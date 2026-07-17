@@ -99,7 +99,7 @@ function seedSettingsForNewTenant(tenant) {
         admin_username: adminUsername,
         admin_password: adminPassword,
         timezone: 'Asia/Jakarta',
-        user_auth_mode: 'mikrotik',
+        user_auth_mode: 'radius',
         server_port: String(process.env.PORT || '3003'),
     };
 }

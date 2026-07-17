@@ -314,13 +314,13 @@ async function main() {
     fs.copyFileSync(backupPath, backupCopy);
     console.log('Salinan backup:', backupCopy);
 
-    const pre = createBillingDbBackup(LIVE_DB, { prefix: 'pre_tenant_restore' });
-    console.log('Cadangan pra-restore:', pre.filename);
-
     const db = new sqlite3.Database(LIVE_DB);
 
     try {
         await run(db, 'PRAGMA wal_checkpoint(TRUNCATE)');
+        const pre = await createBillingDbBackup(LIVE_DB, { prefix: 'pre_tenant_restore', db });
+        console.log('Cadangan pra-restore:', pre.filename);
+
         await run(db, `ATTACH DATABASE ? AS src`, [backupPath.replace(/\\/g, '/')]);
 
         const tenant = await get(db, `SELECT id, slug, name FROM main.tenants WHERE slug = ?`, [tenantSlug]);

@@ -130,31 +130,6 @@
                         </h5>
                         
                         <!-- Alert Panduan Konfigurasi -->
-                        <div class="alert alert-info alert-custom mb-4" role="alert">
-                            <div class="d-flex align-items-start">
-                                <i class="bi bi-info-circle-fill me-2 fs-5 mt-1"></i>
-                                <div>
-                                    <h6 class="alert-heading mb-2">
-                                        <i class="bi bi-lightbulb me-1"></i>Panduan Konfigurasi Sistem
-                                    </h6>
-                                    <p class="mb-2">
-                                        Pastikan konfigurasi GenieACS dan Mikrotik sudah benar agar sistem dapat berjalan optimal:
-                                    </p>
-                                    <ul class="mb-2 small">
-                                        <li><strong>GenieACS URL:</strong> Gunakan IP lokal yang dapat diakses (contoh: http://192.168.1.100:7557)</li>
-                                        <li><strong>GenieACS Credentials:</strong> Pastikan username dan password benar</li>
-                                        <li><strong>Mikrotik Host:</strong> Gunakan IP router Mikrotik yang benar</li>
-                                        <li><strong>Mikrotik Port:</strong> Biasanya 8728 untuk API atau 8729 untuk SSL</li>
-                                        <li><strong>Mikrotik Credentials:</strong> Gunakan user dengan akses API</li>
-                                    </ul>
-                                    <p class="mb-0 small text-muted">
-                                        <i class="bi bi-exclamation-triangle me-1"></i>
-                                        Jika ada masalah koneksi, sistem akan menampilkan warning di dashboard dengan link ke halaman ini.
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-                        
                         <form id="settingsForm">
                             <div id="settingsFields">
                                 <!-- Field dari settings.json akan di-render di sini oleh JS -->
@@ -611,8 +586,8 @@
                                     <div class="small">
                                         <strong>Apa yang di-backup?</strong>
                                         <p class="mb-2 mt-1">
-                                            Tombol <strong>Buat Backup</strong> menyalin seluruh file database
-                                            <code>data/billing.db</code> ke folder <code>data/backup/</code>.
+                                            Tombol <strong>Buat Backup</strong> menyalin <strong>seluruh isi</strong> database
+                                            <code>data/billing.db</code> (termasuk data di WAL) ke folder <code>data/backup/</code>.
                                             Restore mengembalikan <strong>semua isi database billing</strong> ke kondisi saat backup dibuat.
                                         </p>
                                         <div class="row g-2">
@@ -621,18 +596,20 @@
                                                 <ul class="mb-0 ps-3">
                                                     <li>Data pelanggan, paket, tagihan &amp; pembayaran</li>
                                                     <li>Router/NAS, area, mapping pelanggan–router</li>
-                                                    <li>Data RADIUS lokal (user, profil, sesi) di DB ini</li>
                                                     <li>Teknisi, kolektor, job instalasi, laporan gangguan</li>
-                                                    <li>Keuangan, voucher, hotspot, agent, gudang</li>
+                                                    <li>Keuangan, voucher, hotspot, agent</li>
+                                                    <li>Manajemen gudang (item, batch, unit QR)</li>
+                                                    <li>Absensi karyawan, cuti, payroll, shift &amp; cabang</li>
                                                     <li>Activity log admin &amp; pengaturan di tabel <code>app_settings</code></li>
                                                 </ul>
                                             </div>
                                             <div class="col-md-6">
                                                 <strong class="text-danger"><i class="bi bi-x-circle me-1"></i>Tidak ikut backup ini</strong>
                                                 <ul class="mb-0 ps-3">
+                                                    <li>Foto instalasi job &amp; tiket (<code>public/img/field-completion/</code>)</li>
+                                                    <li>Bukti transfer / bukti bayar (<code>public/uploads/payments/</code>)</li>
+                                                    <li>Foto KTP/rumah pelanggan (<code>public/img/</code>)</li>
                                                     <li><code>settings.json</code> — host, password admin, WhatsApp, dll.</li>
-                                                    <li>Logo, QR tagihan, foto KTP/rumah (<code>public/img/</code>)</li>
-                                                    <li>Foto penyelesaian pekerjaan teknisi</li>
                                                     <li>Database RADIUS MySQL terpisah (jika dipakai)</li>
                                                     <li>Sesi WhatsApp &amp; backup RADIUS (.tar.gz di menu RADIUS)</li>
                                                 </ul>
@@ -961,6 +938,9 @@ $(function() {
     const hiddenFields = [
         // Version Info - Tidak perlu diubah manual
         'app_version', 'version_name', 'version_date', 'version_notes', 'build_number',
+
+        // Port server dikelola platform — disembunyikan agar tenant tidak mengubahnya
+        'server_port',
         
         // Interval Settings (millisecond format) - hanya tampilkan format jam
         'rx_power_warning_interval', 'rxpower_recap_interval', 'offline_notification_interval',
@@ -1100,7 +1080,6 @@ $(function() {
     /** Urutan tetap — hanya field ini di grup Sistem & Billing (sisanya ke grup lain). */
     const systemFieldOrder = [
         'server_host',
-        'server_port',
         'admin_username',
         'admin_password',
         'admin_session_timeout_minutes',
@@ -1231,8 +1210,6 @@ $(function() {
                 if (fieldHint) {
                     fieldHtml += '<div class="form-text text-muted">' + fieldHint + '</div>';
                 }
-            } else if (key === 'server_port') {
-                fieldHtml += '<input type="number" class="form-control" name="' + escapeHtml(key) + '" value="' + value + '" min="1" max="65535" step="1">';
             } else {
                 fieldHtml += '<input type="text" class="form-control" name="' + escapeHtml(key) + '" value="' + value + '">';
                 if (fieldHint) {

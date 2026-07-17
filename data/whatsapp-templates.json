@@ -1,37 +1,37 @@
 {
   "invoice_created": {
     "title": "Tagihan Baru",
-    "template": "\n📋 *TAGIHAN BARU*\n\nHalo {customer_name},\nSemoga Sehat selalu , ijin menyampaikan tagihan baru :\n\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n📅 *Jatuh Tempo:* {due_date}\n📦 *Paket:* {package_name} ({package_speed})\n📝 *Catatan:* {notes}\n\n*Cek Status Dan Lakukan Pembayaran Anda Di*\nhttp://bna.kalimasada-app.com/customer-app/login\n*_Login Dengan No Hp Terdaftar_*\n\nUntuk konfirmasi pembayaran hubungi nomer 0816411615\nSilakan lakukan pembayaran sebelum tanggal jatuh tempo untuk menghindari denda keterlambatan.\nTerima kasih atas kepercayaan Anda.\n\n\nKALIMASADA INTI SARANA",
-    "enabled": true
+    "template": "\n📋 *TAGIHAN BARU*\n\nHalo {customer_name},\nSemoga Sehat selalu , ijin menyampaikan tagihan baru :\n\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n📅 *Jatuh Tempo:* {due_date}\n📝 *Catatan:* {notes}\n\n*Cek Status Dan Lakukan Pembayaran Anda Di*\n{customer_portal_url}\n*_Login Dengan No Hp Terdaftar_*\n\nUntuk konfirmasi pembayaran hubungi nomer 082265247377 atau teknisi \nSilakan lakukan pembayaran sebelum tanggal jatuh tempo untuk menghindari denda keterlambatan.\nTerima kasih atas kepercayaan Anda.\n\n\nKALIMASADA INTI SARANA",
+    "enabled": false
   },
   "due_date_reminder": {
     "title": "Peringatan Sebelum Jatuh Tempo",
-    "template": "\n*Pengingat Tagihan*\n\nHalo {customer_name},\n\nIjin Mengingatkan Tagihan Anda akan jatuh tempo dalam *{days_remaining} hari*:\n\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n📅 *Jatuh Tempo:* {due_date}\n📦 *Paket:* {package_name} ({package_speed})\n\nMohon persiapkan pembayaran sebelum tanggal jatuh tempo agar layanan tetap lancar dan terhindar dari isolir\n+.\n\nTerima kasih.",
+    "template": "\n*Pengingat Tagihan*\n\nHalo {customer_name},\n\nIjin Mengingatkan Tagihan Anda akan jatuh tempo dalam *{days_remaining} hari*:\n\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n📅 *Jatuh Tempo:* {due_date}\n\nBRI Puji Rahayu 661901012335535\nUntuk konfirmasi pembayaran hubungi nomer teknisi  atau kirim ke 082265247377\nMohon persiapkan pembayaran sebelum tanggal jatuh tempo agar layanan tetap lancar dan terhindar dari isolir\n+.\n\nTerima kasih.",
     "enabled": true
   },
   "due_date_reminder_today": {
     "title": "Pengingat Hari H Jatuh Tempo",
     "template": "\n🙏 *PENGINGAT PEMBAYARAN*\n\nHalo {customer_name},\n\nHari ini (*{due_date}*) adalah tanggal jatuh tempo terakhir pembayaran tagihan Anda:\n\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n\nApabila belum melakukan pembayaran, mohon kiranya dapat diselesaikan hari ini. Jika sudah melakukan pembeyaran, abaikan pesan ini.\n\nTerima kasih atas kerja samanya.",
-    "enabled": true
+    "enabled": false
   },
   "payment_received": {
     "title": "Pembayaran Diterima",
     "template": "\n*PEMBAYARAN DITERIMA*✅ \n\nHalo {customer_name},\n\nTerima kasih! Pembayaran Anda telah kami terima:\n\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n📅 *Tanggal Pembayaran:* {payment_date}\n\nLayanan internet Anda akan tetap aktif. Terima kasih atas kepercayaan Anda.",
-    "enabled": true
+    "enabled": false
   },
   "service_disruption": {
     "title": "Gangguan Layanan",
-    "template": "\n🚨 *GANGGUAN LAYANAN*\n\nHalo Pelanggan Setia,\n\nMohon maaf atas ketindaknyamannya, Kami informasikan bahwa sedang terjadi gangguan pada jaringan internet:\n\n📡 *Jenis Gangguan:* {disruption_type}\n📍 *Area Terdampak:* {affected_area}\n⏰ *Perkiraan Selesai:* {estimated_resolution}\n📞 *Hotline:* {support_phone}\n\nTerimakasih atas kesabaran dan pengertian anda\nUntuk update informasi bisa hubungi nomor  0816411615\n\n*Cek Status Di*\nhttp://bna.kalimasada-app.com/customer-app/login\n*_Login Dengan No Hp Terdaftar_*\n\n\nKALIMASADA INTI SARANA ",
-    "enabled": true
+    "template": "\n🚨 *GANGGUAN LAYANAN*\n\nHalo Pelanggan Setia,\n\nMohon maaf atas ketindaknyamannya, Kami informasikan bahwa sedang terjadi gangguan pada jaringan internet:\n\n📡 *Jenis Gangguan:* {disruption_type}\n📍 *Area Terdampak:* {affected_area}\n⏰ *Perkiraan Selesai:* {estimated_resolution}\n📞 *Hotline:* {support_phone}\n\nTerimakasih atas kesabaran dan pengertian anda\nUntuk update informasi bisa hubungi nomor  0816411615\n\n*Cek Status Di*\n{customer_portal_url}\n*_Login Dengan No Hp Terdaftar_*\n\n\nKALIMASADA INTI SARANA ",
+    "enabled": false
   },
   "service_announcement": {
     "title": "Pengumuman Layanan",
     "template": "\n📢 *PENGUMUMAN LAYANAN*\n\nHalo Pelanggan Setia,\n\n{announcement_content}\n\nTerima kasih atas perhatian Anda.",
-    "enabled": true
+    "enabled": false
   },
   "service_suspension": {
     "title": "Service Suspension",
-    "template": "\n *LAYANAN INTERNET DINONAKTIFKAN* ⚠️\n\nHalo {customer_name},\n\nLayanan internet Anda telah dinonaktifkan karena:\n📋 *Alasan:* {reason}\n\n💡 *Cara Mengaktifkan Kembali:*\n1. Lakukan pembayaran tagihan yang tertunggak\n2. Layanan akan aktif otomatis setelah pembayaran dikonfirmasi\n\n*Cek Status Dan Pembayaran Anda Di*\nhttp://bna.kalimasada-app.com/customer-app/login\n*_Login Dengan No Hp Terdaftar_*\n\n📞 Butuh Bantuan?\nHubungi kami di: 0816411615\n\nKALIMASADA INTI SARANA \nTerima kasih atas perhatian Anda.",
+    "template": "\n *LAYANAN INTERNET DINONAKTIFKAN* ⚠️\n\nHalo {customer_name},\n\nLayanan internet Anda telah dinonaktifkan karena:\n📋 *Alasan:* {reason}\n\n💡 *Cara Mengaktifkan Kembali:*\n1. Lakukan pembayaran tagihan yang tertunggak\n2. Layanan akan aktif otomatis setelah pembayaran dikonfirmasi\n\n*Cek Status Dan Pembayaran Anda Di*\n{customer_portal_url}\n*_Login Dengan No Hp Terdaftar_*\n\n📞 Butuh Bantuan?\nHubungi kami di: 0816411615\n\nKALIMASADA INTI SARANA \nTerima kasih atas perhatian Anda.",
     "enabled": true
   },
   "service_restoration": {
@@ -41,13 +41,13 @@
   },
   "welcome_message": {
     "title": "Welcome Message",
-    "template": "\n👋 *SELAMAT DATANG* 👋\n\nHalo {customer_name},\n\nSelamat datang di layanan internet kami!\n\n📦 *Paket:* {package_name} ({package_speed})\n📞 *Support:* {support_phone}\n\ncek portal pelanggan : http://bna.kalimasada-app.com/customer-app/login\n\nTerima kasih telah memilih layanan kami.",
-    "enabled": true
+    "template": "\n👋 *SELAMAT DATANG* 👋\n\nHalo {customer_name},\n\nSelamat datang di layanan internet kami!\n\n📦 *Paket:* {package_name} ({package_speed})\n📞 *Support:* {support_phone}\n\ncek portal pelanggan : {customer_portal_url}\n\nTerima kasih telah memilih layanan kami.",
+    "enabled": false
   },
   "installation_job_assigned": {
     "title": "Tugas Instalasi Baru",
     "template": " *TUGAS INSTALASI BARU* 🚀\n\nHalo {technician_name},\n\nAnda telah ditugaskan untuk instalasi baru:\n\n📋 *Detail Job:*\n• Pelanggan: {customer_name}\n• Telepon: {customer_phone}\n• Alamat: {customer_address}\n\n📦 *Paket Internet:*\n• Nama: {package_name}\n• Harga: Rp {package_price}\n• PPPoE: {pppoe_username}\n• Password: {pppoe_password}\n\n📅 *Jadwal Instalasi:*\n• Tanggal: {installation_date}\n• Waktu: {installation_time}\n\n📝 *Catatan:* {notes}\n🛠️ *Peralatan:* {equipment_needed}\n\n📍 *Lokasi:* {customer_address}\n\n*Status:* Ditugaskan\n*Prioritas:* {priority}\n\n",
-    "enabled": true
+    "enabled": false
   },
   "installation_status_update": {
     "title": "Update Status Instalasi",
@@ -57,21 +57,21 @@
   "installation_completed": {
     "title": "Instalasi Selesai",
     "template": "\n*INSTALASI SELESAI* ✅\n\nTerimakasih {technician_name},\n\nInstalasi telah berhasil diselesaikan:\n\n📋 *Detail Job:*\n• Pelanggan: {customer_name}\n• Status: SELESAI ✅\n• Waktu Selesai: {completion_time}\n\n📝 *Catatan Penyelesaian:* {completion_notes}\n",
-    "enabled": true
+    "enabled": false
   },
   "sales_order_new_customer": {
     "title": "Sales Order — Pelanggan Baru (ke teknisi)",
     "template": "📋 *SALES ORDER - PELANGGAN BARU*\n\n*No ID Pelanggan:* {customer_id}\n*Nama Pelanggan:* {customer_name}\n*No HP/WA:* {customer_phone}\n*Email:* {customer_email}\n*Alamat:* {customer_address}\n*Paket:* {package_name} ({package_speed})\n*PPPoE Username:* {pppoe_username}\n*PPPoE Password:* {pppoe_password}\n*PPPoE Profile:* {pppoe_profile}\n\n✅ *Status:* Pelanggan telah di-accept dan siap untuk setting.\n\nSilakan lakukan instalasi sesuai dengan data di atas.",
-    "enabled": true
+    "enabled": false
   },
   "trouble_report_new_technician": {
     "title": "Laporan gangguan — notifikasi ke teknisi/admin",
     "template": "\n🚨 *LAPORAN GANGGUAN BARU*\n\n*{company_header}*\n\n📝 *ID Tiket*: {report_id}\n👤 *Pelanggan*: {customer_name}\n📱 *No. HP*: {phone}\n📍 *Lokasi*: {location}\n🔧 *Kategori*: {category}\n🕒 *Waktu Laporan*: {created_at}\n\n💬 *Deskripsi Masalah*:\n{description}\n\n📌 *Status*: {status}\n\n⚠️ *PRIORITAS TINGGI* - Silakan segera ditindaklanjuti!",
-    "enabled": true
+    "enabled": false
   },
   "trouble_report_customer_update": {
     "title": "Laporan gangguan — update ke pelanggan",
     "template": "\n📣 *UPDATE LAPORAN GANGGUAN*\n\n*{company_header}*\n\n📝 *ID Tiket*: {report_id}\n🕒 *Update Pada*: {updated_at}\n📌 *Status Baru*: {status_label}\n\n{technician_note_section}{status_message}\n\nJika ada pertanyaan, silakan hubungi kami.",
-    "enabled": true
+    "enabled": false
   }
 }

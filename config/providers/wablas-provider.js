@@ -19,9 +19,9 @@ try {
 }
 
 class WablasProvider extends WhatsAppProvider {
-    constructor() {
+    constructor(config = null) {
         super();
-        this.config = getWablasConfig();
+        this.config = config || getWablasConfig();
         this.status = {
             connected: false,
             phoneNumber: null,
@@ -34,6 +34,13 @@ class WablasProvider extends WhatsAppProvider {
         };
         this.requestQueue = [];
         this.processingQueue = false;
+    }
+
+    /** Update kredensial runtime (mis. setelah simpan gateway tenant). */
+    setConfig(config) {
+        if (!config || typeof config !== 'object') return;
+        this.config = { ...this.config, ...config };
+        this.rateLimiter.minDelay = this.config.minDelay || 1000;
     }
 
     /**
@@ -93,6 +100,69 @@ class WablasProvider extends WhatsAppProvider {
         });
     }
 
+    /** Authorization header: token.secret_key (trim penting — spasi bikin "secret key invalid") */
+    _authHeader() {
+        const token = String(this.config.apiKey || '').trim();
+        const secret = String(this.config.secretKey || '').trim();
+        if (!token) return '';
+        return secret ? `${token}.${secret}` : token;
+    }
+
+    /**
+     * Cek status device di Wablas (connected/disconnected + quota).
+     */
+    async fetchDeviceInfo() {
+        const authHeader = this._authHeader();
+        if (!authHeader) {
+            return { ok: false, connected: false, error: 'API key kosong' };
+        }
+
+        const base = String(this.config.apiUrl || 'https://bdg.wablas.com').replace(/\/$/, '');
+        const candidates = [
+            { url: `${base}/api/device/info`, headers: { Authorization: authHeader } },
+            { url: `${base}/api/device/info?token=${encodeURIComponent(authHeader)}`, headers: {} },
+            { url: `${base}/api/device/info?token=${encodeURIComponent(String(this.config.apiKey || '').trim())}`, headers: {} }
+        ];
+
+        let lastError = 'Gagal cek device info';
+        for (const req of candidates) {
+            try {
+                const response = await axios.get(req.url, {
+                    headers: req.headers,
+                    timeout: 15000,
+                    family: 4
+                });
+                const body = response.data || {};
+                // Beberapa response Wablas: { status: false, message: "secret key invalid" }
+                if (body.status === false || body.status === 'false') {
+                    lastError = body.message || 'Autentikasi Wablas ditolak';
+                    continue;
+                }
+                const data = body.data && typeof body.data === 'object' ? body.data : body;
+                const statusRaw = String(data.status || body.device_status || '').toLowerCase();
+                const connected = statusRaw === 'connected' || statusRaw === 'connect' || data.connected === true;
+                // Jika body hanya message error tanpa status device
+                if (!statusRaw && body.message && /invalid|unauthorized|token|secret/i.test(String(body.message))) {
+                    lastError = body.message;
+                    continue;
+                }
+                return {
+                    ok: true,
+                    connected,
+                    status: connected ? 'connected' : (statusRaw || 'disconnected'),
+                    quota: data.quota,
+                    expired_date: data.expired_date || data.expiredDate,
+                    phone: data.phone || data.sender || data.number || null,
+                    device: data.device || data.serial || this.config.deviceId || null,
+                    raw: data
+                };
+            } catch (err) {
+                lastError = err.response?.data?.message || err.message;
+            }
+        }
+        return { ok: false, connected: false, error: lastError, status: 'error' };
+    }
+
     /**
      * Kirim pesan teks
      * Format sesuai dokumentasi Wablas: https://bdg.wablas.com/documentation/api
@@ -127,14 +197,9 @@ class WablasProvider extends WhatsAppProvider {
                 data: [messageData]
             };
 
-            // Format Authorization sesuai dokumentasi: token.secret_key
-            // Jika secretKey tidak ada, gunakan apiKey saja (untuk backward compatibility)
-            let authHeader;
-            if (this.config.secretKey) {
-                authHeader = `${this.config.apiKey}.${this.config.secretKey}`;
-            } else {
-                // Fallback: coba dengan apiKey saja (mungkin token sudah include secret_key)
-                authHeader = this.config.apiKey;
+            const authHeader = this._authHeader();
+            if (!authHeader) {
+                throw new Error('Wablas API key tidak dikonfigurasi');
             }
 
             const response = await axios.post(url, payload, {
@@ -146,48 +211,47 @@ class WablasProvider extends WhatsAppProvider {
                 family: 4 // Force IPv4
             });
 
-            // Handle response dari Wablas
-            if (response.data) {
-                // Status "success" = pesan berhasil dikirim
-                if (response.data.status === 'success') {
-                    logger.info(`✅ Wablas: Message sent to ${formattedPhone}`);
-                    return { 
-                        success: true, 
-                        messageId: response.data.data?.[0]?.id || response.data.data?.[0]?.message_id 
-                    };
-                }
-                
-                // Status "pending" = pesan sedang diproses (bukan error!)
-                // Wablas akan mengirim pesan secara async, jadi "pending" adalah status normal
-                if (response.data.status === 'pending' || 
-                    (response.data.message && response.data.message.includes('pending'))) {
-                    logger.info(`⏳ Wablas: Message queued/pending for ${formattedPhone} (will be sent shortly)`);
-                    return { 
-                        success: true, 
-                        pending: true,
-                        messageId: response.data.data?.[0]?.id || response.data.data?.[0]?.message_id || 'pending'
-                    };
-                }
-                
-                // Jika ada message tapi bukan pending/success, log sebagai warning
-                if (response.data.message) {
-                    logger.warn(`⚠️ Wablas response: ${response.data.message} for ${formattedPhone}`);
-                    // Tetap anggap success jika ada message ID
-                    if (response.data.data?.[0]?.id || response.data.data?.[0]?.message_id) {
-                        return { 
-                            success: true, 
-                            messageId: response.data.data?.[0]?.id || response.data.data?.[0]?.message_id,
-                            warning: response.data.message
-                        };
-                    }
-                }
+            const raw = response.data || {};
+            const messages = Array.isArray(raw.data)
+                ? raw.data
+                : (Array.isArray(raw.data?.messages) ? raw.data.messages : []);
+            const first = messages[0] || {};
+            const topStatus = raw.status;
+            const itemStatus = String(first.status || '').toLowerCase();
+            const topMessage = String(raw.message || '');
+            const isPending = itemStatus === 'pending'
+                || topStatus === 'pending'
+                || /pending/i.test(topMessage);
+            const isAccepted = topStatus === true
+                || topStatus === 'success'
+                || topStatus === 'pending'
+                || isPending
+                || !!first.id
+                || !!first.message_id;
+
+            logger.info(
+                `Wablas send result phone=${formattedPhone} accepted=${isAccepted} ` +
+                `status=${JSON.stringify(topStatus)} itemStatus=${itemStatus || '-'} ` +
+                `msg="${topMessage.substring(0, 120)}" id=${first.id || first.message_id || '-'}`
+            );
+
+            if (isAccepted) {
+                return {
+                    success: true,
+                    pending: isPending,
+                    messageId: first.id || first.message_id || null,
+                    wablasStatus: itemStatus || (isPending ? 'pending' : 'accepted'),
+                    wablasMessage: topMessage || (isPending
+                        ? 'Pesan masuk antrian Wablas (pending). Jika device WhatsApp disconnect, pesan tidak akan terkirim.'
+                        : 'Pesan diterima Wablas')
+                };
             }
-            
-            // Jika tidak ada response data atau status tidak dikenal, throw error
-            const errorMsg = response.data?.message || 'Failed to send message';
+
+            const errorMsg = topMessage || 'Failed to send message';
             throw new Error(errorMsg);
         } catch (error) {
-            logger.error(`❌ Wablas sendMessage error to ${phoneNumber}:`, error.message);
+            const apiMsg = error.response?.data?.message || error.message;
+            logger.error(`❌ Wablas sendMessage error to ${phoneNumber}:`, apiMsg);
             
             // Retry logic
             if (options.retry !== false && this.config.maxRetries > 0) {
@@ -198,7 +262,7 @@ class WablasProvider extends WhatsAppProvider {
 
             return { 
                 success: false, 
-                error: error.response?.data?.message || error.message 
+                error: apiMsg
             };
         }
     }
@@ -232,18 +296,14 @@ class WablasProvider extends WhatsAppProvider {
             const endpoint = isImage ? 'send-image' : 'send-document';
 
             const url = `${this.config.apiUrl}/api/v2/${endpoint}`;
-            
-            // Format Authorization sesuai dokumentasi: token.secret_key
-            let authHeader;
-            if (this.config.secretKey) {
-                authHeader = `${this.config.apiKey}.${this.config.secretKey}`;
-            } else {
-                authHeader = this.config.apiKey;
+            const authHeader = this._authHeader();
+            if (!authHeader) {
+                throw new Error('Wablas API key tidak dikonfigurasi');
             }
             
             const response = await axios.post(url, form, {
                 headers: {
-                    'Authorization': authHeader, // Format: token.secret_key (bukan Bearer)
+                    'Authorization': authHeader,
                     ...form.getHeaders()
                 },
                 timeout: 60000,
@@ -449,37 +509,117 @@ class WablasProvider extends WhatsAppProvider {
     }
 
     /**
-     * Cek koneksi dengan API Wablas
+     * Diagnosa lengkap koneksi Wablas (kredensial + status device).
+     * Dipakai UI settings agar indikator Connected jujur.
+     */
+    async diagnoseConnection() {
+        const issues = [];
+        const hints = [];
+        const apiUrl = String(this.config.apiUrl || '').trim();
+        const apiKey = String(this.config.apiKey || '').trim();
+        const secretKey = String(this.config.secretKey || '').trim();
+
+        if (!apiUrl) issues.push('API URL kosong');
+        if (!apiKey) issues.push('API Key / Token kosong');
+        if (!secretKey) {
+            issues.push('Secret Key kosong');
+            hints.push('Generate Secret Key di pengaturan device Wablas, lalu paste tanpa spasi.');
+        }
+
+        if (issues.length) {
+            return {
+                ok: false,
+                connected: false,
+                authOk: false,
+                status: 'incomplete',
+                label: 'Belum lengkap',
+                issues,
+                hints,
+                device: null
+            };
+        }
+
+        const info = await this.fetchDeviceInfo();
+        if (!info.ok) {
+            const err = String(info.error || 'Gagal menghubungi Wablas');
+            const lower = err.toLowerCase();
+            if (lower.includes('secret') || lower.includes('token') || lower.includes('unauthorized') || lower.includes('auth')) {
+                issues.push(`Autentikasi gagal: ${err}`);
+                hints.push('Pastikan Token dan Secret Key pasangan yang sama (baru digenerate bersama).');
+                hints.push('Pastikan API URL sesuai server device (contoh https://bdg.wablas.com).');
+            } else {
+                issues.push(`Tidak bisa cek device: ${err}`);
+                hints.push('Cek koneksi server ke internet / firewall ke domain Wablas.');
+            }
+            return {
+                ok: false,
+                connected: false,
+                authOk: false,
+                status: 'error',
+                label: 'Error koneksi',
+                issues,
+                hints,
+                device: info,
+                error: err
+            };
+        }
+
+        if (!info.connected) {
+            issues.push(`Device Wablas status: ${info.status || 'disconnected'} (belum Connected)`);
+            hints.push('Buka dashboard Wablas → Device → pastikan status Connected.');
+            hints.push('Jika disconnect, scan ulang QR dari menu device Wablas.');
+            hints.push('Pesan yang berstatus PENDING di laporan Wablas tidak akan sampai sampai device Connected.');
+            return {
+                ok: true,
+                connected: false,
+                authOk: true,
+                status: info.status || 'disconnected',
+                label: 'Token OK · Device offline',
+                issues,
+                hints,
+                device: info,
+                phone: info.phone,
+                quota: info.quota,
+                expired_date: info.expired_date
+            };
+        }
+
+        return {
+            ok: true,
+            connected: true,
+            authOk: true,
+            status: 'connected',
+            label: 'Connected',
+            issues: [],
+            hints: [],
+            device: info,
+            phone: info.phone,
+            quota: info.quota,
+            expired_date: info.expired_date
+        };
+    }
+
+    /**
+     * Cek koneksi dengan API Wablas (status device nyata)
      * @private
      */
     async _checkConnection() {
-        try {
-            // Format Authorization sesuai dokumentasi: token.secret_key
-            let authHeader;
-            if (this.config.secretKey) {
-                authHeader = `${this.config.apiKey}.${this.config.secretKey}`;
-            } else {
-                authHeader = this.config.apiKey;
-            }
-
-            // Wablas tidak punya endpoint public untuk cek device status
-            // Jadi kita anggap connected jika API key ada
-            // Koneksi akan terverifikasi saat pertama kali kirim pesan
-            if (this.config.apiKey) {
-                logger.info('✅ Wablas API key configured, assuming connected (will verify on first send)');
-                return true;
-            }
-
-            return false;
-        } catch (error) {
-            logger.warn(`⚠️ Wablas connection check failed: ${error.message}`);
-            // Jika API key ada, anggap connected (endpoint mungkin berbeda)
-            if (this.config.apiKey) {
-                logger.info('✅ Wablas API key configured, assuming connected despite check failure');
-                return true;
-            }
+        if (!String(this.config.apiKey || '').trim()) {
             return false;
         }
+
+        const diagnosis = await this.diagnoseConnection();
+        if (diagnosis.connected) {
+            this.status.phoneNumber = diagnosis.phone || this.status.phoneNumber;
+            logger.info(`✅ Wablas device connected${diagnosis.phone ? ` (${diagnosis.phone})` : ''}`);
+            return true;
+        }
+
+        this.status.status = diagnosis.status || 'disconnected';
+        if (diagnosis.issues?.length) {
+            logger.warn(`⚠️ Wablas belum siap: ${diagnosis.issues.join('; ')}`);
+        }
+        return false;
     }
 
     /**

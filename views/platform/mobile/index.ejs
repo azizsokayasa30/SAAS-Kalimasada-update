@@ -7,14 +7,31 @@
       <p class="km-subtitle">Aplikasi Flutter unified <code>billing_kalimasada_mobile</code> — build APK release &amp; publikasi update OTA</p>
     </div>
     <div class="d-flex align-items-center gap-2 flex-wrap">
-      <span class="badge bg-secondary" id="flutterStatusBadge"><i class="bi bi-hourglass-split me-1"></i> Memuat…</span>
+      <span class="badge bg-secondary" id="readinessBadge"><i class="bi bi-hourglass-split me-1"></i> Memuat…</span>
+      <span class="badge bg-secondary" id="flutterStatusBadge"><i class="bi bi-hourglass-split me-1"></i> Flutter…</span>
       <span class="badge bg-secondary d-none" id="keystoreStatusBadge"></span>
+    </div>
+  </div>
+
+  <div id="readinessPanel" class="km-readiness-banner mb-3 is-loading" role="status">
+    <div class="km-readiness-banner__main">
+      <i class="bi bi-hourglass-split" id="readinessIcon" aria-hidden="true"></i>
+      <span id="readinessText">Memuat…</span>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <button type="button" class="btn btn-sm btn-warning d-none" id="btnBootstrapKeystore">
+        <i class="bi bi-shield-plus me-1"></i>Buat keystore
+      </button>
+      <button type="button" class="btn btn-sm btn-outline-warning d-none" id="btnAdoptKeystore">
+        <i class="bi bi-shield-check me-1"></i>Adopsi keystore ini
+      </button>
     </div>
   </div>
 
   <div class="alert alert-info km-mobile-info">
     <i class="bi bi-info-circle me-2"></i>
     <strong>Aplikasi unified</strong> — satu APK untuk semua tenant. Pengguna memilih server saat login di dalam app.
+    API mobile memakai <code>https://mobile.kalimasada-app.com</code> (bukan portal <code>manage.</code>).
     Setelah build sukses, <code>manifest.json</code> dan APK di <code id="apkPublishDirHint">public/mobile-app/</code> diperbarui
     sehingga pengguna bisa update langsung dari aplikasi.
     <span id="keystoreOkHint" class="d-none"><br><i class="bi bi-shield-check text-success me-1"></i>Keystore produksi aktif di <code>public/mobile-app/keystore/kalimasada.jks</code>.</span>
@@ -55,8 +72,8 @@
           <h5 class="mb-3"><i class="bi bi-wifi text-primary me-2"></i>Environment &amp; Flutter SDK</h5>
           <div class="mb-3">
             <label class="form-label fw-semibold" for="apiUrl">API_URL default (.env)</label>
-            <input type="url" class="form-control" id="apiUrl" name="api_url" placeholder="https://billing.example.com" required>
-            <div class="form-text">URL server billing default saat pertama install. Tanpa slash di akhir. Disalin ke <code>billing_kalimasada_mobile/.env</code>.</div>
+            <input type="url" class="form-control" id="apiUrl" name="api_url" placeholder="https://mobile.kalimasada-app.com" required>
+            <div class="form-text">URL hub API mobile (default). Tanpa slash di akhir. Disalin ke <code>billing_kalimasada_mobile/.env</code>. Portal management tetap di <code>manage.</code>.</div>
           </div>
           <div class="mb-0">
             <label class="form-label fw-semibold" for="flutterPath">Path Flutter SDK</label>
@@ -167,4 +184,4 @@
   </div>
 </main>
 <%- include('../partials/footer') %>
-<script src="/js/management-mobile-app.js?v=1"></script>
+<script src="/js/management-mobile-app.js?v=4"></script>

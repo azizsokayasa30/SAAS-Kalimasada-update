@@ -29,13 +29,17 @@ class BaileysProvider extends WhatsAppProvider {
             this.status.status = 'connected';
             this.status.connectedSince = new Date();
             
-            // Setup event listeners untuk Baileys
-            this._setupBaileysListeners();
+            // Idempotent: jangan attach listener berulang ke sock yang sama
+            if (this._listenersSock !== sock) {
+                this._setupBaileysListeners();
+                this._listenersSock = sock;
+            }
             
             logger.info('✅ BaileysProvider: Socket set and listeners attached');
         } else {
             this.status.connected = false;
             this.status.status = 'disconnected';
+            this._listenersSock = null;
         }
     }
 

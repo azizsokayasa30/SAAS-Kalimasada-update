@@ -53,6 +53,30 @@ class CollectorProvider extends ChangeNotifier {
   int? get overviewMonth => _overviewMonth;
   int? get overviewYear => _overviewYear;
 
+  /// Bersihkan cache kolektor saat logout (cegah data tenant lain).
+  void clear() {
+    customersReloadNonce++;
+    _overview = null;
+    _customers = [];
+    _settlement = null;
+    _me = null;
+    _collectorAreas = [];
+    _lastCustomersFetchStatus = '';
+    _lastCustomersFetchArea = '';
+    _lastCustomersFetchQ = '';
+    _overviewError = null;
+    _customersError = null;
+    _settlementError = null;
+    _meError = null;
+    _overviewLoading = false;
+    _customersLoading = false;
+    _settlementLoading = false;
+    _meLoading = false;
+    _overviewMonth = null;
+    _overviewYear = null;
+    notifyListeners();
+  }
+
   List<String> _periodQueryParts({int? month, int? year}) {
     final m = month ?? _overviewMonth;
     final y = year ?? _overviewYear;

@@ -23,6 +23,105 @@ function getRadiusClientsConfReadDiagnostics() {
 
 // Import RADIUS connection
 const { getRadiusConnection } = require('./radiusSQLite');
+const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
+
+const SYSTEM_NAS_IPS = new Set(['127.0.0.1', '::1']);
+const SYSTEM_NAS_NAMES = new Set(['localhost', 'localhost_ipv6']);
+
+function isSystemNasClient(client) {
+    const ip = String(client?.ipaddr || client?.nasname || '').trim();
+    const name = String(client?.name || client?.shortname || '').trim();
+    return SYSTEM_NAS_IPS.has(ip) || SYSTEM_NAS_NAMES.has(name);
+}
+
+function resolveTenantIdForNas(explicitTenantId = null) {
+    if (explicitTenantId != null && Number.isFinite(Number(explicitTenantId))) {
+        return parseInt(explicitTenantId, 10);
+    }
+    if (hasTenantContext()) {
+        return parseInt(getTenantId(), 10);
+    }
+    return null;
+}
+
+function clientBelongsToTenant(client, tenantId) {
+    if (tenantId == null) return true;
+    if (isSystemNasClient(client)) return false;
+    const tid = client?.tenant_id;
+    return tid != null && Number(tid) === Number(tenantId);
+}
+
+function filterClientsForTenant(clients, tenantId = null) {
+    const tid = resolveTenantIdForNas(tenantId);
+    if (tid == null) return clients || [];
+    return (clients || []).filter((c) => clientBelongsToTenant(c, tid));
+}
+
+/**
+ * Merge perubahan client milik satu tenant tanpa menghapus client tenant lain / system.
+ */
+function mergeTenantClientsIntoAll(allClients, tenantClients, tenantId) {
+    const tid = resolveTenantIdForNas(tenantId);
+    if (tid == null) {
+        return tenantClients;
+    }
+    const others = (allClients || []).filter((c) => !clientBelongsToTenant(c, tid));
+    const owned = (tenantClients || []).map((c) => ({
+        ...c,
+        tenant_id: tid
+    }));
+    return [...others, ...owned].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+}
+
+async function ensureNasTenantColumn(conn) {
+    try {
+        const [cols] = await conn.execute('PRAGMA table_info(nas)');
+        const hasTenant = Array.isArray(cols) && cols.some((c) => String(c.name).toLowerCase() === 'tenant_id');
+        if (hasTenant) return;
+        await conn.execute('ALTER TABLE nas ADD COLUMN tenant_id INTEGER');
+        logger.info('[RADIUS-CLIENTS] Kolom tenant_id ditambahkan ke tabel nas');
+    } catch (e) {
+        const msg = String(e.message || e);
+        if (!/duplicate column|already exists/i.test(msg)) {
+            logger.debug(`[RADIUS-CLIENTS] ensureNasTenantColumn: ${msg}`);
+        }
+    }
+}
+
+async function backfillNasTenantIdsFromRouters(conn) {
+    try {
+        const sqlite3 = require('sqlite3').verbose();
+        const path = require('path');
+        const billingPath = path.join(__dirname, '../data/billing.db');
+        const routers = await new Promise((resolve) => {
+            const db = new sqlite3.Database(billingPath);
+            db.all('SELECT nas_ip, tenant_id FROM routers WHERE nas_ip IS NOT NULL AND tenant_id IS NOT NULL', [], (err, rows) => {
+                db.close();
+                resolve(err ? [] : (rows || []));
+            });
+        });
+        if (!routers.length) return;
+
+        const byIp = new Map();
+        for (const r of routers) {
+            const ip = String(r.nas_ip || '').trim();
+            if (ip) byIp.set(ip, parseInt(r.tenant_id, 10));
+        }
+
+        const [rows] = await conn.execute(
+            'SELECT id, nasname, tenant_id FROM nas WHERE tenant_id IS NULL OR tenant_id = 0'
+        );
+        for (const row of Array.isArray(rows) ? rows : []) {
+            const ip = String(row.nasname || '').trim();
+            if (SYSTEM_NAS_IPS.has(ip)) continue;
+            const tid = byIp.get(ip);
+            if (tid == null) continue;
+            await conn.execute('UPDATE nas SET tenant_id = ? WHERE id = ?', [tid, row.id]);
+        }
+    } catch (e) {
+        logger.warn(`[RADIUS-CLIENTS] Backfill tenant_id nas gagal: ${e.message}`);
+    }
+}
 
 /**
  * Initialize clients management using existing FreeRADIUS nas table
@@ -31,8 +130,8 @@ const { getRadiusConnection } = require('./radiusSQLite');
 async function initializeClientsTable() {
     try {
         const conn = await getRadiusConnection();
-        // Table nas already exists from radiusSQLite.js schema
-        // Just verify connection works
+        await ensureNasTenantColumn(conn);
+        await backfillNasTenantIdsFromRouters(conn);
         const result = await conn.execute('SELECT COUNT(*) as count FROM nas');
         logger.info('[RADIUS-CLIENTS] Clients table ready - using nas table from FreeRADIUS schema');
         await conn.end();
@@ -55,19 +154,36 @@ initializeClientsTable().catch(err => {
  * - Jika nas kosong tetapi clients.conf berisi client, isi ulang nas otomatis agar konsisten dengan FR.
  * - Simpan dari UI menulis clients.conf DAN nas (lihat writeClientsConfToDB).
  */
-async function parseClientsConfFromDB() {
+async function parseClientsConfFromDB(options = {}) {
+    const tenantId = options.tenantId !== undefined
+        ? options.tenantId
+        : resolveTenantIdForNas();
     let dbRows = [];
     try {
         const conn = await getRadiusConnection();
+        await ensureNasTenantColumn(conn);
         const [rows] = await conn.execute(`
-            SELECT id, nasname, shortname, type, secret, description
+            SELECT id, nasname, shortname, type, secret, description, tenant_id
             FROM nas
             ORDER BY nasname
         `);
         dbRows = Array.isArray(rows) ? rows : [];
+        await conn.end();
     } catch (error) {
-        logger.warn(`[RADIUS-CLIENTS] Gagal baca nas: ${error.message}`);
-        dbRows = [];
+        // Fallback jika kolom tenant_id belum ada di instalasi lama
+        try {
+            const conn = await getRadiusConnection();
+            const [rows] = await conn.execute(`
+                SELECT id, nasname, shortname, type, secret, description
+                FROM nas
+                ORDER BY nasname
+            `);
+            dbRows = Array.isArray(rows) ? rows : [];
+            await conn.end();
+        } catch (e2) {
+            logger.warn(`[RADIUS-CLIENTS] Gagal baca nas: ${e2.message}`);
+            dbRows = [];
+        }
     }
 
     const dbClients = dbRows.map(mapNasRowToClient);
@@ -88,7 +204,11 @@ async function parseClientsConfFromDB() {
     if (merged.length > 0) {
         logger.info(`[RADIUS-CLIENTS] Daftar gabungan: ${merged.length} client (nas + clients.conf)`);
     }
-    return merged;
+
+    if (options.all === true || tenantId == null) {
+        return merged;
+    }
+    return filterClientsForTenant(merged, tenantId);
 }
 
 /**
@@ -285,6 +405,7 @@ function mapNasRowToClient(row) {
         nas_type: row.type || 'other',
         require_message_authenticator: 'no',
         comment: row.description || null,
+        tenant_id: row.tenant_id != null ? Number(row.tenant_id) : null,
         fromDB: true
     };
 }
@@ -306,7 +427,8 @@ function mergeClientsFromDbAndFile(dbClients, fileClients) {
             nas_type: c.nas_type || 'other',
             require_message_authenticator: c.require_message_authenticator || 'no',
             comment: c.comment || null,
-            addrType: c.addrType || 'ipaddr'
+            addrType: c.addrType || 'ipaddr',
+            tenant_id: c.tenant_id != null ? Number(c.tenant_id) : null
         });
     }
     for (const c of dbClients) {
@@ -324,6 +446,7 @@ function mergeClientsFromDbAndFile(dbClients, fileClients) {
                 c.require_message_authenticator || prev.require_message_authenticator || 'no',
             comment: c.comment != null ? c.comment : prev.comment,
             addrType: c.addrType || prev.addrType || 'ipaddr',
+            tenant_id: c.tenant_id != null ? Number(c.tenant_id) : (prev.tenant_id != null ? Number(prev.tenant_id) : null),
             fromDB: true
         });
     }
@@ -333,24 +456,121 @@ function mergeClientsFromDbAndFile(dbClients, fileClients) {
 /** Hanya isi ulang tabel nas (tanpa menulis clients.conf) — dipakai auto-heal + writeClientsConfToDB */
 async function replaceNasTable(clients) {
     const conn = await getRadiusConnection();
+    await ensureNasTenantColumn(conn);
     await conn.execute('DELETE FROM nas');
+    const seenIps = new Set();
     for (const client of clients) {
         if (!client.name || !client.secret) {
             logger.warn(`[RADIUS-CLIENTS] Lewati client tidak lengkap: ${client.name}`);
             continue;
         }
-        const ip = (client.ipaddr || '').trim();
+        let ip = String(client.ipaddr || '').trim();
+        const ipv4Port = ip.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/);
+        if (ipv4Port) ip = ipv4Port[1];
         if (!ip) {
             logger.warn(`[RADIUS-CLIENTS] Lewati client tanpa IP: ${client.name}`);
             continue;
         }
+        if (seenIps.has(ip)) {
+            logger.warn(`[RADIUS-CLIENTS] Lewati IP duplikat ${ip} (${client.name})`);
+            continue;
+        }
+        seenIps.add(ip);
+        const shortname = String(client.name || '').trim();
+        if (!isValidClientName(shortname)) {
+            logger.warn(`[RADIUS-CLIENTS] Lewati nama ilegal "${client.name}" — harus tanpa spasi/karakter aneh`);
+            continue;
+        }
+        if (!isValidClientIp(ip)) {
+            logger.warn(`[RADIUS-CLIENTS] Lewati IP ilegal ${ip} (${shortname})`);
+            continue;
+        }
+        const tenantId = client.tenant_id != null && Number.isFinite(Number(client.tenant_id))
+            ? parseInt(client.tenant_id, 10)
+            : null;
         await conn.execute(
-            `INSERT INTO nas (nasname, shortname, type, secret, description)
-             VALUES (?, ?, ?, ?, ?)`,
-            [ip, client.name, client.nas_type || 'other', client.secret, client.comment || null]
+            `INSERT INTO nas (nasname, shortname, type, secret, description, tenant_id)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [ip, shortname, client.nas_type || 'other', client.secret, client.comment || null, tenantId]
         );
     }
     logger.info(`[RADIUS-CLIENTS] Tabel nas diisi ulang (${clients.length} entri masukan)`);
+    await conn.end();
+}
+
+/**
+ * Simpan daftar client milik tenant (merge aman: client tenant lain & system tetap utuh).
+ */
+async function writeTenantClientsConfToDB(tenantClients, tenantId = null) {
+    const tid = resolveTenantIdForNas(tenantId);
+    const allClients = await parseClientsConfFromDB({ all: true });
+    const merged = mergeTenantClientsIntoAll(allClients, tenantClients, tid);
+    return writeClientsConfToDB(merged);
+}
+
+/**
+ * Upsert satu NAS RADIUS dari data router billing (sinkron Setting Mikrotik / NAS).
+ */
+async function upsertRadiusNasFromRouter(router, tenantId = null) {
+    const ip = String(router?.nas_ip || '').trim();
+    if (!ip || ip.toUpperCase() === 'RADIUS') return { success: false, message: 'IP NAS tidak valid' };
+    if (!isValidClientIp(ip)) {
+        return {
+            success: false,
+            message: 'IP NAS tidak valid untuk RADIUS (jangan sertakan port, contoh: 10.10.0.5)'
+        };
+    }
+    const tid = resolveTenantIdForNas(tenantId != null ? tenantId : router?.tenant_id);
+    const rawName = String(router?.name || ip).trim();
+    if (!isValidClientName(rawName)) {
+        const suggested = sanitizeClientName(rawName) || 'NAS_1';
+        return {
+            success: false,
+            message: `Nama NAS tidak valid untuk RADIUS (tanpa spasi/karakter aneh). Gunakan misalnya: ${suggested}`
+        };
+    }
+    const name = rawName;
+    const secret = String(router?.secret || router?.password || 'testing123').trim() || 'testing123';
+
+    const all = await parseClientsConfFromDB({ all: true });
+    const idx = all.findIndex((c) => String(c.ipaddr || '').trim() === ip);
+    const next = {
+        name,
+        ipaddr: ip,
+        secret,
+        nas_type: 'other',
+        require_message_authenticator: 'no',
+        comment: router?.location || router?.nas_identifier || null,
+        tenant_id: tid
+    };
+    if (idx >= 0) {
+        // Jangan timpa milik tenant lain
+        if (tid != null && all[idx].tenant_id != null && Number(all[idx].tenant_id) !== Number(tid)) {
+            return { success: false, message: 'NAS IP sudah dipakai tenant lain di RADIUS' };
+        }
+        all[idx] = { ...all[idx], ...next, tenant_id: tid != null ? tid : all[idx].tenant_id };
+    } else {
+        all.push(next);
+    }
+    await writeClientsConfToDB(all);
+    return { success: true };
+}
+
+async function removeRadiusNasByIp(nasIp, tenantId = null) {
+    const ip = String(nasIp || '').trim();
+    if (!ip) return { success: false, message: 'IP kosong' };
+    const tid = resolveTenantIdForNas(tenantId);
+    const all = await parseClientsConfFromDB({ all: true });
+    const filtered = all.filter((c) => {
+        if (String(c.ipaddr || '').trim() !== ip) return true;
+        if (tid == null) return false;
+        return !clientBelongsToTenant(c, tid);
+    });
+    if (filtered.length === all.length) {
+        return { success: false, message: 'NAS RADIUS tidak ditemukan / bukan milik tenant' };
+    }
+    await writeClientsConfToDB(filtered);
+    return { success: true };
 }
 
 function readClientsConfHeader() {
@@ -398,12 +618,52 @@ function readClientsConfHeader() {
 `;
 }
 
-function buildClientsConfContent(clients) {
-    const headerContent = readClientsConfHeader();
+/** Nama client FreeRADIUS tidak boleh spasi / karakter aneh (syntax `client NAME {`). */
+const CLIENT_NAME_SAFE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function sanitizeClientName(name) {
+    return String(name || '')
+        .trim()
+        .replace(/\s+/g, '_')
+        .replace(/[^A-Za-z0-9._-]/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^[._-]+|[._-]+$/g, '');
+}
+
+/** true hanya jika nama sudah aman untuk FreeRADIUS (tanpa perlu dinormalisasi). */
+function isValidClientName(name) {
+    const raw = String(name || '').trim();
+    return raw.length > 0 && raw.length <= 64 && CLIENT_NAME_SAFE_RE.test(raw);
+}
+
+function isIpv6Literal(addr) {
+    const s = String(addr || '').trim();
+    if (!s) return false;
+    // IPv4 or IPv4/prefix must stay ipaddr (avoid treating "a.b.c.d:port" as IPv6)
+    if (/^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/.test(s)) return false;
+    if (/^\d{1,3}(\.\d{1,3}){3}:\d+$/.test(s)) return false;
+    return s.includes(':');
+}
+
+function isValidClientIp(ipaddr) {
+    const raw = String(ipaddr || '').trim();
+    if (!raw) return false;
+    if (/^(\d{1,3}\.){3}\d{1,3}:\d+$/.test(raw)) return false;
+    const ipv4 = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
+    if (ipv4.test(raw)) {
+        const parts = raw.split('/')[0].split('.').map(Number);
+        return parts.every((n) => n >= 0 && n <= 255);
+    }
+    return isIpv6Literal(raw);
+}
+
+function buildClientBlocks(clients) {
     let clientsSection = '';
 
-    clients.forEach((client) => {
+    (clients || []).forEach((client) => {
         const c = { ...client };
+        c.name = sanitizeClientName(c.name);
+        if (!c.name) return;
         if (c.name === 'localhost_ipv6' && !c.ipaddr) {
             c.ipaddr = '::1';
             c.addrType = 'ipv6addr';
@@ -412,9 +672,15 @@ function buildClientsConfContent(clients) {
         clientsSection += `client ${c.name} {\n`;
 
         if (c.ipaddr) {
+            let addr = String(c.ipaddr).trim();
+            // Strip mistaken ":port" on IPv4 (bukan field FreeRADIUS client)
+            const ipv4Port = addr.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/);
+            if (ipv4Port) addr = ipv4Port[1];
+
             let keyword = c.addrType || 'ipaddr';
-            if (c.ipaddr.includes(':')) keyword = 'ipv6addr';
-            clientsSection += `\t${keyword} = ${c.ipaddr}\n`;
+            if (isIpv6Literal(addr)) keyword = 'ipv6addr';
+            else if (keyword === 'ipv6addr' && !isIpv6Literal(addr)) keyword = 'ipaddr';
+            clientsSection += `\t${keyword} = ${addr}\n`;
         } else if (c.name === 'localhost') {
             clientsSection += `\tipaddr = 127.0.0.1\n`;
         }
@@ -428,7 +694,11 @@ function buildClientsConfContent(clients) {
         clientsSection += `}\n\n`;
     });
 
-    return headerContent + clientsSection;
+    return clientsSection;
+}
+
+function buildClientsConfContent(clients) {
+    return readClientsConfHeader() + buildClientBlocks(clients);
 }
 
 function canWritePath(targetPath) {
@@ -459,10 +729,36 @@ function writeClientsConfMirror(clients) {
 
 /**
  * Write clients array back to clients.conf file (best-effort).
- * FreeRADIUS di server ini memakai read_clients=yes dari tabel nas — gagal tulis file tidak fatal.
+ * FreeRADIUS di server ini memakai read_clients=yes dari tabel nas —
+ * file clients.conf hanya untuk localhost (hindari duplicate client).
  */
 function writeClientsConf(clients) {
-    const fullContent = buildClientsConfContent(clients);
+    let systemOnly = (clients || []).filter((c) => isSystemNasClient(c));
+    if (systemOnly.length === 0) {
+        systemOnly = [
+            {
+                name: 'localhost',
+                ipaddr: '127.0.0.1',
+                secret: 'testing123',
+                nas_type: 'other',
+                require_message_authenticator: 'no'
+            },
+            {
+                name: 'localhost_ipv6',
+                ipaddr: '::1',
+                secret: 'testing123',
+                nas_type: 'other',
+                require_message_authenticator: 'no'
+            }
+        ];
+    }
+    const fullContent =
+        `# -*- text -*-
+## clients.conf — hanya localhost; NAS produksi di tabel SQLite nas (read_clients=yes)
+## Jangan duplikasi NAS di file ini (bentrok dengan FreeRADIUS).
+## Generated: ${new Date().toISOString()}
+
+` + buildClientBlocks(systemOnly);
     const backupPath = `${CLIENTS_CONF_PATH}.backup.${Date.now()}`;
     let backupCreated = false;
 
@@ -529,6 +825,29 @@ function writeClientsConf(clients) {
  */
 function restartFreeRADIUS() {
     try {
+        // Cegah crash-loop: tolak restart jika config/nas tidak valid
+        try {
+            execSync('freeradius -CX', {
+                encoding: 'utf8',
+                timeout: 20000,
+                stdio: ['ignore', 'pipe', 'pipe']
+            });
+        } catch (cxErr) {
+            const detail = String(cxErr.stderr || cxErr.stdout || cxErr.message || '')
+                .split('\n')
+                .filter((l) => /error|fail|expecting|duplicate/i.test(l))
+                .slice(0, 4)
+                .join(' | ');
+            logger.error(`[RADIUS-CLIENTS] freeradius -CX gagal, restart dibatalkan: ${detail || cxErr.message}`);
+            return {
+                success: false,
+                message:
+                    'Konfigurasi FreeRADIUS tidak valid — restart dibatalkan agar service tidak crash-loop. Perbaiki nama/IP NAS (tanpa spasi) lalu simpan lagi.' +
+                    (detail ? ` Detail: ${detail}` : ''),
+                error: detail || cxErr.message
+            };
+        }
+
         // Check if systemctl exists
         try {
             execSync('command -v systemctl', { stdio: 'ignore' });
@@ -570,26 +889,35 @@ function restartFreeRADIUS() {
 }
 
 /**
- * Validate client data
+ * Validate client data — tolak input ilegal (jangan dinormalisasi diam-diam).
  */
 function validateClient(client) {
     const errors = [];
+    const rawName = client?.name != null ? String(client.name).trim() : '';
 
-    if (!client.name || client.name.trim() === '') {
+    if (!rawName) {
         errors.push('Client name diperlukan');
+    } else if (!isValidClientName(rawName)) {
+        const suggested = sanitizeClientName(rawName);
+        errors.push(
+            suggested
+                ? `Nama client tidak valid (tanpa spasi/karakter aneh). Gunakan hanya huruf, angka, titik, strip, underscore. Contoh: ${suggested}`
+                : 'Nama client tidak valid. Gunakan hanya huruf, angka, titik, strip, underscore (tanpa spasi).'
+        );
     }
 
-    if (!client.ipaddr || client.ipaddr.trim() === '') {
+    if (!client.ipaddr || String(client.ipaddr).trim() === '') {
         errors.push('IP address diperlukan');
     } else {
-        // Simple IP validation
-        const ipRegex = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
-        if (!ipRegex.test(client.ipaddr.trim())) {
+        const raw = String(client.ipaddr).trim();
+        if (/^(\d{1,3}\.){3}\d{1,3}:\d+$/.test(raw)) {
+            errors.push('IP address tidak boleh menyertakan port (contoh benar: 10.10.0.2)');
+        } else if (!isValidClientIp(raw)) {
             errors.push('Format IP address tidak valid');
         }
     }
 
-    if (!client.secret || client.secret.trim() === '') {
+    if (!client.secret || String(client.secret).trim() === '') {
         errors.push('Secret diperlukan');
     }
 
@@ -702,8 +1030,18 @@ module.exports = {
     writeClientsConf,
     writeClientsConfMirror,
     writeClientsConfToDB,
+    writeTenantClientsConfToDB,
+    upsertRadiusNasFromRouter,
+    removeRadiusNasByIp,
+    filterClientsForTenant,
+    clientBelongsToTenant,
+    isSystemNasClient,
+    mergeTenantClientsIntoAll,
     restartFreeRADIUS,
     validateClient,
+    sanitizeClientName,
+    isValidClientName,
+    isValidClientIp,
     getRadiusClientsConfReadDiagnostics,
     CLIENTS_CONF_PATH,
     CLIENTS_CONF_MIRROR

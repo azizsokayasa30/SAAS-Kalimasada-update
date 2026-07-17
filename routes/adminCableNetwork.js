@@ -228,11 +228,12 @@ router.post('/odp', adminAuth, async (req, res) => {
         }
         
         // Insert ODP baru
+        const tenantId = tenantIdForInsert();
         const newODPId = await new Promise((resolve, reject) => {
             db.run(`
-                INSERT INTO odps (name, code, parent_odp_id, latitude, longitude, address, capacity, status, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `, [name, code, parent_odp_id || null, latitude, longitude, address, capacity || 64, status || 'active', notes], function(err) {
+                INSERT INTO odps (name, code, parent_odp_id, latitude, longitude, address, capacity, status, notes, tenant_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [name, code, parent_odp_id || null, latitude, longitude, address, capacity || 64, status || 'active', notes, tenantId], function(err) {
                 if (err) reject(err);
                 else resolve(this.lastID);
             });

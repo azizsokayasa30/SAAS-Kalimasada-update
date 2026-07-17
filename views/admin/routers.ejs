@@ -80,8 +80,18 @@
           <div class="modal-content">
             <div class="modal-header"><h5 class="modal-title">Tambah NAS</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
             <div class="modal-body">
-              <div class="mb-3"><label class="form-label">Nama</label><input class="form-control" id="r_name"></div>
-              <div class="mb-3"><label class="form-label">NAS IP</label><input class="form-control" id="r_ip" placeholder="10.0.0.10"></div>
+              <div class="mb-3">
+                <label class="form-label">Nama</label>
+                <input class="form-control" id="r_name" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*"
+                       title="Hanya huruf, angka, titik, strip, underscore — tanpa spasi"
+                       placeholder="Contoh: RO-KRG_MERDEN" autocomplete="off" spellcheck="false">
+                <small class="form-text text-muted">Tanpa spasi (contoh <code>BAKTI_PUSAT</code>) — dipakai sebagai nama NAS RADIUS</small>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">NAS IP</label>
+                <input class="form-control" id="r_ip" maxlength="45" placeholder="10.10.0.5" autocomplete="off" spellcheck="false">
+                <small class="form-text text-muted">IP saja — jangan sertakan port</small>
+              </div>
               <div class="mb-3"><label class="form-label">NAS Identifier</label><input class="form-control" id="r_ident" placeholder="RouterA"></div>
               <div class="mb-3"><label class="form-label">Lokasi</label><input class="form-control" id="r_location" placeholder="Gedung/Alamat"></div>
               <div class="mb-3"><label class="form-label">POP</label><input class="form-control" id="r_pop" placeholder="POP-1"></div>
@@ -111,8 +121,18 @@
             <div class="modal-header"><h5 class="modal-title">Edit NAS</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
             <div class="modal-body">
               <input type="hidden" id="e_id">
-              <div class="mb-3"><label class="form-label">Nama</label><input class="form-control" id="e_name"></div>
-              <div class="mb-3"><label class="form-label">NAS IP</label><input class="form-control" id="e_ip"></div>
+              <div class="mb-3">
+                <label class="form-label">Nama</label>
+                <input class="form-control" id="e_name" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*"
+                       title="Hanya huruf, angka, titik, strip, underscore — tanpa spasi"
+                       autocomplete="off" spellcheck="false">
+                <small class="form-text text-muted">Tanpa spasi — dipakai sebagai nama NAS RADIUS</small>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">NAS IP</label>
+                <input class="form-control" id="e_ip" maxlength="45" autocomplete="off" spellcheck="false">
+                <small class="form-text text-muted">IP saja — jangan sertakan port</small>
+              </div>
               <div class="mb-3"><label class="form-label">NAS Identifier</label><input class="form-control" id="e_ident"></div>
               <div class="mb-3"><label class="form-label">Lokasi</label><input class="form-control" id="e_location"></div>
               <div class="mb-3"><label class="form-label">POP</label><input class="form-control" id="e_pop"></div>
@@ -142,8 +162,37 @@
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
 <script>
+const NAS_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const NAS_IPV4_RE = /^(\d{1,3}\.){3}\d{1,3}$/;
+const NAS_IPV4_PORT_RE = /^(\d{1,3}\.){3}\d{1,3}:\d+$/;
+
+function filterNasNameInput($el) {
+  const v = $el.val();
+  const filtered = String(v || '').replace(/\s+/g, '_').replace(/[^A-Za-z0-9._-]/g, '');
+  if (filtered !== v) $el.val(filtered);
+}
+function validateNasForm(name, ip) {
+  const n = String(name || '').trim();
+  const i = String(ip || '').trim();
+  if (!n) return 'Nama NAS wajib diisi';
+  if (!NAS_NAME_RE.test(n)) return 'Nama NAS tidak boleh spasi/karakter aneh. Contoh: BAKTI_PUSAT';
+  if (!i) return 'NAS IP wajib diisi';
+  if (NAS_IPV4_PORT_RE.test(i)) return 'NAS IP jangan sertakan port (contoh: 10.10.0.5)';
+  if (NAS_IPV4_RE.test(i)) {
+    const ok = i.split('.').every(function (p) { const x = parseInt(p, 10); return x >= 0 && x <= 255; });
+    if (!ok) return 'Oktet IPv4 harus 0–255';
+    return null;
+  }
+  if (i.includes(':') && !i.includes('.')) return null;
+  return 'Format NAS IP tidak valid';
+}
+$(document).on('input', '#r_name, #e_name', function () { filterNasNameInput($(this)); });
+
 async function saveRouter(){
+  filterNasNameInput($('#r_name'));
   const body = { name: $('#r_name').val().trim(), nas_ip: $('#r_ip').val().trim(), nas_identifier: $('#r_ident').val().trim(), location: $('#r_location').val().trim(), pop: $('#r_pop').val().trim(), port: $('#r_port').val(), user: $('#r_user').val(), password: $('#r_password').val(), genieacs_server_id: $('#r_genieacs_server_id').val() || null };
+  const err = validateNasForm(body.name, body.nas_ip);
+  if (err) { alert(err); return; }
   const res = await fetch('/admin/routers', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)}).then(r=>r.json());
   if(res.success){ location.reload(); } else { alert(res.message||'Gagal simpan'); }
 }
@@ -161,17 +210,37 @@ function openEdit(r){
   new bootstrap.Modal(document.getElementById('editRouterModal')).show(); 
 }
 async function updateRouter(){
+  filterNasNameInput($('#e_name'));
   const id=$('#e_id').val(); 
-  const body={ name:$('#e_name').val(), nas_ip:$('#e_ip').val(), nas_identifier:$('#e_ident').val(), location: $('#e_location').val(), pop: $('#e_pop').val(), port: $('#e_port').val(), user: $('#e_user').val(), password: $('#e_password').val(), genieacs_server_id: $('#e_genieacs_server_id').val() || null };
+  const body={ name:$('#e_name').val().trim(), nas_ip:$('#e_ip').val().trim(), nas_identifier:$('#e_ident').val(), location: $('#e_location').val(), pop: $('#e_pop').val(), port: $('#e_port').val(), user: $('#e_user').val(), password: $('#e_password').val(), genieacs_server_id: $('#e_genieacs_server_id').val() || null };
+  const err = validateNasForm(body.name, body.nas_ip);
+  if (err) { alert(err); return; }
   const res = await fetch('/admin/routers/'+id, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)}).then(r=>r.json());
   if(res.success){ location.reload(); } else { alert(res.message||'Gagal update'); }
 }
 async function deleteRouter(id){ if(!confirm('Hapus NAS ini?')) return; const res=await fetch('/admin/routers/'+id+'/delete',{method:'POST'}).then(r=>r.json()); if(res.success){ location.reload(); } else { alert(res.message||'Gagal hapus'); } }
 async function testRouter(id){
-  const btn = event.currentTarget; const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-  try { const res = await fetch('/admin/routers/'+id+'/test',{method:'POST'}).then(r=>r.json()); if(res.success){ alert('Connected: '+(res.identity||'OK')+' @ '+(res.host||'')+ (res.port? (':'+res.port):'')); } else { alert('Gagal konek: '+(res.message||'Unknown')); } }
-  catch(e){ alert('Error: '+e.message); }
-  finally { btn.disabled=false; btn.innerHTML = old; }
+  const btn = (typeof event !== 'undefined' && event && event.currentTarget) ? event.currentTarget : null;
+  const old = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const res = await fetch('/admin/routers/'+id+'/test', { method: 'POST', signal: controller.signal }).then(r => r.json());
+    if (res.success) {
+      alert('Connected: '+(res.identity||'OK')+' @ '+(res.host||'')+(res.port? (':'+res.port):''));
+    } else {
+      alert('Gagal konek API MikroTik:\n'+(res.message||'Unknown')+'\n\nCatatan: tes ini memakai TCP port API (8728), bukan ping ICMP. Pastikan Tunnel IP, service api, dan firewall dari VPS ke MikroTik.');
+    }
+  } catch (e) {
+    const msg = (e && e.name === 'AbortError')
+      ? 'Timeout menunggu respons server (25 detik). Cek Tunnel IP / API MikroTik dari VPS.'
+      : e.message;
+    alert('Error: '+msg);
+  } finally {
+    clearTimeout(timer);
+    if (btn) { btn.disabled = false; btn.innerHTML = old; }
+  }
 }
 </script>
 </body>

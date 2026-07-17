@@ -7,9 +7,9 @@ const logger = require('../logger');
 const { getWhatsAppProviderSettings } = require('../whatsapp-provider-settings');
 
 class MetaProvider extends WhatsAppProvider {
-    constructor() {
+    constructor(config = null) {
         super();
-        this.config = getWhatsAppProviderSettings().meta;
+        this.config = config || getWhatsAppProviderSettings().meta;
         this.status = {
             connected: false,
             phoneNumber: null,

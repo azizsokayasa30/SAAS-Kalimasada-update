@@ -1,30 +1,14 @@
 <% const cfg = typeof settings !== 'undefined' && settings ? settings : {}; %>
-<% const defaultServerHost = cfg.server_host || '192.168.8.89'; %>
-<% const defaultIsolirPort = cfg.server_port || '8899'; %>
+<% const defaultServerHost = (typeof vpnTunnelIp !== 'undefined' && vpnTunnelIp) ? vpnTunnelIp : '10.10.0.1'; %>
+<% const defaultIsolirPort = (typeof isolirPagePort !== 'undefined' && isolirPagePort) ? String(isolirPagePort) : (cfg.isolir_page_port || '8899'); %>
 <div class="card p-3 mt-4" id="isolirScriptGeneratorSection">
     <h5 class="mb-3"><i class="bi bi-router"></i> Script Generator Menu Isolir Mikrotik</h5>
     <p class="small text-muted mb-3">Generate script untuk mengatur menu isolir di Mikrotik. Pelanggan yang diisolir akan langsung diarahkan ke halaman isolir.</p>
 
     <div class="row g-3 mb-3">
         <div class="col-md-12">
-            <label class="form-label small fw-bold">IP PPPoE Aktif</label>
-            <input type="text" class="form-control form-control-sm" id="activeIp" placeholder="192.168.10.1" value="192.168.10.1">
-        </div>
-    </div>
-
-    <div class="row g-3 mb-3">
-        <div class="col-md-12">
-            <label class="form-label small fw-bold">IP PPPoE Isolir</label>
-            <input type="text" class="form-control form-control-sm" id="isolirIp" placeholder="192.168.200.1" value="192.168.200.1">
-            <small class="text-muted">Tanpa Menggunakan /Segment</small>
-        </div>
-    </div>
-
-    <div class="row g-3 mb-3">
-        <div class="col-md-12">
             <label class="form-label small fw-bold">IP Web/Domain Web Isolir</label>
-            <input type="text" class="form-control form-control-sm" id="isolirDomain" placeholder="<%= defaultServerHost %>" value="<%= defaultServerHost %>">
-            <small class="text-muted">IP atau domain aplikasi (contoh: <%= defaultServerHost %> atau domain publik)</small>
+            <input type="text" class="form-control form-control-sm" id="isolirDomain" placeholder="<%= defaultServerHost %>" value="<%= defaultServerHost %>" readonly>
         </div>
     </div>
 
@@ -32,33 +16,14 @@
         <div class="col-md-12">
             <label class="form-label small fw-bold">Path Halaman Isolir (default)</label>
             <input type="text" class="form-control form-control-sm" id="isolirPath" placeholder="/isolir" value="/isolir">
+            <div class="form-text">Path di server billing benar di <code>/isolir</code>. Portal port khusus juga melayani semua path (captive portal). Tes dari HP isolir: <code>http://neverssl.com</code> (bukan HTTPS).</div>
         </div>
     </div>
 
     <div class="row g-3 mb-3">
         <div class="col-md-12">
             <label class="form-label small fw-bold">Port Halaman Isolir</label>
-            <input type="text" class="form-control form-control-sm" id="isolirPort" placeholder="<%= defaultIsolirPort %>" value="<%= defaultIsolirPort %>">
-            <small class="text-muted">Default: <%= defaultIsolirPort %>. Port aplikasi billing utama ikut di-whitelist oleh script.</small>
-        </div>
-    </div>
-
-    <div class="row g-3 mb-3">
-        <div class="col-md-12">
-            <label class="form-label small fw-bold">Jenis Akses</label>
-            <select class="form-select form-select-sm" id="accessType">
-                <option value="port">Port Langsung (Recommended)</option>
-                <option value="tunneling">Tunneling (Domain + Path)</option>
-            </select>
-            <small class="text-muted">Port Langsung untuk aplikasi lokal, Tunneling untuk domain</small>
-        </div>
-    </div>
-
-    <div class="row g-3 mb-3" id="tunnelingDstAddressRow" style="display: none;">
-        <div class="col-md-12">
-            <label class="form-label small fw-bold">!Dst. Address (IP Domain)</label>
-            <input type="text" class="form-control form-control-sm" id="tunnelingDstAddress" placeholder="" value="">
-            <small class="text-muted">IP Domain yang tidak akan ter-drop oleh firewall. Hanya tampil saat menggunakan Tunneling.</small>
+            <input type="text" class="form-control form-control-sm" id="isolirPort" placeholder="<%= defaultIsolirPort %>" value="<%= defaultIsolirPort %>" readonly>
         </div>
     </div>
 
@@ -71,7 +36,6 @@
                 <option value="<%= r.id %>"><%= r.name %> (<%= r.nas_ip %>)</option>
                 <% }); } %>
             </select>
-            <small class="text-muted">Pilih router untuk execute script, atau Auto untuk router pertama di daftar NAS</small>
         </div>
     </div>
 
@@ -83,7 +47,6 @@
                 <option value="6">ROS 6.x</option>
                 <option value="7">ROS 7.x</option>
             </select>
-            <small class="text-muted">Pilih versi RouterOS atau biarkan Auto untuk deteksi otomatis</small>
         </div>
     </div>
 
@@ -94,7 +57,6 @@
                 <strong>Auto-Execute ke Mikrotik</strong>
             </label>
         </div>
-        <small class="text-muted d-block mb-2">Jika dicentang, script akan otomatis dijalankan ke Mikrotik setelah di-generate</small>
     </div>
 
     <div class="mb-3">
@@ -120,23 +82,12 @@
         </div>
         <pre id="isolirScript" class="mb-0" style="background: #2d3748; color: #e2e8f0; padding: 15px; border-radius: 6px; font-size: 12px; max-height: 400px; overflow-y: auto; white-space: pre-wrap;"></pre>
     </div>
-
-    <div class="alert alert-info mt-3" id="isolirInfo">
-        <h6><i class="bi bi-info-circle"></i> Cara Penggunaan:</h6>
-        <ol class="mb-0">
-            <li>Masukkan IP PPPoE aktif dan isolir</li>
-            <li>Masukkan IP/domain aplikasi dan path halaman isolir</li>
-            <li>Masukkan port aplikasi (contoh: <%= defaultIsolirPort %> untuk aplikasi lokal)</li>
-            <li>Pilih jenis akses: <strong>Port Langsung</strong> (recommended) atau <strong>Tunneling</strong></li>
-            <li>Klik "Generate Script"</li>
-            <li>Copy script dan jalankan di terminal Mikrotik, atau gunakan Auto-Execute</li>
-            <li>Script membuat walled garden: billing, halaman isolir, DNS, dan WhatsApp tetap bisa diakses</li>
-        </ol>
-    </div>
 </div>
 
 <script>
 (function() {
+    const DEFAULT_ISOLIR_IP = '192.168.200.1';
+
     function isoVal(id, fallback) {
         const el = document.getElementById(id);
         const value = el && el.value != null ? String(el.value).trim() : '';
@@ -174,16 +125,10 @@
     }
 
     function buildIsolirWalledGardenScript() {
-        const activeIp = isoVal('activeIp', '192.168.10.1');
-        const isolirIp = isoVal('isolirIp', '192.168.200.1');
-        const serverIp = isoVal('isolirDomain', '<%= defaultServerHost %>');
-        const isolirPath = isoVal('isolirPath', '/isolir');
+        const isolirIp = DEFAULT_ISOLIR_IP;
+        const billingServerIp = isoVal('isolirDomain', '<%= defaultServerHost %>');
+        const isolirPath = isoVal('isolirPath', '/isolir') || '/isolir';
         const pagePort = isoVal('isolirPort', '<%= defaultIsolirPort %>');
-        const accessType = isoVal('accessType', 'port');
-        const tunnelingDstAddress = isoVal('tunnelingDstAddress', '');
-        const billingServerIp = accessType === 'tunneling' && tunnelingDstAddress
-            ? tunnelingDstAddress.replace(/\/.*$/, '')
-            : serverIp;
         const isolirRange = isoToCidr(isolirIp);
         const poolRange = isoPoolRange(isolirIp);
         const localAddress = isoGateway(isolirIp);
@@ -192,9 +137,16 @@
             'wa.me', 'whatsapp.com', 'web.whatsapp.com', 'api.whatsapp.com',
             'static.whatsapp.net', 'mmg.whatsapp.net', 'pps.whatsapp.net', 'media.whatsapp.net'
         ];
+        // Host deteksi captive portal HP/browser → arahkan ke IP portal isolir
+        const captiveHosts = [
+            'captive.apple.com', 'www.apple.com',
+            'connectivitycheck.gstatic.com', 'clients3.google.com',
+            'www.msftconnecttest.com', 'dns.msftncsi.com',
+            'detectportal.firefox.com', 'neverssl.com', 'example.com'
+        ];
 
-        if (!activeIp || !isolirIp || !billingServerIp) {
-            throw new Error('Mohon lengkapi IP PPPoE aktif, IP isolir, dan IP/domain server billing.');
+        if (!billingServerIp) {
+            throw new Error('IP Web Isolir (WireGuard VPS) tidak tersedia.');
         }
 
         const filterTop = (chain, params) => [
@@ -219,19 +171,24 @@
         return [
             '# BILLING ISOLIR WALLED GARDEN',
             '# Generated on: ' + new Date().toLocaleString('id-ID'),
-            '# IP PPPoE Aktif: ' + activeIp,
             '# IP Range Isolir: ' + isolirRange,
-            '# Server Billing: ' + billingServerIp,
+            '# Server Billing (WireGuard): ' + billingServerIp,
             '# Port Halaman Isolir: ' + pagePort,
+            '# Path Halaman Isolir: ' + isolirPath,
+            '# Catatan: dst-nat mengubah IP+port saja; path tetap dari browser.',
+            '# Portal di port ' + pagePort + ' melayani SEMUA path sebagai halaman isolir.',
             '',
             '/ip firewall filter remove [find where comment~"BILLING-ISOLIR"]',
             '/ip firewall nat remove [find where comment~"BILLING-ISOLIR"]',
             '/ip firewall address-list remove [find where comment~"BILLING-ISOLIR"]',
+            '/ip dns static remove [find where comment~"BILLING-ISOLIR"]',
             '/ip firewall filter remove [find where comment~"Generate BILLING - Isolir"]',
             '/ip firewall filter remove [find where comment~"isolir-allow"]',
             '/ip firewall filter remove [find where comment~"isolir-block"]',
             '/ip firewall nat remove [find where comment~"Generate BILLING - Isolir"]',
             '/ip firewall nat remove [find where comment~"isolir-redirect"]',
+            '',
+            '/ip dns set allow-remote-requests=yes',
             '',
             '/ip firewall address-list add list=isolir-users address=' + isolirRange + ' comment="BILLING-ISOLIR users range"',
             '/ip firewall address-list add list=isolir-allowed-dst address=' + billingServerIp + ' comment="BILLING-ISOLIR billing server"',
@@ -240,27 +197,34 @@
             '/ip pool remove [find where name="isolir-pool"]',
             '/ip pool add name="isolir-pool" ranges=' + poolRange + ' comment="BILLING-ISOLIR pool"',
             '/ppp profile remove [find where name="isolir" and comment~"BILLING-ISOLIR"]',
-            '/ppp profile add name="isolir" local-address=' + localAddress + ' remote-address=isolir-pool only-one=yes comment="BILLING-ISOLIR profile"',
+            '/ppp profile add name="isolir" local-address=' + localAddress + ' remote-address=isolir-pool dns-server=' + localAddress + ' only-one=yes comment="BILLING-ISOLIR profile"',
             '',
-            ...filterTop('input', 'src-address=' + isolirRange + ' protocol=udp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns udp to router"'),
-            ...filterTop('input', 'src-address=' + isolirRange + ' protocol=tcp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns tcp to router"'),
+            '# DNS static captive portal → IP server billing (agar HP memunculkan halaman login/isolir)',
+            ...captiveHosts.map((host) => '/ip dns static add name=' + host + ' address=' + billingServerIp + ' ttl=30s comment="BILLING-ISOLIR captive ' + host + '"'),
+            '',
+            '# Urutan insert filterTop: drop dulu, lalu allow di atasnya (DNS/billing/WA/established).',
+            ...filterTop('forward', 'src-address=' + isolirRange + ' action=drop comment="BILLING-ISOLIR drop all other traffic"'),
             ...filterTop('forward', 'src-address=' + isolirRange + ' protocol=udp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns udp forward"'),
             ...filterTop('forward', 'src-address=' + isolirRange + ' protocol=tcp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns tcp forward"'),
-            '',
-            '# RouterOS v7: rule diinsert ke atas chain jika chain sudah punya rule.',
-            ...natTop('srcnat', 'src-address=' + isolirRange + ' dst-address=' + billingServerIp + ' action=masquerade comment="BILLING-ISOLIR masquerade to billing server"'),
-            ...natTop('dstnat', 'src-address=' + isolirRange + ' protocol=tcp dst-port=80,8080,8000,8888 action=dst-nat to-addresses=' + billingServerIp + ' to-ports=' + pagePort + ' comment="BILLING-ISOLIR force http to isolir page"'),
-            ...natTop('dstnat', 'src-address=' + isolirRange + ' dst-address-list=isolir-allowed-dst protocol=tcp action=accept comment="BILLING-ISOLIR bypass allowed destinations"'),
-            '',
-            '# RouterOS v7: drop dibuat, lalu allow diinsert ke atas drop.',
-            ...filterTop('forward', 'src-address=' + isolirRange + ' action=drop comment="BILLING-ISOLIR drop all other traffic"'),
             ...filterTop('forward', 'src-address=' + isolirRange + ' dst-address-list=isolir-allowed-dst protocol=tcp dst-port=80,443,5222,5223,5228,4244 action=accept comment="BILLING-ISOLIR allow whatsapp and allowed web"'),
             ...filterTop('forward', 'src-address=' + isolirRange + ' dst-address=' + billingServerIp + ' protocol=tcp dst-port=' + billingPorts + ' action=accept comment="BILLING-ISOLIR allow billing app and isolir page"'),
             ...filterTop('forward', 'connection-state=established,related action=accept comment="BILLING-ISOLIR allow established"'),
+            ...filterTop('input', 'src-address=' + isolirRange + ' protocol=udp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns udp to router"'),
+            ...filterTop('input', 'src-address=' + isolirRange + ' protocol=tcp dst-port=53 action=accept comment="BILLING-ISOLIR allow dns tcp to router"'),
+            '',
+            '# NAT: paksa DNS isolir ke router; HTTP → portal :' + pagePort + ' HARUS di atas bypass.',
+            ...natTop('srcnat', 'src-address=' + isolirRange + ' dst-address=' + billingServerIp + ' action=masquerade comment="BILLING-ISOLIR masquerade to billing server"'),
+            ...natTop('dstnat', 'src-address=' + isolirRange + ' dst-address-list=isolir-allowed-dst protocol=tcp action=accept comment="BILLING-ISOLIR bypass allowed destinations"'),
+            ...natTop('dstnat', 'src-address=' + isolirRange + ' protocol=tcp dst-port=80,8080,8000,8888 action=dst-nat to-addresses=' + billingServerIp + ' to-ports=' + pagePort + ' comment="BILLING-ISOLIR force http to isolir page"'),
+            ...natTop('dstnat', 'src-address=' + isolirRange + ' protocol=udp dst-port=53 action=redirect to-ports=53 comment="BILLING-ISOLIR force dns udp to router"'),
+            ...natTop('dstnat', 'src-address=' + isolirRange + ' protocol=tcp dst-port=53 action=redirect to-ports=53 comment="BILLING-ISOLIR force dns tcp to router"'),
+            '',
+            '# HTTPS non-whitelist tidak bisa di-rewrite tanpa sertifikat; traffic-nya di-drop (normal).',
+            '# Tes halaman isolir dari HP pelanggan: buka http://neverssl.com atau http://example.com',
             '',
             ':put "=== BILLING ISOLIR WALLED GARDEN READY ==="',
-            ':put "Halaman isolir: http://' + billingServerIp + ':' + pagePort + (isolirPath || '/isolir') + '"',
-            ':put "HTTP non-whitelist otomatis diarahkan ke halaman isolir."',
+            ':put "Halaman isolir: http://' + billingServerIp + ':' + pagePort + isolirPath + '"',
+            ':put "Tes captive: http://neverssl.com (harus tampil halaman isolir)"',
             ':put "Billing dan WhatsApp sudah di-whitelist sebelum drop."'
         ].join('\n');
     }
@@ -351,24 +315,5 @@
                 isoNotify('danger', 'Gagal menjalankan script: ' + error.message);
             });
     };
-
-    function toggleTunnelingFields() {
-        const accessTypeSelect = document.getElementById('accessType');
-        const tunnelingDstAddressRow = document.getElementById('tunnelingDstAddressRow');
-        if (!accessTypeSelect) return;
-        if (accessTypeSelect.value === 'tunneling') {
-            if (tunnelingDstAddressRow) tunnelingDstAddressRow.style.display = 'block';
-        } else if (tunnelingDstAddressRow) {
-            tunnelingDstAddressRow.style.display = 'none';
-        }
-    }
-
-    document.addEventListener('DOMContentLoaded', function() {
-        const accessTypeSelect = document.getElementById('accessType');
-        if (accessTypeSelect) {
-            toggleTunnelingFields();
-            accessTypeSelect.addEventListener('change', toggleTunnelingFields);
-        }
-    });
 })();
 </script>

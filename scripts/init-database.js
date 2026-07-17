@@ -326,7 +326,7 @@ function createBaseTables() {
             `CREATE TABLE IF NOT EXISTS collector_areas (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 collector_id INTEGER NOT NULL,
-                area_name TEXT NOT NULL,
+                area TEXT NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (collector_id) REFERENCES collectors(id) ON DELETE CASCADE
             )`,

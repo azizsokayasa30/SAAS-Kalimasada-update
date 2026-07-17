@@ -46,15 +46,19 @@ String _methodLabel(String? m) {
 }
 
 /// Resi / bukti invoice — isi setara halaman cetak admin, tema Field Collector (teks gelap).
+/// Mendukung satu atau beberapa invoice yang dilunasi dalam sesi yang sama.
 class CollectorInvoiceReceiptScreen extends StatefulWidget {
   const CollectorInvoiceReceiptScreen({
     super.key,
     required this.customerId,
     this.invoiceId,
+    this.invoiceIds,
   });
 
   final int customerId;
   final int? invoiceId;
+  /// Jika diisi (mis. setelah bayar multi-invoice), resi merekap semua ID ini.
+  final List<int>? invoiceIds;
 
   @override
   State<CollectorInvoiceReceiptScreen> createState() => _CollectorInvoiceReceiptScreenState();
@@ -67,6 +71,8 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
   bool _preparingCapture = false;
   String? _error;
   Map<String, dynamic>? _invoice;
+  List<Map<String, dynamic>> _invoices = [];
+  Map<String, dynamic>? _totals;
   Map<String, dynamic>? _settings;
   final GlobalKey _receiptCaptureKey = GlobalKey();
   final ScrollController _scrollController = ScrollController();
@@ -92,8 +98,13 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
     });
     try {
       var path = '/api/mobile-adapter/collector/customers/${widget.customerId}/receipt';
-      if (widget.invoiceId != null) {
-        path += '?invoice_id=${widget.invoiceId}';
+      final ids = <int>[
+        ...?widget.invoiceIds,
+        if (widget.invoiceId != null) widget.invoiceId!,
+      ];
+      final uniqueIds = ids.toSet().where((e) => e > 0).toList();
+      if (uniqueIds.isNotEmpty) {
+        path += '?invoice_ids=${uniqueIds.join(',')}';
       }
       final r = await ApiClient.get(path);
       final body = ApiClient.decodeJsonObject(r, debugLabel: 'collector/receipt');
@@ -101,9 +112,22 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
         final d = Map<String, dynamic>.from(body['data'] as Map);
         final inv = d['invoice'];
         final st = d['settings'];
+        final totals = d['totals'];
+        final invoicesRaw = d['invoices'];
+        final list = <Map<String, dynamic>>[];
+        if (invoicesRaw is List) {
+          for (final item in invoicesRaw) {
+            if (item is Map) list.add(Map<String, dynamic>.from(item));
+          }
+        }
+        if (list.isEmpty && inv is Map) {
+          list.add(Map<String, dynamic>.from(inv));
+        }
         if (mounted) {
           setState(() {
-            _invoice = inv is Map ? Map<String, dynamic>.from(inv) : null;
+            _invoice = inv is Map ? Map<String, dynamic>.from(inv) : (list.isNotEmpty ? list.first : null);
+            _invoices = list;
+            _totals = totals is Map ? Map<String, dynamic>.from(totals) : null;
             _settings = st is Map ? Map<String, dynamic>.from(st) : null;
             _loading = false;
             _logoPrecached = false;
@@ -236,6 +260,8 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
   Widget _receiptContent() {
     return _ReceiptBody(
       invoice: _invoice!,
+      invoices: _invoices.isNotEmpty ? _invoices : [_invoice!],
+      totals: _totals,
       settings: _settings!,
       logoWidget: _logoWidget(height: 40),
     );
@@ -277,7 +303,15 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
       _preparingCapture = true;
     });
     try {
-      final invNo = _invoice!['invoice_number']?.toString() ?? 'invoice';
+      final list = _invoices.isNotEmpty ? _invoices : [_invoice!];
+      final invNos = list
+          .map((e) => e['invoice_number']?.toString() ?? '')
+          .where((s) => s.isNotEmpty)
+          .toList();
+      final invLabel = invNos.isEmpty
+          ? 'invoice'
+          : (invNos.length == 1 ? invNos.first : '${invNos.length} tagihan (${invNos.join(', ')})');
+      final fileLabel = invNos.length > 1 ? 'Resi-${invNos.length}-invoice' : 'Resi-${invNos.isNotEmpty ? invNos.first : 'invoice'}';
       final customerName = _invoice!['customer_name']?.toString().trim() ?? 'Pelanggan';
 
       await _precacheLogo();
@@ -292,9 +326,11 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
 
       await WhatsAppReceiptShare.shareImageToCustomer(
         pngBytes: pngBytes,
-        fileName: 'Resi-$invNo.png',
+        fileName: '$fileLabel.png',
         customerPhone: phone,
-        prefilledText: 'Halo $customerName, berikut resi pembayaran $invNo.',
+        prefilledText: invNos.length > 1
+            ? 'Halo $customerName, berikut resi pembayaran untuk ${invNos.length} tagihan: ${invNos.join(', ')}.'
+            : 'Halo $customerName, berikut resi pembayaran $invLabel.',
       );
 
       if (!mounted) return;
@@ -383,7 +419,7 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
       child: Scaffold(
         backgroundColor: bg,
         appBar: AppBar(
-          title: const Text('Resi / Invoice'),
+          title: Text(_invoices.length > 1 ? 'Nota Lunas' : 'Resi / Invoice'),
           actions: [
             if (!_loading)
               IconButton(
@@ -426,6 +462,8 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
                                     color: FieldCollectorColors.background,
                                     child: _ReceiptBody(
                                       invoice: _invoice!,
+                                      invoices: _invoices.isNotEmpty ? _invoices : [_invoice!],
+                                      totals: _totals,
                                       settings: _settings!,
                                       logoWidget: _logoWidget(height: 40),
                                     ),
@@ -481,11 +519,15 @@ class _CollectorInvoiceReceiptScreenState extends State<CollectorInvoiceReceiptS
 class _ReceiptBody extends StatelessWidget {
   const _ReceiptBody({
     required this.invoice,
+    required this.invoices,
     required this.settings,
     required this.logoWidget,
+    this.totals,
   });
 
   final Map<String, dynamic> invoice;
+  final List<Map<String, dynamic>> invoices;
+  final Map<String, dynamic>? totals;
   final Map<String, dynamic> settings;
   final Widget logoWidget;
 
@@ -493,18 +535,34 @@ class _ReceiptBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final company = settings['companyHeader']?.toString() ?? 'ISP';
     final slogan = settings['company_slogan']?.toString() ?? '';
-    final invNo = invoice['invoice_number']?.toString() ?? '—';
-    final invoiceAmount = _coerceNum(invoice['amount']) ?? 0;
-    final discount = (_coerceNum(invoice['discount_amount']) ?? 0).round();
-    final amountPaid = (_coerceNum(invoice['amount_paid']) ?? (invoiceAmount - discount)).round();
+    final isMulti = invoices.length > 1;
+    final invNo = isMulti
+        ? '${invoices.length} Invoice'
+        : (invoice['invoice_number']?.toString() ?? '—');
+    final invoiceAmount = isMulti
+        ? (_coerceNum(totals?['gross_amount']) ??
+            invoices.fold<num>(0, (s, e) => s + (_coerceNum(e['amount']) ?? 0)))
+        : (_coerceNum(invoice['amount']) ?? 0);
+    final discount = isMulti
+        ? (_coerceNum(totals?['discount_amount']) ?? 0).round()
+        : (_coerceNum(invoice['discount_amount']) ?? 0).round();
+    final amountPaid = isMulti
+        ? (_coerceNum(totals?['amount_paid']) ?? (invoiceAmount - discount)).round()
+        : (_coerceNum(invoice['amount_paid']) ?? (invoiceAmount - discount)).round();
     final displayTotal = discount > 0 ? amountPaid : invoiceAmount.round();
     final base = _coerceNum(invoice['base_amount']);
     final taxRate = _coerceNum(invoice['tax_rate']);
     final notes = invoice['notes']?.toString().trim() ?? '';
     final invoiceNotes = settings['invoice_notes']?.toString().trim() ?? '';
+    final paymentDate = isMulti
+        ? (totals?['payment_date']?.toString() ?? invoice['payment_date']?.toString())
+        : invoice['payment_date']?.toString();
+    final paymentMethod = isMulti
+        ? (totals?['payment_method']?.toString() ?? invoice['payment_method']?.toString())
+        : invoice['payment_method']?.toString();
 
     num taxAmount = 0;
-    if (base != null && base > 0) {
+    if (!isMulti && base != null && base > 0) {
       final tr = taxRate ?? 11;
       taxAmount = base * (tr / 100);
     }
@@ -546,7 +604,7 @@ class _ReceiptBody extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(
-                        'INVOICE',
+                        isMulti ? 'NOTA LUNAS' : 'INVOICE',
                         style: TextStyle(
                           fontWeight: FontWeight.w900,
                           fontSize: 18,
@@ -568,13 +626,19 @@ class _ReceiptBody extends StatelessWidget {
                   ? invoice['customer_address'].toString()
                   : 'Alamat tidak tersedia'),
               const SizedBox(height: 16),
-              const Text('Informasi invoice', style: TextStyle(fontWeight: FontWeight.w800, color: FieldCollectorColors.primaryContainer)),
+              Text(
+                isMulti ? 'Informasi pembayaran' : 'Informasi invoice',
+                style: const TextStyle(fontWeight: FontWeight.w800, color: FieldCollectorColors.primaryContainer),
+              ),
               const SizedBox(height: 8),
-              _kv('Tanggal dibuat', _fmtIdDate(invoice['created_at']?.toString())),
-              _kv('Jatuh tempo', _fmtIdDate(invoice['due_date']?.toString())),
-              if ((invoice['payment_date']?.toString() ?? '').trim().isNotEmpty)
-                _kv('Tanggal bayar', _fmtIdDate(invoice['payment_date']?.toString())),
-              _kv('Metode', _methodLabel(invoice['payment_method']?.toString())),
+              if (!isMulti) ...[
+                _kv('Tanggal dibuat', _fmtIdDate(invoice['created_at']?.toString())),
+                _kv('Jatuh tempo', _fmtIdDate(invoice['due_date']?.toString())),
+              ] else
+                _kv('Jumlah invoice', '${invoices.length} tagihan'),
+              if ((paymentDate ?? '').trim().isNotEmpty)
+                _kv('Tanggal bayar', _fmtIdDate(paymentDate)),
+              _kv('Metode', _methodLabel(paymentMethod)),
               if (discount > 0) ...[
                 _kv('Tagihan', _rupiah(invoiceAmount.round())),
                 _kv('Diskon', '- ${_rupiah(discount)}', valueColor: const Color(0xFFB45309)),
@@ -662,9 +726,111 @@ class _ReceiptBody extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text('Detail layanan', style: TextStyle(fontWeight: FontWeight.w800, color: FieldCollectorColors.primaryContainer)),
+              Text(
+                isMulti ? 'Rincian tagihan' : 'Detail layanan',
+                style: const TextStyle(fontWeight: FontWeight.w800, color: FieldCollectorColors.primaryContainer),
+              ),
               const SizedBox(height: 10),
-              Table(
+              if (isMulti)
+                Table(
+                  border: TableBorder.all(color: FieldCollectorColors.outlineVariant),
+                  columnWidths: const {
+                    0: FlexColumnWidth(1.3),
+                    1: FlexColumnWidth(1.4),
+                    2: FlexColumnWidth(1.1),
+                    3: FlexColumnWidth(1.1),
+                  },
+                  children: [
+                    TableRow(
+                      decoration: const BoxDecoration(color: Color(0xFFF1F5F9)),
+                      children: ['No. Invoice', 'Paket', 'Jatuh tempo', 'Tagihan']
+                          .map(
+                            (h) => Padding(
+                              padding: const EdgeInsets.all(6),
+                              child: Text(h, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: FieldCollectorColors.onSurface)),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                    for (final row in invoices)
+                      TableRow(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.all(6),
+                            child: Text(
+                              row['invoice_number']?.toString() ?? '—',
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: FieldCollectorColors.onSurface),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.all(6),
+                            child: Text(
+                              row['package_name']?.toString() ?? '—',
+                              style: const TextStyle(fontSize: 11, color: FieldCollectorColors.onSurface),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.all(6),
+                            child: Text(
+                              _fmtIdDate(row['due_date']?.toString()),
+                              style: const TextStyle(fontSize: 11, color: FieldCollectorColors.onSurface),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.all(6),
+                            child: Text(
+                              _rupiah((_coerceNum(row['amount']) ?? 0).round()),
+                              textAlign: TextAlign.end,
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: FieldCollectorColors.onSurface),
+                            ),
+                          ),
+                        ],
+                      ),
+                    if (discount > 0)
+                      TableRow(
+                        children: [
+                          const Padding(
+                            padding: EdgeInsets.all(6),
+                            child: Text('Diskon', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: Color(0xFFB45309))),
+                          ),
+                          const Padding(padding: EdgeInsets.all(6), child: SizedBox.shrink()),
+                          const Padding(padding: EdgeInsets.all(6), child: SizedBox.shrink()),
+                          Padding(
+                            padding: const EdgeInsets.all(6),
+                            child: Text(
+                              '- ${_rupiah(discount)}',
+                              textAlign: TextAlign.end,
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Color(0xFFB45309)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    TableRow(
+                      decoration: const BoxDecoration(color: Color(0xFFE8EDF5)),
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.all(6),
+                          child: Text(
+                            discount > 0 ? 'Total dibayar' : 'Total',
+                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 11, color: FieldCollectorColors.onSurface),
+                          ),
+                        ),
+                        const Padding(padding: EdgeInsets.all(6), child: SizedBox.shrink()),
+                        const Padding(padding: EdgeInsets.all(6), child: SizedBox.shrink()),
+                        Padding(
+                          padding: const EdgeInsets.all(6),
+                          child: Text(
+                            _rupiah(displayTotal),
+                            textAlign: TextAlign.end,
+                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: FieldCollectorColors.onSurface),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                )
+              else
+                Table(
                 border: TableBorder.all(color: FieldCollectorColors.outlineVariant),
                 children: [
                   TableRow(

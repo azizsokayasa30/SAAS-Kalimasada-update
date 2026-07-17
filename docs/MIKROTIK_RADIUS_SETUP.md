@@ -374,12 +374,13 @@ Cara menggunakan:
 1. **Mode RADIUS 100%**: Semua user, profile, dan konfigurasi dikelola di RADIUS database, BUKAN di Mikrotik
 2. **Mikrotik sebagai NAS**: Mikrotik hanya berfungsi sebagai Network Access Server yang meneruskan request ke RADIUS
 3. **Profile Fallback**: Profile di Mikrotik hanya digunakan jika RADIUS tidak mengembalikan profile
-4. **IP Pool Fallback**: IP pool di Mikrotik hanya digunakan jika RADIUS tidak mengembalikan IP
-5. **Secret Key**: Pastikan secret key di Mikrotik sama dengan yang dikonfigurasi di FreeRADIUS `clients.conf`
-6. **Firewall**: Pastikan firewall tidak memblokir port 1812 (authentication) dan 1813 (accounting)
+4. **IP Pool / Framed-Pool**: Remote Address di profile billing yang berupa **nama pool** dikirim sebagai `Framed-Pool`. MikroTik mengalokasikan IP dari `/ip pool` **lokal** di NAS yang mengautentikasi. Nama pool boleh sama di banyak router dengan range/subnet berbeda (contoh: RO-A `pool-10m` = `10.10.10.0/24`, RO-B `pool-10m` = `10.10.20.0/24`). Pastikan pool ada di setiap router dan `local-address` PPP se-subnet.
+5. **IP Pool Fallback**: Jika RADIUS tidak mengembalikan `Framed-Pool` / `Framed-IP-Address`, MikroTik memakai remote-address pada profile PPP lokal
+6. **Secret Key**: Pastikan secret key di Mikrotik sama dengan yang dikonfigurasi di FreeRADIUS `clients.conf`
+7. **Firewall**: Pastikan firewall tidak memblokir port 1812 (authentication) dan 1813 (accounting)
 
 ---
 
-**Last Updated:** 2024-12-19
-**Version:** 1.0
+**Last Updated:** 2026-07-13
+**Version:** 1.1
 
