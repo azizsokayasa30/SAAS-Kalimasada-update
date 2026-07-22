@@ -138,6 +138,7 @@
             </button>
             <div id="testResult" class="mt-3"></div>
 
+            <% if (typeof canManageSharedRadius !== 'undefined' && canManageSharedRadius) { %>
             <div class="mt-3">
               <button type="button" id="syncOrphanUsersBtn" class="btn btn-warning">
                 <i class="bi bi-shuffle"></i> Sinkronisasi & Hapus User Fiktif
@@ -145,8 +146,14 @@
               <div id="orphanSyncResult" class="mt-3"></div>
               <div class="text-muted small mt-2">
                 Menghapus user yang ada di RADIUS tapi tidak ada di data aplikasi (customers/members/vouchers), lalu mengakhiri sesi aktifnya.
+                <strong class="text-danger">Operasi global — semua tenant.</strong>
               </div>
             </div>
+            <% } else { %>
+            <div class="alert alert-secondary mt-3 mb-0 small">
+              Hapus user fiktif (orphan) dinonaktifkan untuk admin tenant — database RADIUS dipakai bersama semua tenant.
+            </div>
+            <% } %>
           </div>
         </div>
         <div class="col-md-6">
@@ -160,6 +167,7 @@
         </div>
       </div>
 
+      <% if (typeof canManageSharedRadius !== 'undefined' && canManageSharedRadius) { %>
       <!-- Sync Password Section -->
       <div class="row mt-3">
         <div class="col-12">
@@ -194,6 +202,10 @@
         <div class="col-12">
           <div class="card p-3 shadow-sm">
             <h5 class="mb-3"><i class="bi bi-database"></i> Backup & Restore RADIUS</h5>
+            <div class="alert alert-warning small">
+              <strong>Peringatan:</strong> Database RADIUS dipakai bersama semua tenant.
+              Backup/restore mengubah data seluruh ISP — hanya platform admin.
+            </div>
             <p class="text-muted mb-3">
               Backup mencakup semua data database RADIUS dan konfigurasi FreeRADIUS. 
               Restore akan memulihkan semua data dan konfigurasi ke server baru tanpa perubahan struktur.
@@ -307,6 +319,17 @@
           </div>
         </div>
       </div>
+      <% } else { %>
+      <div class="row mt-3">
+        <div class="col-12">
+          <div class="alert alert-info mb-0">
+            <strong>Isolasi multi-tenant:</strong> Backup/restore database RADIUS bersama, hapus user fiktif global,
+            dan sinkronisasi password FreeRADIUS hanya tersedia untuk <em>platform admin</em>.
+            Admin tenant tetap bisa mengelola user/profil PPPoE milik tenant sendiri (edit/hapus sudah di-scope allowlist).
+          </div>
+        </div>
+      </div>
+      <% } %>
     </main>
   </div>
 </div>

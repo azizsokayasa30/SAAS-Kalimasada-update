@@ -1153,6 +1153,11 @@ async function remountTenantRadusergroupOnRename(oldGroupname, newGroupname, ten
         const { getRadiusConnection } = require('../config/radiusSQLite');
         conn = await getRadiusConnection();
         const updated = await remountTenantUsersToGroup(conn, tid, oldG, newG);
+        // Juga coba nama fisik lama dengan spasi (Profil 50 Mbps)
+        if (oldGroupname && normalizeGroupname(oldGroupname) !== String(oldGroupname).trim()) {
+            const extra = await remountTenantUsersToGroup(conn, tid, String(oldGroupname).trim(), newG);
+            return { updated: updated + extra };
+        }
         return { updated };
     } finally {
         if (conn && typeof conn.end === 'function') {
@@ -1161,6 +1166,373 @@ async function remountTenantRadusergroupOnRename(oldGroupname, newGroupname, ten
             } catch (_) {}
         }
     }
+}
+
+/**
+ * Ambil angka Mbps dari string profil/speed (Profil 50 Mbps, 50Mbps/50Mbps, profile-10mbps, …).
+ */
+function extractSpeedMbps(text) {
+    const s = String(text || '');
+    const m =
+        s.match(/(?:profil|profile)[_\s-]*(\d+)\s*[_\s-]*mbps/i) ||
+        s.match(/(\d+)\s*mbps\s*\/\s*\d+\s*mbps/i) ||
+        s.match(/(\d+)\s*m\s*\/\s*\d+\s*m\b/i) ||
+        s.match(/(\d+)\s*mbps/i) ||
+        s.match(/(\d+)\s*[mM]\b/);
+    return m ? String(parseInt(m[1], 10)) : null;
+}
+
+/**
+ * Canonical fisik: t{tenantId}_profil_{N}_mbps atau t{tenantId}_gratis.
+ * Return null untuk isolir / kosong / default tanpa hint speed.
+ */
+function toCanonicalTenantPppoeProfile(tenantId, profileName, speedHint = null) {
+    const tid = parseInt(tenantId, 10);
+    if (!Number.isFinite(tid) || tid <= 0) return null;
+    const raw = String(profileName || '').trim();
+    if (!raw) return null;
+
+    const norm = normalizeGroupname(raw);
+    if (norm === 'isolir') return null;
+
+    const prefix = `t${tid}_`;
+    if (norm === 'default') {
+        const sp = extractSpeedMbps(speedHint);
+        return sp ? `${prefix}profil_${sp}_mbps` : null;
+    }
+
+    // Sudah canonical milik tenant ini
+    if (norm.startsWith(prefix)) {
+        const restOwn = norm.slice(prefix.length);
+        if (restOwn === 'gratis' || restOwn === 'free') return `${prefix}gratis`;
+        const spOwn = extractSpeedMbps(restOwn);
+        if (spOwn) return `${prefix}profil_${spOwn}_mbps`;
+        return norm;
+    }
+
+    // Buang prefix tenant lain / prefix generik
+    let rest = norm.replace(/^t\d+_/, '');
+    if (rest === 'gratis' || rest === 'free') return `${prefix}gratis`;
+
+    const sp =
+        extractSpeedMbps(rest) ||
+        extractSpeedMbps(raw) ||
+        extractSpeedMbps(speedHint);
+    if (sp) return `${prefix}profil_${sp}_mbps`;
+
+    return `${prefix}${rest}`;
+}
+
+async function findRadiusGroupPhysicalName(conn, candidates) {
+    for (const c of candidates) {
+        if (!c) continue;
+        const [exact] = await conn.execute(
+            `SELECT groupname FROM radgroupreply WHERE groupname = ? LIMIT 1`,
+            [c]
+        );
+        if (exact && exact[0] && exact[0].groupname) return String(exact[0].groupname);
+
+        const norm = normalizeGroupname(c);
+        const [fuzzy] = await conn.execute(
+            `SELECT groupname FROM radgroupreply
+             WHERE LOWER(TRIM(REPLACE(groupname, ' ', '_'))) = ?
+             LIMIT 1`,
+            [norm]
+        );
+        if (fuzzy && fuzzy[0] && fuzzy[0].groupname) return String(fuzzy[0].groupname);
+    }
+    return null;
+}
+
+/**
+ * Seragamkan nama profil ke t{tenantId}_profil_* (dan t*_gratis) untuk satu/semua tenant.
+ * Update packages + customers + clone/remount RADIUS.
+ *
+ * @param {{ tenantId?: number|null }} options - null/omit = semua tenant
+ */
+async function standardizeTenantPppoeProfileNames(options = {}) {
+    await ensureTenantPppoeProfilesTable();
+    const db = getBillingDb();
+    const onlyTid =
+        options.tenantId != null && Number.isFinite(Number(options.tenantId))
+            ? parseInt(options.tenantId, 10)
+            : null;
+
+    const packages = await dbAll(
+        db,
+        onlyTid
+            ? `SELECT id, tenant_id, name, speed, pppoe_profile FROM packages
+               WHERE tenant_id = ? AND pppoe_profile IS NOT NULL AND TRIM(pppoe_profile) != ''`
+            : `SELECT id, tenant_id, name, speed, pppoe_profile FROM packages
+               WHERE tenant_id IS NOT NULL AND pppoe_profile IS NOT NULL AND TRIM(pppoe_profile) != ''`,
+        onlyTid ? [onlyTid] : []
+    );
+
+    /** @type {Map<string, { tenantId: number, from: string, to: string, packageIds: number[] }>} */
+    const renames = new Map();
+    for (const pkg of packages || []) {
+        const tid = parseInt(pkg.tenant_id, 10);
+        if (!tid) continue;
+        const fromRaw = String(pkg.pppoe_profile || '').trim();
+        const to = toCanonicalTenantPppoeProfile(tid, fromRaw, pkg.speed);
+        if (!to) continue;
+        const fromNorm = normalizeGroupname(fromRaw);
+        if (fromNorm === to || fromRaw === to) continue;
+        const key = `${tid}::${fromNorm}::${to}`;
+        if (!renames.has(key)) {
+            renames.set(key, { tenantId: tid, from: fromRaw, fromNorm, to, packageIds: [] });
+        }
+        renames.get(key).packageIds.push(pkg.id);
+    }
+
+    // Juga seragamkan customers yang profilnya non-canonical (meski paket sudah canonical)
+    const customerProfiles = await dbAll(
+        db,
+        onlyTid
+            ? `SELECT DISTINCT tenant_id, pppoe_profile FROM customers
+               WHERE tenant_id = ?
+                 AND pppoe_profile IS NOT NULL AND TRIM(pppoe_profile) != ''
+                 AND LOWER(TRIM(pppoe_profile)) NOT IN ('isolir', 'default')`
+            : `SELECT DISTINCT tenant_id, pppoe_profile FROM customers
+               WHERE tenant_id IS NOT NULL
+                 AND pppoe_profile IS NOT NULL AND TRIM(pppoe_profile) != ''
+                 AND LOWER(TRIM(pppoe_profile)) NOT IN ('isolir', 'default')`,
+        onlyTid ? [onlyTid] : []
+    );
+    for (const row of customerProfiles || []) {
+        const tid = parseInt(row.tenant_id, 10);
+        const fromRaw = String(row.pppoe_profile || '').trim();
+        const to = toCanonicalTenantPppoeProfile(tid, fromRaw, null);
+        if (!to) continue;
+        const fromNorm = normalizeGroupname(fromRaw);
+        if (fromNorm === to || fromRaw === to) continue;
+        const key = `${tid}::${fromNorm}::${to}`;
+        if (!renames.has(key)) {
+            renames.set(key, { tenantId: tid, from: fromRaw, fromNorm, to, packageIds: [] });
+        }
+    }
+
+    let radiusConn = null;
+    try {
+        const { getRadiusConnection } = require('../config/radiusSQLite');
+        radiusConn = await getRadiusConnection();
+    } catch (err) {
+        logger.warn(`[standardizeTenantPppoeProfileNames] RADIUS unavailable: ${err.message}`);
+    }
+
+    let packagesUpdated = 0;
+    let customersUpdated = 0;
+    let radiusRemounted = 0;
+    let groupsEnsured = 0;
+    const details = [];
+
+    try {
+        for (const item of renames.values()) {
+            const { tenantId: tid, from, fromNorm, to } = item;
+            try {
+                if (radiusConn) {
+                    const sourcePhysical = await findRadiusGroupPhysicalName(radiusConn, [
+                        from,
+                        fromNorm,
+                        to
+                    ]);
+                    const destExists = await findRadiusGroupPhysicalName(radiusConn, [to]);
+                    if (!destExists && sourcePhysical && normalizeGroupname(sourcePhysical) !== to) {
+                        await cloneRadiusGroupAttributes(radiusConn, sourcePhysical, to);
+                        groupsEnsured++;
+                    } else if (!destExists) {
+                        // Buat grup minimal agar assign tidak gagal
+                        await radiusConn.execute(
+                            `INSERT INTO radgroupreply (groupname, attribute, op, value)
+                             VALUES (?, 'Reply-Message', ':=', ?)`,
+                            [to, `Profile standardized for tenant ${tid}`]
+                        );
+                        groupsEnsured++;
+                    }
+
+                    // Remount dari semua alias lama
+                    for (const oldAlias of [from, fromNorm, sourcePhysical].filter(Boolean)) {
+                        try {
+                            radiusRemounted += await remountTenantUsersToGroup(
+                                radiusConn,
+                                tid,
+                                oldAlias,
+                                to
+                            );
+                        } catch (_) {
+                            /* ignore per-alias */
+                        }
+                    }
+                }
+
+                // Update packages: match exact + normalized space form
+                const pkgRes1 = await dbRun(
+                    db,
+                    `UPDATE packages SET pppoe_profile = ?
+                     WHERE tenant_id = ? AND TRIM(pppoe_profile) = ?`,
+                    [to, tid, from]
+                );
+                const pkgRes2 = await dbRun(
+                    db,
+                    `UPDATE packages SET pppoe_profile = ?
+                     WHERE tenant_id = ?
+                       AND LOWER(TRIM(REPLACE(pppoe_profile, ' ', '_'))) = ?
+                       AND TRIM(pppoe_profile) != ?`,
+                    [to, tid, fromNorm, to]
+                );
+                packagesUpdated += (pkgRes1?.changes || 0) + (pkgRes2?.changes || 0);
+
+                const custRes1 = await dbRun(
+                    db,
+                    `UPDATE customers SET pppoe_profile = ?
+                     WHERE tenant_id = ? AND TRIM(pppoe_profile) = ?`,
+                    [to, tid, from]
+                );
+                const custRes2 = await dbRun(
+                    db,
+                    `UPDATE customers SET pppoe_profile = ?
+                     WHERE tenant_id = ?
+                       AND LOWER(TRIM(REPLACE(pppoe_profile, ' ', '_'))) = ?
+                       AND TRIM(pppoe_profile) != ?`,
+                    [to, tid, fromNorm, to]
+                );
+                customersUpdated += (custRes1?.changes || 0) + (custRes2?.changes || 0);
+
+                try {
+                    await claimTenantPppoeProfile(to, tid);
+                    if (fromNorm !== to) {
+                        await releaseTenantPppoeProfile(fromNorm, tid).catch(() => {});
+                        await releaseTenantPppoeProfile(from, tid).catch(() => {});
+                    }
+                } catch (claimErr) {
+                    logger.warn(
+                        `[standardizeTenantPppoeProfileNames] claim ${to}: ${claimErr.message}`
+                    );
+                }
+
+                details.push({ tenant_id: tid, from, to });
+                logger.info(
+                    `[standardizeTenantPppoeProfileNames] tenant=${tid} "${from}" → "${to}"`
+                );
+            } catch (itemErr) {
+                logger.warn(
+                    `[standardizeTenantPppoeProfileNames] tenant=${tid} ${from}→${to}: ${itemErr.message}`
+                );
+                details.push({ tenant_id: tid, from, to, error: itemErr.message });
+            }
+        }
+    } finally {
+        if (radiusConn && typeof radiusConn.end === 'function') {
+            try {
+                await radiusConn.end();
+            } catch (_) {}
+        }
+    }
+
+    // Sinkron display_name metadata + bersihkan klaim ownership non-canonical
+    const syncMeta = await syncCanonicalPppoeProfileDisplayNames({ tenantId: onlyTid });
+
+    return {
+        success: true,
+        renames: renames.size,
+        packages_updated: packagesUpdated,
+        customers_updated: customersUpdated,
+        radius_remounted: radiusRemounted,
+        groups_ensured: groupsEnsured,
+        display_names_synced: syncMeta.updated || 0,
+        ownership_cleaned: syncMeta.ownership_cleaned || 0,
+        details: details.slice(0, 100)
+    };
+}
+
+/**
+ * Samakan pppoe_profiles.display_name = groupname untuk profil t{tid}_*,
+ * dan hapus klaim ownership sampah (50mbps/50mbps, Profil …, dll.).
+ */
+async function syncCanonicalPppoeProfileDisplayNames(options = {}) {
+    const onlyTid =
+        options.tenantId != null && Number.isFinite(Number(options.tenantId))
+            ? parseInt(options.tenantId, 10)
+            : null;
+
+    let updated = 0;
+    let ownershipCleaned = 0;
+    let conn = null;
+    try {
+        const { getRadiusConnection } = require('../config/radiusSQLite');
+        conn = await getRadiusConnection();
+        const [rows] = await conn.execute(
+            `SELECT groupname, display_name FROM pppoe_profiles
+             WHERE groupname LIKE 't%_%'`
+        );
+        for (const row of rows || []) {
+            const gn = String(row.groupname || '').trim();
+            if (!/^t\d+_/i.test(gn)) continue;
+            if (onlyTid != null) {
+                const m = gn.match(/^t(\d+)_/i);
+                if (!m || parseInt(m[1], 10) !== onlyTid) continue;
+            }
+            const dn = row.display_name != null ? String(row.display_name).trim() : '';
+            if (dn === gn) continue;
+            await conn.execute(
+                `UPDATE pppoe_profiles SET display_name = ?, updated_at = datetime('now','localtime')
+                 WHERE groupname = ?`,
+                [gn, gn]
+            );
+            updated++;
+        }
+    } catch (err) {
+        logger.warn(`[syncCanonicalPppoeProfileDisplayNames] RADIUS: ${err.message}`);
+    } finally {
+        if (conn && typeof conn.end === 'function') {
+            try {
+                await conn.end();
+            } catch (_) {}
+        }
+    }
+
+    try {
+        await ensureTenantPppoeProfilesTable();
+        const db = getBillingDb();
+        const junk = await dbAll(
+            db,
+            onlyTid
+                ? `SELECT id, tenant_id, groupname FROM ${TABLE}
+                   WHERE tenant_id = ?
+                     AND LOWER(TRIM(groupname)) NOT IN ('isolir', 'default')
+                     AND groupname NOT LIKE 't' || tenant_id || '_%'`
+                : `SELECT id, tenant_id, groupname FROM ${TABLE}
+                   WHERE LOWER(TRIM(groupname)) NOT IN ('isolir', 'default')
+                     AND groupname NOT LIKE 't' || tenant_id || '_%'`
+            ,
+            onlyTid ? [onlyTid] : []
+        );
+        for (const row of junk || []) {
+            const tid = parseInt(row.tenant_id, 10);
+            const canonical = toCanonicalTenantPppoeProfile(tid, row.groupname, null);
+            // Hanya klaim ulang jika hasilnya profil/speed atau gratis (hindari t10_test, t10_100, dll.)
+            const looksCanonical =
+                canonical &&
+                (/^t\d+_profil_\d+_mbps$/i.test(canonical) || /^t\d+_gratis$/i.test(canonical));
+            if (looksCanonical && canonical !== normalizeGroupname(row.groupname)) {
+                try {
+                    await claimTenantPppoeProfile(canonical, tid);
+                } catch (_) {
+                    /* ignore */
+                }
+            }
+            await dbRun(db, `DELETE FROM ${TABLE} WHERE id = ?`, [row.id]);
+            ownershipCleaned++;
+            logger.info(
+                `[syncCanonicalPppoeProfileDisplayNames] drop ownership tenant=${tid} "${row.groupname}"` +
+                    (looksCanonical ? ` (ensure ${canonical})` : '')
+            );
+        }
+    } catch (ownErr) {
+        logger.warn(`[syncCanonicalPppoeProfileDisplayNames] ownership: ${ownErr.message}`);
+    }
+
+    return { updated, ownership_cleaned: ownershipCleaned };
 }
 
 module.exports = {
@@ -1178,5 +1550,9 @@ module.exports = {
     ensureExclusivePppoeProfileForTenant,
     remountTenantRadusergroupOnRename,
     normalizeGroupname,
-    stripTenantProfilePrefix
+    stripTenantProfilePrefix,
+    extractSpeedMbps,
+    toCanonicalTenantPppoeProfile,
+    standardizeTenantPppoeProfileNames,
+    syncCanonicalPppoeProfileDisplayNames
 };

@@ -901,6 +901,8 @@ async function getPPPoEUsersRadius(options = {}) {
         const resolveProfileLabel = (groupname) => {
             const gn = groupname != null ? String(groupname).trim() : '';
             if (!gn) return 'default';
+            // Profil tenant-prefixed: tampilkan groupname fisik (bukan display_name legacy)
+            if (/^t\d+_/i.test(gn)) return gn;
             const meta =
                 metaByExact[gn] ||
                 metaByNorm.get(gn.toLowerCase()) ||
@@ -2435,6 +2437,13 @@ async function unsuspendUserRadius(username, customer = null) {
 
 // Fungsi untuk delete user PPPoE dari RADIUS
 async function deletePPPoEUserRadius(username) {
+    try {
+        const { assertTenantOwnsPppoeUsername } = require('../utils/tenantPppoeOwnership');
+        await assertTenantOwnsPppoeUsername(username);
+    } catch (ownErr) {
+        return { success: false, message: ownErr.message };
+    }
+
     const conn = await getRadiusConnection();
     try {
         try {
@@ -2463,6 +2472,13 @@ async function deletePPPoEUserRadius(username) {
 
 // Fungsi untuk edit user PPPoE di RADIUS (update password dan/atau package)
 async function editPPPoEUserRadius({ oldUsername, username, password, profile = null }) {
+    try {
+        const { assertTenantOwnsPppoeUsername } = require('../utils/tenantPppoeOwnership');
+        await assertTenantOwnsPppoeUsername(oldUsername || username);
+    } catch (ownErr) {
+        return { success: false, message: ownErr.message };
+    }
+
     const conn = await getRadiusConnection();
     try {
         if (oldUsername && username && oldUsername !== username) {
@@ -2796,7 +2812,7 @@ async function getUserAuthModeAsync() {
         // Fallback ke settings.json jika database tidak bisa diakses
         logger.debug('Failed to get user_auth_mode from database, using settings.json fallback');
     }
-    return getSetting('user_auth_mode', 'mikrotik');
+    return getSetting('user_auth_mode', 'radius');
 }
 
 // Wrapper: Get active PPPoE connections (RADIUS atau Mikrotik API)
@@ -7182,8 +7198,12 @@ async function getHotspotProfilesRadius() {
 
             const meta = metadataMap[groupname] || null;
 
+            // Nama tampilan: utamakan groupname fisik ber-prefix tenant (t16_profil_…)
+            // agar tidak tertimpa display_name legacy ("Profil 50 Mbps").
+            const gnStr = String(groupname || '').trim();
+            const isTenantPrefixed = /^t\d+_/i.test(gnStr);
             const profile = {
-                name: meta?.display_name || groupname,
+                name: isTenantPrefixed ? gnStr : (meta?.display_name || groupname),
                 '.id': groupname,
                 groupname: groupname,
                 'rate-limit': null,
@@ -8628,32 +8648,29 @@ async function getPPPoEProfilesRadius(options = {}) {
 
                 const pickKeeper = (candidates) => {
                     if (candidates.length === 1) return candidates[0];
-                    // 1) Exact match ke referensi paket/pelanggan
+                    const prefix = `t${tid}_`;
+                    // 1) Exact match ke referensi paket/pelanggan (biasanya t{tid}_…)
                     for (const c of candidates) {
                         if (exactRefs.has(String(c).trim())) return c;
                     }
-                    // 2) Normalized match ke referensi — utamakan yang ada spasi (nama RADIUS legacy)
+                    // 2) Normalized match ke referensi — utamakan nama ber-prefix tenant
                     const normHits = candidates.filter((c) => normRefs.has(normLogical(c)));
                     if (normHits.length === 1) return normHits[0];
                     if (normHits.length > 1) {
-                        const spaced = normHits.filter((c) => String(c).includes(' '));
-                        if (spaced.length) {
-                            spaced.sort((a, b) => String(a).localeCompare(String(b)));
-                            return spaced[0];
-                        }
-                        normHits.sort((a, b) => String(a).localeCompare(String(b)));
-                        return normHits[0];
+                        const prefixed = normHits.filter((c) =>
+                            normLogical(c).startsWith(prefix)
+                        );
+                        const pool = prefixed.length ? prefixed : normHits;
+                        pool.sort((a, b) => String(a).localeCompare(String(b)));
+                        return pool[0];
                     }
-                    // 3) Utamakan tanpa prefix t{tid}_
-                    const prefix = `t${tid}_`;
-                    const bare = candidates.filter(
-                        (c) => !normLogical(c).startsWith(prefix)
+                    // 3) Utamakan groupname ber-prefix t{tid}_ (sesuai halaman paket)
+                    const prefixed = candidates.filter((c) =>
+                        normLogical(c).startsWith(prefix)
                     );
-                    const pool = bare.length ? bare : candidates;
-                    const spaced = pool.filter((c) => String(c).includes(' '));
-                    const finalPool = spaced.length ? spaced : pool;
-                    finalPool.sort((a, b) => String(a).localeCompare(String(b)));
-                    return finalPool[0];
+                    const pool = prefixed.length ? prefixed : candidates;
+                    pool.sort((a, b) => String(a).localeCompare(String(b)));
+                    return pool[0];
                 };
 
                 const keptLogical = [];
@@ -8756,8 +8773,10 @@ async function getPPPoEProfilesRadius(options = {}) {
             
             // Build profile object
             const isIsolirProfile = groupname === 'isolir';
+            const gnStr = String(groupname || '').trim();
+            const isTenantPrefixed = /^t\d+_/i.test(gnStr);
             const profile = {
-                name: meta?.display_name || groupname,
+                name: isTenantPrefixed ? gnStr : (meta?.display_name || groupname),
                 '.id': groupname, // Use groupname as ID for RADIUS
                 groupname: groupname,
                 'rate-limit': null,

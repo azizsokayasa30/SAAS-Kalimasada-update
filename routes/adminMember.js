@@ -55,7 +55,7 @@ router.get('/packages', adminAuth, async (req, res) => {
         // Get hotspot profiles from RADIUS/MikroTik
         let hotspotProfiles = [];
         try {
-            const userAuthMode = await getRadiusConfigValue('user_auth_mode', 'mikrotik');
+            const userAuthMode = await getRadiusConfigValue('user_auth_mode', 'radius');
             if (userAuthMode === 'radius') {
                 const profilesResult = await getHotspotProfilesRadius();
                 if (profilesResult.success) {
@@ -165,7 +165,7 @@ router.post('/packages', adminAuth, async (req, res) => {
         // PENTING: Pastikan rate limit dari hotspot profile metadata di-sync ke radgroupreply
         if (packageData.hotspot_profile && packageData.hotspot_profile !== 'default') {
             try {
-                const userAuthMode = await getRadiusConfigValue('user_auth_mode', 'mikrotik');
+                const userAuthMode = await getRadiusConfigValue('user_auth_mode', 'radius');
                 if (userAuthMode === 'radius') {
                     const { getHotspotProfileMetadata, getRadiusConnection } = require('../config/mikrotik');
                     const conn = await getRadiusConnection();
@@ -252,7 +252,7 @@ router.post('/packages/:id/update', adminAuth, async (req, res) => {
         // PENTING: Pastikan rate limit dari hotspot profile metadata di-sync ke radgroupreply
         if (newHotspotProfile && newHotspotProfile !== 'default') {
             try {
-                const userAuthMode = await getRadiusConfigValue('user_auth_mode', 'mikrotik');
+                const userAuthMode = await getRadiusConfigValue('user_auth_mode', 'radius');
                 if (userAuthMode === 'radius') {
                     const { getHotspotProfileMetadata, getRadiusConnection } = require('../config/mikrotik');
                     const conn = await getRadiusConnection();
@@ -294,7 +294,7 @@ router.post('/packages/:id/update', adminAuth, async (req, res) => {
         // Jika hotspot_profile berubah, update semua member yang menggunakan paket ini di RADIUS
         if (hotspotProfileChanged) {
             try {
-                const userAuthMode = await getRadiusConfigValue('user_auth_mode', 'mikrotik');
+                const userAuthMode = await getRadiusConfigValue('user_auth_mode', 'radius');
                 if (userAuthMode === 'radius') {
                     // Get all members using this package
                     const members = await billingManager.getAllMembers({ package_id: id });
@@ -411,7 +411,7 @@ router.get('/data', adminAuth, async (req, res) => {
         let hotspotServers = [];
         
         try {
-            const userAuthMode = await getRadiusConfigValue('user_auth_mode', 'mikrotik');
+            const userAuthMode = await getRadiusConfigValue('user_auth_mode', 'radius');
             if (userAuthMode === 'radius') {
                 const profilesResult = await getHotspotProfilesRadius();
                 if (profilesResult.success) {
@@ -660,7 +660,7 @@ router.post('/data/:id/update', adminAuth, memberPhotoUpload.fields([
         const finalHotspotUsername = memberData.hotspot_username || existingMember.hotspot_username;
         if (finalHotspotUsername && oldStatus !== newStatus) {
             try {
-                const userAuthMode = await getRadiusConfigValue('user_auth_mode', 'mikrotik');
+                const userAuthMode = await getRadiusConfigValue('user_auth_mode', 'radius');
                 if (userAuthMode === 'radius') {
                     const { disableHotspotUserRadius, enableHotspotUserRadius, disconnectHotspotUser } = require('../config/mikrotik');
                     
@@ -713,7 +713,7 @@ router.post('/data/:id/update', adminAuth, memberPhotoUpload.fields([
         // PENTING: Jika hotspot_profile berubah, groupname di RADIUS akan di-update dan rate limit akan mengikuti profile baru
         if (finalHotspotUsername && (password || memberData.hotspot_profile)) {
             try {
-                const userAuthMode = await getRadiusConfigValue('user_auth_mode', 'mikrotik');
+                const userAuthMode = await getRadiusConfigValue('user_auth_mode', 'radius');
                 if (userAuthMode === 'radius') {
                     const packageInfo = await billingManager.getMemberPackageById(package_id);
                     const finalHotspotProfile = memberData.hotspot_profile || packageInfo?.hotspot_profile || 'default';

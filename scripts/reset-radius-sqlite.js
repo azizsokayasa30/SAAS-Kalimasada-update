@@ -64,18 +64,20 @@ async function tableExists(db, name) {
 
 async function main() {
     const args = new Set(process.argv.slice(2));
-    if (!args.has('--yes')) {
+    if (!args.has('--yes') || !args.has('--i-understand-shared-db')) {
         console.log(`
-Reset database RADIUS (SQLite): hapus semua DATA di tabel user/NAS/profil/accounting.
+Reset database RADIUS (SQLite): hapus semua DATA di tabel user/NAS/profil/accounting
+untuk SEMUA TENANT (database bersama).
 
-Wajib tambahkan flag --yes untuk menjalankan.
+Wajib kedua flag:
+  --yes
+  --i-understand-shared-db
 
 Opsi:
   --backup   Salin file .db ke backups/radius/ sebelum mengosongkan.
 
 Contoh:
-  node scripts/reset-radius-sqlite.js --yes
-  node scripts/reset-radius-sqlite.js --yes --backup
+  node scripts/reset-radius-sqlite.js --yes --i-understand-shared-db --backup
 `);
         process.exit(1);
     }

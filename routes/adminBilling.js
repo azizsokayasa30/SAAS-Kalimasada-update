@@ -2705,6 +2705,38 @@ router.post('/customers/bulk-delete', async (req, res) => {
     }
 });
 
+/**
+ * Perbaiki profil PPPoE pelanggan dari paket tenant:
+ * - Seragamkan nama profil ke t{tenantId}_profil_*
+ * - Remap package_id ke paket milik tenant
+ * - Update customers.pppoe_profile + assign RADIUS
+ * - Tanpa pppoe_username → dianggap static (pppoe_profile dikosongkan)
+ */
+router.post('/customers/fix-pppoe-profiles-from-packages', async (req, res) => {
+    const scope = resolveImportTenantScope(req);
+    if (!scope.tenantId) {
+        return res.status(400).json({
+            success: false,
+            message: 'Konteks tenant tidak ditemukan. Aksi ini hanya boleh dari panel tenant yang aktif.'
+        });
+    }
+
+    try {
+        const {
+            fixCustomerPppoeProfilesFromPackages
+        } = require('../utils/fixCustomerPppoeProfilesFromPackages');
+        const result = await fixCustomerPppoeProfilesFromPackages(scope.tenantId);
+        return res.json(result);
+    } catch (error) {
+        logger.error('Error fixing PPPoE profiles from packages:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Gagal memperbaiki profil PPPoE dari paket',
+            error: error.message
+        });
+    }
+});
+
 function formatCustomerExportDate(val) {
     if (val == null || val === '') return '';
     const d = new Date(val);
@@ -3920,7 +3952,7 @@ async function runCustomerXlsxImport(req, res) {
                     odp_id: cellNum('odp_id'),
                     area: cellStr('area'),
                     join_date: resolveImportJoinDate(getVal, row),
-                    pppoe_profile: String(getVal(row, 'pppoe_profile') || 'default').trim(),
+                    pppoe_profile: String(getVal(row, 'pppoe_profile') || '').trim(),
                     connection_type: cellStr('connection_type'),
                     static_ip: cellStr('static_ip') || cellStr('assigned_ip'),
                     assigned_ip: cellStr('assigned_ip') || cellStr('static_ip'),
@@ -4066,6 +4098,10 @@ async function runCustomerXlsxImport(req, res) {
                 const resolvedAreaId = await resolveAreaIdByName(raw.area);
 
                 const connType = resolveImportConnectionType(raw);
+                const packageRow = packageById.get(Number(resolvedPackageId)) || null;
+                const resolvedPppoeProfile = connType === 'static_ip'
+                    ? null
+                    : (resolveCustomerPppoeProfile(raw.pppoe_profile, packageRow, null) || 'default');
                 const staticIpVal = String(raw.static_ip || raw.assigned_ip || '').trim();
                 const pppoeUsernameKey = String(raw.pppoe_username || '').trim();
 
@@ -4124,9 +4160,7 @@ async function runCustomerXlsxImport(req, res) {
                     email: raw.email ? raw.email.trim() : '',
                     address: raw.address ? raw.address.trim() : '',
                     package_id: resolvedPackageId,
-                    pppoe_profile: connType === 'static_ip'
-                        ? null
-                        : (raw.pppoe_profile || 'default'),
+                    pppoe_profile: resolvedPppoeProfile,
                     status: raw.status || 'active',
                     auto_suspension: typeof raw.auto_suspension !== 'undefined' ? parseInt(raw.auto_suspension, 10) : 1,
                     billing_day: raw.billing_day ? Math.min(Math.max(parseInt(raw.billing_day, 10), 1), 28) : 15
@@ -4189,7 +4223,7 @@ async function runCustomerXlsxImport(req, res) {
                     try {
                         const pppoe_username = String(raw.pppoe_username).trim();
                         const pppoe_password = String(raw.pppoe_password).trim();
-                        const pppoe_profile = raw.pppoe_profile || 'default';
+                        const pppoe_profile = resolvedPppoeProfile || 'default';
                         const router_id = raw.router_id || null;
 
                         if (pppoe_username && pppoe_password) {
@@ -4744,6 +4778,18 @@ async function runCustomerJsonImport(req, res) {
                     const n = typeof v === 'number' ? v : parseFloat(String(v).replace(',', '.'));
                     return Number.isFinite(n) ? n : undefined;
                 };
+                const packageIdForProfile = raw.package_id || null;
+                let packageRow = null;
+                if (packageIdForProfile) {
+                    try {
+                        packageRow = await billingManager.getPackageById(packageIdForProfile);
+                    } catch (pkgErr) {
+                        logger.warn(`[IMPORT-JSON] Failed to load package ${packageIdForProfile}: ${pkgErr.message}`);
+                    }
+                }
+                const resolvedPppoeProfile = connType === 'static_ip'
+                    ? null
+                    : (resolveCustomerPppoeProfile(raw.pppoe_profile, packageRow, null) || 'default');
                 const customerData = {
                     tenant_id: impT.tenantId,
                     name,
@@ -4752,8 +4798,8 @@ async function runCustomerJsonImport(req, res) {
                     pppoe_password: connType === 'static_ip' ? '' : (raw.pppoe_password ? String(raw.pppoe_password).trim() : ''),
                     email: raw.email || '',
                     address: raw.address || '',
-                    package_id: raw.package_id || null,
-                    pppoe_profile: connType === 'static_ip' ? null : (raw.pppoe_profile || 'default'),
+                    package_id: packageIdForProfile,
+                    pppoe_profile: resolvedPppoeProfile,
                     status: raw.status || 'active',
                     auto_suspension: raw.auto_suspension !== undefined ? parseInt(raw.auto_suspension, 10) : 1,
                     billing_day: raw.billing_day ? Math.min(Math.max(parseInt(raw.billing_day, 10), 1), 28) : 15
@@ -4819,7 +4865,7 @@ async function runCustomerJsonImport(req, res) {
                     try {
                         const pppoe_username = String(raw.pppoe_username).trim();
                         const pppoe_password = String(raw.pppoe_password).trim();
-                        const pppoe_profile = raw.pppoe_profile || 'default';
+                        const pppoe_profile = resolvedPppoeProfile || 'default';
                         const router_id = raw.router_id || null;
 
                         if (pppoe_username && pppoe_password) {

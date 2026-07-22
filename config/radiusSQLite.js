@@ -463,6 +463,11 @@ async function getRadiusReadConnection(dbPath) {
 
 /**
  * Online backup via SQLite backup API — safe while FreeRADIUS is running (no file copy lock).
+ *
+ * IMPORTANT: node-sqlite3 `db.backup(path, cb)` does NOT copy pages by itself.
+ * The callback fires when the Backup object is constructed. You MUST call
+ * `backup.step(-1)` then `backup.finish()`, otherwise the target is a 0-byte empty file
+ * (this previously caused a full RADIUS wipe when that empty archive was restored).
  */
 async function backupRadiusDatabaseToPath(targetPath) {
     const conn = await getRadiusConnection();
@@ -470,17 +475,79 @@ async function backupRadiusDatabaseToPath(targetPath) {
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
     }
+    if (fs.existsSync(targetPath)) {
+        try {
+            fs.unlinkSync(targetPath);
+        } catch (_) {}
+    }
+
     return enqueueRadiusOperation(
         () =>
             new Promise((resolve, reject) => {
-                conn.db.backup(targetPath, (err) => {
-                    if (err) {
-                        logger.error(`[RADIUS-SQLITE] Online backup failed: ${err.message}`);
-                        reject(err);
-                    } else {
-                        logger.info(`[RADIUS-SQLITE] Online backup completed: ${targetPath}`);
-                        resolve(targetPath);
+                let backup;
+                try {
+                    backup = conn.db.backup(targetPath);
+                } catch (err) {
+                    logger.error(`[RADIUS-SQLITE] Online backup init failed: ${err.message}`);
+                    return reject(err);
+                }
+
+                backup.step(-1, (stepErr) => {
+                    if (stepErr) {
+                        logger.error(`[RADIUS-SQLITE] Online backup step failed: ${stepErr.message}`);
+                        try {
+                            backup.finish(() => {});
+                        } catch (_) {}
+                        return reject(stepErr);
                     }
+
+                    backup.finish((finishErr) => {
+                        if (finishErr) {
+                            logger.error(`[RADIUS-SQLITE] Online backup finish failed: ${finishErr.message}`);
+                            return reject(finishErr);
+                        }
+
+                        try {
+                            const st = fs.statSync(targetPath);
+                            if (!st.size || st.size < 1024) {
+                                const msg = `Online backup produced empty/too-small file (${st.size} bytes)`;
+                                logger.error(`[RADIUS-SQLITE] ${msg}`);
+                                return reject(new Error(msg));
+                            }
+
+                            const verify = new sqlite3.Database(targetPath, sqlite3.OPEN_READONLY, (openErr) => {
+                                if (openErr) {
+                                    return reject(new Error(`Backup unreadable: ${openErr.message}`));
+                                }
+                                verify.get(
+                                    `SELECT COUNT(*) AS n FROM radcheck
+                                     WHERE LOWER(TRIM(attribute)) IN (
+                                       'cleartext-password','user-password','crypt-password',
+                                       'md5-password','sha-password','smd5-password','mikrotik-password'
+                                     )`,
+                                    (qErr, row) => {
+                                        verify.close(() => {
+                                            if (qErr) {
+                                                return reject(new Error(`Backup missing radcheck: ${qErr.message}`));
+                                            }
+                                            const n = row && row.n != null ? Number(row.n) : 0;
+                                            if (n < 1) {
+                                                return reject(
+                                                    new Error('Backup validation failed: 0 password users in radcheck')
+                                                );
+                                            }
+                                            logger.info(
+                                                `[RADIUS-SQLITE] Online backup completed: ${targetPath} (${st.size} bytes, ${n} password users)`
+                                            );
+                                            resolve(targetPath);
+                                        });
+                                    }
+                                );
+                            });
+                        } catch (validateErr) {
+                            reject(validateErr);
+                        }
+                    });
                 });
             })
     );

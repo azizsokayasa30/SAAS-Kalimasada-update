@@ -19,7 +19,7 @@ function msUntilNextLocalHour(targetHour = 3) {
 
 function runMaintenanceJob() {
     if (running) return;
-    const mode = String(getSetting('user_auth_mode', 'mikrotik') || '').toLowerCase();
+    const mode = String(getSetting('user_auth_mode', 'radius') || '').toLowerCase();
     if (mode !== 'radius') return;
 
     running = true;

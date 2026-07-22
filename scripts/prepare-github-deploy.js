@@ -177,7 +177,7 @@ echo "🎉 Deploy selesai!"
             "offline_notification_enable": true,
             "offline_notification_interval": "43200000",
             "offline_device_threshold_hours": "24",
-            "user_auth_mode": "mikrotik",
+            "user_auth_mode": "radius",
             "logo_filename": "logo.png",
             "company_website": "https://alijaya.net",
             "company_slogan": "Solusi Internet Terdepan",

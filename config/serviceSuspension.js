@@ -15,7 +15,7 @@ async function getUserAuthMode() {
     } catch (e) {
         // Fallback ke settings.json
     }
-    return getSetting('user_auth_mode', 'mikrotik');
+    return getSetting('user_auth_mode', 'radius');
 }
 
 /** Jeda singkat setelah disconnect agar NAS sempat membersihkan sesi (dulu 1s — terlalu memperlambat admin). */

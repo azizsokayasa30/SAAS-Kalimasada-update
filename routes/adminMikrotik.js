@@ -581,6 +581,395 @@ router.post('/mikrotik/delete-user', adminAuth, async (req, res) => {
   }
 });
 
+const multer = require('multer');
+const pppoeImportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    const name = String(file.originalname || '').toLowerCase();
+    const ok =
+      name.endsWith('.xlsx') ||
+      file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+      file.mimetype === 'application/octet-stream';
+    cb(ok ? null : new Error('Hanya file Excel .xlsx yang diizinkan'), ok);
+  }
+});
+
+function unwrapExcelCellValue(value) {
+  if (value == null) return '';
+  if (typeof value === 'object') {
+    if (value.text != null) return String(value.text).trim();
+    if (value.result != null) return String(value.result).trim();
+    if (Array.isArray(value.richText)) {
+      return value.richText.map((t) => t.text || '').join('').trim();
+    }
+    if (value.hyperlink != null && value.text != null) return String(value.text).trim();
+  }
+  return String(value).trim();
+}
+
+function buildPppoeImportHeaderMap(headerRow) {
+  const map = {};
+  headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+    const raw = unwrapExcelCellValue(cell.value).toLowerCase().replace(/[\s_-]+/g, '');
+    if (!raw) return;
+    if (['username', 'user', 'pppoeusername', 'login'].includes(raw)) map.username = colNumber;
+    else if (['password', 'pass', 'passwd', 'sandi'].includes(raw)) map.password = colNumber;
+    else if (['profile', 'groupname', 'profil', 'pppoeprofile'].includes(raw)) map.profile = colNumber;
+  });
+  return map;
+}
+
+function exportFilename(kind) {
+  const tid = hasTenantContext() ? `t${getTenantId()}` : 'platform';
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  return `pppoe-${kind}-${tid}-${stamp}.xlsx`;
+}
+
+async function writePppoeExcel(res, sheetName, columns, rows, filename) {
+  const ExcelJS = require('exceljs');
+  const workbook = new ExcelJS.Workbook();
+  workbook.created = new Date();
+  const worksheet = workbook.addWorksheet(sheetName, {
+    views: [{ state: 'frozen', ySplit: 1 }]
+  });
+  worksheet.columns = columns;
+  const headerRow = worksheet.getRow(1);
+  headerRow.font = { bold: true };
+  for (const row of rows) {
+    worksheet.addRow(row);
+  }
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  );
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  await workbook.xlsx.write(res);
+  res.end();
+}
+
+// GET: Export user PPPoE milik tenant (Excel) — aman multi-tenant, bukan dump RADIUS penuh
+router.get('/mikrotik/export-pppoe-users', adminAuth, async (req, res) => {
+  try {
+    const { getUserAuthModeAsync, getPPPoEUsers } = require('../config/mikrotik');
+    const authMode = await getUserAuthModeAsync();
+
+    await ensureTenantPppoeUsersTable();
+    const tenantPppoeUsers = await getTenantPppoeUsernames();
+    const tenantBillingSet = await getTenantBillingPppoeUsernameSet();
+
+    let users = [];
+    if (authMode === 'radius') {
+      const { getPPPoEUsersRadius } = require('../config/mikrotik');
+      const radiusUsers = await getPPPoEUsersRadius({
+        allowedUsernames: tenantPppoeUsers === null ? null : tenantPppoeUsers,
+        skipMikrotikActive: true
+      });
+      users = await mergeRadiusAndBillingUsers(radiusUsers || [], tenantPppoeUsers, tenantBillingSet);
+    } else {
+      const result = await getPPPoEUsers();
+      users = Array.isArray(result) ? result : result?.data || [];
+      if (tenantPppoeUsers !== null) {
+        const allow = new Set(tenantPppoeUsers.map((u) => String(u).toLowerCase().trim()));
+        users = users.filter((u) => allow.has(String(u.name || u.username || '').toLowerCase().trim()));
+      }
+    }
+
+    const rows = (users || []).map((u) => {
+      const username = u.name || u.username || '';
+      return {
+        username,
+        password: u.password || '',
+        profile: u.profile || '',
+        in_radius: u.missing_radius ? 'no' : 'yes'
+      };
+    });
+
+    const filename = exportFilename('users');
+    logger.info(`[PPPoE-EXPORT] users xlsx rows=${rows.length} file=${filename}`);
+    await writePppoeExcel(
+      res,
+      'User PPPoE',
+      [
+        { header: 'Username', key: 'username', width: 28 },
+        { header: 'Password', key: 'password', width: 20 },
+        { header: 'Profile', key: 'profile', width: 24 },
+        { header: 'Di RADIUS', key: 'in_radius', width: 12 }
+      ],
+      rows,
+      filename
+    );
+  } catch (err) {
+    logger.error('Error exporting PPPoE users:', err);
+    if (!res.headersSent) {
+      return res.status(500).json({ success: false, message: err.message || 'Gagal export user PPPoE' });
+    }
+  }
+});
+
+// GET: Export profile PPPoE milik tenant (Excel)
+router.get('/mikrotik/export-pppoe-profiles', adminAuth, async (req, res) => {
+  try {
+    const result = await getPPPoEProfiles();
+    const profiles = result?.success ? result.data || [] : Array.isArray(result) ? result : [];
+
+    const rows = (profiles || []).map((p) => ({
+      profile_name: p.name || p.groupname || '',
+      groupname: p.groupname || p['.id'] || p.name || '',
+      rate_limit: p['rate-limit'] || p.rate_limit || '',
+      local_address: p.localAddress || p['local-address'] || '',
+      remote_address: p.remoteAddress || p['remote-address'] || '',
+      dns_server: p.dnsServer || p['dns-server'] || '',
+      address_list: p.addressList || p['address-list'] || '',
+      comment: p.comment || '',
+      is_system: p.is_system_profile || p.is_isolir ? 'yes' : 'no'
+    }));
+
+    const filename = exportFilename('profiles');
+    logger.info(`[PPPoE-EXPORT] profiles xlsx rows=${rows.length} file=${filename}`);
+    await writePppoeExcel(
+      res,
+      'Profile PPPoE',
+      [
+        { header: 'Nama Profile', key: 'profile_name', width: 28 },
+        { header: 'Groupname', key: 'groupname', width: 28 },
+        { header: 'Rate Limit', key: 'rate_limit', width: 22 },
+        { header: 'Local Address', key: 'local_address', width: 16 },
+        { header: 'Remote Address', key: 'remote_address', width: 18 },
+        { header: 'DNS Server', key: 'dns_server', width: 20 },
+        { header: 'Address List', key: 'address_list', width: 18 },
+        { header: 'Comment', key: 'comment', width: 30 },
+        { header: 'Sistem', key: 'is_system', width: 10 }
+      ],
+      rows,
+      filename
+    );
+  } catch (err) {
+    logger.error('Error exporting PPPoE profiles:', err);
+    if (!res.headersSent) {
+      return res.status(500).json({ success: false, message: err.message || 'Gagal export profile PPPoE' });
+    }
+  }
+});
+
+// GET: Template Excel import user PPPoE
+router.get('/mikrotik/import-pppoe-users/template', adminAuth, async (req, res) => {
+  try {
+    await writePppoeExcel(
+      res,
+      'User PPPoE',
+      [
+        { header: 'Username', key: 'username', width: 28 },
+        { header: 'Password', key: 'password', width: 20 },
+        { header: 'Profile', key: 'profile', width: 24 }
+      ],
+      [
+        { username: 'contoh-user', password: 'rahasia123', profile: 'nama_profile' }
+      ],
+      'template-import-pppoe-users.xlsx'
+    );
+  } catch (err) {
+    logger.error('Error creating PPPoE import template:', err);
+    if (!res.headersSent) {
+      return res.status(500).json({ success: false, message: err.message || 'Gagal buat template' });
+    }
+  }
+});
+
+// POST: Import user PPPoE dari Excel (.xlsx)
+router.post(
+  '/mikrotik/import-pppoe-users',
+  adminAuth,
+  (req, res, next) => {
+    pppoeImportUpload.single('file')(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({ success: false, message: err.message || 'Upload gagal' });
+      }
+      return next();
+    });
+  },
+  async (req, res) => {
+    try {
+      if (!hasTenantContext()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Import PPPoE hanya dari panel tenant yang aktif (bukan platform tanpa tenant).'
+        });
+      }
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ success: false, message: 'File Excel (.xlsx) wajib diunggah' });
+      }
+
+      const { getUserAuthModeAsync } = require('../config/mikrotik');
+      const authMode = await getUserAuthModeAsync();
+      let routerObj = null;
+
+      if (authMode !== 'radius') {
+        const routerId = parseInt(String(req.body.router_id || '').trim(), 10);
+        if (!routerId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Mode Mikrotik: pilih NAS (router_id) untuk import.'
+          });
+        }
+        routerObj = await new Promise((resolve) => {
+          billingManager.db.get(
+            'SELECT * FROM routers WHERE id=?' + _routerTenantAnd(),
+            [routerId],
+            (err, row) => resolve(row || null)
+          );
+        });
+        if (!routerObj) {
+          return res.status(400).json({ success: false, message: 'Router tidak ditemukan' });
+        }
+      }
+
+      const ExcelJS = require('exceljs');
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(req.file.buffer);
+      const worksheet =
+        workbook.getWorksheet('User PPPoE') ||
+        workbook.worksheets.find((ws) => ws && ws.rowCount > 0) ||
+        workbook.worksheets[0];
+      if (!worksheet) {
+        return res.status(400).json({ success: false, message: 'Worksheet tidak ditemukan dalam file' });
+      }
+
+      const headerMap = buildPppoeImportHeaderMap(worksheet.getRow(1));
+      if (!headerMap.username || !headerMap.password) {
+        return res.status(400).json({
+          success: false,
+          message: 'Header wajib: Username dan Password (opsional: Profile). Sesuaikan dengan template/export.'
+        });
+      }
+
+      const MAX_ROWS = 3000;
+      const MAX_ERROR_SAMPLES = 40;
+      let created = 0;
+      let updated = 0;
+      let skipped = 0;
+      let failed = 0;
+      const errors = [];
+      const seenInFile = new Set();
+
+      await ensureTenantPppoeUsersTable();
+      const tenantOwnedSet = await getTenantAllowedPppoeUsernameSet();
+
+      for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
+        if (created + updated + failed + skipped >= MAX_ROWS) {
+          errors.push(`Dihentikan: maksimal ${MAX_ROWS} baris data per import`);
+          break;
+        }
+
+        const row = worksheet.getRow(rowNumber);
+        const username = unwrapExcelCellValue(row.getCell(headerMap.username).value);
+        const password = unwrapExcelCellValue(row.getCell(headerMap.password).value);
+        const profile = headerMap.profile
+          ? unwrapExcelCellValue(row.getCell(headerMap.profile).value)
+          : '';
+
+        if (!username && !password && !profile) {
+          skipped += 1;
+          continue;
+        }
+        if (!username) {
+          failed += 1;
+          if (errors.length < MAX_ERROR_SAMPLES) {
+            errors.push(`Baris ${rowNumber}: username kosong`);
+          }
+          continue;
+        }
+        if (!password) {
+          failed += 1;
+          if (errors.length < MAX_ERROR_SAMPLES) {
+            errors.push(`Baris ${rowNumber} (${username}): password kosong`);
+          }
+          continue;
+        }
+
+        const key = username.toLowerCase();
+        if (seenInFile.has(key)) {
+          skipped += 1;
+          if (errors.length < MAX_ERROR_SAMPLES) {
+            errors.push(`Baris ${rowNumber} (${username}): duplikat dalam file, dilewati`);
+          }
+          continue;
+        }
+        seenInFile.add(key);
+
+        const existedBefore = !!(tenantOwnedSet && tenantOwnedSet.has(key));
+
+        try {
+          try {
+            await claimTenantPppoeUsername(username);
+          } catch (claimErr) {
+            if (!existedBefore) throw claimErr;
+          }
+
+          const result = await addPPPoEUser({
+            username,
+            password,
+            profile: profile || null,
+            routerObj: routerObj || null
+          });
+
+          if (!result || result.success === false) {
+            if (!existedBefore) {
+              await releaseTenantPppoeUsername(username).catch(() => {});
+            }
+            failed += 1;
+            if (errors.length < MAX_ERROR_SAMPLES) {
+              errors.push(
+                `Baris ${rowNumber} (${username}): ${(result && result.message) || 'gagal simpan'}`
+              );
+            }
+            continue;
+          }
+
+          if (existedBefore) updated += 1;
+          else {
+            created += 1;
+            if (tenantOwnedSet) tenantOwnedSet.add(key);
+          }
+        } catch (rowErr) {
+          failed += 1;
+          if (errors.length < MAX_ERROR_SAMPLES) {
+            errors.push(`Baris ${rowNumber} (${username}): ${rowErr.message || rowErr}`);
+          }
+        }
+      }
+
+      clearPppoeAdminPageCache();
+      if (routerObj && routerObj.id) {
+        clearPppPrintCachesForRouter(routerObj.id);
+      }
+
+      logger.info(
+        `[PPPoE-IMPORT] tenant=${getTenantId()} created=${created} updated=${updated} failed=${failed} skipped=${skipped}`
+      );
+
+      return res.json({
+        success: failed === 0,
+        message:
+          failed === 0
+            ? `Import selesai: ${created} baru, ${updated} diperbarui`
+            : `Import selesai dengan error: ${created} baru, ${updated} diperbarui, ${failed} gagal`,
+        created,
+        updated,
+        failed,
+        skipped,
+        errors
+      });
+    } catch (err) {
+      logger.error('Error importing PPPoE users:', err);
+      return res.status(500).json({
+        success: false,
+        message: err.message || 'Gagal import user PPPoE'
+      });
+    }
+  }
+);
+
 // GET: List Profile PPPoE
 router.get('/mikrotik/profiles', adminAuth, async (req, res) => {
   let profiles = [];

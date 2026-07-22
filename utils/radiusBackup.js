@@ -43,10 +43,22 @@ async function backupRadius() {
             await fs.access(sourceDbPath);
             const { backupRadiusDatabaseToPath } = require('../config/radiusSQLite');
             await backupRadiusDatabaseToPath(targetDbPath);
-            logger.info('Database backup completed (SQLite online backup)');
+            const dbStat = await fs.stat(targetDbPath);
+            if (!dbStat.size || dbStat.size < 1024) {
+                throw new Error(`RADIUS DB backup kosong/terlalu kecil (${dbStat.size} bytes)`);
+            }
+            logger.info(`Database backup completed (SQLite online backup, ${dbStat.size} bytes)`);
         } catch (error) {
-            logger.error(`Database file not found at ${sourceDbPath}: ${error.message}`);
-            // If file not found, we still continue with config backup
+            logger.error(`Database backup failed at ${sourceDbPath}: ${error.message}`);
+            // Jangan buat arsip "sukses" tanpa DB — itu yang sempat menyebabkan restore kosong
+            try {
+                await execAsync(`rm -rf ${tempDir}`);
+            } catch (_) {}
+            return {
+                success: false,
+                filePath: null,
+                message: `Gagal backup database RADIUS: ${error.message}`
+            };
         }
         
         // 2. Backup FreeRADIUS Configuration
@@ -115,9 +127,10 @@ async function backupRadius() {
             }
             backupFiles.sort((a, b) => b.created - a.created);
             
-            if (backupFiles.length > 3) {
-                logger.info(`Ditemukan ${backupFiles.length} file backup. Menghapus backup lama (batas maksimal 3)...`);
-                const filesToDelete = backupFiles.slice(3);
+            // Simpan lebih banyak cadangan — batas 3 terlalu agresif setelah insiden wipe
+            if (backupFiles.length > 14) {
+                logger.info(`Ditemukan ${backupFiles.length} file backup. Menghapus backup lama (batas maksimal 14)...`);
+                const filesToDelete = backupFiles.slice(14);
                 for (const backup of filesToDelete) {
                     await fs.unlink(path.join(backupDir, backup.file));
                     logger.info(`Berhasil menghapus backup lama: ${backup.file}`);
@@ -190,6 +203,50 @@ async function restoreRadius(backupFilePath) {
             const dbBackupFile = path.join(tempDir, 'radius-database.db');
             
             if (await fs.access(dbBackupFile).then(() => true).catch(() => false)) {
+                const dbStat = await fs.stat(dbBackupFile);
+                if (!dbStat.size || dbStat.size < 1024) {
+                    throw new Error(
+                        `File radius-database.db di arsip kosong/rusak (${dbStat.size} bytes). Restore dibatalkan.`
+                    );
+                }
+
+                // Validasi isi sebelum menimpa DB live (cegah wipe ulang)
+                const sqlite3 = require('sqlite3').verbose();
+                const passwordUsers = await new Promise((resolve, reject) => {
+                    const db = new sqlite3.Database(dbBackupFile, sqlite3.OPEN_READONLY, (err) => {
+                        if (err) return reject(new Error(`Backup DB tidak bisa dibuka: ${err.message}`));
+                    });
+                    db.get(
+                        `SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='radcheck'`,
+                        (tErr, tRow) => {
+                            if (tErr || !tRow || !tRow.n) {
+                                db.close(() => {});
+                                return reject(new Error('Backup tidak punya tabel radcheck — restore dibatalkan'));
+                            }
+                            db.get(
+                                `SELECT COUNT(*) AS n FROM radcheck
+                                 WHERE LOWER(TRIM(attribute)) IN (
+                                   'cleartext-password','user-password','crypt-password',
+                                   'md5-password','sha-password','smd5-password','mikrotik-password'
+                                 )`,
+                                (qErr, row) => {
+                                    db.close(() => {
+                                        if (qErr) return reject(new Error(`Gagal validasi radcheck: ${qErr.message}`));
+                                        resolve(row && row.n != null ? Number(row.n) : 0);
+                                    });
+                                }
+                            );
+                        }
+                    );
+                });
+
+                if (passwordUsers < 1) {
+                    throw new Error(
+                        'Backup berisi 0 user password di radcheck — restore dibatalkan (mencegah wipe RADIUS).'
+                    );
+                }
+                logger.info(`Backup RADIUS valid: ${passwordUsers} password users, ${dbStat.size} bytes`);
+
                 const { dbPath: targetDbPath } = await resolveRadiusSqliteDbPath();
                 await fs.mkdir(path.dirname(targetDbPath), { recursive: true });
 

@@ -27,6 +27,7 @@ const {
 const { getTenantId, hasTenantContext } = require('../config/platform/tenantContext');
 const { tenantSqlFromRequest } = require('../config/platform/tenantSqlHelpers');
 const { backupRadius, restoreRadius, listBackups } = require('../utils/radiusBackup');
+const { canManageSharedRadius, requireSharedRadiusAdmin } = require('../middleware/sharedRadiusGuard');
 
 // Configure multer for file upload
 const upload = multer({
@@ -62,7 +63,8 @@ router.get('/radius', adminAuth, async (req, res) => {
     
     res.render('adminRadius', {
       settings,
-      backups: backups || [],
+      backups: canManageSharedRadius(req) ? (backups || []) : [],
+      canManageSharedRadius: canManageSharedRadius(req),
       page: 'setting-radius',
       error: req.query.error || null,
       success: req.query.success || null
@@ -87,7 +89,8 @@ router.get('/radius', adminAuth, async (req, res) => {
         radius_password: '',
         radius_database: 'radius'
       },
-      backups: backups || [],
+      backups: canManageSharedRadius(req) ? (backups || []) : [],
+      canManageSharedRadius: canManageSharedRadius(req),
       page: 'setting-radius',
       error: 'Gagal memuat pengaturan RADIUS',
       success: null
@@ -126,7 +129,8 @@ router.post('/radius', adminAuth, async (req, res) => {
     
     res.render('adminRadius', {
       settings,
-      backups: backups || [],
+      backups: canManageSharedRadius(req) ? (backups || []) : [],
+      canManageSharedRadius: canManageSharedRadius(req),
       page: 'setting-radius',
       error: null,
       success: 'Pengaturan RADIUS berhasil disimpan'
@@ -152,7 +156,8 @@ router.post('/radius', adminAuth, async (req, res) => {
 
     res.render('adminRadius', {
       settings,
-      backups: backups || [],
+      backups: canManageSharedRadius(req) ? (backups || []) : [],
+      canManageSharedRadius: canManageSharedRadius(req),
       page: 'setting-radius',
       error: 'Gagal menyimpan pengaturan RADIUS: ' + e.message,
       success: null
@@ -161,7 +166,7 @@ router.post('/radius', adminAuth, async (req, res) => {
 });
 
 // POST: Sync password FreeRADIUS dengan password database billing
-router.post('/radius/sync-password', adminAuth, async (req, res) => {
+router.post('/radius/sync-password', adminAuth, requireSharedRadiusAdmin, async (req, res) => {
   try {
     const { syncRadiusPassword } = require('../utils/syncRadiusPassword');
     const result = await syncRadiusPassword();
@@ -189,7 +194,7 @@ router.post('/radius/sync-password', adminAuth, async (req, res) => {
 });
 
 // GET: Check password sync status
-router.get('/radius/check-password-sync', adminAuth, async (req, res) => {
+router.get('/radius/check-password-sync', adminAuth, requireSharedRadiusAdmin, async (req, res) => {
   try {
     const { checkPasswordSync } = require('../utils/syncRadiusPassword');
     const status = await checkPasswordSync();
@@ -452,8 +457,8 @@ router.get('/radius/test', adminAuth, async (req, res) => {
   }
 });
 
-// POST: Sinkronisasi & hapus user yatim (orphan users) di RADIUS (root version)
-router.post('/radius/sync-orphan-users', adminAuth, async (req, res) => {
+// POST: Sinkronisasi & hapus user yatim (orphan users) di RADIUS — HANYA platform (DB bersama)
+router.post('/radius/sync-orphan-users', adminAuth, requireSharedRadiusAdmin, async (req, res) => {
   let conn = null;
   try {
     const settings = await getRadiusConfig();
@@ -846,8 +851,8 @@ router.post('/radius/clients/delete', adminAuth, async (req, res) => {
   }
 });
 
-// GET: Backup RADIUS
-router.get('/radius/backup', adminAuth, async (req, res) => {
+// GET: Backup RADIUS — full shared DB, platform only
+router.get('/radius/backup', adminAuth, requireSharedRadiusAdmin, async (req, res) => {
   try {
     logger.info('Starting RADIUS backup...');
     const result = await backupRadius();
@@ -869,8 +874,8 @@ router.get('/radius/backup', adminAuth, async (req, res) => {
   }
 });
 
-// POST: Restore RADIUS
-router.post('/radius/restore', adminAuth, upload.single('backupFile'), async (req, res) => {
+// POST: Restore RADIUS — full shared DB, platform only + validated archive
+router.post('/radius/restore', adminAuth, requireSharedRadiusAdmin, upload.single('backupFile'), async (req, res) => {
   try {
     if (!req.file) {
       return res.redirect('/admin/radius?error=' + encodeURIComponent('File backup tidak ditemukan'));
@@ -899,7 +904,7 @@ router.post('/radius/restore', adminAuth, upload.single('backupFile'), async (re
 });
 
 // GET: List backups
-router.get('/radius/backups', adminAuth, async (req, res) => {
+router.get('/radius/backups', adminAuth, requireSharedRadiusAdmin, async (req, res) => {
   try {
     const backups = await listBackups();
     res.json({ success: true, backups });
@@ -910,7 +915,7 @@ router.get('/radius/backups', adminAuth, async (req, res) => {
 });
 
 // POST: Simpan Pengaturan Auto Backup
-router.post('/radius/auto-backup-settings', adminAuth, async (req, res) => {
+router.post('/radius/auto-backup-settings', adminAuth, requireSharedRadiusAdmin, async (req, res) => {
   try {
     const { enabled, interval } = req.body;
     const db = require('../config/billing').db;
