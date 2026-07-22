@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <%- include('../../partials/hard-reload') %>
+    <meta charset="UTF-8">
+    <title>Profil Bandwidth</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+    <%- include('../../partials/theme-head') %>
+    <link href="/css/theme.css" rel="stylesheet">
+    <link href="/css/responsive-admin.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <style>
+        html[data-theme="dark"] .card,
+        html[data-theme="dark"] .table,
+        html[data-theme="dark"] .dataTables_wrapper,
+        html[data-theme="dark"] .modal-content {
+            background-color: var(--panel, #0f172a) !important;
+            color: var(--text, #e2e8f0) !important;
+        }
+        html[data-theme="dark"] .table > :not(caption) > * > * {
+            background-color: transparent !important;
+            color: inherit !important;
+            border-color: rgba(148, 163, 184, 0.2) !important;
+        }
+        html[data-theme="dark"] .form-control,
+        html[data-theme="dark"] .form-select {
+            background-color: var(--panel-2, #1e293b) !important;
+            color: var(--text, #e2e8f0) !important;
+            border-color: rgba(148, 163, 184, 0.25) !important;
+        }
+        .toast-container { z-index: 99999 !important; }
+        .mismatch-table { font-size: 0.875rem; max-height: 55vh; overflow: auto; }
+        #editMinWarn { display: none; }
+    </style>
+</head>
+<body>
+<div id="toastContainer" class="toast-container position-fixed top-0 end-0 p-3"></div>
+<div class="container-fluid">
+    <div class="row">
+        <%- include('../../partials/admin-responsive-sidebar', { page: 'static-ip-profiles' }) %>
+        <main class="col-md-10 ms-sm-auto main-content px-md-4 py-4">
+            <div class="d-flex justify-content-between align-items-center border-bottom pb-2 mb-3">
+                <div>
+                    <h1 class="h3 mb-0">Profil Bandwidth</h1>
+                    <div class="small text-muted">Sumber: paket billing · Sync = cek kesesuaian queue (tanpa ubah MikroTik)</div>
+                </div>
+                <button class="btn btn-outline-primary btn-sm" id="btnCheckAll" onclick="checkAll()">
+                    <i class="bi bi-search"></i> Sync semua (cek)
+                </button>
+            </div>
+            <div class="table-responsive card p-2">
+                <table class="table table-hover table-sm" id="profilesTable">
+                    <thead>
+                        <tr>
+                            <th>Nama</th>
+                            <th>Download</th>
+                            <th>Upload</th>
+                            <th>Speed</th>
+                            <th>User static</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <% (profiles || []).forEach(function(p) { %>
+                        <tr data-id="<%= p.id %>"
+                            data-name="<%= String(p.name || '').replace(/"/g, '&quot;') %>"
+                            data-download="<%= p.download_limit || '' %>"
+                            data-upload="<%= p.upload_limit || '' %>"
+                            data-speed="<%= p.speed || '' %>"
+                            data-burst-download="<%= p.burst_limit_download || '' %>"
+                            data-burst-upload="<%= p.burst_limit_upload || '' %>"
+                            data-burst-threshold="<%= p.burst_threshold || '' %>"
+                            data-burst-time="<%= p.burst_time || '' %>">
+                            <td><%= p.name %></td>
+                            <td><code class="dl"><%= p.download_limit || '-' %></code></td>
+                            <td><code class="ul"><%= p.upload_limit || '-' %></code></td>
+                            <td class="sp"><%= p.speed || '-' %></td>
+                            <td><%= p.static_users || 0 %></td>
+                            <td class="text-nowrap">
+                                <button type="button" class="btn btn-sm btn-outline-secondary me-1" onclick="openEdit(this)">Edit</button>
+                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="checkOne(<%= p.id %>, this)">Sync</button>
+                            </td>
+                        </tr>
+                    <% }) %>
+                    </tbody>
+                </table>
+            </div>
+        </main>
+    </div>
+</div>
+
+<!-- Edit modal -->
+<div class="modal fade" id="editModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <form class="modal-content" id="editForm">
+      <div class="modal-header">
+        <h5 class="modal-title">Edit profil bandwidth</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="editId">
+        <div class="mb-2">
+          <label class="form-label">Nama paket</label>
+          <input type="text" class="form-control" id="editName" readonly>
+        </div>
+        <div class="row g-2 mb-2">
+          <div class="col-6">
+            <label class="form-label">Download (max-limit)</label>
+            <input type="text" class="form-control" id="editDownload" placeholder="contoh: 50M" required>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Upload (max-limit)</label>
+            <input type="text" class="form-control" id="editUpload" placeholder="contoh: 50M" required>
+          </div>
+        </div>
+        <div class="alert alert-warning py-2" id="editMinWarn" role="alert">
+          Minimal 10 Mbps. Nilai di bawah batas tidak diizinkan.
+        </div>
+        <hr class="my-3">
+        <div class="row g-2 mb-2">
+          <div class="col-6">
+            <label class="form-label">Burst limit (Download)</label>
+            <input type="text" class="form-control" id="editBurstDownload" placeholder="contoh: 70M">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Burst limit (Upload)</label>
+            <input type="text" class="form-control" id="editBurstUpload" placeholder="contoh: 70M">
+          </div>
+        </div>
+        <div class="row g-2 mb-2">
+          <div class="col-6">
+            <label class="form-label">Burst threshold (Download)</label>
+            <input type="text" class="form-control" id="editBurstThresholdDown" placeholder="contoh: 50M">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Burst threshold (Upload)</label>
+            <input type="text" class="form-control" id="editBurstThresholdUp" placeholder="contoh: 50M">
+          </div>
+        </div>
+        <div class="row g-2">
+          <div class="col-6">
+            <label class="form-label">Burst time (Download)</label>
+            <input type="text" class="form-control" id="editBurstTimeDown" placeholder="contoh: 10">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Burst time (Upload)</label>
+            <input type="text" class="form-control" id="editBurstTimeUp" placeholder="contoh: 10">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-primary" id="editSaveBtn">Simpan</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Check result modal -->
+<div class="modal fade" id="checkModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Hasil cek queue</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="checkSummary" class="mb-3"></div>
+        <div class="mismatch-table">
+          <table class="table table-sm table-striped mb-0" id="checkTable">
+            <thead>
+              <tr>
+                <th>Pelanggan</th>
+                <th>IP</th>
+                <th>Masalah</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Tutup</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+<script>
+$('#profilesTable').DataTable({ pageLength: 25, order: [[0, 'asc']] });
+
+function showToast(type, message, details){
+  const t = type === 'error' ? 'danger' : (type === 'warning' ? 'warning' : (type === 'info' ? 'info' : 'success'));
+  const container = document.getElementById('toastContainer');
+  const el = document.createElement('div');
+  el.className = 'toast align-items-center text-white bg-'+t+' border-0';
+  const html = details
+    ? ('<div><strong>'+escapeHtml(message)+'</strong><div class="small opacity-75">'+escapeHtml(details)+'</div></div>')
+    : escapeHtml(message);
+  el.innerHTML = '<div class="d-flex"><div class="toast-body">'+html+'</div>'+
+    '<button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>';
+  container.appendChild(el);
+  const toast = new bootstrap.Toast(el, { delay: 4500, autohide: true });
+  el.addEventListener('hidden.bs.toast', () => el.remove());
+  toast.show();
+}
+
+function escapeHtml(s){
+  return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function rateToMbps(raw){
+  if(raw == null || raw === '') return null;
+  const s = String(raw).trim().replace(/\s+/g,'');
+  if(!s || s === '0') return 0;
+  const m = s.match(/^(\d+(?:\.\d+)?)([kKmMgG])?(?:bps|bit|b)?$/i);
+  if(!m) return null;
+  const n = parseFloat(m[1]);
+  const u = (m[2]||'M').toUpperCase();
+  if(u === 'K') return n/1000;
+  if(u === 'G') return n*1000;
+  return n;
+}
+
+function validateMin10(){
+  const up = rateToMbps(document.getElementById('editUpload').value);
+  const down = rateToMbps(document.getElementById('editDownload').value);
+  const warn = document.getElementById('editMinWarn');
+  const btn = document.getElementById('editSaveBtn');
+  const values = [up, down].filter(v => v != null);
+  const bad = values.some(v => v < 10);
+  if(bad || !values.length){
+    warn.style.display = 'block';
+    btn.disabled = true;
+    return false;
+  }
+  warn.style.display = 'none';
+  btn.disabled = false;
+  return true;
+}
+
+['editUpload','editDownload'].forEach(id => {
+  document.getElementById(id).addEventListener('input', validateMin10);
+});
+
+function openEdit(btn){
+  const tr = btn.closest('tr');
+  document.getElementById('editId').value = tr.dataset.id;
+  document.getElementById('editName').value = tr.dataset.name || '';
+  document.getElementById('editDownload').value = tr.dataset.download || '';
+  document.getElementById('editUpload').value = tr.dataset.upload || '';
+  document.getElementById('editBurstDownload').value = tr.dataset.burstDownload || '';
+  document.getElementById('editBurstUpload').value = tr.dataset.burstUpload || '';
+
+  const thr = String(tr.dataset.burstThreshold || '').trim();
+  const thrParts = thr.includes('/') ? thr.split('/') : [thr, thr];
+  document.getElementById('editBurstThresholdDown').value = (thrParts[0] || '').trim();
+  document.getElementById('editBurstThresholdUp').value = (thrParts[1] || thrParts[0] || '').trim();
+
+  const bt = String(tr.dataset.burstTime || '').trim().replace(/[smhd]$/i, '');
+  const btParts = bt.includes('/') ? bt.split('/') : [bt, bt];
+  document.getElementById('editBurstTimeDown').value = (btParts[0] || '').trim();
+  document.getElementById('editBurstTimeUp').value = (btParts[1] || btParts[0] || '').trim();
+
+  validateMin10();
+  new bootstrap.Modal(document.getElementById('editModal')).show();
+}
+
+document.getElementById('editForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if(!validateMin10()){
+    showToast('warning', 'Minimal 10 Mbps');
+    return;
+  }
+  const id = document.getElementById('editId').value;
+  const upload_limit = document.getElementById('editUpload').value.trim();
+  const download_limit = document.getElementById('editDownload').value.trim();
+  const burst_limit_download = document.getElementById('editBurstDownload').value.trim();
+  const burst_limit_upload = document.getElementById('editBurstUpload').value.trim();
+  const thrDown = document.getElementById('editBurstThresholdDown').value.trim();
+  const thrUp = document.getElementById('editBurstThresholdUp').value.trim();
+  const timeDown = document.getElementById('editBurstTimeDown').value.trim();
+  const timeUp = document.getElementById('editBurstTimeUp').value.trim();
+
+  const burst_threshold = (thrDown || thrUp)
+    ? (thrDown && thrUp ? thrDown + '/' + thrUp : (thrDown || thrUp))
+    : null;
+  const burst_time = (timeDown || timeUp)
+    ? (timeDown && timeUp ? timeDown + '/' + timeUp : (timeDown || timeUp))
+    : null;
+
+  const hasAnyBurst = !!(burst_limit_download || burst_limit_upload || thrDown || thrUp || timeDown || timeUp);
+  if (hasAnyBurst) {
+    if (!burst_limit_download || !burst_limit_upload) {
+      showToast('warning', 'Burst limit download & upload wajib diisi bersamaan');
+      return;
+    }
+    if (!timeDown || !timeUp) {
+      showToast('warning', 'Burst time download & upload wajib diisi');
+      return;
+    }
+  }
+
+  const btn = document.getElementById('editSaveBtn');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/admin/static-ip/profiles/'+id, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        upload_limit,
+        download_limit,
+        burst_limit_download: burst_limit_download || null,
+        burst_limit_upload: burst_limit_upload || null,
+        burst_threshold,
+        burst_time
+      })
+    });
+    const data = await res.json();
+    if(!data.success){
+      showToast('error', data.message || 'Gagal menyimpan');
+      btn.disabled = false;
+      return;
+    }
+    showToast('success', 'Profil disimpan', data.package?.speed || (download_limit+'/'+upload_limit));
+    bootstrap.Modal.getInstance(document.getElementById('editModal')).hide();
+    setTimeout(() => location.reload(), 600);
+  } catch (err) {
+    showToast('error', 'Gagal menyimpan', err.message || String(err));
+    btn.disabled = false;
+  }
+});
+
+function showCheckResult(data){
+  const sum = document.getElementById('checkSummary');
+  const tbody = document.querySelector('#checkTable tbody');
+  tbody.innerHTML = '';
+  const checked = data.checked || 0;
+  const ok = data.ok || 0;
+  const mismatch = data.mismatch || 0;
+  sum.innerHTML =
+    '<div class="d-flex flex-wrap gap-2">'+
+      '<span class="badge text-bg-secondary">Dicek: '+checked+'</span>'+
+      '<span class="badge text-bg-success">Sesuai: '+ok+'</span>'+
+      '<span class="badge text-bg-'+(mismatch ? 'danger' : 'success')+'">Tidak sesuai: '+mismatch+'</span>'+
+    '</div>'+
+    '<div class="small text-muted mt-2">Hanya cek — tidak mengubah queue di MikroTik.</div>';
+
+  const rows = data.mismatches || [];
+  if(!rows.length){
+    tbody.innerHTML = '<tr><td colspan="3" class="text-muted">Semua queue sesuai rule billing.</td></tr>';
+  } else {
+    rows.forEach(r => {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>'+escapeHtml(r.customer_name||('- #'+r.customer_id))+'</td>'+
+        '<td><code>'+escapeHtml(r.ip||'-')+'</code></td>'+
+        '<td>'+escapeHtml(r.message|| (r.issues||[]).join(', '))+'</td>';
+      tbody.appendChild(tr);
+    });
+  }
+  new bootstrap.Modal(document.getElementById('checkModal')).show();
+}
+
+async function checkOne(id, btn){
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Cek...';
+  try {
+    const res = await fetch('/admin/static-ip/profiles/'+id+'/sync', { method: 'POST' });
+    const data = await res.json();
+    if(!data.success){
+      showToast('error', data.message || 'Gagal cek');
+      return;
+    }
+    showCheckResult(data);
+  } catch (err) {
+    showToast('error', 'Gagal cek', err.message || String(err));
+  } finally {
+    btn.disabled = false; btn.textContent = old;
+  }
+}
+
+async function checkAll(){
+  const btn = document.getElementById('btnCheckAll');
+  const old = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Cek...';
+  try {
+    const res = await fetch('/admin/static-ip/profiles/sync-all', { method: 'POST' });
+    const data = await res.json();
+    if(!data.success){
+      showToast('error', data.message || 'Gagal cek');
+      return;
+    }
+    showCheckResult(data);
+  } catch (err) {
+    showToast('error', 'Gagal cek', err.message || String(err));
+  } finally {
+    btn.disabled = false; btn.innerHTML = old;
+  }
+}
+</script>
+</body>
+</html>

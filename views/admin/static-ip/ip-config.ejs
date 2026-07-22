@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <%- include('../../partials/hard-reload') %>
+    <meta charset="UTF-8">
+    <title>Konfigurasi IP</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+    <%- include('../../partials/theme-head') %>
+    <link href="/css/theme.css" rel="stylesheet">
+    <link href="/css/responsive-admin.css" rel="stylesheet">
+    <style>
+        html[data-theme="dark"] .card,
+        html[data-theme="dark"] .table,
+        html[data-theme="dark"] .modal-content {
+            background-color: var(--panel, #0f172a) !important;
+            color: var(--text, #e2e8f0) !important;
+        }
+        html[data-theme="dark"] .table > :not(caption) > * > * {
+            background-color: transparent !important;
+            color: inherit !important;
+            border-color: rgba(148, 163, 184, 0.2) !important;
+        }
+        html[data-theme="dark"] .form-control,
+        html[data-theme="dark"] .form-select {
+            background-color: var(--panel-2, #1e293b) !important;
+            color: var(--text, #e2e8f0) !important;
+            border-color: rgba(148, 163, 184, 0.25) !important;
+        }
+        .toast-container { z-index: 99999 !important; }
+        .toast { min-width: 300px; }
+        .pool-row { cursor: pointer; }
+        .pool-row.active-pool { background: rgba(13, 110, 253, 0.08); }
+        html[data-theme="dark"] .pool-row.active-pool { background: rgba(59, 130, 246, 0.15); }
+        .stat-card .h4 { font-weight: 700; }
+    </style>
+</head>
+<body>
+<div id="toastContainer" class="toast-container position-fixed top-0 end-0 p-3"></div>
+<div class="container-fluid">
+    <div class="row">
+        <%- include('../../partials/admin-responsive-sidebar', { page: 'static-ip-config' }) %>
+        <main class="col-md-10 ms-sm-auto main-content px-md-4 py-4">
+            <div class="d-flex justify-content-between align-items-center border-bottom pb-2 mb-3">
+                <h1 class="h3 mb-0">Konfigurasi IP</h1>
+                <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#poolModal" onclick="openCreatePool()">
+                    <i class="bi bi-plus"></i> Tambah CIDR
+                </button>
+            </div>
+
+            <% const gs = globalStats || { total: 0, used: 0, unused: 0, pools: 0 }; %>
+            <div class="row g-2 mb-4">
+                <div class="col-6 col-md-3">
+                    <div class="card p-3 text-center stat-card">
+                        <div class="h4 mb-0"><%= gs.pools %></div>
+                        <div class="small text-muted">Total pool / CIDR</div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="card p-3 text-center stat-card">
+                        <div class="h4 mb-0"><%= gs.total %></div>
+                        <div class="small text-muted">Total IP</div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="card p-3 text-center stat-card">
+                        <div class="h4 mb-0 text-success"><%= gs.used %></div>
+                        <div class="small text-muted">IP terpakai</div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="card p-3 text-center stat-card">
+                        <div class="h4 mb-0 text-danger"><%= gs.unused %></div>
+                        <div class="small text-muted">IP belum di pakai</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card p-3 mb-4">
+                <h2 class="h6 mb-3">Daftar pool / CIDR</h2>
+                <div class="table-responsive">
+                    <table class="table table-hover table-sm align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Nama pool</th>
+                                <th>CIDR</th>
+                                <th>Range</th>
+                                <th>Gateway</th>
+                                <th>Router</th>
+                                <th>IP terpakai</th>
+                                <th>IP belum di pakai</th>
+                                <th>Status</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        <% if (!(pools || []).length) { %>
+                            <tr><td colspan="9" class="text-muted">Belum ada CIDR. Klik Tambah CIDR.</td></tr>
+                        <% } %>
+                        <% (pools || []).forEach(function(p) { %>
+                            <tr class="pool-row <%= selected && selected.id == p.id ? 'active-pool' : '' %>"
+                                onclick="location.href='/admin/static-ip/ip-config?pool_id=<%= p.id %>'">
+                                <td><strong><%= p.name %></strong></td>
+                                <td><code><%= p.network_cidr || '-' %></code></td>
+                                <td><code><%= p.range_start %>-<%= p.range_end %></code></td>
+                                <td><code><%= p.gateway || '-' %></code></td>
+                                <td><%= p.router_name || p.router_id %></td>
+                                <td><span class="text-success"><%= (p.stats && p.stats.used) || 0 %></span></td>
+                                <td><span class="text-danger"><%= (p.stats && p.stats.unused) || 0 %></span></td>
+                                <td>
+                                    <% if (p.enabled) { %>
+                                        <span class="badge text-bg-success">Aktif</span>
+                                    <% } else { %>
+                                        <span class="badge text-bg-secondary">Nonaktif</span>
+                                    <% } %>
+                                </td>
+                                <td class="text-nowrap" onclick="event.stopPropagation()">
+                                    <button class="btn btn-sm btn-outline-secondary" onclick='openEditPool(<%= JSON.stringify({
+                                        id: p.id, name: p.name, router_id: p.router_id, gateway: p.gateway,
+                                        range_start: p.range_start, range_end: p.range_end, network_cidr: p.network_cidr,
+                                        enabled: p.enabled
+                                    }) %>)'>Edit</button>
+                                    <button class="btn btn-sm btn-outline-primary" onclick="syncPool(<%= p.id %>)">Sync</button>
+                                    <button class="btn btn-sm btn-outline-danger" onclick="deletePool(<%= p.id %>)">Hapus</button>
+                                </td>
+                            </tr>
+                        <% }) %>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <% if (selected) { %>
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="h6 mb-0">Detail: <%= selected.name %> <code class="ms-1"><%= selected.network_cidr || (selected.range_start + '-' + selected.range_end) %></code></h2>
+            </div>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <div class="card p-3">
+                        <h2 class="h6">IP terpakai</h2>
+                        <div class="table-responsive" style="max-height:420px;overflow:auto">
+                            <table class="table table-sm">
+                                <thead><tr><th>IP</th><th>Pelanggan</th><th>Status</th></tr></thead>
+                                <tbody>
+                                <% ((analysis && analysis.used) || []).forEach(function(u) { %>
+                                    <tr><td><code><%= u.ip %></code></td><td><%= u.name %></td><td><%= u.status %></td></tr>
+                                <% }) %>
+                                <% if (!(analysis && analysis.used && analysis.used.length)) { %>
+                                    <tr><td colspan="3" class="text-muted">Tidak ada</td></tr>
+                                <% } %>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card p-3">
+                        <h2 class="h6">IP belum di pakai</h2>
+                        <div class="table-responsive" style="max-height:420px;overflow:auto">
+                            <table class="table table-sm">
+                                <thead><tr><th>IP</th><th></th></tr></thead>
+                                <tbody>
+                                <% ((analysis && analysis.unused) || []).forEach(function(u) { %>
+                                    <tr><td><code><%= u.ip %></code></td><td><span class="badge text-bg-warning">isolir</span></td></tr>
+                                <% }) %>
+                                <% if (!(analysis && analysis.unused && analysis.unused.length)) { %>
+                                    <tr><td colspan="2" class="text-muted">Tidak ada</td></tr>
+                                <% } %>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <% } %>
+        </main>
+    </div>
+</div>
+
+<div class="modal fade" id="poolModal" tabindex="-1">
+  <div class="modal-dialog">
+    <form class="modal-content" id="poolForm">
+      <div class="modal-header"><h5 class="modal-title" id="poolModalTitle">Tambah CIDR</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <input type="hidden" id="pool_id">
+        <div class="mb-2"><label class="form-label">Nama</label><input class="form-control" id="pool_name" required placeholder="Pool RT01"></div>
+        <div class="mb-2"><label class="form-label">Router</label>
+          <select class="form-select" id="pool_router_id" required>
+            <% if (!(routers || []).length) { %>
+              <option value="">— tidak ada router —</option>
+            <% } %>
+            <% (routers || []).forEach(function(r) { %>
+              <option value="<%= r.id %>"><%= r.name %> (<%= r.nas_ip %>)</option>
+            <% }) %>
+          </select>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">CIDR</label>
+          <input class="form-control" id="pool_network_cidr" required placeholder="10.10.10.0/24" oninput="fillFromCidr()">
+        </div>
+        <div class="mb-2"><label class="form-label">Gateway</label><input class="form-control" id="pool_gateway" placeholder="10.10.10.1"></div>
+        <div class="row g-2">
+          <div class="col"><label class="form-label">Range start</label><input class="form-control" id="pool_range_start" required placeholder="10.10.10.1"></div>
+          <div class="col"><label class="form-label">Range end</label><input class="form-control" id="pool_range_end" required placeholder="10.10.10.254"></div>
+        </div>
+      </div>
+      <div class="modal-footer"><button type="submit" class="btn btn-primary" id="poolSubmitBtn">Simpan &amp; sync block</button></div>
+    </form>
+  </div>
+</div>
+
+<script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script>
+function escapeHtmlToast(s){
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function showToast(type, message, details){
+  const t = type === 'error' ? 'danger' : (type || 'info');
+  const container = document.getElementById('toastContainer');
+  let html = '<strong>'+escapeHtmlToast(message)+'</strong>';
+  if(details) html += '<br><small style="opacity:.9">'+escapeHtmlToast(details)+'</small>';
+  const el = document.createElement('div');
+  el.className = 'toast align-items-center text-white bg-'+t+' border-0';
+  el.setAttribute('role','alert');
+  el.innerHTML = '<div class="d-flex"><div class="toast-body">'+html+'</div>'+
+    '<button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>';
+  container.appendChild(el);
+  const toast = new bootstrap.Toast(el, { delay: 4500, autohide: true });
+  el.addEventListener('hidden.bs.toast', () => el.remove());
+  toast.show();
+}
+function flashToast(type, message, details){
+  try {
+    sessionStorage.setItem('staticIpConfigFlash', JSON.stringify({
+      type: type||'success', message: message||'', details: details||'', ts: Date.now()
+    }));
+  } catch(_){}
+}
+(function showFlash(){
+  try {
+    const raw = sessionStorage.getItem('staticIpConfigFlash');
+    if(!raw) return;
+    sessionStorage.removeItem('staticIpConfigFlash');
+    const f = JSON.parse(raw);
+    if(!f || !f.message) return;
+    if(f.ts && (Date.now()-f.ts)>30000) return;
+    setTimeout(() => showToast(f.type||'success', f.message, f.details), 300);
+  } catch(_){}
+})();
+
+function ipToInt(ip){
+  const p = String(ip||'').split('.').map(n=>parseInt(n,10));
+  if(p.length!==4 || p.some(n=>isNaN(n)||n<0||n>255)) return null;
+  return ((p[0]<<24)>>>0)+(p[1]<<16)+(p[2]<<8)+p[3];
+}
+function intToIp(n){ return [(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255].join('.'); }
+function fillFromCidr(){
+  const raw = (pool_network_cidr.value||'').trim();
+  const m = raw.match(/^(\d{1,3}(?:\.\d{1,3}){3})\s*\/\s*(\d{1,2})$/);
+  if(!m) return;
+  const base = m[1], prefix = parseInt(m[2],10);
+  if(prefix<8 || prefix>30) return;
+  const baseInt = ipToInt(base); if(baseInt==null) return;
+  const size = 2**(32-prefix);
+  const network = (baseInt & (~(size-1)>>>0))>>>0;
+  const broadcast = (network+size-1)>>>0;
+  const first = (network+1)>>>0, last = (broadcast-1)>>>0;
+  pool_gateway.value = intToIp(first);
+  pool_range_start.value = intToIp(first);
+  pool_range_end.value = intToIp(last);
+}
+function openCreatePool(){
+  poolForm.reset(); pool_id.value=''; poolModalTitle.textContent='Tambah CIDR';
+}
+function openEditPool(p){
+  pool_id.value=p.id; pool_name.value=p.name||''; pool_router_id.value=p.router_id||'';
+  pool_gateway.value=p.gateway||''; pool_range_start.value=p.range_start||''; pool_range_end.value=p.range_end||'';
+  pool_network_cidr.value=p.network_cidr||'';
+  poolModalTitle.textContent='Edit CIDR';
+  new bootstrap.Modal('#poolModal').show();
+}
+poolForm.addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  fillFromCidr();
+  if(!pool_router_id.value){ showToast('warning','Pilih router dulu'); return; }
+  if(!pool_network_cidr.value && !(pool_range_start.value && pool_range_end.value)){
+    showToast('warning','Isi CIDR','Contoh: 10.10.10.0/24'); return;
+  }
+  const btn = poolSubmitBtn; btn.disabled = true; btn.textContent = 'Menyimpan...';
+  const isEdit = !!pool_id.value;
+  const body = {
+    name: pool_name.value, router_id: pool_router_id.value, gateway: pool_gateway.value,
+    range_start: pool_range_start.value, range_end: pool_range_end.value,
+    network_cidr: pool_network_cidr.value
+  };
+  try {
+    const id = pool_id.value;
+    const res = await fetch(id ? '/admin/static-ip/pools/'+id : '/admin/static-ip/pools', {
+      method: id ? 'PUT' : 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
+    const data = await res.json().catch(()=>({}));
+    if(!data.success){
+      showToast('error', isEdit ? 'Gagal mengedit CIDR' : 'Gagal menambah CIDR', data.message||'');
+      return;
+    }
+    const poolId = (data.pool && data.pool.id) ? data.pool.id : id;
+    if(data.sync && data.sync.success===false){
+      flashToast('warning',
+        isEdit ? 'CIDR diubah, sync gagal' : 'CIDR tersimpan, sync gagal',
+        data.sync.message||'Cek koneksi router');
+    } else {
+      flashToast('success',
+        isEdit ? 'CIDR berhasil diubah' : 'CIDR berhasil ditambahkan',
+        data.sync && data.sync.block_addresses
+          ? ('Block: '+(data.sync.block_addresses||[]).join(', '))
+          : 'Block list tersinkron ke MikroTik');
+    }
+    location.href = '/admin/static-ip/ip-config?pool_id='+poolId;
+  } catch(err){
+    showToast('error','Gagal menyimpan', err.message||String(err));
+  } finally {
+    btn.disabled = false; btn.textContent = 'Simpan & sync block';
+  }
+});
+async function syncPool(id){
+  showToast('info','Menyinkronkan block ke MikroTik...');
+  try {
+    const res = await fetch('/admin/static-ip/pools/'+id+'/sync',{method:'POST'});
+    const data = await res.json().catch(()=>({}));
+    if(data.success){
+      showToast('success','Sync block berhasil',
+        'Block: '+(data.block_addresses||[]).join(', ')+' | Allowed: '+(data.allowed_count||0)+' IP');
+    } else {
+      showToast('error','Sync block gagal', data.message||'');
+    }
+  } catch(err){
+    showToast('error','Sync block gagal', err.message||String(err));
+  }
+}
+async function deletePool(id){
+  if(!confirm('Hapus CIDR/pool ini?')) return;
+  try {
+    const res = await fetch('/admin/static-ip/pools/'+id,{method:'DELETE'});
+    const data = await res.json().catch(()=>({}));
+    if(!data.success){
+      showToast('error','Gagal menghapus CIDR', data.message||'');
+      return;
+    }
+    flashToast('success','CIDR berhasil dihapus');
+    location.href='/admin/static-ip/ip-config';
+  } catch(err){
+    showToast('error','Gagal menghapus CIDR', err.message||String(err));
+  }
+}
+</script>
+</body>
+</html>

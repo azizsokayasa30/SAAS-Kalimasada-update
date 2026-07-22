@@ -1504,6 +1504,15 @@
             console.error('Error ensuring OLT management schema:', err.message);
         });
 
+        try {
+            const { ensureStaticIpSchema } = require('./staticIpPool');
+            ensureStaticIpSchema(this.db).catch((err) => {
+                console.error('Error ensuring static IP pool schema:', err.message);
+            });
+        } catch (e) {
+            console.warn('staticIpPool schema skip:', e.message);
+        }
+
         // Kolom akun pengeluaran (subkategori) — DB lama dibuat sebelum kolom ini ada di CREATE TABLE
         this.db.run('ALTER TABLE expenses ADD COLUMN account_expenses TEXT', (err) => {
             if (err && !err.message.includes('duplicate column name')) {
@@ -2474,6 +2483,15 @@
                 { name: 'static_ip', value: () => static_ip || null },
                 { name: 'assigned_ip', value: () => assigned_ip || null },
                 { name: 'mac_address', value: () => mac_address || null },
+                {
+                    name: 'connection_type',
+                    value: () => {
+                        if (customerData.connection_type === 'static_ip' || customerData.connection_type === 'pppoe') {
+                            return customerData.connection_type;
+                        }
+                        return hasStaticIpIntent && !pppoeUserStored ? 'static_ip' : 'pppoe';
+                    }
+                },
                 { name: 'latitude', value: () => finalLatitude },
                 { name: 'longitude', value: () => finalLongitude },
                 { name: 'cable_type', value: () => cable_type || null },
@@ -4185,12 +4203,22 @@ ${lifetimePaymentStatusSql}
                     (fix_date !== undefined ? Math.min(Math.max(parseInt(fix_date, 10) || 15, 1), 28) : (oldCustomer.fix_date || 15)) : 
                     null;
                 
-                let sql = `UPDATE customers SET name = ?, username = ?, phone = ?, pppoe_username = ?, email = ?, address = ?, area = ?, area_id = ?, package_id = ?, odp_id = ?, pppoe_profile = ?, status = ?, auto_suspension = ?, billing_day = ?, renewal_type = ?, fix_date = ?, latitude = ?, longitude = ?, static_ip = ?, assigned_ip = ?, mac_address = ?, cable_type = ?, cable_length = ?, port_number = ?, cable_status = ?, cable_notes = ?, ktp_photo_path = ?, house_photo_path = ?`;
+                const nextStaticIp = static_ip !== undefined ? (static_ip || null) : oldCustomer.static_ip;
+                const nextAssignedIp = assigned_ip !== undefined ? (assigned_ip || null) : oldCustomer.assigned_ip;
+                const nextPppoe = pppoe_username !== undefined ? pppoe_username : oldCustomer.pppoe_username;
+                let nextConnectionType = customerData.connection_type;
+                if (nextConnectionType !== 'static_ip' && nextConnectionType !== 'pppoe') {
+                    const hasStatic = Boolean((nextStaticIp && String(nextStaticIp).trim()) || (nextAssignedIp && String(nextAssignedIp).trim()));
+                    const hasPppoe = Boolean(nextPppoe && String(nextPppoe).trim());
+                    nextConnectionType = hasStatic && !hasPppoe ? 'static_ip' : 'pppoe';
+                }
+
+                let sql = `UPDATE customers SET name = ?, username = ?, phone = ?, pppoe_username = ?, email = ?, address = ?, area = ?, area_id = ?, package_id = ?, odp_id = ?, pppoe_profile = ?, status = ?, auto_suspension = ?, billing_day = ?, renewal_type = ?, fix_date = ?, latitude = ?, longitude = ?, static_ip = ?, assigned_ip = ?, mac_address = ?, cable_type = ?, cable_length = ?, port_number = ?, cable_status = ?, cable_notes = ?, ktp_photo_path = ?, house_photo_path = ?, connection_type = ?`;
                 let params = [
                     name !== undefined ? name : oldCustomer.name, 
                     username || oldCustomer.username, 
                     phone || oldPhone, 
-                    pppoe_username !== undefined ? pppoe_username : oldCustomer.pppoe_username, 
+                    nextPppoe, 
                     email !== undefined ? email : oldCustomer.email, 
                     address !== undefined ? address : oldCustomer.address, 
                     area !== undefined ? area : oldCustomer.area,
@@ -4205,8 +4233,8 @@ ${lifetimePaymentStatusSql}
                     normFixDate,
                     latitude !== undefined ? parseFloat(latitude) : oldCustomer.latitude,
                     longitude !== undefined ? parseFloat(longitude) : oldCustomer.longitude,
-                    static_ip !== undefined ? (static_ip || null) : oldCustomer.static_ip,
-                    assigned_ip !== undefined ? (assigned_ip || null) : oldCustomer.assigned_ip,
+                    nextStaticIp,
+                    nextAssignedIp,
                     mac_address !== undefined ? (mac_address || null) : oldCustomer.mac_address,
                     cable_type !== undefined ? cable_type : oldCustomer.cable_type,
                     cable_length !== undefined ? cable_length : oldCustomer.cable_length,
@@ -4214,7 +4242,8 @@ ${lifetimePaymentStatusSql}
                     cable_status !== undefined ? cable_status : oldCustomer.cable_status,
                     cable_notes !== undefined ? cable_notes : oldCustomer.cable_notes,
                     ktp_photo_path !== undefined ? ktp_photo_path : oldCustomer.ktp_photo_path,
-                    house_photo_path !== undefined ? house_photo_path : oldCustomer.house_photo_path
+                    house_photo_path !== undefined ? house_photo_path : oldCustomer.house_photo_path,
+                    nextConnectionType
                 ];
 
                 if (password !== undefined) {
@@ -4456,6 +4485,30 @@ ${lifetimePaymentStatusSql}
                     } catch (pppoeError) {
                         console.warn(`⚠️ PPPoE deletion failed or skipped for ${customer.username}:`, pppoeError.message);
                     }
+
+                    // Static IP: hapus queue + sync pool (unused kembali blocked)
+                    try {
+                        const hasStatic =
+                            customer.connection_type === 'static_ip' ||
+                            ((customer.static_ip || customer.assigned_ip) && !String(customer.pppoe_username || '').trim());
+                        if (hasStatic) {
+                            const { removeStaticIPQueue } = require('./staticIPProvisioning');
+                            await removeStaticIPQueue(customer);
+                            const mapRow = await new Promise((res) => {
+                                db.get(
+                                    `SELECT router_id FROM customer_router_map WHERE customer_id = ?`,
+                                    [customer.id],
+                                    (e, row) => res(row || null)
+                                );
+                            });
+                            if (mapRow && mapRow.router_id) {
+                                const { syncPoolsForRouter } = require('./staticIpPoolSync');
+                                await syncPoolsForRouter(mapRow.router_id);
+                            }
+                        }
+                    } catch (staticErr) {
+                        console.warn(`Static IP cleanup skipped: ${staticErr.message}`);
+                    }
                     
                     resolve({ username: customer.username, deleted: true });
                 });
@@ -4539,6 +4592,30 @@ ${lifetimePaymentStatusSql}
                         }
                     } catch (pppoeError) {
                         console.warn(`⚠️ PPPoE deletion failed or skipped for ${customer.username}:`, pppoeError.message);
+                    }
+
+                    // Static IP: hapus queue + sync pool (unused kembali blocked)
+                    try {
+                        const hasStatic =
+                            customer.connection_type === 'static_ip' ||
+                            ((customer.static_ip || customer.assigned_ip) && !String(customer.pppoe_username || '').trim());
+                        if (hasStatic) {
+                            const { removeStaticIPQueue } = require('./staticIPProvisioning');
+                            await removeStaticIPQueue(customer);
+                            const mapRow = await new Promise((res) => {
+                                db.get(
+                                    `SELECT router_id FROM customer_router_map WHERE customer_id = ?`,
+                                    [customer.id],
+                                    (e, row) => res(row || null)
+                                );
+                            });
+                            if (mapRow && mapRow.router_id) {
+                                const { syncPoolsForRouter } = require('./staticIpPoolSync');
+                                await syncPoolsForRouter(mapRow.router_id);
+                            }
+                        }
+                    } catch (staticErr) {
+                        console.warn(`Static IP cleanup skipped: ${staticErr.message}`);
                     }
                     
                     resolve({ username: customer.username, deleted: true });

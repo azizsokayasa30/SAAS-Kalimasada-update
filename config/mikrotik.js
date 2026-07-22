@@ -471,14 +471,33 @@ async function getRouterForCustomer(customer) {
     const sqlite3 = require('sqlite3').verbose();
     const db = new sqlite3.Database(require('path').join(__dirname, '../data/billing.db'));
     const router = await new Promise((resolve, reject) => {
-        db.get('SELECT r.* FROM customer_router_map m JOIN routers r ON r.id = m.router_id WHERE m.customer_id = ? LIMIT 1', [customer.id], (err, row) => {
-            if (err) return reject(err);
-            resolve(row || null);
-        });
+        db.get(
+            'SELECT r.* FROM customer_router_map m JOIN routers r ON r.id = m.router_id WHERE m.customer_id = ? LIMIT 1',
+            [customer.id],
+            (err, row) => {
+                if (err) return reject(err);
+                resolve(row || null);
+            }
+        );
     });
-    db.close();
-    if (!router) throw new Error('Customer belum memilih router/NAS');
-    return router;
+    if (router) {
+        db.close();
+        return router;
+    }
+    // Fallback: router_id di object customer
+    if (customer.router_id) {
+        const byId = await new Promise((resolve, reject) => {
+            db.get('SELECT * FROM routers WHERE id = ?', [customer.router_id], (err, row) => {
+                if (err) return reject(err);
+                resolve(row || null);
+            });
+        });
+        db.close();
+        if (byId) return byId;
+    } else {
+        db.close();
+    }
+    throw new Error('Customer belum memilih router/NAS');
 }
 
 async function getMikrotikConnectionForCustomer(customer) {
@@ -11219,6 +11238,119 @@ async function executeMikrotikScript(script, routerObj, rosVersion = null) {
     }
 }
 
+/**
+ * Online check for static IP via ARP (+ optional DHCP).
+ * Returns Set of IP strings that appear online on the given router.
+ * Cached singkat agar halaman users tidak sering blank/timeout.
+ */
+const staticIpOnlineCache = new Map(); // key -> { at, set }
+
+async function getStaticIpOnlineSetForRouter(router, ips = []) {
+    const wanted = new Set((ips || []).map((ip) => String(ip || '').trim()).filter(Boolean));
+    const online = new Set();
+    if (!router || wanted.size === 0) return online;
+
+    const shortKey = `r${router.id}:${wanted.size}:${simpleHash([...wanted].sort().join('|'))}`;
+    const cached = staticIpOnlineCache.get(shortKey);
+    if (cached && Date.now() - cached.at < 45000) {
+        for (const ip of cached.set) {
+            if (wanted.has(ip)) online.add(ip);
+        }
+        return online;
+    }
+
+    const withTimeout = async (promise, ms) => {
+        let timer;
+        try {
+            return await Promise.race([
+                promise,
+                new Promise((_, reject) => {
+                    timer = setTimeout(() => reject(new Error(`timeout ${ms}ms`)), ms);
+                })
+            ]);
+        } finally {
+            if (timer) clearTimeout(timer);
+        }
+    };
+
+    try {
+        const conn = await getMikrotikConnectionForRouter(router);
+
+        // 1) ARP — sumber utama status online static IP
+        try {
+            const arps = await withTimeout(
+                conn.write('/ip/arp/print', [
+                    '=.proplist=address,mac-address,status,complete'
+                ]),
+                12000
+            );
+            for (const row of arps || []) {
+                const ip = String(row.address || '').trim();
+                if (!wanted.has(ip)) continue;
+                const status = String(row.status || '').toLowerCase();
+                if (status === 'failed') continue;
+                const mac = String(row['mac-address'] || '').trim();
+                const complete = row.complete === 'true' || row.complete === true;
+                const live =
+                    complete ||
+                    status === 'reachable' ||
+                    status === 'stale' ||
+                    status === 'delay' ||
+                    status === 'permanent' ||
+                    status === '' ||
+                    !status;
+                // Banyak RouterOS tampilkan ARP aktif cukup dengan mac-address
+                if (mac || live) online.add(ip);
+            }
+        } catch (e) {
+            logger.warn(`[STATIC-IP-ARP] arp print failed: ${e.message}`);
+        }
+
+        // 2) DHCP lease bound (opsional, cepat) — skip connection tracking (sering lambat/timeout)
+        if (online.size < wanted.size) {
+            try {
+                const leases = await withTimeout(
+                    conn.write('/ip/dhcp-server/lease/print', [
+                        '=.proplist=address,status,active-mac-address'
+                    ]),
+                    4000
+                );
+                for (const row of leases || []) {
+                    const ip = String(row.address || '').trim();
+                    if (!wanted.has(ip)) continue;
+                    const status = String(row.status || '').toLowerCase();
+                    const activeMac = String(row['active-mac-address'] || '').trim();
+                    if (status === 'bound' || activeMac) online.add(ip);
+                }
+            } catch (_) {
+                /* DHCP optional */
+            }
+        }
+
+        staticIpOnlineCache.set(shortKey, { at: Date.now(), set: new Set(online) });
+        // batasi cache entries
+        if (staticIpOnlineCache.size > 40) {
+            const oldest = [...staticIpOnlineCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+            if (oldest) staticIpOnlineCache.delete(oldest[0]);
+        }
+    } catch (e) {
+        logger.warn(`[STATIC-IP-ARP] router connect failed: ${e.message}`);
+        // pakai cache lama jika ada meski expired (grace)
+        if (cached && cached.set) {
+            for (const ip of cached.set) {
+                if (wanted.has(ip)) online.add(ip);
+            }
+        }
+    }
+    return online;
+}
+
+function simpleHash(str) {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+    return String(h);
+}
+
 // Export all functions
 module.exports = {
     setSock,
@@ -11231,6 +11363,7 @@ module.exports = {
     clearPppPrintCachesForRouter,
     getMikrotikConnectionForCustomer,
     getRouterForCustomer,
+    getStaticIpOnlineSetForRouter,
     getPPPoEUsers,
     addPPPoEUser,
     editPPPoEUser,

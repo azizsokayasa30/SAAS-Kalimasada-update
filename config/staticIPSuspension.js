@@ -2,6 +2,11 @@ const logger = require('./logger');
 const { getMikrotikConnectionForCustomer } = require('./mikrotik');
 const { getSetting } = require('./settingsManager');
 const { getPublicAppBaseUrl } = require('./public-endpoint');
+const { getCustomerStaticIp } = require('./staticIPProvisioning');
+
+/** Address-list Isolir static IP (redirect ke halaman isolir). Bukan static_pool_blocked. */
+const ISOLIR_LIST = 'isolir_customer';
+const LEGACY_ISOLIR_LIST = 'blocked_customers';
 
 function isIpAddress(value) {
     return /^(\d{1,3}\.){3}\d{1,3}$/.test(String(value || '').trim());
@@ -84,8 +89,7 @@ class StaticIPSuspensionManager {
                 mac_address: null
             };
 
-            // Tentukan IP pelanggan (bisa dari field static_ip, ip_address, atau lainnya)
-            const customerIP = customer.static_ip || customer.ip_address || customer.assigned_ip;
+            const customerIP = getCustomerStaticIp(customer) || customer.ip_address || null;
             const macAddress = customer.mac_address;
 
             if (!customerIP && !macAddress) {
@@ -169,30 +173,42 @@ class StaticIPSuspensionManager {
     async suspendByAddressList(customer, reason) {
         try {
             const mikrotik = await getMikrotikConnectionForCustomer(customer);
-            
-            // Pastikan address list "blocked_customers" ada dan firewall rule aktif
-            await this.ensureBlockedCustomersSetup(customer);
+            const customerIP = getCustomerStaticIp(customer);
+            if (!customerIP) {
+                return { success: false, error: 'No static IP' };
+            }
 
-            // Cek apakah IP sudah ada di address list
+            await this.ensureIsolirCustomerSetup(customer);
+
             const existingEntries = await mikrotik.write('/ip/firewall/address-list/print', [
-                '?list=blocked_customers',
-                `?address=${customer.static_ip}`
+                `?list=${ISOLIR_LIST}`,
+                `?address=${customerIP}`
             ]);
 
             if (existingEntries && existingEntries.length > 0) {
-                logger.warn(`IP ${customer.static_ip} already in blocked list`);
-                return { success: true, message: 'Already blocked' };
+                logger.warn(`IP ${customerIP} already in ${ISOLIR_LIST}`);
+                return { success: true, message: 'Already isolir' };
             }
 
-            // Tambahkan IP ke address list
             await mikrotik.write('/ip/firewall/address-list/add', [
-                '=list=blocked_customers',
-                `=address=${customer.static_ip}`,
+                `=list=${ISOLIR_LIST}`,
+                `=address=${customerIP}`,
                 `=comment=SUSPENDED - ${reason} - ${new Date().toISOString()}`
             ]);
 
-            logger.info(`Static IP ${customer.static_ip} added to blocked_customers address list`);
-            return { success: true, message: 'Added to address list' };
+            // Bersihkan entry legacy jika ada
+            try {
+                const legacy = await mikrotik.write('/ip/firewall/address-list/print', [
+                    `?list=${LEGACY_ISOLIR_LIST}`,
+                    `?address=${customerIP}`
+                ]);
+                for (const row of legacy || []) {
+                    await mikrotik.write('/ip/firewall/address-list/remove', [`=.id=${row['.id']}`]);
+                }
+            } catch (_) {}
+
+            logger.info(`Static IP ${customerIP} added to ${ISOLIR_LIST}`);
+            return { success: true, message: 'Added to isolir_customer' };
 
         } catch (error) {
             logger.error('Error in suspendByAddressList:', error);
@@ -422,23 +438,31 @@ class StaticIPSuspensionManager {
     async restoreFromAddressList(customer) {
         try {
             const mikrotik = await getMikrotikConnectionForCustomer(customer);
-
-            const entries = await mikrotik.write('/ip/firewall/address-list/print', [
-                '?list=blocked_customers',
-                `?address=${customer.static_ip}`
-            ]);
-
-            if (entries && entries.length > 0) {
-                for (const entry of entries) {
-                    await mikrotik.write('/ip/firewall/address-list/remove', [
-                        `=.id=${entry['.id']}`
-                    ]);
-                }
-                logger.info(`Removed ${customer.static_ip} from blocked_customers address list`);
-                return { success: true };
+            const customerIP = getCustomerStaticIp(customer) || customer.static_ip;
+            if (!customerIP) {
+                return { success: false, message: 'No static IP' };
             }
 
-            return { success: false, message: 'Not found in address list' };
+            let removed = false;
+            for (const listName of [ISOLIR_LIST, LEGACY_ISOLIR_LIST]) {
+                const entries = await mikrotik.write('/ip/firewall/address-list/print', [
+                    `?list=${listName}`,
+                    `?address=${customerIP}`
+                ]);
+                if (entries && entries.length > 0) {
+                    for (const entry of entries) {
+                        await mikrotik.write('/ip/firewall/address-list/remove', [
+                            `=.id=${entry['.id']}`
+                        ]);
+                    }
+                    logger.info(`Removed ${customerIP} from ${listName}`);
+                    removed = true;
+                }
+            }
+
+            return removed
+                ? { success: true }
+                : { success: false, message: 'Not found in address list' };
 
         } catch (error) {
             logger.error('Error in restoreFromAddressList:', error);
@@ -538,10 +562,37 @@ class StaticIPSuspensionManager {
     /**
      * Setup infrastruktur untuk blocked customers (address list + firewall rule)
      */
-    async ensureBlockedCustomersSetup(customer) {
+    async ensureIsolirCustomerSetup(customer) {
         try {
             const mikrotik = await getMikrotikConnectionForCustomer(customer);
             const access = getBillingWalledGardenConfig();
+
+            // Migrasi entry lama blocked_customers → isolir_customer (sekali jalan per setup)
+            try {
+                const legacy = await mikrotik.write('/ip/firewall/address-list/print', [
+                    `?list=${LEGACY_ISOLIR_LIST}`
+                ]);
+                for (const row of legacy || []) {
+                    const addr = String(row.address || '').trim();
+                    if (!addr || addr === '0.0.0.0') continue;
+                    const exists = await mikrotik.write('/ip/firewall/address-list/print', [
+                        `?list=${ISOLIR_LIST}`,
+                        `?address=${addr}`
+                    ]);
+                    if (!exists || exists.length === 0) {
+                        await mikrotik.write('/ip/firewall/address-list/add', [
+                            `=list=${ISOLIR_LIST}`,
+                            `=address=${addr}`,
+                            `=comment=${row.comment || 'migrated from blocked_customers'}`
+                        ]);
+                    }
+                    try {
+                        await mikrotik.write('/ip/firewall/address-list/remove', [`=.id=${row['.id']}`]);
+                    } catch (_) {}
+                }
+            } catch (migErr) {
+                logger.warn(`Legacy isolir list migrate: ${migErr.message}`);
+            }
 
             const addAddressListIfMissing = async (list, address, comment) => {
                 if (!address || address === 'GANTI_IP_SERVER_BILLING') return;
@@ -589,7 +640,7 @@ class StaticIPSuspensionManager {
                 await addAddressListIfMissing('isolir-allowed-dst', host, `BILLING-ISOLIR whatsapp ${host}`);
             }
 
-            // Whitelist ini harus berada sebelum drop blocked_customers supaya pelanggan isolir
+            // Whitelist ini harus berada sebelum drop isolir_customer supaya pelanggan isolir
             // tetap bisa bayar di portal dan mengirim bukti lewat WhatsApp.
             await addFilterIfMissing('BILLING-ISOLIR static allow established', [
                 '=chain=forward',
@@ -598,14 +649,14 @@ class StaticIPSuspensionManager {
             ]);
             await addFilterIfMissing('BILLING-ISOLIR static allow dns udp', [
                 '=chain=forward',
-                '=src-address-list=blocked_customers',
+                '=src-address-list=isolir_customer',
                 '=protocol=udp',
                 '=dst-port=53',
                 '=action=accept'
             ]);
             await addFilterIfMissing('BILLING-ISOLIR static allow dns tcp', [
                 '=chain=forward',
-                '=src-address-list=blocked_customers',
+                '=src-address-list=isolir_customer',
                 '=protocol=tcp',
                 '=dst-port=53',
                 '=action=accept'
@@ -613,7 +664,7 @@ class StaticIPSuspensionManager {
             if (access.billingServerIp) {
                 await addFilterIfMissing('BILLING-ISOLIR static allow billing app', [
                     '=chain=forward',
-                    '=src-address-list=blocked_customers',
+                    '=src-address-list=isolir_customer',
                     `=dst-address=${access.billingServerIp}`,
                     '=protocol=tcp',
                     `=dst-port=${access.billingPorts}`,
@@ -622,7 +673,7 @@ class StaticIPSuspensionManager {
             }
             await addFilterIfMissing('BILLING-ISOLIR static allow whatsapp', [
                 '=chain=forward',
-                '=src-address-list=blocked_customers',
+                '=src-address-list=isolir_customer',
                 '=dst-address-list=isolir-allowed-dst',
                 '=protocol=tcp',
                 '=dst-port=80,443,5222,5223,5228,4244',
@@ -651,14 +702,14 @@ class StaticIPSuspensionManager {
             if (access.billingServerIp) {
                 await addNatIfMissing('BILLING-ISOLIR static bypass allowed destinations', [
                     '=chain=dstnat',
-                    '=src-address-list=blocked_customers',
+                    '=src-address-list=isolir_customer',
                     '=dst-address-list=isolir-allowed-dst',
                     '=protocol=tcp',
                     '=action=accept'
                 ]);
                 await addNatIfMissing('BILLING-ISOLIR static force http to isolir page', [
                     '=chain=dstnat',
-                    '=src-address-list=blocked_customers',
+                    '=src-address-list=isolir_customer',
                     '=protocol=tcp',
                     '=dst-port=80,8080,8000,8888',
                     '=action=dst-nat',
@@ -667,7 +718,7 @@ class StaticIPSuspensionManager {
                 ]);
                 await addNatIfMissing('BILLING-ISOLIR static masquerade to billing server', [
                     '=chain=srcnat',
-                    '=src-address-list=blocked_customers',
+                    '=src-address-list=isolir_customer',
                     `=dst-address=${access.billingServerIp}`,
                     '=action=masquerade'
                 ]);
@@ -675,7 +726,7 @@ class StaticIPSuspensionManager {
 
             // 1. Pastikan firewall rule untuk block address list ada
             const existingRules = await mikrotik.write('/ip/firewall/filter/print', [
-                '?src-address-list=blocked_customers',
+                '?src-address-list=isolir_customer',
                 '?action=drop'
             ]);
 
@@ -684,33 +735,33 @@ class StaticIPSuspensionManager {
                 const firstId = firstRules && firstRules[0] && firstRules[0]['.id'];
                 await mikrotik.write('/ip/firewall/filter/add', [
                     '=chain=forward',
-                    '=src-address-list=blocked_customers',
+                    '=src-address-list=isolir_customer',
                     '=action=drop',
                     '=comment=Block suspended customers (static IP)',
                     ...(firstId ? [`=place-before=${firstId}`] : [])
                 ]);
-                logger.info('Created firewall rule for blocked_customers address list');
+                logger.info('Created firewall rule for isolir_customer address list');
             }
 
             // 2. Tambahkan rule untuk block dari internal juga (jika diperlukan)
             const internalRules = await mikrotik.write('/ip/firewall/filter/print', [
                 '?chain=input',
-                '?src-address-list=blocked_customers',
+                '?src-address-list=isolir_customer',
                 '?action=drop'
             ]);
 
             if (!internalRules || internalRules.length === 0) {
                 await mikrotik.write('/ip/firewall/filter/add', [
                     '=chain=input',
-                    '=src-address-list=blocked_customers',
+                    '=src-address-list=isolir_customer',
                     '=action=drop',
                     '=comment=Block suspended customers from accessing router (static IP)'
                 ]);
-                logger.info('Created input chain rule for blocked_customers address list');
+                logger.info('Created input chain rule for isolir_customer address list');
             }
 
         } catch (error) {
-            logger.error('Error in ensureBlockedCustomersSetup:', error);
+            logger.error('Error in ensureIsolirCustomerSetup:', error);
             throw error;
         }
     }
@@ -720,7 +771,7 @@ class StaticIPSuspensionManager {
      */
     async getStaticIPSuspensionStatus(customer) {
         try {
-            const customerIP = customer.static_ip || customer.ip_address || customer.assigned_ip;
+            const customerIP = getCustomerStaticIp(customer) || customer.ip_address || null;
             const macAddress = customer.mac_address;
 
             if (!customerIP && !macAddress) {
@@ -730,14 +781,17 @@ class StaticIPSuspensionManager {
             const mikrotik = await getMikrotikConnectionForCustomer(customer);
             const suspensionMethods = [];
 
-            // Cek address list
+            // Cek address list isolir (+ legacy)
             if (customerIP) {
-                const addressListEntries = await mikrotik.write('/ip/firewall/address-list/print', [
-                    '?list=blocked_customers',
-                    `?address=${customerIP}`
-                ]);
-                if (addressListEntries && addressListEntries.length > 0) {
-                    suspensionMethods.push('address_list');
+                for (const listName of [ISOLIR_LIST, LEGACY_ISOLIR_LIST]) {
+                    const addressListEntries = await mikrotik.write('/ip/firewall/address-list/print', [
+                        `?list=${listName}`,
+                        `?address=${customerIP}`
+                    ]);
+                    if (addressListEntries && addressListEntries.length > 0) {
+                        suspensionMethods.push('address_list');
+                        break;
+                    }
                 }
 
                 // Cek bandwidth limit

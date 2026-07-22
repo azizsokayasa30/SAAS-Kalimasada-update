@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>User Static IP</title>
+    <!-- Critical styles first: hindari FOUC pill / tema -->
+    <style>
+        .pill-ip {
+            display: inline-block !important;
+            padding: 0.28rem 0.65rem !important;
+            border-radius: 0.4rem !important;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+            font-size: 0.8125rem !important;
+            font-weight: 600 !important;
+            letter-spacing: 0.01em;
+            color: #0f172a !important;
+            background: #e2e8f0 !important;
+            border: 1px solid #cbd5e1 !important;
+        }
+        .pill-speed {
+            display: inline-block !important;
+            padding: 0.28rem 0.7rem !important;
+            border-radius: 999px !important;
+            font-size: 0.8125rem !important;
+            font-weight: 600 !important;
+            color: #ffffff !important;
+            background: #2563eb !important;
+            border: none !important;
+            white-space: nowrap !important;
+        }
+        .online-pending { opacity: 0.65; }
+        .btn-action {
+            padding: 0.25rem 0.65rem;
+            font-size: 0.78rem;
+            font-weight: 600;
+            border: none !important;
+            color: #fff !important;
+        }
+        .btn-action-edit { background: #475569 !important; }
+        .btn-action-edit:hover { background: #334155 !important; color: #fff !important; }
+        .btn-action-isolir { background: #d97706 !important; }
+        .btn-action-isolir:hover { background: #b45309 !important; color: #fff !important; }
+        .btn-action-aktif { background: #16a34a !important; }
+        .btn-action-aktif:hover { background: #15803d !important; color: #fff !important; }
+        .btn-action-hapus { background: #dc2626 !important; }
+        .btn-action-hapus:hover { background: #b91c1c !important; color: #fff !important; }
+        #profileFilter { min-width: 160px; max-width: 220px; display: inline-block; width: auto; }
+        #usersTable_filter { display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem; flex-wrap: wrap; }
+        #usersTable_filter label { margin-bottom: 0; display: flex; align-items: center; gap: 0.35rem; }
+    </style>
+    <script>
+    (function(){
+      try {
+        var stored = localStorage.getItem('kalimasada_theme');
+        var theme = (stored === 'dark' || stored === 'light') ? stored
+          : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch(e) {
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
+    })();
+    </script>
+    <style>
+        html[data-theme="dark"] .pill-ip {
+            color: #e2e8f0 !important;
+            background: #334155 !important;
+            border-color: #475569 !important;
+        }
+        html[data-theme="dark"] .pill-speed {
+            color: #ffffff !important;
+            background: #3b82f6 !important;
+        }
+    </style>
+    <%- include('../../partials/hard-reload') %>
+    <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+    <%- include('../../partials/theme-head') %>
+    <link href="/css/theme.css" rel="stylesheet">
+    <link href="/css/responsive-admin.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <style>
+        html[data-theme="dark"] .card,
+        html[data-theme="dark"] .table,
+        html[data-theme="dark"] .dataTables_wrapper,
+        html[data-theme="dark"] .modal-content {
+            background-color: var(--panel, #0f172a) !important;
+            color: var(--text, #e2e8f0) !important;
+        }
+        html[data-theme="dark"] .table > :not(caption) > * > * {
+            background-color: transparent !important;
+            color: inherit !important;
+            border-color: rgba(148, 163, 184, 0.2) !important;
+        }
+        html[data-theme="dark"] .form-control,
+        html[data-theme="dark"] .form-select {
+            background-color: var(--panel-2, #1e293b) !important;
+            color: var(--text, #e2e8f0) !important;
+            border-color: rgba(148, 163, 184, 0.25) !important;
+        }
+        /* Lindungi pill dari override badge tema */
+        html[data-theme='light'] .pill-speed,
+        html:not([data-theme='dark']) .pill-speed,
+        html[data-theme='dark'] .pill-speed {
+            color: #ffffff !important;
+            background: #2563eb !important;
+        }
+    </style>
+</head>
+<body>
+<div class="container-fluid">
+    <div class="row">
+        <%- include('../../partials/admin-responsive-sidebar', { page: 'static-ip-users' }) %>
+        <main class="col-md-10 ms-sm-auto main-content px-md-4 py-4">
+            <div class="d-flex justify-content-between align-items-center border-bottom pb-2 mb-3 flex-wrap gap-2">
+                <h1 class="h3 mb-0">User Static IP</h1>
+                <div class="d-flex gap-2 flex-wrap align-items-center">
+                    <button class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#importModal"><i class="bi bi-upload"></i> Import</button>
+                    <a class="btn btn-outline-secondary btn-sm" href="/admin/static-ip/export/users.xlsx"><i class="bi bi-download"></i> Export</a>
+                    <button type="button" class="btn btn-primary btn-sm" id="btnRefresh" onclick="refreshUsersPage()">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh
+                    </button>
+                </div>
+            </div>
+            <div id="profileFilterWrap" class="d-none">
+                <select class="form-select form-select-sm" id="profileFilter" aria-label="Filter profil">
+                    <option value="">Semua profil</option>
+                    <% (packages || []).forEach(function(p) { %>
+                      <option value="<%= String(p.name || '').replace(/"/g, '&quot;') %>"><%= p.name %></option>
+                    <% }) %>
+                </select>
+            </div>
+            <div class="table-responsive card p-2">
+                <table class="table table-hover table-sm align-middle" id="usersTable">
+                    <thead><tr>
+                        <th>Nama</th><th>IP</th><th>Profil</th><th>Kecepatan</th><th>Online</th><th>Status</th><th>Aksi</th>
+                    </tr></thead>
+                    <tbody>
+                    <% (customers || []).forEach(function(c) {
+                        const displayName = String(c.customer_name || c.name || '').trim();
+                        const ipLabel = c.static_ip || c.assigned_ip || '-';
+                        let speedLabel = '-';
+                        if (c.download_limit || c.upload_limit) {
+                            speedLabel = (c.download_limit || '-') + '/' + (c.upload_limit || '-');
+                        } else if (c.speed) {
+                            speedLabel = String(c.speed);
+                        }
+                        let ipOrder = 0;
+                        const ipParts = String(ipLabel).split('.').map(function(n){ return parseInt(n, 10); });
+                        if (ipParts.length === 4 && ipParts.every(function(n){ return !isNaN(n) && n >= 0 && n <= 255; })) {
+                            ipOrder = ((ipParts[0] << 24) >>> 0) + (ipParts[1] << 16) + (ipParts[2] << 8) + ipParts[3];
+                        }
+                    %>
+                        <tr data-id="<%= c.id %>">
+                            <td>
+                                <span class="fw-semibold"><%= displayName || '—' %></span>
+                                <% if (c.phone) { %><div class="small text-muted"><%= c.phone %></div><% } %>
+                            </td>
+                            <td data-order="<%= ipOrder %>"><span class="pill-ip"><%= ipLabel %></span></td>
+                            <td><%= c.package_name || '-' %></td>
+                            <td>
+                                <% if (speedLabel !== '-') { %>
+                                    <span class="pill-speed"><%= speedLabel %></span>
+                                <% } else { %>
+                                    <span class="text-muted">-</span>
+                                <% } %>
+                            </td>
+                            <td class="js-online-cell" data-customer-id="<%= c.id %>" data-order="0">
+                                <span class="badge text-bg-secondary online-pending">…</span>
+                            </td>
+                            <td data-order="<%= c.status === 'active' ? 1 : (c.status === 'suspended' ? 0 : 2) %>"><span class="badge text-bg-<%= c.status === 'active' ? 'primary' : (c.status === 'suspended' ? 'danger' : 'secondary') %>"><%= c.status %></span></td>
+                            <td class="text-nowrap">
+                                <button type="button" class="btn btn-sm btn-action btn-action-edit" onclick='openEdit(<%= JSON.stringify({
+                                    id: c.id,
+                                    name: displayName,
+                                    phone: c.phone,
+                                    static_ip: c.static_ip || c.assigned_ip,
+                                    package_id: c.package_id,
+                                    router_id: c.router_id,
+                                    mac_address: c.mac_address,
+                                    status: c.status
+                                }).replace(/</g, "\\u003c") %>)'>Edit</button>
+                                <% if (c.status === 'suspended') { %>
+                                <button type="button" class="btn btn-sm btn-action btn-action-aktif" onclick="restoreUser(<%= c.id %>)">Aktifkan</button>
+                                <% } else { %>
+                                <button type="button" class="btn btn-sm btn-action btn-action-isolir" onclick="suspendUser(<%= c.id %>)">Isolir</button>
+                                <% } %>
+                                <button type="button" class="btn btn-sm btn-action btn-action-hapus" onclick="deleteUser(<%= c.id %>)">Hapus</button>
+                            </td>
+                        </tr>
+                    <% }) %>
+                    </tbody>
+                </table>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="modal fade" id="userModal" tabindex="-1">
+  <div class="modal-dialog">
+    <form class="modal-content" id="userForm">
+      <div class="modal-header"><h5 class="modal-title" id="userModalTitle">Tambah User</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <input type="hidden" id="user_id">
+        <div class="mb-2"><label class="form-label">Nama</label><input class="form-control" id="name" required></div>
+        <div class="mb-2"><label class="form-label">HP</label><input class="form-control" id="phone" required></div>
+        <div class="mb-2"><label class="form-label">Static IP</label><input class="form-control" id="static_ip" required placeholder="10.10.10.50"></div>
+        <div class="mb-2"><label class="form-label">Profil (Paket)</label>
+          <select class="form-select" id="package_id" required>
+            <option value="">—</option>
+            <% (packages || []).forEach(function(p) { %>
+              <option value="<%= p.id %>"><%= p.name %> (<%= p.download_limit || p.speed || '-' %>/<%= p.upload_limit || '-' %>)</option>
+            <% }) %>
+          </select>
+        </div>
+        <div class="mb-2"><label class="form-label">Router</label>
+          <select class="form-select" id="router_id" required>
+            <option value="">—</option>
+            <% (routers || []).forEach(function(r) { %>
+              <option value="<%= r.id %>"><%= r.name %> (<%= r.nas_ip %>)</option>
+            <% }) %>
+          </select>
+        </div>
+        <div class="mb-2"><label class="form-label">MAC</label><input class="form-control" id="mac_address"></div>
+        <div class="mb-2"><label class="form-label">Status</label>
+          <select class="form-select" id="status"><option value="active">active</option><option value="suspended">suspended</option></select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-primary">Simpan</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal fade" id="importModal" tabindex="-1">
+  <div class="modal-dialog">
+    <form class="modal-content" id="importForm">
+      <div class="modal-header"><h5 class="modal-title">Import</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body"><input type="file" class="form-control" name="file" accept=".xlsx" required></div>
+      <div class="modal-footer"><button class="btn btn-primary" type="submit">Upload</button></div>
+    </form>
+  </div>
+</div>
+
+<script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+<script>
+const usersTable = $('#usersTable').DataTable({
+  pageLength: 25,
+  lengthMenu: [[25, 50, 100, 250, -1], [25, 50, 100, 250, 'Semua']],
+  order: [[0, 'asc']],
+  columnDefs: [
+    { targets: 1, type: 'num' },
+    { targets: 4, type: 'num' },
+    { targets: 6, orderable: false, searchable: false }
+  ]
+});
+
+$.fn.dataTable.ext.search.push(function(settings, data) {
+  if (settings.nTable !== document.getElementById('usersTable')) return true;
+  const selected = String((document.getElementById('profileFilter') || {}).value || '').trim();
+  if (!selected) return true;
+  const profile = String(data[2] || '').trim();
+  return profile === selected;
+});
+
+(function placeProfileFilter(){
+  const wrap = document.getElementById('profileFilterWrap');
+  const filter = document.getElementById('profileFilter');
+  const dtFilter = document.getElementById('usersTable_filter');
+  if (wrap && filter && dtFilter) {
+    dtFilter.insertBefore(filter, dtFilter.firstChild);
+    wrap.remove();
+  }
+  filter.addEventListener('change', function(){
+    usersTable.draw();
+  });
+})();
+
+function refreshUsersPage(){
+  const btn = document.getElementById('btnRefresh');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Refresh';
+  }
+  location.reload();
+}
+
+(function onlineStatusUi(){
+  const onlineMap = Object.create(null);
+  let loading = false;
+  let painting = false;
+
+  function paintCell(cell){
+    const id = String(cell.getAttribute('data-customer-id') || '');
+    if(!id) return;
+    if(!(id in onlineMap)){
+      cell.setAttribute('data-order', '0');
+      cell.innerHTML = '<span class="badge text-bg-secondary online-pending">\u2026</span>';
+      return;
+    }
+    const on = !!onlineMap[id];
+    cell.setAttribute('data-order', on ? '1' : '0');
+    cell.innerHTML = on
+      ? '<span class="badge text-bg-success">Online</span>'
+      : '<span class="badge text-bg-secondary">Offline</span>';
+  }
+
+  function paintAll(){
+    if (painting) return;
+    painting = true;
+    try {
+      usersTable.rows({ page: 'all' }).nodes().to$().find('.js-online-cell').each(function(){
+        paintCell(this);
+      });
+    } finally {
+      painting = false;
+    }
+  }
+
+  function refreshSortCache(redraw){
+    usersTable.rows().invalidate('dom');
+    if (redraw) usersTable.draw(false);
+  }
+
+  async function fetchOnce(timeoutMs){
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+    try {
+      const res = await fetch('/admin/static-ip/users/online-status', {
+        credentials: 'same-origin',
+        signal: ctrl ? ctrl.signal : undefined,
+        headers: { 'Accept': 'application/json' }
+      });
+      const data = await res.json().catch(() => ({}));
+      if(data && data.online && typeof data.online === 'object'){
+        Object.keys(data.online).forEach((id) => {
+          onlineMap[String(id)] = !!data.online[id];
+        });
+        usersTable.rows({ page: 'all' }).nodes().to$().find('.js-online-cell').each(function(){
+          const id = String(this.getAttribute('data-customer-id') || '');
+          if(id && !(id in onlineMap)) onlineMap[id] = false;
+        });
+        paintAll();
+        refreshSortCache(true);
+        return true;
+      }
+      return false;
+    } finally {
+      if(timer) clearTimeout(timer);
+    }
+  }
+
+  async function loadOnlineStatus(){
+    if(loading) return;
+    loading = true;
+    try {
+      let ok = false;
+      for(let attempt = 1; attempt <= 3; attempt++){
+        try {
+          ok = await fetchOnce(25000);
+          if(ok) break;
+        } catch(_) {}
+        await new Promise((r) => setTimeout(r, 800 * attempt));
+      }
+      if(!ok){
+        usersTable.rows({ page: 'all' }).nodes().to$().find('.js-online-cell').each(function(){
+          const id = String(this.getAttribute('data-customer-id') || '');
+          if(id && !(id in onlineMap)) onlineMap[id] = false;
+        });
+        paintAll();
+        refreshSortCache(true);
+      }
+    } finally {
+      loading = false;
+    }
+  }
+
+  usersTable.on('draw', function(){
+    paintAll();
+  });
+
+  loadOnlineStatus();
+  setInterval(loadOnlineStatus, 60000);
+})();
+
+function openCreate(){ userForm.reset(); user_id.value=''; userModalTitle.textContent='Tambah User'; }
+function openEdit(c){
+  user_id.value=c.id; name.value=c.name||''; phone.value=c.phone||''; static_ip.value=c.static_ip||'';
+  package_id.value=c.package_id||''; router_id.value=c.router_id||''; mac_address.value=c.mac_address||''; status.value=c.status||'active';
+  userModalTitle.textContent='Edit User';
+  new bootstrap.Modal('#userModal').show();
+}
+userForm.addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const body = {
+    name: name.value, phone: phone.value, static_ip: static_ip.value,
+    package_id: package_id.value, router_id: router_id.value,
+    mac_address: mac_address.value, status: status.value
+  };
+  const id = user_id.value;
+  const res = await fetch(id ? '/admin/static-ip/users/'+id : '/admin/static-ip/users', {
+    method: id ? 'PUT' : 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  if(!data.success){ alert(data.message||'Gagal'); return; }
+  location.reload();
+});
+importForm.addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const fd = new FormData(importForm);
+  const res = await fetch('/admin/static-ip/import/users', { method:'POST', body: fd });
+  const data = await res.json();
+  alert(data.success ? `OK: +${data.created} ~${data.updated} x${data.failed}` : (data.message||'Gagal'));
+  if(data.success) location.reload();
+});
+async function suspendUser(id){
+  if(!confirm('Isolir user ini?')) return;
+  const res = await fetch('/admin/static-ip/users/'+id+'/suspend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:'Isolir manual'})});
+  const data = await res.json();
+  if(!data.success) alert(data.message||data.error||'Gagal'); else location.reload();
+}
+async function restoreUser(id){
+  const res = await fetch('/admin/static-ip/users/'+id+'/restore',{method:'POST'});
+  const data = await res.json();
+  if(!data.success) alert(data.message||data.error||'Gagal'); else location.reload();
+}
+async function deleteUser(id){
+  if(!confirm('Hapus user?')) return;
+  const res = await fetch('/admin/static-ip/users/'+id,{method:'DELETE'});
+  const data = await res.json();
+  if(!data.success) alert(data.message||'Gagal'); else location.reload();
+}
+</script>
+</body>
+</html>

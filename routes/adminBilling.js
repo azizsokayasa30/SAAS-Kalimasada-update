@@ -8316,7 +8316,7 @@ router.post('/customers', customerPhotoUpload.fields([
         try {
             const {
                 getCustomerStaticIp,
-                provisionStaticIPQueue
+                ensureStaticIpAutomation
             } = require('../config/staticIPProvisioning');
             const staticIp = getCustomerStaticIp({
                 static_ip: customerData.static_ip || static_ip,
@@ -8326,23 +8326,30 @@ router.post('/customers', customerPhotoUpload.fields([
             const hasPppoeUser = !!(result.pppoe_username && String(result.pppoe_username).trim());
             if (staticIp && !pppoeWasCreated && !hasPppoeUser) {
                 staticIpProvision.attempted = true;
-                const prov = await provisionStaticIPQueue(
+                const { getTenantId, hasTenantContext } = require('../config/platform/tenantContext');
+                const tenantIdForAuto = result.tenant_id || (hasTenantContext() ? getTenantId() : null);
+                const auto = await ensureStaticIpAutomation(
                     {
                         id: result.id,
+                        tenant_id: tenantIdForAuto,
                         static_ip: staticIp,
                         assigned_ip: customerData.assigned_ip || assigned_ip || staticIp,
-                        username: result.username
+                        username: result.username,
+                        router_id: mappedRouterId
                     },
-                    packageData
+                    packageData,
+                    { routerId: mappedRouterId, tenantId: tenantIdForAuto }
                 );
-                staticIpProvision.success = !!(prov && prov.success);
+                const prov = auto.provision || {};
+                staticIpProvision.success = !!(auto.success && (prov.success || prov.skipped));
                 staticIpProvision.message = (prov && (prov.message || (prov.success
                     ? `Queue ${prov.queue} ${prov.action} (${prov.maxLimit})`
-                    : 'Gagal provision queue'))) || '';
+                    : auto.message || 'Gagal provision queue'))) || auto.message || '';
                 staticIpProvision.queue = prov?.queue;
                 staticIpProvision.maxLimit = prov?.maxLimit;
                 staticIpProvision.skipped = !!(prov && prov.skipped);
-                if (prov && !prov.success && !prov.skipped) {
+                staticIpProvision.router_id = auto.router_id;
+                if (!staticIpProvision.success && !staticIpProvision.skipped) {
                     logger.warn(`[STATIC-IP-PROVISION] Create customer ${result.id}: ${staticIpProvision.message}`);
                 }
             }
@@ -9123,15 +9130,22 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
                     const pkg = packageRowForProfile || (updatedCustomer.package_id
                         ? await billingManager.getPackageById(updatedCustomer.package_id)
                         : null);
-                    const prov = await provisionStaticIPQueue(updatedCustomer, pkg);
-                    staticIpProvision.success = !!(prov && prov.success);
+                    const { getTenantId, hasTenantContext } = require('../config/platform/tenantContext');
+                    const tenantIdForAuto = updatedCustomer.tenant_id || (hasTenantContext() ? getTenantId() : null);
+                    const { ensureStaticIpAutomation } = require('../config/staticIPProvisioning');
+                    const auto = await ensureStaticIpAutomation(updatedCustomer, pkg, {
+                        tenantId: tenantIdForAuto
+                    });
+                    const prov = auto.provision || {};
+                    staticIpProvision.success = !!(auto.success && (prov.success || prov.skipped));
                     staticIpProvision.message = (prov && (prov.message || (prov.success
                         ? `Queue ${prov.queue} ${prov.action} (${prov.maxLimit})`
-                        : 'Gagal provision queue'))) || '';
+                        : auto.message || 'Gagal provision queue'))) || auto.message || '';
                     staticIpProvision.queue = prov?.queue;
                     staticIpProvision.maxLimit = prov?.maxLimit;
                     staticIpProvision.skipped = !!(prov && prov.skipped);
-                    if (prov && !prov.success && !prov.skipped) {
+                    staticIpProvision.router_id = auto.router_id;
+                    if (!staticIpProvision.success && !staticIpProvision.skipped) {
                         logger.warn(`[STATIC-IP-PROVISION] Update customer ${updatedCustomer.id}: ${staticIpProvision.message}`);
                     }
                 }

@@ -975,6 +975,10 @@ app.use('/admin', blockTechnicianAccess, adminMappingNewRouter);
 const adminMikrotikRouter = require('./routes/adminMikrotik');
 app.use('/admin', blockTechnicianAccess, adminMikrotikRouter);
 
+// Static IP Connection (overlay pelanggan billing — tidak menyentuh RADIUS/PPPoE)
+const adminStaticIpRouter = require('./routes/adminStaticIp');
+app.use('/admin/static-ip', blockTechnicianAccess, adminAuth, adminStaticIpRouter);
+
 // Import dan gunakan route adminRadius (Setting RADIUS)
 const adminRadiusRouter = require('./routes/adminRadius');
 app.use('/admin', blockTechnicianAccess, adminRadiusRouter);

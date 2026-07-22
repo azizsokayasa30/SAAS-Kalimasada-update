@@ -136,6 +136,36 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
             </div>
         </div>
         
+        <!-- STATIC IP CONNECTION -->
+        <% const staticIpPages = ['static-ip-users', 'static-ip-profiles', 'static-ip-config']; %>
+        <% const staticIpExpanded = typeof page !== 'undefined' && staticIpPages.includes(page); %>
+        <div class="sb-section">
+            <div class="sb-section-title sb-collapsible"
+                 data-manual-toggle="collapse"
+                 data-target-id="staticIpConnectionCollapse"
+                 aria-expanded="<%= staticIpExpanded ? 'true' : 'false' %>"
+                 aria-controls="staticIpConnectionCollapse"
+                 role="button"
+                 tabindex="0">
+                <span>Static IP Connection</span>
+                <i class="bi <%= staticIpExpanded ? 'bi-chevron-up' : 'bi-chevron-down' %> toggle-arrow sb-chevron"></i>
+            </div>
+            <div class="collapse <%= staticIpExpanded ? 'show' : '' %>" id="staticIpConnectionCollapse">
+                <a href="/admin/static-ip/users" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'static-ip-users' ? 'active' : '' %>">
+                    <i class="bi bi-pc-display"></i>
+                    <span class="sb-item-text">User Static IP</span>
+                </a>
+                <a href="/admin/static-ip/profiles" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'static-ip-profiles' ? 'active' : '' %>">
+                    <i class="bi bi-speedometer2"></i>
+                    <span class="sb-item-text">Profil Bandwidth</span>
+                </a>
+                <a href="/admin/static-ip/ip-config" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'static-ip-config' ? 'active' : '' %>">
+                    <i class="bi bi-hdd-network"></i>
+                    <span class="sb-item-text">Konfigurasi IP</span>
+                </a>
+            </div>
+        </div>
+
         <!-- HOTSPOT & VOUCHER -->
         <% const hotspotPages = ['hotspot-settings','hotspot-master','hotspot-users','hotspot-profiles','hotspot-server-profiles','voucher-template','member-list','routers']; %>
         <% const hotspotExpanded = typeof page !== 'undefined' && hotspotPages.includes(page); %>
@@ -620,7 +650,7 @@ document.addEventListener('DOMContentLoaded', function () {
             bootstrap.Collapse.getOrCreateInstance(collapseEl, { toggle: false });
         }
     }
-    ['pppConnectionCollapse','responsiveHotspotCollapse','agentCollapse','teknisiCollapse','toolsCollapse','settingCollapse','billingCustomerCollapse','billingInvoiceCollapse','billingFinanceCollapse','warehouseCollapse','karyawanCollapse'].forEach(setupCollapseToggle);
+    ['pppConnectionCollapse','staticIpConnectionCollapse','responsiveHotspotCollapse','agentCollapse','teknisiCollapse','toolsCollapse','settingCollapse','billingCustomerCollapse','billingInvoiceCollapse','billingFinanceCollapse','warehouseCollapse','karyawanCollapse'].forEach(setupCollapseToggle);
 
     window.addEventListener('resize', function() { if (window.innerWidth >= 768) closeSidebar(); });
 

@@ -1801,7 +1801,7 @@ function generateIsolationScript(method, bandwidthLimit, networkRange, dnsServer
 # ========================================
 
 # Buat address list untuk blocked customers
-/ip firewall address-list add list=blocked_customers address=0.0.0.0 comment="Placeholder - Auto managed by Billing-System from Enos "
+/ip firewall address-list add list=isolir_customer address=0.0.0.0 comment="Placeholder - Auto managed by Billing-System from Enos "
 
 `;
 
@@ -1811,10 +1811,10 @@ function generateIsolationScript(method, bandwidthLimit, networkRange, dnsServer
 # ========================================
 
 # Rule 1: Block traffic dari blocked customers (FORWARD chain)
-/ip firewall filter add chain=forward src-address-list=blocked_customers action=drop comment="Block suspended customers (static IP) - Billing-System from Enos " place-before=0
+/ip firewall filter add chain=forward src-address-list=isolir_customer action=drop comment="Block suspended customers (static IP) - Billing-System from Enos " place-before=0
 
 # Rule 2: Block access to router dari blocked customers (INPUT chain)
-/ip firewall filter add chain=input src-address-list=blocked_customers action=drop comment="Block suspended customers from accessing router (static IP) - Billing-System from Enos "
+/ip firewall filter add chain=input src-address-list=isolir_customer action=drop comment="Block suspended customers from accessing router (static IP) - Billing-System from Enos "
 
 `;
 
@@ -1861,7 +1861,7 @@ function generateIsolationScript(method, bandwidthLimit, networkRange, dnsServer
 # ========================================
 
 # Cek address list blocked customers:
-# /ip firewall address-list print where list=blocked_customers
+# /ip firewall address-list print where list=isolir_customer
 
 # Cek firewall rules:
 # /ip firewall filter print where comment~"Block suspended customers"
@@ -1888,16 +1888,16 @@ function generateIsolationScript(method, bandwidthLimit, networkRange, dnsServer
 # ========================================
 
 # Isolir pelanggan (ganti IP_ADDRESS dengan IP pelanggan):
-# /ip firewall address-list add list=blocked_customers address=IP_ADDRESS comment="SUSPENDED - [ALASAN] - [TANGGAL]"
+# /ip firewall address-list add list=isolir_customer address=IP_ADDRESS comment="SUSPENDED - [ALASAN] - [TANGGAL]"
 
 # Contoh:
-# /ip firewall address-list add list=blocked_customers address=192.168.1.100 comment="SUSPENDED - Telat bayar - 2024-01-15"
+# /ip firewall address-list add list=isolir_customer address=192.168.1.100 comment="SUSPENDED - Telat bayar - 2024-01-15"
 
 # Restore pelanggan (hapus dari address list):
-# /ip firewall address-list remove [find where address=IP_ADDRESS and list=blocked_customers]
+# /ip firewall address-list remove [find where address=IP_ADDRESS and list=isolir_customer]
 
 # Contoh:
-# /ip firewall address-list remove [find where address=192.168.1.100 and list=blocked_customers]
+# /ip firewall address-list remove [find where address=192.168.1.100 and list=isolir_customer]
 
 `;
 
@@ -1907,10 +1907,10 @@ function generateIsolationScript(method, bandwidthLimit, networkRange, dnsServer
 # ========================================
 
 # Isolir multiple IP sekaligus:
-# :foreach i in={192.168.1.100;192.168.1.101;192.168.1.102} do={/ip firewall address-list add list=blocked_customers address=$i comment="BULK SUSPEND - [TANGGAL]"}
+# :foreach i in={192.168.1.100;192.168.1.101;192.168.1.102} do={/ip firewall address-list add list=isolir_customer address=$i comment="BULK SUSPEND - [TANGGAL]"}
 
 # Restore semua pelanggan yang diisolir:
-# /ip firewall address-list remove [find where list=blocked_customers and comment~"SUSPENDED"]
+# /ip firewall address-list remove [find where list=isolir_customer and comment~"SUSPENDED"]
 
 `;
 
@@ -1923,7 +1923,7 @@ function generateIsolationScript(method, bandwidthLimit, networkRange, dnsServer
 # /ip firewall filter print where disabled=no and comment~"Block suspended customers"
 
 # Cek address list entries:
-# /ip firewall address-list print where list=blocked_customers
+# /ip firewall address-list print where list=isolir_customer
 
 # Test connectivity dari IP yang diisolir:
 # /ping 8.8.8.8 src-address=IP_YANG_DIISOLIR

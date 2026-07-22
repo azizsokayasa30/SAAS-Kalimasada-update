@@ -28,9 +28,9 @@ class IsolationStatusGenerator {
 
     async getBlockedCustomersFromMikrotik() {
         try {
-            // Ambil semua IP yang ada di address list blocked_customers
+            // Ambil semua IP yang ada di address list isolir_customer
             const blockedIPs = await this.mikrotik.write('/ip/firewall/address-list/print', [
-                '?list=blocked_customers'
+                '?list=isolir_customer'
             ]);
 
             console.log(`📊 Ditemukan ${blockedIPs.length} IP yang diisolir di Mikrotik`);
@@ -137,7 +137,7 @@ class IsolationStatusGenerator {
                     
                     if (customer) {
                         console.log(`# Restore ${customer.name} (${customer.phone})`);
-                        console.log(`/ip firewall address-list remove [find where address=${ip} and list=blocked_customers]`);
+                        console.log(`/ip firewall address-list remove [find where address=${ip} and list=isolir_customer]`);
                         console.log('');
                     }
                 });
@@ -153,7 +153,7 @@ class IsolationStatusGenerator {
                 
                 if (ipsToRestore.length > 0) {
                     console.log('# Restore semua pelanggan yang ada di billing:');
-                    console.log(`:foreach i in={${ipsToRestore.join(';')}} do={/ip firewall address-list remove [find where address=$i and list=blocked_customers]}`);
+                    console.log(`:foreach i in={${ipsToRestore.join(';')}} do={/ip firewall address-list remove [find where address=$i and list=isolir_customer]}`);
                 }
             }
 
@@ -182,7 +182,7 @@ class IsolationStatusGenerator {
             
             // Commands untuk monitoring
             console.log('# Monitoring commands:');
-            console.log('/ip firewall address-list print where list=blocked_customers');
+            console.log('/ip firewall address-list print where list=isolir_customer');
             console.log('/ip firewall filter print where comment~"Block suspended customers"');
             console.log('');
             
@@ -190,14 +190,14 @@ class IsolationStatusGenerator {
             console.log('# Individual restore commands:');
             blockedIPs.forEach((blockedIP, index) => {
                 console.log(`# ${index + 1}. IP: ${blockedIP.address} - ${blockedIP.comment || 'No comment'}`);
-                console.log(`/ip firewall address-list remove [find where address=${blockedIP.address} and list=blocked_customers]`);
+                console.log(`/ip firewall address-list remove [find where address=${blockedIP.address} and list=isolir_customer]`);
                 console.log('');
             });
             
             // Bulk restore command
             const allIPs = blockedIPs.map(ip => ip.address);
             console.log('# Bulk restore command:');
-            console.log(`:foreach i in={${allIPs.join(';')}} do={/ip firewall address-list remove [find where address=$i and list=blocked_customers]}`);
+            console.log(`:foreach i in={${allIPs.join(';')}} do={/ip firewall address-list remove [find where address=$i and list=isolir_customer]}`);
             
             console.log('\n' + '='.repeat(60));
 
