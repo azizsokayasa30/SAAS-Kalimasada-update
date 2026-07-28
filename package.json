@@ -48,6 +48,8 @@
   "dependencies": {
     "@hapi/boom": "^10.0.1",
     "@whiskeysockets/baileys": "^6.7.21",
+    "adm-zip": "^0.6.0",
+    "archiver": "^8.0.0",
     "axios": "^1.6.7",
     "bcrypt": "^6.0.0",
     "body-parser": "^1.20.2",

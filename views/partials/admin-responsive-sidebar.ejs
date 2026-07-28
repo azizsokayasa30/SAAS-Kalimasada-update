@@ -999,3 +999,22 @@ document.addEventListener('DOMContentLoaded', function () {
     .main-content { margin-top: 60px; padding: 15px; }
 }
 </style>
+<script>
+  window.__ADMIN_SESSION_TIMEOUT_MINUTES__ = <%= (function () {
+    if (typeof adminSessionTimeoutMinutes !== 'undefined' && Number.isFinite(Number(adminSessionTimeoutMinutes))) {
+      return Math.min(Math.max(Math.round(Number(adminSessionTimeoutMinutes)), 5), 1440);
+    }
+    var raw = null;
+    try {
+      if (typeof appSettings !== 'undefined' && appSettings && appSettings.admin_session_timeout_minutes != null) {
+        raw = appSettings.admin_session_timeout_minutes;
+      } else if (typeof settings !== 'undefined' && settings && settings.admin_session_timeout_minutes != null) {
+        raw = settings.admin_session_timeout_minutes;
+      }
+    } catch (e) {}
+    var n = parseInt(raw, 10);
+    if (!Number.isFinite(n)) n = 60;
+    return Math.min(Math.max(n, 5), 1440);
+  })() %>;
+</script>
+<script src="/js/admin-session-timeout.js?v=1" defer></script>

@@ -4,13 +4,87 @@
  * Isolasi: hanya router milik tenant pelanggan.
  */
 const logger = require('./logger');
-const { getMikrotikConnectionForCustomer, buildMikrotikRateLimit } = require('./mikrotik');
+const { getMikrotikConnectionForCustomer } = require('./mikrotik');
 
 function sanitizeIp(value) {
     if (!value || typeof value !== 'string') return null;
     const ip = value.trim();
     if (!ip) return null;
     return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip) ? ip : null;
+}
+
+/**
+ * Terjemahkan pesan error MikroTik / RouterOS ke bahasa Indonesia (untuk UI sync queue).
+ */
+function translateMikrotikQueueError(raw) {
+    const msg = String(raw || '').trim();
+    if (!msg) return 'Gagal sync queue ke MikroTik';
+
+    const lower = msg.toLowerCase();
+    const rules = [
+        {
+            test: /download-max-limit.*invalid trailing characters/i,
+            id: 'Nilai download-max-limit berisi karakter tambahan yang tidak valid (format bandwidth salah)'
+        },
+        {
+            test: /upload-max-limit.*invalid trailing characters/i,
+            id: 'Nilai upload-max-limit berisi karakter tambahan yang tidak valid (format bandwidth salah)'
+        },
+        {
+            test: /max-limit.*invalid trailing characters/i,
+            id: 'Nilai max-limit berisi karakter tambahan yang tidak valid (format bandwidth salah)'
+        },
+        {
+            test: /burst-limit.*invalid trailing characters/i,
+            id: 'Nilai burst-limit berisi karakter tambahan yang tidak valid'
+        },
+        {
+            test: /burst-threshold.*invalid trailing characters/i,
+            id: 'Nilai burst-threshold berisi karakter tambahan yang tidak valid'
+        },
+        {
+            test: /burst-time.*invalid trailing characters/i,
+            id: 'Nilai burst-time berisi karakter tambahan yang tidak valid'
+        },
+        {
+            test: /invalid value for argument/i,
+            id: 'Nilai argumen tidak valid untuk MikroTik'
+        },
+        {
+            test: /failure:.*already have/i,
+            id: 'Queue dengan nama tersebut sudah ada di MikroTik'
+        },
+        {
+            test: /no such item/i,
+            id: 'Item queue tidak ditemukan di MikroTik'
+        },
+        {
+            test: /timeout|etimedout|timed out/i,
+            id: 'Koneksi ke MikroTik timeout'
+        },
+        {
+            test: /econnrefused|connection refused/i,
+            id: 'Koneksi ke MikroTik ditolak'
+        },
+        {
+            test: /authentication|login failure|invalid user name or password/i,
+            id: 'Autentikasi MikroTik gagal'
+        },
+        {
+            test: /cannot connect|connect.*failed|enotfound|getaddrinfo/i,
+            id: 'Tidak dapat terhubung ke MikroTik'
+        }
+    ];
+
+    for (const rule of rules) {
+        if (rule.test.test(msg) || rule.test.test(lower)) return rule.id;
+    }
+
+    // Fallback generik: tetap tampilkan pesan asli bila belum dikenal
+    if (/^[A-Za-z0-9 _\-.:/=()',"%]+$/.test(msg) && /[a-z]/.test(lower)) {
+        return `Gagal sync queue: ${msg}`;
+    }
+    return msg;
 }
 
 function getCustomerStaticIp(customer) {
@@ -100,21 +174,6 @@ function normalizeUnit(u) {
     return 'M';
 }
 
-function normalizeRateToken(raw) {
-    if (raw == null) return null;
-    let s = String(raw).trim().replace(/\s+/g, '');
-    if (!s || s === '0') return '0';
-    const m = s.match(/^(\d+(?:\.\d+)?)([kKmMgG])?(?:bps|bit|b)?$/i);
-    if (m) {
-        const n = m[1];
-        let u = (m[2] || 'M').toUpperCase();
-        if (u === 'K') u = 'k';
-        return `${n}${u}`;
-    }
-    if (/^\d+(?:\.\d+)?$/.test(s)) return `${s}M`;
-    return s;
-}
-
 function normalizeMaxLimit(raw) {
     if (!raw) return null;
     const parts = String(raw).trim().split(/\s+/);
@@ -128,20 +187,138 @@ function normalizeMaxLimit(raw) {
     return normalized.join(' ');
 }
 
-function resolvePackageRateLimit(pkg) {
+/**
+ * Normalisasi token bandwidth ke format RouterOS (50M = 50 Mbps).
+ * Menerima: 50, 50M, 50Mbps, 50 Mbps, 50mbps, 10k, 1G, dll.
+ */
+function normalizeRateToken(raw) {
+    if (raw == null) return null;
+    let s = String(raw).trim().replace(/\s+/g, '');
+    if (!s || s === '0') return '0';
+
+    // 50Mbps / 50mbps / 50Mbit / 50Mb → 50M
+    let m = s.match(/^(\d+(?:\.\d+)?)\s*(?:mbps|mbit\/s|mbits|mbit|mb)$/i);
+    if (m) return `${m[1]}M`;
+
+    // 50Kbps / 10kbps → 50k
+    m = s.match(/^(\d+(?:\.\d+)?)\s*(?:kbps|kbit\/s|kbits|kbit|kb)$/i);
+    if (m) return `${m[1]}k`;
+
+    // 1Gbps / 1gb → 1G
+    m = s.match(/^(\d+(?:\.\d+)?)\s*(?:gbps|gbit\/s|gbits|gbit|gb)$/i);
+    if (m) return `${m[1]}G`;
+
+    // 50M / 10k / 1G / 50 (default M = Mbps)
+    m = s.match(/^(\d+(?:\.\d+)?)([kKmMgG])?(?:bps|bit|b)?$/i);
+    if (m) {
+        const n = m[1];
+        let u = (m[2] || 'M').toUpperCase();
+        if (u === 'K') u = 'k';
+        return `${n}${u}`;
+    }
+    return null;
+}
+
+function formatPair(upload, download) {
+    const up = normalizeRateToken(upload);
+    const down = normalizeRateToken(download);
+    if (!up && !down) return null;
+    return `${up || '0'}/${down || '0'}`;
+}
+
+function formatBurstTimePair(raw) {
+    if (raw == null || String(raw).trim() === '') return null;
+    const s = String(raw).trim().replace(/\s+/g, '');
+    if (s.includes('/')) {
+        const [a, b] = s.split('/');
+        const left = String(a || '').replace(/[smhd]$/i, '');
+        const right = String(b || a || '').replace(/[smhd]$/i, '');
+        const t1 = parseInt(left, 10);
+        const t2 = parseInt(right, 10);
+        if (!Number.isFinite(t1) || !Number.isFinite(t2)) return null;
+        return `${t1}s/${t2}s`;
+    }
+    const n = parseInt(String(s).replace(/[smhd]$/i, ''), 10);
+    if (!Number.isFinite(n)) return null;
+    return `${n}s/${n}s`;
+}
+
+/**
+ * Parameter simple queue MikroTik.
+ * max-limit = upload/download (contoh 10M/50M). Burst dikirim field terpisah.
+ * Jangan pernah menaruh burst di dalam string max-limit (itu penyebab "invalid trailing characters").
+ */
+function resolveSimpleQueueLimits(pkg) {
     if (!pkg) return null;
 
-    const fromLimits = buildMikrotikRateLimit({
-        upload_limit: pkg.upload_limit,
-        download_limit: pkg.download_limit,
-        burst_limit_upload: pkg.burst_limit_upload,
-        burst_limit_download: pkg.burst_limit_download,
-        burst_threshold: pkg.burst_threshold,
-        burst_time: pkg.burst_time
-    });
-    if (fromLimits) return normalizeMaxLimit(fromLimits);
+    let upload = normalizeRateToken(pkg.upload_limit);
+    let download = normalizeRateToken(pkg.download_limit);
 
-    return normalizeMaxLimit(parseSpeedToRateLimit(pkg.speed));
+    if (!upload && !download) {
+        const parsed = parseSpeedToRateLimit(pkg.speed);
+        if (parsed) {
+            // Convention app/RADIUS speed text: download/upload
+            const first = String(parsed).trim().split(/\s+/)[0];
+            const [downPart, upPart] = first.split('/');
+            download = normalizeRateToken(downPart);
+            upload = normalizeRateToken(upPart != null ? upPart : downPart);
+        }
+    }
+
+    const maxLimit = formatPair(upload, download);
+    if (!maxLimit) return null;
+
+    const burstLimit = formatPair(pkg.burst_limit_upload, pkg.burst_limit_download);
+    let burstThreshold = null;
+    if (pkg.burst_threshold && String(pkg.burst_threshold).includes('/')) {
+        const [downThr, upThr] = String(pkg.burst_threshold).split('/');
+        // stored as download/upload in form; MikroTik wants upload/download
+        burstThreshold = formatPair(upThr, downThr);
+    } else if (pkg.burst_threshold) {
+        const t = normalizeRateToken(pkg.burst_threshold);
+        burstThreshold = t ? `${t}/${t}` : null;
+    }
+    const burstTime = formatBurstTimePair(pkg.burst_time);
+
+    return {
+        maxLimit,
+        burstLimit: burstLimit && burstTime ? burstLimit : null,
+        burstThreshold: burstLimit && burstTime ? burstThreshold : null,
+        burstTime: burstLimit && burstTime ? burstTime : null
+    };
+}
+
+/**
+ * max-limit simple queue MikroTik: upload/download (contoh 10M/50M).
+ * 50M = 50 Mbps. Tanpa burst di string ini.
+ */
+function resolvePackageRateLimit(pkg) {
+    if (!pkg) return null;
+    const simple = resolveSimpleQueueLimits(pkg);
+    return simple ? simple.maxLimit : null;
+}
+
+function buildSimpleQueueParams({ name, target, limits }) {
+    const params = [
+        `=name=${name}`,
+        `=target=${target}`,
+        `=max-limit=${limits.maxLimit}`,
+        '=comment=',
+        '=disabled=no'
+    ];
+    if (limits.burstLimit && limits.burstTime) {
+        params.push(`=burst-limit=${limits.burstLimit}`);
+        if (limits.burstThreshold) {
+            params.push(`=burst-threshold=${limits.burstThreshold}`);
+        }
+        params.push(`=burst-time=${limits.burstTime}`);
+    } else {
+        // bersihkan burst lama jika paket tidak memakai burst
+        params.push('=burst-limit=0/0');
+        params.push('=burst-threshold=0/0');
+        params.push('=burst-time=0s/0s');
+    }
+    return params;
 }
 
 async function listSimpleQueues(mikrotik) {
@@ -344,7 +521,7 @@ async function ensureStaticIpAutomation(customer, pkg, options = {}) {
         result.message = result.provision?.message || (result.success ? 'OK' : 'Gagal');
         return result;
     } catch (e) {
-        result.message = e.message;
+        result.message = translateMikrotikQueueError(e.message);
         logger.error(`[STATIC-IP-AUTO] ${e.message}`);
         return result;
     }
@@ -363,8 +540,8 @@ async function provisionStaticIPQueue(customer, pkg) {
             return { success: false, skipped: true, message: 'Customer id kosong' };
         }
 
-        const rateLimit = resolvePackageRateLimit(pkg);
-        if (!rateLimit) {
+        const limits = resolveSimpleQueueLimits(pkg);
+        if (!limits || !limits.maxLimit) {
             return {
                 success: false,
                 skipped: true,
@@ -410,31 +587,37 @@ async function provisionStaticIPQueue(customer, pkg) {
             }
         }
 
+        const queueParams = buildSimpleQueueParams({ name, target: ip, limits });
         if (existing) {
-            await mikrotik.write('/queue/simple/set', [
-                `=.id=${existing['.id']}`,
-                `=name=${name}`,
-                `=target=${ip}`,
-                `=max-limit=${rateLimit}`,
-                '=comment=',
-                '=disabled=no'
-            ]);
-            logger.info(`[STATIC-IP-PROVISION] Updated queue "${name}" target=${ip} max-limit=${rateLimit}`);
-            return { success: true, action: 'updated', queue: name, target: ip, maxLimit: rateLimit };
+            await mikrotik.write('/queue/simple/set', [`=.id=${existing['.id']}`, ...queueParams]);
+            logger.info(
+                `[STATIC-IP-PROVISION] Updated queue "${name}" target=${ip} max-limit=${limits.maxLimit}` +
+                    (limits.burstLimit ? ` burst-limit=${limits.burstLimit}` : '')
+            );
+            return {
+                success: true,
+                action: 'updated',
+                queue: name,
+                target: ip,
+                maxLimit: limits.maxLimit
+            };
         }
 
-        await mikrotik.write('/queue/simple/add', [
-            `=name=${name}`,
-            `=target=${ip}`,
-            `=max-limit=${rateLimit}`,
-            '=comment=',
-            '=disabled=no'
-        ]);
-        logger.info(`[STATIC-IP-PROVISION] Created queue "${name}" target=${ip} max-limit=${rateLimit}`);
-        return { success: true, action: 'created', queue: name, target: ip, maxLimit: rateLimit };
+        await mikrotik.write('/queue/simple/add', queueParams);
+        logger.info(
+            `[STATIC-IP-PROVISION] Created queue "${name}" target=${ip} max-limit=${limits.maxLimit}` +
+                (limits.burstLimit ? ` burst-limit=${limits.burstLimit}` : '')
+        );
+        return {
+            success: true,
+            action: 'created',
+            queue: name,
+            target: ip,
+            maxLimit: limits.maxLimit
+        };
     } catch (error) {
         logger.error(`[STATIC-IP-PROVISION] Failed for customer ${customer?.id}: ${error.message}`);
-        return { success: false, message: error.message };
+        return { success: false, message: translateMikrotikQueueError(error.message) };
     }
 }
 
@@ -912,11 +1095,13 @@ async function checkStaticIpQueuesForCustomers(customers, getPkgFn, { tenantId =
 module.exports = {
     sanitizeIp,
     getCustomerStaticIp,
+    translateMikrotikQueueError,
     toTitleCase,
     queueNameForCustomer,
     parseSpeedToRateLimit,
     normalizeMaxLimit,
     resolvePackageRateLimit,
+    resolveSimpleQueueLimits,
     rateTokenToMbps,
     packageSpeedToMbps,
     validateMinPackageMbps,

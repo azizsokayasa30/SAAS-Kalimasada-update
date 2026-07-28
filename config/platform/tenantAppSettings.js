@@ -50,6 +50,8 @@ async function attachTenantAppSettings(req, res, next) {
             contact_whatsapp: settings.contact_whatsapp || '',
             suspension_grace_period_days: settings.suspension_grace_period_days || '3',
             isolir_profile: settings.isolir_profile || 'isolir',
+            auto_suspension_enabled: settings.auto_suspension_enabled === true || settings.auto_suspension_enabled === 'true',
+            auto_suspension_day: settings.auto_suspension_day != null ? String(settings.auto_suspension_day) : '25',
         };
         res.locals.appSettings = req.appSettings;
         next();

@@ -381,7 +381,10 @@ router.post('/auth/login', rateLimitLogin, async (req, res) => {
             return res.status(401).json({ success: false, message: 'Kredensial tidak valid.' });
         }
 
-        if (customer.status && customer.status !== 'active') {
+        // Suspended / isolated may still log in to view bills & pay; only inactive is blocked.
+        const status = String(customer.status || '').toLowerCase().trim();
+        const portalBlockedStatuses = new Set(['inactive', 'disabled', 'terminated', 'deleted']);
+        if (status && portalBlockedStatuses.has(status)) {
             return res.status(403).json({
                 success: false,
                 message: 'Akun layanan tidak aktif. Hubungi admin.',
@@ -554,7 +557,8 @@ router.get('/dashboard/summary', verifyCustomerToken, async (req, res) => {
 
         const serviceStatus = customer.status === 'active' ? 'Aktif'
             : customer.status === 'suspended' ? 'Suspend'
-                : customer.status === 'isolir' ? 'Isolir' : customer.status || '-';
+                : (customer.status === 'isolir' || customer.status === 'isolated') ? 'Isolir'
+                    : customer.status || '-';
 
         /** Sumber sama dengan admin /admin/billing/packages: SELECT * FROM packages + aturan PPN di packages.ejs */
         let pkg = null;

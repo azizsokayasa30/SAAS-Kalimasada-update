@@ -50,19 +50,23 @@ function isIpAddress(value) {
 }
 
 function getIsolirAccessConfig() {
-    let host = String(getSetting('server_host', '') || '').trim();
+    const globalServerHost = String(getSetting('server_host', '') || '').trim();
+    let host = globalServerHost;
     let port = String(getSetting('server_port', process.env.PORT || 4555));
     try {
         const url = new URL(getPublicAppBaseUrl());
-        host = url.hostname || host;
-        port = url.port || (url.protocol === 'https:' ? '443' : '80');
+        if (url.hostname) host = url.hostname;
+        if (url.port) port = url.port;
+        else if (url.protocol === 'https:') port = '443';
+        else if (url.protocol === 'http:') port = port || '80';
     } catch (_) {}
 
     const billingServerIp =
         String(process.env.ISOLIR_BILLING_SERVER_IP || '').trim() ||
         String(getSetting('isolir_billing_server_ip', '') || '').trim() ||
         String(getSetting('billing_server_ip', '') || '').trim() ||
-        (isIpAddress(host) ? host : '');
+        (isIpAddress(host) ? host : '') ||
+        (isIpAddress(globalServerHost) ? globalServerHost : '');
 
     return {
         billingServerIp,
@@ -143,6 +147,31 @@ async function ensureAddressListEntry(mikrotik, list, address, comment) {
  * Unused IP: redirect ke halaman isolir + walled garden (bukan hard-drop).
  * Migrasi: hapus rule lama "STATIC-POOL drop blocked".
  */
+const POOL_FILTER_COMMENTS = [
+    `${COMMENT_PREFIX} accept allowed`,
+    `${COMMENT_PREFIX} drop blocked`,
+    `${COMMENT_PREFIX} allow dns udp`,
+    `${COMMENT_PREFIX} allow dns tcp`,
+    `${COMMENT_PREFIX} allow billing`,
+    `${COMMENT_PREFIX} allow whatsapp`,
+    `${COMMENT_PREFIX} drop other`
+];
+
+const POOL_NAT_COMMENTS = [
+    `${COMMENT_PREFIX} bypass allowed dst`,
+    `${COMMENT_PREFIX} redirect http isolir`,
+    `${COMMENT_PREFIX} masquerade billing`
+];
+
+async function removePoolFirewall(mikrotik) {
+    for (const comment of POOL_FILTER_COMMENTS) {
+        await removeByComment(mikrotik, '/ip/firewall/filter', comment);
+    }
+    for (const comment of POOL_NAT_COMMENTS) {
+        await removeByComment(mikrotik, '/ip/firewall/nat', comment);
+    }
+}
+
 async function ensurePoolFirewall(mikrotik) {
     const access = getIsolirAccessConfig();
     const acceptComment = `${COMMENT_PREFIX} accept allowed`;
@@ -326,7 +355,7 @@ async function reconcileAddressList(mikrotik, listName, desiredAddresses, commen
     return { added, removed, desired: desired.size };
 }
 
-async function collectRouterPoolTargets(routerId, tenantId) {
+async function collectRouterPoolTargets(routerId, tenantId, { blockUnused = true } = {}) {
     const poolsOnRouter = (await listPools(tenantId)).filter(
         (p) => p.enabled && Number(p.router_id) === Number(routerId)
     );
@@ -335,10 +364,12 @@ async function collectRouterPoolTargets(routerId, tenantId) {
     const allowedSet = new Set();
 
     for (const p of poolsOnRouter) {
-        const blockAddr = mikrotikRangeAddress(p);
-        if (blockAddr && !seenBlock.has(blockAddr)) {
-            seenBlock.add(blockAddr);
-            blockAddresses.push(blockAddr);
+        if (blockUnused) {
+            const blockAddr = mikrotikRangeAddress(p);
+            if (blockAddr && !seenBlock.has(blockAddr)) {
+                seenBlock.add(blockAddr);
+                blockAddresses.push(blockAddr);
+            }
         }
         const used = await getUsedIpsForPool(p, tenantId);
         const reserved = new Set(parseReserved(p.reserved_ips));
@@ -353,7 +384,13 @@ async function collectRouterPoolTargets(routerId, tenantId) {
     return { poolsOnRouter, blockAddresses, allowedSet };
 }
 
-async function syncPoolToMikrotik(poolOrId, tenantId = getTenantId()) {
+function isBlockUnusedEnabled() {
+    const raw = getSetting('static_ip_block_unused', true);
+    if (raw === false || raw === 0 || raw === '0' || raw === 'false' || raw === 'off') return false;
+    return true;
+}
+
+async function syncPoolToMikrotik(poolOrId, tenantId = getTenantId(), options = {}) {
     const pool = typeof poolOrId === 'object' ? poolOrId : await getPoolById(poolOrId, tenantId);
     if (!pool) throw new Error('Pool tidak ditemukan');
     if (!pool.enabled) {
@@ -367,47 +404,61 @@ async function syncPoolToMikrotik(poolOrId, tenantId = getTenantId()) {
         );
     }
 
-    const { blockAddresses, allowedSet } = await collectRouterPoolTargets(pool.router_id, tenantId);
-    if (!blockAddresses.length) throw new Error('Tidak bisa menentukan address block range');
+    const blockUnused =
+        options.blockUnused !== undefined ? !!options.blockUnused : isBlockUnusedEnabled();
+    const { blockAddresses, allowedSet } = await collectRouterPoolTargets(pool.router_id, tenantId, {
+        blockUnused
+    });
+    if (blockUnused && !blockAddresses.length) {
+        throw new Error('Tidak bisa menentukan address block range');
+    }
 
     logger.info(
-        `[STATIC-POOL-SYNC] start pool=${pool.id} router=${router.id}(${router.nas_ip}:${router.port || 8728}) blocks=${blockAddresses.length} allowed=${allowedSet.size} mode=isolir-redirect`
+        `[STATIC-POOL-SYNC] start pool=${pool.id} router=${router.id}(${router.nas_ip}:${router.port || 8728}) blocks=${blockAddresses.length} allowed=${allowedSet.size} blockUnused=${blockUnused} mode=isolir-redirect`
     );
 
     const mikrotik = await getMikrotikConnectionForRouter(router);
-    await ensurePoolFirewall(mikrotik);
+
+    if (blockUnused) {
+        await ensurePoolFirewall(mikrotik);
+    } else {
+        // Matikan blokir unused: hapus rule filter/NAT STATIC-POOL + kosongkan address-list blocked
+        await removePoolFirewall(mikrotik);
+        logger.info(`[STATIC-POOL-SYNC] block unused OFF — firewall STATIC-POOL dihapus di router ${router.id}`);
+    }
 
     const blockResult = await reconcileAddressList(
         mikrotik,
         LIST_BLOCKED,
-        blockAddresses,
+        blockUnused ? blockAddresses : [],
         `${COMMENT_PREFIX} range`
     );
 
     const allowResult = await reconcileAddressList(
         mikrotik,
         LIST_ALLOWED,
-        [...allowedSet],
+        blockUnused ? [...allowedSet] : [],
         `${COMMENT_PREFIX} allowed`
     );
 
     logger.info(
-        `[STATIC-POOL-SYNC] ok pool=${pool.id} router=${router.id} blocked=[${blockAddresses.join(',')}] allowed=${allowedSet.size}`
+        `[STATIC-POOL-SYNC] ok pool=${pool.id} router=${router.id} blocked=[${blockAddresses.join(',')}] allowed=${allowedSet.size} blockUnused=${blockUnused}`
     );
 
     return {
         success: true,
         pool_id: pool.id,
-        mode: 'isolir-redirect',
+        mode: blockUnused ? 'isolir-redirect' : 'block-unused-off',
+        block_unused: blockUnused,
         blocked: blockResult,
         allowed: allowResult,
-        block_addresses: blockAddresses,
-        allowed_count: allowedSet.size,
+        block_addresses: blockUnused ? blockAddresses : [],
+        allowed_count: blockUnused ? allowedSet.size : 0,
         router: { id: router.id, name: router.name, nas_ip: router.nas_ip }
     };
 }
 
-async function syncPoolsForRouter(routerId, tenantId = getTenantId()) {
+async function syncPoolsForRouter(routerId, tenantId = getTenantId(), options = {}) {
     const router = await getRouterById(routerId, tenantId);
     if (!router) {
         return [{ success: false, error: `Router ${routerId} bukan milik tenant / tidak ditemukan` }];
@@ -415,13 +466,13 @@ async function syncPoolsForRouter(routerId, tenantId = getTenantId()) {
     const pools = (await listPools(tenantId)).filter((p) => Number(p.router_id) === Number(routerId));
     if (!pools.length) return [];
     try {
-        return [await syncPoolToMikrotik(pools[0], tenantId)];
+        return [await syncPoolToMikrotik(pools[0], tenantId, options)];
     } catch (e) {
         return [{ success: false, pool_id: pools[0].id, error: e.message }];
     }
 }
 
-async function syncAllPools(tenantId = getTenantId()) {
+async function syncAllPools(tenantId = getTenantId(), options = {}) {
     const pools = await listPools(tenantId);
     const byRouter = new Map();
     for (const p of pools) {
@@ -432,7 +483,7 @@ async function syncAllPools(tenantId = getTenantId()) {
     const results = [];
     for (const [, list] of byRouter) {
         try {
-            results.push(await syncPoolToMikrotik(list[0], tenantId));
+            results.push(await syncPoolToMikrotik(list[0], tenantId, options));
         } catch (e) {
             results.push({ success: false, error: e.message });
         }
@@ -440,11 +491,66 @@ async function syncAllPools(tenantId = getTenantId()) {
     return results;
 }
 
+/**
+ * Sync allow/block pool setelah perubahan pelanggan static IP (status, IP, hapus, dll).
+ */
+async function syncPoolAfterCustomerChange(customer, tenantId = null) {
+    try {
+        if (!customer) return null;
+        const isStatic =
+            customer.connection_type === 'static_ip' ||
+            ((customer.static_ip || customer.assigned_ip) &&
+                !String(customer.pppoe_username || '').trim());
+        if (!isStatic) return null;
+
+        const tid =
+            tenantId != null
+                ? tenantId
+                : customer.tenant_id != null
+                  ? customer.tenant_id
+                  : getTenantId();
+
+        let routerId = customer.router_id ? Number(customer.router_id) : null;
+        if (!routerId && customer.id) {
+            const db = new sqlite3.Database(path.join(__dirname, '../data/billing.db'));
+            try {
+                const map = await new Promise((resolve) => {
+                    db.get(
+                        `SELECT router_id FROM customer_router_map WHERE customer_id = ?`,
+                        [customer.id],
+                        (err, row) => resolve(err ? null : row || null)
+                    );
+                });
+                if (map && map.router_id) routerId = Number(map.router_id);
+            } finally {
+                db.close();
+            }
+        }
+        if (!routerId) {
+            const { findPoolForIp } = require('./staticIpPool');
+            const { getCustomerStaticIp } = require('./staticIPProvisioning');
+            const ip = getCustomerStaticIp(customer);
+            if (ip) {
+                const pool = await findPoolForIp(ip, null, tid);
+                if (pool) routerId = Number(pool.router_id);
+            }
+        }
+        if (!routerId) return null;
+        return await syncPoolsForRouter(routerId, tid);
+    } catch (e) {
+        logger.warn(`[STATIC-POOL-SYNC] syncPoolAfterCustomerChange: ${e.message}`);
+        return [{ success: false, error: e.message }];
+    }
+}
+
 module.exports = {
     LIST_BLOCKED,
     LIST_ALLOWED,
     ensurePoolFirewall,
+    removePoolFirewall,
+    isBlockUnusedEnabled,
     syncPoolToMikrotik,
     syncPoolsForRouter,
-    syncAllPools
+    syncAllPools,
+    syncPoolAfterCustomerChange
 };

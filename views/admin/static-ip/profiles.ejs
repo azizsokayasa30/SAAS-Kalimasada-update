@@ -44,10 +44,10 @@
             <div class="d-flex justify-content-between align-items-center border-bottom pb-2 mb-3">
                 <div>
                     <h1 class="h3 mb-0">Profil Bandwidth</h1>
-                    <div class="small text-muted">Sumber: paket billing · Sync = cek kesesuaian queue (tanpa ubah MikroTik)</div>
+                    <div class="small text-muted">Sumber: paket billing · Sync Queue = buat/update simple queue di MikroTik</div>
                 </div>
-                <button class="btn btn-outline-primary btn-sm" id="btnCheckAll" onclick="checkAll()">
-                    <i class="bi bi-search"></i> Sync semua (cek)
+                <button class="btn btn-outline-primary btn-sm" id="btnCheckAll" onclick="syncAll()">
+                    <i class="bi bi-arrow-repeat"></i> Sync Queue semua
                 </button>
             </div>
             <div class="table-responsive card p-2">
@@ -80,7 +80,7 @@
                             <td><%= p.static_users || 0 %></td>
                             <td class="text-nowrap">
                                 <button type="button" class="btn btn-sm btn-outline-secondary me-1" onclick="openEdit(this)">Edit</button>
-                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="checkOne(<%= p.id %>, this)">Sync</button>
+                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="syncOne(<%= p.id %>, this)">Sync ke Mirotik
                             </td>
                         </tr>
                     <% }) %>
@@ -107,12 +107,14 @@
         </div>
         <div class="row g-2 mb-2">
           <div class="col-6">
-            <label class="form-label">Download (max-limit)</label>
-            <input type="text" class="form-control" id="editDownload" placeholder="contoh: 50M" required>
+            <label class="form-label">Download</label>
+            <input type="text" class="form-control" id="editDownload" placeholder="50M (= 50 Mbps)" required>
+            <div class="form-text">Format: <code>50M</code> atau <code>50Mbps</code> (= 50 Mbps)</div>
           </div>
           <div class="col-6">
-            <label class="form-label">Upload (max-limit)</label>
-            <input type="text" class="form-control" id="editUpload" placeholder="contoh: 50M" required>
+            <label class="form-label">Upload</label>
+            <input type="text" class="form-control" id="editUpload" placeholder="10M (= 10 Mbps)" required>
+            <div class="form-text">Format: <code>10M</code> atau <code>10Mbps</code> (= 10 Mbps)</div>
           </div>
         </div>
         <div class="alert alert-warning py-2" id="editMinWarn" role="alert">
@@ -122,31 +124,31 @@
         <div class="row g-2 mb-2">
           <div class="col-6">
             <label class="form-label">Burst limit (Download)</label>
-            <input type="text" class="form-control" id="editBurstDownload" placeholder="contoh: 70M">
+            <input type="text" class="form-control" id="editBurstDownload" placeholder="70M (= 70 Mbps)">
           </div>
           <div class="col-6">
             <label class="form-label">Burst limit (Upload)</label>
-            <input type="text" class="form-control" id="editBurstUpload" placeholder="contoh: 70M">
+            <input type="text" class="form-control" id="editBurstUpload" placeholder="20M (= 20 Mbps)">
           </div>
         </div>
         <div class="row g-2 mb-2">
           <div class="col-6">
             <label class="form-label">Burst threshold (Download)</label>
-            <input type="text" class="form-control" id="editBurstThresholdDown" placeholder="contoh: 50M">
+            <input type="text" class="form-control" id="editBurstThresholdDown" placeholder="50M (= 50 Mbps)">
           </div>
           <div class="col-6">
             <label class="form-label">Burst threshold (Upload)</label>
-            <input type="text" class="form-control" id="editBurstThresholdUp" placeholder="contoh: 50M">
+            <input type="text" class="form-control" id="editBurstThresholdUp" placeholder="10M (= 10 Mbps)">
           </div>
         </div>
         <div class="row g-2">
           <div class="col-6">
             <label class="form-label">Burst time (Download)</label>
-            <input type="text" class="form-control" id="editBurstTimeDown" placeholder="contoh: 10">
+            <input type="text" class="form-control" id="editBurstTimeDown" placeholder="10 (= 10 detik)">
           </div>
           <div class="col-6">
             <label class="form-label">Burst time (Upload)</label>
-            <input type="text" class="form-control" id="editBurstTimeUp" placeholder="contoh: 10">
+            <input type="text" class="form-control" id="editBurstTimeUp" placeholder="10 (= 10 detik)">
           </div>
         </div>
       </div>
@@ -158,12 +160,12 @@
   </div>
 </div>
 
-<!-- Check result modal -->
+<!-- Sync result modal -->
 <div class="modal fade" id="checkModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title">Hasil cek queue</h5>
+        <h5 class="modal-title">Hasil Sync Queue</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -174,7 +176,8 @@
               <tr>
                 <th>Pelanggan</th>
                 <th>IP</th>
-                <th>Masalah</th>
+                <th>Aksi</th>
+                <th>Keterangan</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -337,69 +340,76 @@ document.getElementById('editForm').addEventListener('submit', async (e) => {
   }
 });
 
-function showCheckResult(data){
+function showSyncResult(data){
   const sum = document.getElementById('checkSummary');
   const tbody = document.querySelector('#checkTable tbody');
   tbody.innerHTML = '';
-  const checked = data.checked || 0;
-  const ok = data.ok || 0;
-  const mismatch = data.mismatch || 0;
+  const total = data.total || 0;
+  const synced = data.synced || 0;
+  const skipped = data.skipped || 0;
+  const failed = data.failed || 0;
   sum.innerHTML =
     '<div class="d-flex flex-wrap gap-2">'+
-      '<span class="badge text-bg-secondary">Dicek: '+checked+'</span>'+
-      '<span class="badge text-bg-success">Sesuai: '+ok+'</span>'+
-      '<span class="badge text-bg-'+(mismatch ? 'danger' : 'success')+'">Tidak sesuai: '+mismatch+'</span>'+
+      '<span class="badge text-bg-secondary">Total: '+total+'</span>'+
+      '<span class="badge text-bg-success">Synced: '+synced+'</span>'+
+      '<span class="badge text-bg-warning">Dilewati: '+skipped+'</span>'+
+      '<span class="badge text-bg-'+(failed ? 'danger' : 'success')+'">Gagal: '+failed+'</span>'+
     '</div>'+
-    '<div class="small text-muted mt-2">Hanya cek — tidak mengubah queue di MikroTik.</div>';
+    '<div class="small text-muted mt-2">Queue simple di MikroTik dibuat/diupdate sesuai paket billing.</div>';
 
-  const rows = data.mismatches || [];
+  const rows = data.results || [];
   if(!rows.length){
-    tbody.innerHTML = '<tr><td colspan="3" class="text-muted">Semua queue sesuai rule billing.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" class="text-muted">Tidak ada user static IP untuk paket ini.</td></tr>';
   } else {
     rows.forEach(r => {
       const tr = document.createElement('tr');
       tr.innerHTML =
         '<td>'+escapeHtml(r.customer_name||('- #'+r.customer_id))+'</td>'+
         '<td><code>'+escapeHtml(r.ip||'-')+'</code></td>'+
-        '<td>'+escapeHtml(r.message|| (r.issues||[]).join(', '))+'</td>';
+        '<td><code>'+escapeHtml(r.action||'-')+'</code></td>'+
+        '<td>'+escapeHtml(r.message||'')+'</td>';
       tbody.appendChild(tr);
     });
   }
   new bootstrap.Modal(document.getElementById('checkModal')).show();
 }
 
-async function checkOne(id, btn){
+async function syncOne(id, btn){
   const old = btn.textContent;
-  btn.disabled = true; btn.textContent = 'Cek...';
+  btn.disabled = true; btn.textContent = 'Sync...';
   try {
     const res = await fetch('/admin/static-ip/profiles/'+id+'/sync', { method: 'POST' });
     const data = await res.json();
     if(!data.success){
-      showToast('error', data.message || 'Gagal cek');
+      showToast('error', data.message || 'Gagal sync queue');
       return;
     }
-    showCheckResult(data);
+    const detail = 'OK '+ (data.synced||0) + ' · dilewati ' + (data.skipped||0) + ' · gagal ' + (data.failed||0);
+    showToast(data.failed ? 'warning' : 'success', 'Sync Queue selesai', detail);
+    showSyncResult(data);
   } catch (err) {
-    showToast('error', 'Gagal cek', err.message || String(err));
+    showToast('error', 'Gagal sync queue', err.message || String(err));
   } finally {
     btn.disabled = false; btn.textContent = old;
   }
 }
 
-async function checkAll(){
+async function syncAll(){
   const btn = document.getElementById('btnCheckAll');
   const old = btn.innerHTML;
-  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Cek...';
+  btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Sync...';
   try {
     const res = await fetch('/admin/static-ip/profiles/sync-all', { method: 'POST' });
     const data = await res.json();
     if(!data.success){
-      showToast('error', data.message || 'Gagal cek');
+      showToast('error', data.message || 'Gagal sync queue');
       return;
     }
-    showCheckResult(data);
+    const detail = 'OK '+ (data.synced||0) + ' · dilewati ' + (data.skipped||0) + ' · gagal ' + (data.failed||0);
+    showToast(data.failed ? 'warning' : 'success', 'Sync Queue semua selesai', detail);
+    showSyncResult(data);
   } catch (err) {
-    showToast('error', 'Gagal cek', err.message || String(err));
+    showToast('error', 'Gagal sync queue', err.message || String(err));
   } finally {
     btn.disabled = false; btn.innerHTML = old;
   }

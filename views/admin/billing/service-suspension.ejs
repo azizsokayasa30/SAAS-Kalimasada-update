@@ -236,10 +236,13 @@
 
                 <h6 class="section-title"><i class="bi bi-gear me-1"></i> Pengaturan Sistem</h6>
                 <div class="row g-3 mb-4">
-                    <div class="col-lg-6">
+                    <div class="col-lg-4">
                         <div class="card h-100 border-primary">
-                            <div class="card-header bg-primary text-white py-2">
+                            <div class="card-header bg-primary text-white py-2 d-flex justify-content-between align-items-center gap-2">
                                 <strong><i class="bi bi-power me-2"></i>Status Auto Isolir</strong>
+                                <button type="button" class="btn btn-sm btn-success" id="saveAutoSuspensionBtn" style="background-color:#198754;border-color:#157347;color:#fff;">
+                                    <i class="bi bi-floppy-fill me-1"></i>Simpan
+                                </button>
                             </div>
                             <div class="card-body d-flex flex-column justify-content-center text-center py-4">
                                 <% const autoSuspensionEnabled = appSettings.auto_suspension_enabled === true || appSettings.auto_suspension_enabled === 'true'; %>
@@ -253,27 +256,27 @@
                                         <%= autoSuspensionEnabled ? 'AKTIF (ON)' : 'NON-AKTIF (OFF)' %>
                                     </span>
                                 </h4>
-                                <p class="text-muted small mb-0">Isolir otomatis pukul <strong>10:00</strong> (cek harian), restore pukul <strong>11:00</strong>. Tanggal isolir per pelanggan diatur per wilayah di bawah.</a>.</p>
+                                <p class="text-muted small mb-0">Isolir otomatis pukul <strong>10:00</strong> (cek harian), restore pukul <strong>11:00</strong>. Tanggal isolir per pelanggan diatur per wilayah di bawah. Klik <strong>Simpan</strong> untuk menerapkan status ON/OFF.</p>
                             </div>
                         </div>
                     </div>
 
-                    <div class="col-lg-6">
+                    <div class="col-lg-4">
                         <div class="card h-100">
-                            <div class="card-header d-flex justify-content-between align-items-center py-2">
+                            <div class="card-header d-flex justify-content-between align-items-center py-2 gap-2 flex-wrap">
                                 <% if (typeof authMode !== 'undefined' && authMode === 'radius') { %>
-                                    <strong><i class="bi bi-router me-1"></i> Profile Isolir (RADIUS)</strong>
+                                    <strong><i class="bi bi-router me-1"></i> Isolir PPPoE (RADIUS)</strong>
                                 <% } else { %>
-                                    <strong><i class="bi bi-router me-1"></i> Profile Isolir (Mikrotik)</strong>
+                                    <strong><i class="bi bi-router me-1"></i> Isolir PPPoE (Mikrotik)</strong>
                                 <% } %>
-                                <div>
+                                <div class="d-flex gap-1 flex-wrap">
                                     <% if (typeof authMode !== 'undefined' && authMode !== 'radius') { %>
-                                        <button class="btn btn-sm btn-outline-secondary me-1" id="reloadIsolirProfilesBtn" title="Reload Profile">
+                                        <button class="btn btn-sm btn-outline-secondary" id="reloadIsolirProfilesBtn" title="Reload Profile">
                                             <i class="bi bi-arrow-clockwise"></i>
                                         </button>
                                     <% } %>
-                                    <button class="btn btn-sm btn-primary" id="saveIsolirProfileBtn">
-                                        <i class="bi bi-floppy-fill me-1"></i>Simpan
+                                    <button type="button" class="btn btn-sm btn-success" id="btnSyncPppoeIsolir" style="background-color:#198754;border-color:#157347;color:#fff;">
+                                        <i class="bi bi-arrow-repeat me-1"></i>Sync ke Mikrotik
                                     </button>
                                 </div>
                             </div>
@@ -282,14 +285,42 @@
                                 <% if (typeof authMode !== 'undefined' && authMode === 'radius') { %>
                                     <input type="text" id="isolirProfileSelect" class="form-control" value="isolir" readonly>
                                     <small class="text-muted d-block mt-2">
-                                        <i class="bi bi-info-circle"></i> Mode RADIUS memakai groupname <strong>isolir</strong> di <code>radusergroup</code>.
+                                        <i class="bi bi-info-circle"></i> Mode RADIUS: group <strong>isolir</strong> + <code>Framed-Pool</code> (<code>isolir-pool</code>).
                                     </small>
                                 <% } else { %>
                                     <select id="isolirProfileSelect" class="form-select">
                                         <option value="default">Loading...</option>
                                     </select>
-                                    <small class="text-muted d-block mt-2">Profil dipakai saat suspend otomatis / manual.</small>
+                                    <small class="text-muted d-block mt-2">Profil PPP dipakai saat suspend otomatis / manual.</small>
                                 <% } %>
+                                <small class="text-muted d-block mt-2">
+                                    <strong>Sync ke Mikrotik</strong> memasang pool isolir, firewall &amp; NAT redirect halaman isolir di semua router tenant.
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-lg-4">
+                        <div class="card h-100 border-warning">
+                            <div class="card-header bg-warning text-dark py-2 d-flex justify-content-between align-items-center">
+                                <strong><i class="bi bi-hdd-network me-1"></i> Isolir Static IP</strong>
+                                <button type="button" class="btn btn-sm btn-success" id="btnSyncStaticIpIsolir" style="background-color:#198754;border-color:#157347;color:#fff;">
+                                    <i class="bi bi-arrow-repeat me-1"></i>Sync ke Mikrotik
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <div class="mb-2">
+                                    <div class="small text-muted">Metode</div>
+                                    <div><code>address-list</code> <strong>isolir_customer</strong></div>
+                                </div>
+                                <div class="mb-2">
+                                    <div class="small text-muted">Redirect</div>
+                                    <div class="small">HTTP → halaman isolir (walled garden + WhatsApp)</div>
+                                </div>
+                                <small class="text-muted d-block mt-3">
+                                    Tombol sync memasang/memperbarui rule firewall &amp; NAT redirect di semua router tenant.
+                                    IP billing &amp; port isolir mengikuti pengaturan portal management.
+                                </small>
                             </div>
                         </div>
                     </div>
@@ -1093,56 +1124,13 @@
                 .catch(() => {});
         }
 
-        // Save isolir profile
-        $('#saveIsolirProfileBtn').click(function(){
-            const sel = document.getElementById('isolirProfileSelect');
-            if (!sel) return;
-            
-            <% if (typeof authMode !== 'undefined' && authMode === 'radius') { %>
-                // In RADIUS mode, isolir is always 'isolir' (groupname)
-                showToast('info', 'Info', 'Di mode RADIUS, isolir selalu menggunakan groupname "isolir" di tabel radusergroup');
-                return;
-            <% } %>
-            
-            const value = sel.value || 'isolir';
-            const btn = $(this);
-            btn.prop('disabled', true).html('<i class="bi bi-circle bx-spin me-1"></i>Menyimpan...');
-            fetch('/admin/billing/service-suspension/isolir-profile', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-                body: new URLSearchParams({ isolir_profile: value }).toString()
-            }).then(r => r.json()).then(data => {
-                if (data && data.success) {
-                    showToast('success', 'Tersimpan', `Isolir profile diset ke: ${value}`);
-                    // Update tampilan setelah save berhasil
-                    setTimeout(() => {
-                        const sel = document.getElementById('isolirProfileSelect');
-                        if (sel) {
-                            for (let i = 0; i < sel.options.length; i++) {
-                                const option = sel.options[i];
-                                if (option.value === value) {
-                                    option.textContent = value + ' (Aktif)';
-                                    option.selected = true;
-                                } else if (option.textContent.includes(' (Aktif)')) {
-                                    option.textContent = option.value;
-                                }
-                            }
-                        }
-                    }, 100);
-                } else {
-                    showToast('error', 'Gagal', data.message || 'Gagal menyimpan');
-                }
-            }).catch(err => {
-                showToast('error', 'Gagal', 'Gagal menyimpan');
-            }).finally(() => {
-                btn.prop('disabled', false).html('<i class="bi bi-floppy-fill me-1"></i>Simpan');
-            });
-        });
-
-        // Autosave saat pilihan profil berubah
+        // Autosave saat pilihan profil PPP berubah (mode Mikrotik saja)
         let isolirSelectReady = false;
         $(document).on('change', '#isolirProfileSelect', function(){
             if (!isolirSelectReady) return; // hindari trigger saat inisialisasi
+            <% if (typeof authMode !== 'undefined' && authMode === 'radius') { %>
+                return;
+            <% } %>
             const value = this.value || 'isolir';
             fetch('/admin/billing/service-suspension/isolir-profile', {
                 method: 'POST',
@@ -1151,7 +1139,6 @@
             }).then(r => r.json()).then(data => {
                 if (data && data.success) {
                     showToast('success', 'Tersimpan', `Isolir profile diset ke: ${value}`);
-                    // Update tampilan setelah autosave berhasil
                     setTimeout(() => {
                         const sel = document.getElementById('isolirProfileSelect');
                         if (sel) {
@@ -1206,14 +1193,24 @@
             <% } %>
         });
 
-        // Toggle Auto Suspension
+        // Toggle hanya update badge; status tersimpan lewat tombol Simpan
         $('#toggleAutoSuspension').change(function() {
             const isEnabled = $(this).is(':checked');
             const badge = $('#autoSuspensionBadge');
-            
-            // Temporary loading state
+            badge
+                .removeClass('bg-success bg-danger bg-secondary')
+                .addClass(isEnabled ? 'bg-success' : 'bg-danger')
+                .text(isEnabled ? 'AKTIF (ON)' : 'NON-AKTIF (OFF)');
+        });
+
+        $('#saveAutoSuspensionBtn').click(function() {
+            const isEnabled = $('#toggleAutoSuspension').is(':checked');
+            const badge = $('#autoSuspensionBadge');
+            const btn = $(this);
+            const original = btn.html();
+            btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm me-1"></span>Menyimpan...');
             badge.removeClass('bg-success bg-danger').addClass('bg-secondary').text('Saving...');
-            $(this).prop('disabled', true);
+            $('#toggleAutoSuspension').prop('disabled', true);
 
             fetch('/admin/billing/service-suspension/toggle-feature', {
                 method: 'POST',
@@ -1224,22 +1221,89 @@
             .then(data => {
                 if (data && data.success) {
                     showToast('success', 'Berhasil', 'Fitur Auto Isolir ' + (isEnabled ? 'Diaktifkan' : 'Dimatikan'));
-                    badge.removeClass('bg-secondary').addClass(isEnabled ? 'bg-success' : 'bg-danger').text(isEnabled ? 'ON' : 'OFF');
+                    badge.removeClass('bg-secondary').addClass(isEnabled ? 'bg-success' : 'bg-danger').text(isEnabled ? 'AKTIF (ON)' : 'NON-AKTIF (OFF)');
                 } else {
                     showToast('error', 'Gagal', data.message || 'Gagal mengubah pengaturan');
-                    // Revert UI
-                    $(this).prop('checked', !isEnabled);
-                    badge.removeClass('bg-secondary').addClass(!isEnabled ? 'bg-success' : 'bg-danger').text(!isEnabled ? 'ON' : 'OFF');
+                    badge.removeClass('bg-secondary').addClass(isEnabled ? 'bg-success' : 'bg-danger').text(isEnabled ? 'AKTIF (ON)' : 'NON-AKTIF (OFF)');
                 }
             })
             .catch(err => {
                 showToast('error', 'Gagal', 'Terjadi kesalahan koneksi');
-                // Revert UI
-                $(this).prop('checked', !isEnabled);
-                badge.removeClass('bg-secondary').addClass(!isEnabled ? 'bg-success' : 'bg-danger').text(!isEnabled ? 'ON' : 'OFF');
+                badge.removeClass('bg-secondary').addClass(isEnabled ? 'bg-success' : 'bg-danger').text(isEnabled ? 'AKTIF (ON)' : 'NON-AKTIF (OFF)');
             })
             .finally(() => {
-                $(this).prop('disabled', false);
+                btn.prop('disabled', false).html(original);
+                $('#toggleAutoSuspension').prop('disabled', false);
+            });
+        });
+
+        $('#btnSyncStaticIpIsolir').click(function() {
+            const btn = $(this);
+            const original = btn.html();
+            btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm me-1"></span>Syncing...');
+            showToast('info', 'Sync', 'Menyinkronkan firewall isolir static IP ke MikroTik...');
+            fetch('/admin/billing/service-suspension/static-ip-isolir/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}'
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data && data.success) {
+                    const n = (data.results || []).filter(x => x.success).length;
+                    const natInfo = (data.results || []).map(r => {
+                        if (!r.success) return null;
+                        const nat = r.nat || {};
+                        if (nat.skipped) return (r.router_name || '') + ': NAT dilewati (IP billing kosong)';
+                        return (r.router_name || '') + ': NAT +' + (nat.added || 0) + ' / ada ' + (nat.exists || 0);
+                    }).filter(Boolean).join('; ');
+                    showToast('success', 'Sync berhasil', natInfo || data.message || (n + ' router tersinkron'));
+                } else {
+                    const fails = (data && data.results || []).filter(x => !x.success);
+                    const detail = fails.map(f => (f.router_name || f.router_id || 'router') + ': ' + (f.error || 'gagal')).join('; ');
+                    showToast('warning', 'Sync sebagian/gagal', detail || (data && data.message) || 'Gagal sync');
+                }
+            })
+            .catch(err => {
+                showToast('error', 'Gagal', err.message || 'Koneksi gagal');
+            })
+            .finally(() => {
+                btn.prop('disabled', false).html(original);
+            });
+        });
+
+        $('#btnSyncPppoeIsolir').click(function() {
+            const btn = $(this);
+            const original = btn.html();
+            btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm me-1"></span>Syncing...');
+            showToast('info', 'Sync', 'Menyinkronkan firewall isolir PPPoE/RADIUS ke MikroTik...');
+            fetch('/admin/billing/service-suspension/pppoe-isolir/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}'
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data && data.success) {
+                    const n = (data.results || []).filter(x => x.success).length;
+                    const natInfo = (data.results || []).map(r => {
+                        if (!r.success) return null;
+                        const nat = r.nat || {};
+                        if (nat.skipped) return (r.router_name || '') + ': NAT dilewati (IP billing kosong)';
+                        return (r.router_name || '') + ': pool ' + (r.isolir_pool || 'isolir-pool') + ', NAT +' + (nat.added || 0);
+                    }).filter(Boolean).join('; ');
+                    showToast('success', 'Sync berhasil', natInfo || data.message || (n + ' router tersinkron'));
+                } else {
+                    const fails = (data && data.results || []).filter(x => !x.success);
+                    const detail = fails.map(f => (f.router_name || f.router_id || 'router') + ': ' + (f.error || 'gagal')).join('; ');
+                    showToast('warning', 'Sync sebagian/gagal', detail || (data && data.message) || 'Gagal sync');
+                }
+            })
+            .catch(err => {
+                showToast('error', 'Gagal', err.message || 'Koneksi gagal');
+            })
+            .finally(() => {
+                btn.prop('disabled', false).html(original);
             });
         });
 

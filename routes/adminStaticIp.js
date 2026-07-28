@@ -8,7 +8,7 @@ const sqlite3 = require('sqlite3').verbose();
 const ExcelJS = require('exceljs');
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage() });
-const { getSettingsWithCache } = require('../config/settingsManager');
+const { getSettingsWithCache, setSetting } = require('../config/settingsManager');
 const { getTenantId } = require('../config/platform/tenantContext');
 const billingManager = require('../config/billing');
 const {
@@ -22,16 +22,21 @@ const {
     assertIpAvailable,
     ipInPoolRange,
 } = require('../config/staticIpPool');
-const { syncPoolToMikrotik, syncAllPools, syncPoolsForRouter } = require('../config/staticIpPoolSync');
+const {
+    syncPoolToMikrotik,
+    syncAllPools,
+    syncPoolsForRouter,
+    isBlockUnusedEnabled
+} = require('../config/staticIpPoolSync');
 const {
     provisionStaticIPQueue,
     removeStaticIPQueue,
     getCustomerStaticIp,
     sanitizeIp,
     ensureStaticIpAutomation,
-    checkStaticIpQueuesForCustomers,
     validateMinPackageMbps,
-    resolvePackageRateLimit
+    resolvePackageRateLimit,
+    translateMikrotikQueueError
 } = require('../config/staticIPProvisioning');
 const { getStaticIpOnlineSetForRouter } = require('../config/mikrotik');
 const serviceSuspension = require('../config/serviceSuspension');
@@ -266,43 +271,65 @@ router.get('/ip-config', async (req, res) => {
         const tenantId = getTenantId();
         const pools = await listPools(tenantId);
         const routers = await listRouters(tenantId);
-        const poolId = parseInt(req.query.pool_id, 10);
+        const blockUnused = isBlockUnusedEnabled();
 
         const poolStats = [];
+        const allUsed = [];
+        const allUnused = [];
+        const allIsolir = [];
         let globalTotal = 0;
         let globalUsed = 0;
         let globalUnused = 0;
+        let globalIsolir = 0;
         let globalReserved = 0;
 
+        const sortByIp = (a, b) => {
+            const pa = String(a.ip || '')
+                .split('.')
+                .map((n) => parseInt(n, 10) || 0);
+            const pb = String(b.ip || '')
+                .split('.')
+                .map((n) => parseInt(n, 10) || 0);
+            for (let i = 0; i < 4; i++) {
+                const d = (pa[i] || 0) - (pb[i] || 0);
+                if (d) return d;
+            }
+            return String(a.pool_name || '').localeCompare(String(b.pool_name || ''), 'id');
+        };
+
         for (const p of pools) {
-            const analysis = await analyzePool(p, tenantId);
+            const analysis = await analyzePool(p, tenantId, { blockUnused });
+            const isolirCount = (analysis.isolir || []).length;
+            const poolLabel = p.name || p.network_cidr || `Pool #${p.id}`;
             poolStats.push({
                 ...p,
                 stats: {
                     total: analysis.total,
                     used: analysis.used.length,
                     unused: analysis.unused.length,
+                    isolir: isolirCount,
                     reserved: (analysis.reserved || []).length
-                },
-                analysis
+                }
             });
+            for (const u of analysis.used || []) {
+                allUsed.push({ ...u, pool_id: p.id, pool_name: poolLabel });
+            }
+            for (const u of analysis.unused || []) {
+                allUnused.push({ ...u, pool_id: p.id, pool_name: poolLabel });
+            }
+            for (const u of analysis.isolir || []) {
+                allIsolir.push({ ...u, pool_id: p.id, pool_name: poolLabel });
+            }
             globalTotal += analysis.total;
             globalUsed += analysis.used.length;
             globalUnused += analysis.unused.length;
+            globalIsolir += isolirCount;
             globalReserved += (analysis.reserved || []).length;
         }
 
-        let selected = null;
-        let analysis = null;
-        if (poolId) {
-            selected = poolStats.find((p) => Number(p.id) === poolId) || null;
-        }
-        if (!selected && poolStats.length) {
-            selected = poolStats[0];
-        }
-        if (selected) {
-            analysis = selected.analysis;
-        }
+        allUsed.sort(sortByIp);
+        allUnused.sort(sortByIp);
+        allIsolir.sort(sortByIp);
 
         res.render('admin/static-ip/ip-config', {
             title: 'Konfigurasi IP',
@@ -310,12 +337,17 @@ router.get('/ip-config', async (req, res) => {
             settings,
             pools: poolStats,
             routers,
-            selected,
-            analysis,
+            blockUnused,
+            allIps: {
+                used: allUsed,
+                unused: allUnused,
+                isolir: allIsolir
+            },
             globalStats: {
                 total: globalTotal,
                 used: globalUsed,
                 unused: globalUnused,
+                isolir: globalIsolir,
                 reserved: globalReserved,
                 pools: pools.length
             }
@@ -323,6 +355,55 @@ router.get('/ip-config', async (req, res) => {
     } catch (error) {
         logger.error('[STATIC-IP] ip-config page:', error);
         res.status(500).send('Gagal memuat Konfigurasi IP');
+    }
+});
+
+router.post('/block-unused', async (req, res) => {
+    try {
+        const enabled = !(
+            req.body.enabled === false ||
+            req.body.enabled === 0 ||
+            req.body.enabled === '0' ||
+            req.body.enabled === 'false' ||
+            req.body.enabled === 'off'
+        );
+        const ok = setSetting('static_ip_block_unused', enabled);
+        if (!ok) {
+            return res.status(500).json({ success: false, message: 'Gagal menyimpan pengaturan' });
+        }
+        const tenantId = getTenantId();
+        let syncResults = [];
+        try {
+            // Pass enabled eksplisit agar sync tidak bergantung cache settings
+            syncResults = await syncAllPools(tenantId, { blockUnused: enabled });
+        } catch (e) {
+            logger.warn(`[STATIC-IP] sync after block-unused toggle: ${e.message}`);
+            return res.json({
+                success: true,
+                enabled,
+                sync: { success: false, message: e.message },
+                message: enabled
+                    ? 'Blokir IP unused diaktifkan, sync gagal'
+                    : 'Blokir IP unused dimatikan, sync gagal'
+            });
+        }
+        const failed = (syncResults || []).filter((r) => r && r.success === false);
+        res.json({
+            success: true,
+            enabled,
+            sync: {
+                success: failed.length === 0,
+                results: syncResults,
+                message: failed.length
+                    ? `${failed.length} router gagal sync`
+                    : 'Sinkron ke MikroTik berhasil'
+            },
+            message: enabled
+                ? 'Blokir IP tidak dipakai aktif'
+                : 'Blokir IP tidak dipakai nonaktif'
+        });
+    } catch (error) {
+        res.status(400).json({ success: false, message: error.message });
     }
 });
 
@@ -491,7 +572,86 @@ router.post('/users/:id/restore', async (req, res) => {
     }
 });
 
-// ——— Profiles: cek queue (read-only) + edit bandwidth ———
+// ——— Profiles: sync queue ke MikroTik + edit bandwidth ———
+
+function isSuspendedStatus(status) {
+    const s = String(status || '').toLowerCase().trim();
+    return s === 'suspended' || s === 'isolir' || s === 'inactive';
+}
+
+async function syncQueuesForCustomers(customers, getPkgFn, { tenantId = null } = {}) {
+    const results = [];
+    let synced = 0;
+    let skipped = 0;
+    let failed = 0;
+
+    for (const customer of customers) {
+        const row = {
+            customer_id: customer.id,
+            customer_name: customer.customer_name || customer.name || null,
+            ip: getCustomerStaticIp(customer),
+            status: customer.status || null,
+            ok: false,
+            action: null,
+            message: ''
+        };
+
+        try {
+            if (isSuspendedStatus(customer.status)) {
+                row.action = 'skipped_suspended';
+                row.message = 'Dilewati (status isolir/suspended)';
+                skipped += 1;
+                results.push(row);
+                continue;
+            }
+
+            const pkg = await getPkgFn(customer);
+            if (!pkg) {
+                row.action = 'skipped';
+                row.message = 'Paket tidak ditemukan';
+                skipped += 1;
+                results.push(row);
+                continue;
+            }
+
+            customer.tenant_id = tenantId != null ? tenantId : customer.tenant_id;
+            const auto = await ensureStaticIpAutomation(customer, pkg, {
+                tenantId,
+                routerId: customer.router_id || null,
+                skipPoolSync: true
+            });
+            const provision = auto && auto.provision;
+            row.ok = !!(auto && auto.success);
+            row.action = (provision && provision.action) || (row.ok ? 'synced' : 'failed');
+            const rawMsg =
+                (provision && provision.message) ||
+                (auto && auto.message) ||
+                (row.ok ? 'OK' : 'Gagal sync queue');
+            row.message = row.ok ? rawMsg : translateMikrotikQueueError(rawMsg);
+            row.queue = provision && provision.queue ? provision.queue : null;
+            row.max_limit = provision && provision.maxLimit ? provision.maxLimit : null;
+
+            if (row.ok) synced += 1;
+            else failed += 1;
+        } catch (e) {
+            row.action = 'failed';
+            row.message = translateMikrotikQueueError(e.message || String(e));
+            failed += 1;
+        }
+        results.push(row);
+    }
+
+    return {
+        success: true,
+        mode: 'sync',
+        total: results.length,
+        synced,
+        skipped,
+        failed,
+        results,
+        failures: results.filter((r) => !r.ok && r.action !== 'skipped' && r.action !== 'skipped_suspended')
+    };
+}
 
 router.post('/profiles/:packageId/sync', async (req, res) => {
     try {
@@ -503,18 +663,12 @@ router.post('/profiles/:packageId/sync', async (req, res) => {
             (c) => Number(c.package_id) === packageId
         );
         for (const c of customers) c.tenant_id = tenantId;
-        const report = await checkStaticIpQueuesForCustomers(
-            customers,
-            async () => pkg,
-            { tenantId }
-        );
+        const report = await syncQueuesForCustomers(customers, async () => pkg, { tenantId });
         res.json({
-            success: true,
-            mode: 'check',
+            ...report,
             package_id: packageId,
             package_name: pkg.name,
-            expected_limit: resolvePackageRateLimit(pkg),
-            ...report
+            expected_limit: resolvePackageRateLimit(pkg)
         });
     } catch (error) {
         res.status(400).json({ success: false, message: error.message });
@@ -527,7 +681,7 @@ router.post('/profiles/sync-all', async (req, res) => {
         const customers = await listStaticIpCustomers(tenantId);
         for (const c of customers) c.tenant_id = tenantId;
         const pkgCache = new Map();
-        const report = await checkStaticIpQueuesForCustomers(
+        const report = await syncQueuesForCustomers(
             customers.filter((c) => c.package_id),
             async (c) => {
                 const id = Number(c.package_id);
@@ -543,7 +697,7 @@ router.post('/profiles/sync-all', async (req, res) => {
             },
             { tenantId }
         );
-        res.json({ success: true, mode: 'check', ...report });
+        res.json(report);
     } catch (error) {
         res.status(400).json({ success: false, message: error.message });
     }

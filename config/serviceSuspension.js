@@ -4,6 +4,7 @@ const { getMikrotikConnectionForCustomer, suspendUserRadius, unsuspendUserRadius
 const { classifySuspendReason, isSuspendedStatus, shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
 const { findDeviceByPhoneNumber, findDeviceByPPPoE, setParameterValues } = require('./genieacs');
 const { getSetting } = require('./settingsManager');
+const { getTenantSetting } = require('./platform/tenantSettings');
 const staticIPSuspension = require('./staticIPSuspension');
 const { getRadiusConfigValue } = require('./radiusConfig');
 
@@ -15,7 +16,7 @@ async function getUserAuthMode() {
     } catch (e) {
         // Fallback ke settings.json
     }
-    return getSetting('user_auth_mode', 'radius');
+    return getTenantSetting('user_auth_mode', getSetting('user_auth_mode', 'radius'));
 }
 
 /** Jeda singkat setelah disconnect agar NAS sempat membersihkan sesi (dulu 1s — terlalu memperlambat admin). */
@@ -33,9 +34,17 @@ function withTimeout(promise, ms, label = 'operation') {
     ]);
 }
 
+function isAutoSuspensionEnabledFlag() {
+    const raw = getTenantSetting('auto_suspension_enabled', getSetting('auto_suspension_enabled', true));
+    return raw === true || raw === 'true' || raw === 1 || raw === '1';
+}
+
 /** Tanggal isolir otomatis global setiap bulan (1–28), default 25. */
 function getAutoSuspensionDay() {
-    const raw = parseInt(getSetting('auto_suspension_day', '25'), 10);
+    const raw = parseInt(
+        getTenantSetting('auto_suspension_day', getSetting('auto_suspension_day', '25')),
+        10
+    );
     if (!Number.isFinite(raw)) return 25;
     return Math.min(Math.max(raw, 1), 28);
 }
@@ -87,8 +96,17 @@ async function findRouterForPppDisconnect(customer, pppUser) {
     const sqlite3 = require('sqlite3').verbose();
     const dbPath = require('path').join(__dirname, '../data/billing.db');
     const db = new sqlite3.Database(dbPath);
+    let tenantFilterSql = '';
+    const tenantParams = [];
+    try {
+        const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
+        if (hasTenantContext()) {
+            tenantFilterSql = ' WHERE tenant_id = ?';
+            tenantParams.push(getTenantId());
+        }
+    } catch (_) {}
     const routers = await new Promise((resolve) =>
-        db.all('SELECT * FROM routers ORDER BY id', (err, rows) => {
+        db.all(`SELECT * FROM routers${tenantFilterSql} ORDER BY id`, tenantParams, (err, rows) => {
             db.close();
             resolve(rows || []);
         })
@@ -128,7 +146,27 @@ async function findRouterForPppDisconnect(customer, pppUser) {
 
 class ServiceSuspensionManager {
     constructor() {
-        this.isRunning = false;
+        /** @type {Set<string>} lock per tenant agar job tenant A tidak skip job tenant B */
+        this.runningKeys = new Set();
+    }
+
+    _runKey() {
+        try {
+            const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
+            if (hasTenantContext()) return `t:${getTenantId()}`;
+        } catch (_) {}
+        return 'global';
+    }
+
+    _tryAcquireRun() {
+        const key = this._runKey();
+        if (this.runningKeys.has(key)) return null;
+        this.runningKeys.add(key);
+        return key;
+    }
+
+    _releaseRun(key) {
+        if (key) this.runningKeys.delete(key);
     }
 
     /**
@@ -139,7 +177,7 @@ class ServiceSuspensionManager {
         try {
             const mikrotik = await getMikrotikConnectionForCustomer(customer);
             
-            const selectedProfile = getSetting('isolir_profile', 'isolir');
+            const selectedProfile = getTenantSetting('isolir_profile', getSetting('isolir_profile', 'isolir'));
             // Cek apakah profile isolir sudah ada
             const profiles = await mikrotik.write('/ppp/profile/print', [
                 `?name=${selectedProfile}`
@@ -231,7 +269,7 @@ class ServiceSuspensionManager {
                         const mikrotik = await getMikrotikConnectionForCustomer(customer);
                         
                         // Tentukan profile isolir dari setting
-                        const selectedProfile = getSetting('isolir_profile', 'isolir');
+                        const selectedProfile = getTenantSetting('isolir_profile', getSetting('isolir_profile', 'isolir'));
                         // Pastikan profile isolir ada pada NAS milik customer
                         await this.ensureIsolirProfile(customer);
 
@@ -301,6 +339,13 @@ class ServiceSuspensionManager {
                         results.mikrotik = true;
                         results.static_ip_method = staticResult.results?.method_used;
                         logger.info(`Static IP suspension successful for ${customer.username} using ${staticResult.results?.method_used}`);
+                        try {
+                            const { syncPoolAfterCustomerChange } = require('./staticIpPoolSync');
+                            await syncPoolAfterCustomerChange({ ...customer, status: 'suspended' });
+                            results.pool_sync = true;
+                        } catch (poolErr) {
+                            logger.warn(`Static IP pool sync after suspend: ${poolErr.message}`);
+                        }
                     } else {
                         logger.error(`Static IP suspension failed for ${customer.username}: ${staticResult.error}`);
                     }
@@ -578,6 +623,13 @@ class ServiceSuspensionManager {
                         results.mikrotik = true;
                         results.static_ip_methods = staticResult.results?.methods_tried;
                         logger.info(`Static IP restoration successful for ${customer.username}. Methods: ${staticResult.results?.methods_tried?.join(', ')}`);
+                        try {
+                            const { syncPoolAfterCustomerChange } = require('./staticIpPoolSync');
+                            await syncPoolAfterCustomerChange({ ...customer, status: 'active' });
+                            results.pool_sync = true;
+                        } catch (poolErr) {
+                            logger.warn(`Static IP pool sync after restore: ${poolErr.message}`);
+                        }
                     } else {
                         logger.error(`Static IP restoration failed for ${customer.username}: ${staticResult.error}`);
                     }
@@ -737,16 +789,16 @@ class ServiceSuspensionManager {
      * Check dan suspend pelanggan yang telat bayar otomatis
      */
     async checkAndSuspendOverdueCustomers(options = {}) {
-        if (this.isRunning) {
-            logger.info('Service suspension check already running, skipping...');
+        const runKey = this._tryAcquireRun();
+        if (!runKey) {
+            logger.info('Service suspension check already running for this tenant, skipping...');
             return;
         }
 
         try {
-            this.isRunning = true;
-            logger.info('Starting automatic service suspension check...');
+            logger.info(`Starting automatic service suspension check (${runKey})...`);
 
-            const autoSuspensionEnabled = getSetting('auto_suspension_enabled', true) === true || getSetting('auto_suspension_enabled', 'true') === 'true';
+            const autoSuspensionEnabled = isAutoSuspensionEnabledFlag();
             const defaultSuspensionDay = getAutoSuspensionDay();
             const todayDay = new Date().getDate();
             const forceRun = Boolean(options && options.force);
@@ -846,21 +898,21 @@ class ServiceSuspensionManager {
             logger.error('Error in automatic service suspension check:', error);
             throw error;
         } finally {
-            this.isRunning = false;
+            this._releaseRun(runKey);
         }
     }
 
     async checkAndSuspendOverdueMembers(options = {}) {
-        if (this.isRunning) {
-            logger.info('Member service suspension check already running, skipping...');
+        const runKey = this._tryAcquireRun();
+        if (!runKey) {
+            logger.info('Member service suspension check already running for this tenant, skipping...');
             return;
         }
 
         try {
-            this.isRunning = true;
-            logger.info('Starting automatic member service suspension check...');
+            logger.info(`Starting automatic member service suspension check (${runKey})...`);
 
-            const autoSuspensionEnabled = getSetting('auto_suspension_enabled', true) === true || getSetting('auto_suspension_enabled', 'true') === 'true';
+            const autoSuspensionEnabled = isAutoSuspensionEnabledFlag();
             const suspensionDay = getAutoSuspensionDay();
             const todayDay = new Date().getDate();
 
@@ -949,7 +1001,7 @@ class ServiceSuspensionManager {
             logger.error('Error in automatic member service suspension check:', error);
             throw error;
         } finally {
-            this.isRunning = false;
+            this._releaseRun(runKey);
         }
     }
 

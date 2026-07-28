@@ -18,9 +18,16 @@ const {
     getLatestRegularBackup,
     DEFAULT_KEEP_COUNT
 } = require('../utils/billingDbBackup');
+const tenantBillingBackup = require('../utils/tenantBillingBackup');
 const { spawn } = require('child_process');
 const { adminAuth } = require('./adminAuth');
 const dns = require('dns').promises;
+
+function resolveRequestTenantId(req) {
+    const raw = req.session?.tenantId || req.tenantId || req.tenant?.id;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? n : null;
+}
 
 // Konfigurasi penyimpanan file
 const imageFileFilter = function (req, file, cb) {
@@ -67,27 +74,32 @@ const billingQrUpload = multer({
     fileFilter: imageFileFilter
 });
 
-// Upload file database (.db/.sqlite) untuk restore dari file lokal
+// Upload backup tenant (.zip) — disimpan di folder per-tenant
 const restoreDbDir = path.join(__dirname, '../data/backup');
 const restoreDbStorage = multer.diskStorage({
     destination: function (req, file, cb) {
         try {
-            fs.mkdirSync(restoreDbDir, { recursive: true });
-        } catch (_) { /* ignore */ }
-        cb(null, restoreDbDir);
+            const tid = resolveRequestTenantId(req) || 'unknown';
+            const dir = path.join(restoreDbDir, 'tenant', String(tid));
+            fs.mkdirSync(dir, { recursive: true });
+            cb(null, dir);
+        } catch (err) {
+            cb(err);
+        }
     },
     filename: function (req, file, cb) {
+        const tid = resolveRequestTenantId(req) || 0;
         const ts = new Date().toISOString().replace(/[:.]/g, '-');
-        cb(null, `uploaded_backup_${ts}.db`);
+        cb(null, `tenant_${tid}_uploaded_${ts}.zip`);
     }
 });
 
 const dbFileFilter = function (req, file, cb) {
     const name = String(file.originalname || '').toLowerCase();
-    if (name.endsWith('.db') || name.endsWith('.sqlite') || name.endsWith('.sqlite3')) {
+    if (name.endsWith('.zip')) {
         cb(null, true);
     } else {
-        cb(new Error('Hanya file database (.db, .sqlite, .sqlite3) yang diizinkan'), false);
+        cb(new Error('Hanya file backup tenant (.zip) yang diizinkan'), false);
     }
 };
 
@@ -101,120 +113,6 @@ const restoreDbUpload = multer({
 
 // Parser multipart tanpa file (untuk field teks pada restore dari daftar server)
 const multipartTextOnly = multer();
-
-/** Validasi header file SQLite ("SQLite format 3\0"). */
-function isValidSqliteFile(filePath) {
-    let fd = null;
-    try {
-        fd = fs.openSync(filePath, 'r');
-        const buf = Buffer.alloc(16);
-        const bytes = fs.readSync(fd, buf, 0, 16, 0);
-        if (bytes < 16) return false;
-        return buf.toString('utf8', 0, 15) === 'SQLite format 3';
-    } catch (_) {
-        return false;
-    } finally {
-        if (fd !== null) {
-            try { fs.closeSync(fd); } catch (_) { /* ignore */ }
-        }
-    }
-}
-
-/**
- * Restore billing.db dari file sumber (sudah tervalidasi path-nya) MENGGUNAKAN
- * SQLite Online Backup API langsung ke koneksi aktif aplikasi.
- *
- * Kenapa tidak copy file? billing.db berjalan dalam mode WAL dan koneksinya tetap
- * terbuka selama aplikasi hidup. Menimpa file .db saat koneksi masih terbuka —
- * apalagi meninggalkan file -wal/-shm lama — akan MERUSAK database
- * ("SQLITE_CORRUPT: database disk image is malformed"). Backup API menyalin
- * seluruh halaman dari file sumber ke dalam koneksi live secara aman, tanpa perlu
- * menimpa file mentah dan tanpa perlu me-restart proses.
- */
-async function restoreBillingDbFromFile(sourceAbsPath) {
-    const dbPath = path.join(__dirname, '../data/billing.db');
-
-    if (!isValidSqliteFile(sourceAbsPath)) {
-        throw new Error('File bukan database SQLite yang valid');
-    }
-
-    const liveDb = billing && billing.db ? billing.db : null;
-    if (!liveDb) {
-        throw new Error('Koneksi database aktif tidak tersedia untuk restore');
-    }
-
-    // Rapikan WAL supaya cadangan pra-restore konsisten, lalu buat cadangan pengaman.
-    await new Promise((resolve) => {
-        liveDb.run('PRAGMA wal_checkpoint(TRUNCATE)', () => resolve());
-    });
-    try {
-        await createBillingDbBackup(dbPath, { prefix: 'pre_restore', db: liveDb });
-    } catch (e) {
-        logger.warn('[restore] Gagal membuat cadangan pra-restore: ' + e.message);
-    }
-
-    // Salin isi file sumber ke koneksi live via Online Backup API (arah: file -> live db).
-    await new Promise((resolve, reject) => {
-        let backup;
-        try {
-            backup = liveDb.backup(sourceAbsPath, 'main', 'main', false, (err) => {
-                if (err) reject(err);
-            });
-        } catch (err) {
-            return reject(err);
-        }
-
-        const stepAll = () => {
-            try {
-                backup.step(-1);
-            } catch (err) {
-                try { backup.finish(() => {}); } catch (_) { /* ignore */ }
-                return reject(err);
-            }
-            if (backup.completed) {
-                return backup.finish((err) => (err ? reject(err) : resolve()));
-            }
-            if (backup.failed) {
-                return backup.finish(() =>
-                    reject(new Error('Restore gagal saat menyalin data database (database sedang sibuk)'))
-                );
-            }
-            setImmediate(stepAll);
-        };
-        stepAll();
-    });
-
-    // Pastikan hasil restore tertulis penuh ke file utama.
-    await new Promise((resolve) => {
-        liveDb.run('PRAGMA wal_checkpoint(TRUNCATE)', () => resolve());
-    });
-
-    // Bangun ulang skema platform SaaS. File restore bisa berasal dari versi single
-    // (tanpa tabel tenants/subscription_plans dan tanpa kolom tenant_id), sehingga
-    // tanpa langkah ini aplikasi akan error "no such table: tenants". initPlatform()
-    // membuat tabel platform, menambahkan kolom tenant_id (default tenant #1) ke tabel
-    // single yang di-restore, dan memastikan tenant default + super admin tersedia.
-    try {
-        const tenantStore = require('../config/platform/tenantStore');
-        await tenantStore.initPlatform();
-        logger.info('[restore] Skema platform SaaS dipastikan ulang (initPlatform)');
-    } catch (e) {
-        logger.error('[restore] Gagal menjalankan initPlatform setelah restore: ' + e.message);
-    }
-
-    // Guard: hapus data demo seed jika ikut terbawa dari file restore.
-    try {
-        const { purgeDemoSeedData } = require('../utils/demoSeedData');
-        const purged = await purgeDemoSeedData(liveDb);
-        if ((purged.collectorsRemoved || 0) + (purged.odpsRemoved || 0) > 0) {
-            logger.info(
-                `[restore] Demo seed guard: hapus ${purged.collectorsRemoved || 0} kolektor, ${purged.odpsRemoved || 0} ODP demo`
-            );
-        }
-    } catch (e) {
-        logger.warn('[restore] Demo seed guard dilewati: ' + e.message);
-    }
-}
 
 const settingsPath = path.join(__dirname, '../settings.json');
 const { ensureSettingsFile } = require('../config/settingsManager');
@@ -985,41 +883,63 @@ router.post('/wa-delete', async (req, res) => {
     }
 });
 
-// Backup database
+// Backup data tenant (ZIP per-tenant — tanpa image, termasuk RADIUS slice)
 router.post('/backup', async (req, res) => {
     try {
-        const dbPath = path.join(__dirname, '../data/billing.db');
-        const { filename, cleanup, method } = await createBillingDbBackup(dbPath, {
-            db: billing && billing.db ? billing.db : undefined
+        const tenantId = resolveRequestTenantId(req);
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message:
+                    'Backup full database hanya tersedia di Management Portal. Login sebagai tenant untuk backup data tenant Anda.'
+            });
+        }
+
+        const result = await tenantBillingBackup.exportTenantBackup(billing.db, tenantId);
+        const cleanup = tenantBillingBackup.cleanupTenantBackups(
+            tenantId,
+            tenantBillingBackup.DEFAULT_KEEP_COUNT
+        );
+
+        logger.info(`Tenant backup created: ${result.filename} (tenant=${tenantId})`);
+        await logAdminActivity(req, 'tenant_database_backup', `Backup data tenant: ${result.filename}`, {
+            backup_file: result.filename,
+            tenant_id: tenantId
         });
 
-        logger.info(`Database backup created: ${filename} (method=${method || 'online'})`);
-        await logAdminActivity(req, 'database_backup', `Backup database: ${filename}`, { backup_file: filename });
-
-        let message = 'Database backup berhasil dibuat';
+        let message = 'Backup data tenant berhasil dibuat (ZIP, tanpa file gambar)';
         if (cleanup.deletedCount > 0) {
-            message += ` (${cleanup.deletedCount} backup lama dihapus, tersisa ${DEFAULT_KEEP_COUNT} terakhir)`;
+            message += ` (${cleanup.deletedCount} backup lama dihapus)`;
         }
 
         res.json({
             success: true,
             message,
-            backup_file: filename,
+            backup_file: result.filename,
+            size: result.size,
             cleanup
         });
     } catch (error) {
-        logger.error('Error creating backup:', error);
+        logger.error('Error creating tenant backup:', error);
         res.status(500).json({
             success: false,
-            message: 'Error creating backup',
+            message: error.message || 'Gagal membuat backup tenant',
             error: error.message
         });
     }
 });
 
-// Restore database dari file backup yang ada di server (daftar Riwayat Backup)
+// Restore data tenant dari ZIP
 router.post('/restore', multipartTextOnly.none(), async (req, res) => {
     try {
+        const tenantId = resolveRequestTenantId(req);
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Restore full database hanya tersedia di Management Portal.'
+            });
+        }
+
         const requested = String(req.body.backup_file || '').trim();
         if (!requested) {
             return res.status(400).json({
@@ -1028,41 +948,57 @@ router.post('/restore', multipartTextOnly.none(), async (req, res) => {
             });
         }
 
-        // Cegah path traversal — hanya nama file di dalam folder backup
-        const safeName = path.basename(requested);
-        const backupPath = path.join(getBackupDir(), safeName);
-        if (!fs.existsSync(backupPath)) {
+        const backupPath = tenantBillingBackup.resolveTenantBackupFile(tenantId, requested);
+        if (!backupPath) {
             return res.status(404).json({
                 success: false,
-                message: 'File backup tidak ditemukan di server'
+                message: 'File backup tenant tidak ditemukan atau tidak valid'
             });
         }
 
-        await restoreBillingDbFromFile(backupPath);
+        await tenantBillingBackup.restoreTenantBackup(billing.db, tenantId, backupPath);
 
-        logger.info(`Database restored from: ${safeName}`);
-        await logAdminActivity(req, 'database_restore', `Restore database: ${safeName}`, { backup_file: safeName });
+        logger.info(`Tenant restore OK: ${path.basename(backupPath)} (tenant=${tenantId})`);
+        await logAdminActivity(req, 'tenant_database_restore', `Restore data tenant: ${path.basename(backupPath)}`, {
+            backup_file: path.basename(backupPath),
+            tenant_id: tenantId
+        });
 
         res.json({
             success: true,
-            message: 'Database berhasil di-restore',
-            restored_file: safeName
+            message: 'Data tenant berhasil di-restore (hanya data tenant Anda)',
+            restored_file: path.basename(backupPath)
         });
     } catch (error) {
-        logger.error('Error restoring database:', error);
+        logger.error('Error restoring tenant backup:', error);
         res.status(500).json({
             success: false,
-            message: 'Error restoring database',
+            message: error.message || 'Gagal restore data tenant',
             error: error.message
         });
     }
 });
 
-// Upload file backup database dari komputer admin (hanya menyimpan ke daftar backup, tidak restore)
+// Upload ZIP backup tenant
 router.post('/upload-backup', (req, res) => {
     restoreDbUpload.single('backup_file')(req, res, async (uploadErr) => {
         const uploadedPath = req.file ? req.file.path : null;
         try {
+            const tenantId = resolveRequestTenantId(req);
+            if (!tenantId) {
+                if (uploadedPath) {
+                    try {
+                        fs.unlinkSync(uploadedPath);
+                    } catch (_) {
+                        /* ignore */
+                    }
+                }
+                return res.status(403).json({
+                    success: false,
+                    message: 'Upload backup full DB hanya di Management Portal.'
+                });
+            }
+
             if (uploadErr) {
                 return res.status(400).json({
                     success: false,
@@ -1073,41 +1009,64 @@ router.post('/upload-backup', (req, res) => {
             if (!req.file) {
                 return res.status(400).json({
                     success: false,
-                    message: 'File database tidak ditemukan. Pilih file .db terlebih dahulu.'
+                    message: 'File ZIP tidak ditemukan. Pilih file .zip backup tenant.'
                 });
             }
 
-            // Pastikan file yang diunggah benar-benar database SQLite
-            if (!isValidSqliteFile(uploadedPath)) {
-                try { fs.unlinkSync(uploadedPath); } catch (_) { /* ignore */ }
+            // Validasi manifest milik tenant
+            try {
+                const AdmZip = require('adm-zip');
+                const zip = new AdmZip(uploadedPath);
+                const entry = zip.getEntry('manifest.json');
+                if (!entry) throw new Error('manifest.json tidak ada');
+                const manifest = JSON.parse(entry.getData().toString('utf8'));
+                if (manifest.kind !== 'tenant_billing_backup') {
+                    throw new Error('Bukan arsip backup tenant');
+                }
+                if (Number(manifest.tenant_id) !== Number(tenantId)) {
+                    throw new Error(
+                        `ZIP milik tenant ${manifest.tenant_id}, sesi Anda tenant ${tenantId}`
+                    );
+                }
+            } catch (valErr) {
+                try {
+                    fs.unlinkSync(uploadedPath);
+                } catch (_) {
+                    /* ignore */
+                }
                 return res.status(400).json({
                     success: false,
-                    message: 'File yang diunggah bukan database SQLite yang valid'
+                    message: valErr.message || 'File ZIP tidak valid'
                 });
             }
 
-            // Batasi jumlah file backup sesuai kebijakan (maks. DEFAULT_KEEP_COUNT terbaru)
-            const cleanup = cleanupOldBillingBackups(DEFAULT_KEEP_COUNT, getBackupDir());
-
-            const originalName = req.file.originalname || req.file.filename;
+            const cleanup = tenantBillingBackup.cleanupTenantBackups(
+                tenantId,
+                tenantBillingBackup.DEFAULT_KEEP_COUNT
+            );
             const storedName = req.file.filename;
-            logger.info(`Backup database di-upload: ${originalName} -> ${storedName}`);
-            await logAdminActivity(req, 'database_backup', `Upload file backup: ${originalName} (${storedName})`, {
-                backup_file: storedName
+            const originalName = req.file.originalname || storedName;
+            await logAdminActivity(req, 'tenant_database_backup', `Upload backup tenant: ${originalName}`, {
+                backup_file: storedName,
+                tenant_id: tenantId
             });
 
             res.json({
                 success: true,
-                message: 'File backup berhasil diunggah dan ditambahkan ke daftar',
+                message: 'File backup tenant berhasil diunggah',
                 filename: storedName,
                 original_name: originalName,
                 cleanup
             });
         } catch (error) {
             if (uploadedPath) {
-                try { fs.unlinkSync(uploadedPath); } catch (_) { /* ignore */ }
+                try {
+                    fs.unlinkSync(uploadedPath);
+                } catch (_) {
+                    /* ignore */
+                }
             }
-            logger.error('Error uploading backup file:', error);
+            logger.error('Error uploading tenant backup:', error);
             res.status(500).json({
                 success: false,
                 message: 'Error uploading backup file',
@@ -1117,42 +1076,64 @@ router.post('/upload-backup', (req, res) => {
     });
 });
 
+// Download ZIP backup tenant
+router.get('/backups/:filename/download', async (req, res) => {
+    try {
+        const tenantId = resolveRequestTenantId(req);
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Unauthorized' });
+        }
+        const full = tenantBillingBackup.resolveTenantBackupFile(tenantId, req.params.filename);
+        if (!full) {
+            return res.status(404).json({ success: false, message: 'File tidak ditemukan' });
+        }
+        res.download(full, path.basename(full));
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
 // Simpan pengaturan auto backup database billing
 router.post('/auto-backup-settings', async (req, res) => {
     try {
         const enabled = req.body.enabled === 'true' || req.body.enabled === true ? 'true' : 'false';
         const interval = Math.max(parseInt(req.body.interval, 10) || 7, 1);
+        const tenantId = resolveRequestTenantId(req) || 1;
 
         await new Promise((resolve, reject) => {
             billing.db.run(
-                `INSERT INTO app_settings (key, value) VALUES (?, ?)
-                 ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
-                ['billing_autobackup_enabled', enabled],
+                `INSERT INTO app_settings (key, value, tenant_id) VALUES (?, ?, ?)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value, tenant_id=excluded.tenant_id, updated_at=CURRENT_TIMESTAMP`,
+                ['billing_autobackup_enabled', enabled, tenantId],
                 (err) => (err ? reject(err) : resolve())
             );
         });
 
         await new Promise((resolve, reject) => {
             billing.db.run(
-                `INSERT INTO app_settings (key, value) VALUES (?, ?)
-                 ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
-                ['billing_autobackup_interval', String(interval)],
+                `INSERT INTO app_settings (key, value, tenant_id) VALUES (?, ?, ?)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value, tenant_id=excluded.tenant_id, updated_at=CURRENT_TIMESTAMP`,
+                ['billing_autobackup_interval', String(interval), tenantId],
                 (err) => (err ? reject(err) : resolve())
             );
         });
 
-        logger.info(`Billing auto backup settings updated: enabled=${enabled}, interval=${interval} days`);
+        logger.info(`Billing auto backup settings updated: enabled=${enabled}, interval=${interval} days, tenant=${tenantId}`);
         await logAdminActivity(
             req,
             'billing_autobackup_settings',
-            `Auto backup database: ${enabled === 'true' ? 'aktif' : 'nonaktif'}, interval ${interval} hari`
+            `Auto backup tenant: ${enabled === 'true' ? 'aktif' : 'nonaktif'}, interval ${interval} hari`
         );
 
         res.json({
             success: true,
             message: 'Pengaturan auto backup berhasil disimpan',
             enabled,
-            interval
+            interval,
+            auto_backup: {
+                enabled: enabled === 'true',
+                interval
+            }
         });
     } catch (error) {
         logger.error('Error saving billing auto backup settings:', error);
@@ -1160,58 +1141,47 @@ router.post('/auto-backup-settings', async (req, res) => {
     }
 });
 
-// Get backup files list
+// Get backup files list (ZIP per-tenant)
 router.get('/backups', async (req, res) => {
     try {
-        const backupPath = getBackupDir();
+        const tenantId = resolveRequestTenantId(req);
+        const appSettings = await getAppSettingsForAdmin(req);
 
-        if (!fs.existsSync(backupPath)) {
-            const appSettings = await getAppSettingsForAdmin(req);
+        if (!tenantId) {
             return res.json({
                 success: true,
                 backups: [],
-                keep_count: DEFAULT_KEEP_COUNT,
+                keep_count: tenantBillingBackup.DEFAULT_KEEP_COUNT,
                 auto_backup: {
-                    enabled: appSettings.billing_autobackup_enabled === 'true',
-                    interval: parseInt(appSettings.billing_autobackup_interval, 10) || 7,
+                    enabled: false,
+                    interval: 7,
                     last_backup: null
-                }
+                },
+                message: 'Backup full DB hanya di Management Portal'
             });
         }
 
-        const tenantId = req.tenantId ?? null;
-        const tenantBackupNames = await getTenantBackupFilenames(tenantId);
-        const tenantAllowedNames = new Set(tenantBackupNames);
-
-        const files = listBackupDbFiles(backupPath)
-            .filter((file) => {
-                const allowed = tenantAllowedNames;
-                if (!allowed || allowed.size === 0) return false;
-                return allowed.has(file.filename);
-            })
-            .map((file) => ({
-            filename: file.filename,
-            size: file.size,
-            created: file.created
+        const files = tenantBillingBackup.listTenantBackups(tenantId).map((f) => ({
+            filename: f.filename,
+            size: f.size,
+            created: f.created,
+            download_url: `/admin/settings/backups/${encodeURIComponent(f.filename)}/download`
         }));
-        const latestRegular = files.length
-            ? files.reduce((latest, file) => (!latest || file.created > latest.created ? file : latest), null)
-            : null;
-        const appSettings = await getAppSettingsForAdmin(req);
+        const latest = files[0] || null;
 
         res.json({
             success: true,
             backups: files,
-            keep_count: DEFAULT_KEEP_COUNT,
+            keep_count: tenantBillingBackup.DEFAULT_KEEP_COUNT,
             auto_backup: {
                 enabled: appSettings.billing_autobackup_enabled === 'true',
                 interval: parseInt(appSettings.billing_autobackup_interval, 10) || 7,
-                last_backup: latestRegular
+                last_backup: latest
                     ? {
-                        filename: latestRegular.filename,
-                        created: latestRegular.created,
-                        modified: latestRegular.created
-                    }
+                          filename: latest.filename,
+                          created: latest.created,
+                          modified: latest.created
+                      }
                     : null
             }
         });

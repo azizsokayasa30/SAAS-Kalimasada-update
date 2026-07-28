@@ -100,12 +100,18 @@ class InvoiceScheduler {
         // Schedule service suspension check daily at 10:00 (hanya eksekusi isolir di tanggal yang dikonfigurasi, default tgl 25)
         cron.schedule('0 10 * * *', async () => {
             try {
+                const { forEachOperationalTenant } = require('./platform/tenantJobs');
                 const serviceSuspension = require('./serviceSuspension');
-                const suspensionDay = serviceSuspension.getAutoSuspensionDay();
-                logger.info(`Starting service suspension check (default global tgl ${suspensionDay}, per pelanggan sesuai auto_suspension_day)...`);
-                await serviceSuspension.checkAndSuspendOverdueCustomers();
-                await serviceSuspension.checkAndSuspendOverdueMembers();
-                logger.info('Service suspension check completed');
+                logger.info('Starting service suspension check (per-tenant)...');
+                const results = await forEachOperationalTenant(async (tenant) => {
+                    const day = serviceSuspension.getAutoSuspensionDay();
+                    logger.info(`[isolir] tenant #${tenant.id} (${tenant.subdomain || tenant.name}) day=${day}`);
+                    const customers = await serviceSuspension.checkAndSuspendOverdueCustomers();
+                    const members = await serviceSuspension.checkAndSuspendOverdueMembers();
+                    return { customers, members };
+                }, { label: 'auto-isolir' });
+                const ok = results.filter((r) => r.success).length;
+                logger.info(`Service suspension check completed for ${ok}/${results.length} tenants`);
             } catch (error) {
                 logger.error('Error in daily service suspension check:', error);
             }
@@ -117,10 +123,15 @@ class InvoiceScheduler {
         // Schedule daily service restoration check at 11:00
         cron.schedule('0 11 * * *', async () => {
             try {
-                logger.info('Starting daily service restoration check...');
+                logger.info('Starting daily service restoration check (per-tenant)...');
+                const { forEachOperationalTenant } = require('./platform/tenantJobs');
                 const serviceSuspension = require('./serviceSuspension');
-                await serviceSuspension.checkAndRestorePaidCustomers();
-                logger.info('Daily service restoration check completed');
+                const results = await forEachOperationalTenant(async (tenant) => {
+                    logger.info(`[restore] tenant #${tenant.id} (${tenant.subdomain || tenant.name})`);
+                    return serviceSuspension.checkAndRestorePaidCustomers();
+                }, { label: 'auto-restore' });
+                const ok = results.filter((r) => r.success).length;
+                logger.info(`Daily service restoration check completed for ${ok}/${results.length} tenants`);
             } catch (error) {
                 logger.error('Error in daily service restoration check:', error);
             }
@@ -132,10 +143,18 @@ class InvoiceScheduler {
         // Schedule sync suspended status to RADIUS every 30 minutes
         cron.schedule('*/30 * * * *', async () => {
             try {
-                logger.info('Starting sync suspended status to RADIUS...');
+                logger.info('Starting sync suspended status to RADIUS (per-tenant)...');
+                const { forEachOperationalTenant } = require('./platform/tenantJobs');
                 const serviceSuspension = require('./serviceSuspension');
-                const result = await serviceSuspension.syncSuspendedStatusToRadius();
-                logger.info(`Sync suspended status completed: synced=${result.synced}, alreadyIsolir=${result.alreadyIsolir}, errors=${result.errors}`);
+                const results = await forEachOperationalTenant(async (tenant) => {
+                    const result = await serviceSuspension.syncSuspendedStatusToRadius();
+                    logger.info(
+                        `[radius-sync] tenant #${tenant.id}: synced=${result.synced}, alreadyIsolir=${result.alreadyIsolir}, errors=${result.errors}`
+                    );
+                    return result;
+                }, { label: 'radius-isolir-sync' });
+                const ok = results.filter((r) => r.success).length;
+                logger.info(`Sync suspended status completed for ${ok}/${results.length} tenants`);
             } catch (error) {
                 logger.error('Error in sync suspended status to RADIUS:', error);
             }
@@ -146,7 +165,7 @@ class InvoiceScheduler {
         
         logger.info('Sync suspended status scheduler initialized - will run every 30 minutes');
 
-        logger.info('Service suspension/restoration scheduler initialized - suspension on configured day (default 25) at 10:00, restoration daily at 11:00');
+        logger.info('Service suspension/restoration scheduler initialized - suspension on configured day (default 25) at 10:00, restoration daily at 11:00 (per-tenant isolated)');
 
         // Schedule RADIUS Auto Backup every day at 02:00 AM
         cron.schedule('0 2 * * *', async () => {
@@ -200,32 +219,76 @@ class InvoiceScheduler {
                     logger.debug('RADIUS Auto Backup is disabled.');
                 }
 
-                // Billing database auto backup
-                if (appSettings.billing_autobackup_enabled === 'true') {
-                    const billingInterval = parseInt(appSettings.billing_autobackup_interval, 10) || 7;
-                    const { runBillingAutoBackupIfEnabled } = require('../utils/billingDbBackup');
+                // Per-tenant billing ZIP auto backup (bukan full billing.db)
+                try {
+                    const tenantStore = require('./platform/tenantStore');
+                    const { runTenantAutoBackupIfEnabled } = require('../utils/tenantBillingBackup');
                     const { logActivity } = require('./activityLogger');
-                    const billingResult = await runBillingAutoBackupIfEnabled({ db });
 
-                    if (billingResult.ran) {
-                        logger.info(`✅ Billing Auto Backup completed: ${billingResult.filename}`);
+                    const getExactTenantAutoBackupSettings = (tenantId) =>
+                        new Promise((resolve) => {
+                            db.all(
+                                `SELECT key, value FROM app_settings
+                                 WHERE tenant_id = ?
+                                   AND key IN ('billing_autobackup_enabled', 'billing_autobackup_interval')`,
+                                [tenantId],
+                                (err, rows) => {
+                                    const settingsObj = {};
+                                    if (!err && rows) {
+                                        rows.forEach((row) => {
+                                            settingsObj[row.key] = row.value;
+                                        });
+                                    }
+                                    resolve(settingsObj);
+                                }
+                            );
+                        });
+
+                    const tenants = await tenantStore.listTenants({ operationalOnly: true });
+                    let ranCount = 0;
+                    for (const tenant of tenants || []) {
+                        const tid = Number(tenant.id);
+                        if (!Number.isFinite(tid)) continue;
                         try {
-                            await logActivity({
-                                userType: 'system',
-                                userId: 'scheduler',
-                                action: 'database_backup_auto',
-                                description: `Auto backup database: ${billingResult.filename} (interval ${billingInterval} hari)`
-                            });
-                        } catch (logErr) {
-                            logger.warn(`[billing-backup] Gagal catat activity log: ${logErr.message}`);
+                            const result = await runTenantAutoBackupIfEnabled(
+                                db,
+                                tid,
+                                getExactTenantAutoBackupSettings
+                            );
+                            if (result.ran) {
+                                ranCount += 1;
+                                logger.info(
+                                    `✅ Tenant ${tid} auto backup ZIP: ${result.filename}`
+                                );
+                                try {
+                                    await logActivity({
+                                        userType: 'system',
+                                        userId: 'scheduler',
+                                        action: 'database_backup_auto',
+                                        description: `Auto backup tenant ${tid}: ${result.filename} (interval ${result.interval} hari)`,
+                                        tenantId: tid
+                                    });
+                                } catch (logErr) {
+                                    logger.warn(
+                                        `[tenant-backup] Gagal catat activity log tenant ${tid}: ${logErr.message}`
+                                    );
+                                }
+                            } else if (result.reason === 'interval') {
+                                logger.debug(
+                                    `Tenant ${tid} auto backup skipped (interval ${result.interval} hari, last ${result.daysSinceLast} hari).`
+                                );
+                            }
+                        } catch (tenantErr) {
+                            logger.error(
+                                `❌ Tenant ${tid} auto backup failed: ${tenantErr.message}`
+                            );
                         }
-                    } else if (billingResult.reason === 'interval') {
-                        logger.info(
-                            `Billing Auto Backup skipped. Last backup ${billingResult.daysSinceLast} hari lalu, interval ${billingResult.interval} hari.`
-                        );
                     }
-                } else {
-                    logger.debug('Billing Auto Backup is disabled.');
+                    if (ranCount === 0) {
+                        logger.debug('Tenant ZIP auto backup: tidak ada tenant yang perlu di-backup saat ini.');
+                    }
+                } catch (tenantBackupErr) {
+                    logger.error('Error in tenant ZIP auto backup scheduler:', tenantBackupErr);
                 }
             } catch (error) {
                 logger.error('Error in RADIUS Auto Backup scheduler:', error);

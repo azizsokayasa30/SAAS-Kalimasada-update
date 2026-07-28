@@ -107,9 +107,19 @@
 
         /* Fix: tambah/edit pelanggan modal transparan di tema terang */
         /* Form tambah pelanggan — tampilan lebih ringkas */
-        #addCustomerModal .modal-header .modal-title { font-size: 1.05rem; }
+        #addCustomerModal .modal-header .modal-title {
+            font-size: 1.45rem;
+            font-weight: 700;
+            line-height: 1.25;
+        }
         #addCustomerModal .form-label { font-weight: 500; margin-bottom: 0.25rem; }
         #addCustomerModal .card-header h6 { font-size: 0.95rem; }
+        #addCustomerModal .form-text,
+        #addCustomerModal small.text-muted {
+            font-size: 0.75rem;
+            line-height: 1.25;
+            margin-top: 0.15rem;
+        }
         #addCustomerModal .btn-save-create-task {
             background-color: #198754 !important;
             border-color: #198754 !important;
@@ -127,6 +137,72 @@
             background-color: #157347 !important;
             border-color: #146c43 !important;
             color: #fff !important;
+        }
+        /* Collapsible opsional (kabel/ODP, upload dokumen) */
+        #addCustomerModal .add-optional-toggle {
+            cursor: pointer;
+            user-select: none;
+            border: 0;
+            background: transparent;
+            width: 100%;
+            text-align: left;
+            padding: 0;
+            color: inherit; /* hindari teks hitam default <button> di tema gelap */
+        }
+        #addCustomerModal .add-optional-toggle h6 {
+            color: inherit;
+        }
+        #addCustomerModal .add-optional-toggle .optional-fill-action {
+            font-size: 0.72rem;
+            font-weight: 600;
+            white-space: nowrap;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 7.25rem;
+            height: 1.65rem;
+            padding: 0 0.85rem;
+            border-radius: 999px;
+            line-height: 1;
+            border: none;
+            background-color: #198754;
+            color: #fff;
+            box-sizing: border-box;
+            transition: background-color 0.15s ease, color 0.15s ease;
+        }
+        #addCustomerModal .add-optional-toggle .optional-fill-later {
+            display: none;
+        }
+        #addCustomerModal .add-optional-toggle[aria-expanded="true"] .optional-fill-now {
+            display: none;
+        }
+        #addCustomerModal .add-optional-toggle[aria-expanded="true"] .optional-fill-later {
+            display: inline;
+        }
+        #addCustomerModal .add-optional-toggle[aria-expanded="true"] .optional-fill-action {
+            background-color: #6c757d;
+            color: #fff;
+        }
+        #addCustomerModal .add-optional-toggle:hover .optional-fill-action {
+            background-color: #157347;
+        }
+        #addCustomerModal .add-optional-toggle[aria-expanded="true"]:hover .optional-fill-action {
+            background-color: #5c636a;
+        }
+        [data-theme="dark"] #addCustomerModal .add-optional-toggle,
+        [data-theme="dark"] #addCustomerModal .add-optional-toggle h6 {
+            color: #f1f5f9 !important;
+        }
+        [data-theme="dark"] #addCustomerModal .add-optional-toggle .text-muted {
+            color: #94a3b8 !important;
+        }
+        [data-theme="dark"] #addCustomerModal .add-optional-toggle .optional-fill-action {
+            background-color: #198754;
+            color: #fff;
+        }
+        [data-theme="dark"] #addCustomerModal .add-optional-toggle[aria-expanded="true"] .optional-fill-action {
+            background-color: #64748b;
+            color: #fff;
         }
         /* Lebar modal tambah: ~25% lebih sempit dari modal-lg Bootstrap (800px → 600px) */
         #addCustomerModal .modal-dialog {
@@ -460,6 +536,7 @@
                     
                     <!-- Desktop: Show all buttons -->
                     <div class="d-none d-lg-block">
+                        <% if (typeof authMode === 'undefined' || authMode !== 'radius') { %>
                         <div class="d-inline-block me-2">
                             <select id="routerFilter" class="form-select form-select-sm">
                                 <option value="">Semua NAS</option>
@@ -468,6 +545,7 @@
                                 <% }); } %>
                             </select>
                         </div>
+                        <% } %>
                         <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addCustomerModal">
                             <i class="bi bi-plus-circle"></i> Tambah Pelanggan
                         </button>
@@ -490,6 +568,7 @@
                             <i class="bi bi-list"></i> Menu
                         </button>
                         <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="actionMenuDropdown">
+                            <% if (typeof authMode === 'undefined' || authMode !== 'radius') { %>
                             <li class="px-3 py-2">
                                 <select id="routerFilterMobile" class="form-select form-select-sm">
                                     <option value="">Semua NAS</option>
@@ -498,6 +577,7 @@
                                     <% }); } %>
                                 </select>
                             </li>
+                            <% } %>
                             <li><a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#addCustomerModal">
                                 <i class="bi bi-plus-circle"></i> Tambah Pelanggan
                             </a></li>
@@ -1055,10 +1135,9 @@
     <div class="modal fade" id="addCustomerModal" tabindex="-1">
         <div class="modal-dialog modal-dialog-scrollable">
             <div class="modal-content">
-                <div class="modal-header py-2">
+                <div class="modal-header py-3">
                     <div>
-                        <h5 class="modal-title">Tambah Pelanggan</h5>
-                        <small class="text-muted">Area &amp; alamat dipakai untuk job instalasi</small>
+                        <h5 class="modal-title mb-0">Tambah Pelanggan</h5>
                     </div>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
@@ -1067,18 +1146,14 @@
                         <div class="mb-3">
                             <label for="name" class="form-label">Nama pelanggan <span class="text-danger">*</span></label>
                             <input type="text" class="form-control text-uppercase" id="name" name="name" required autocomplete="off" placeholder="NAMA OTOMATIS HURUF BESAR" maxlength="120">
-                            <small class="form-text text-muted">Username &amp; email tetap diisi otomatis dari nama</small>
                         </div>
                         <div class="mb-3">
-                            <label for="username" class="form-label">Username login *</label>
-                            <input type="text" class="form-control" id="username" name="username" required placeholder="Contoh: aderestu_020526 (nama tanpa spasi + _DDMMYY WIB)">
-                            <small class="text-muted">Login portal/tagihan (bukan PPPoE). Otomatis dari nama: huruf/angka saja tanpa spasi, lalu tanggal WIB (DDMMYY).</small>
-                            <small class="form-text text-muted">Username akan digunakan untuk login pelanggan dan payment gateway. Format otomatis: nama_DDMMYY</small>
+                            <label for="username" class="form-label">Username login Portal Pelanggan
+                            <input type="text" class="form-control" id="username" name="username" required placeholder="Contoh: aderestu_020526">
                         </div>
                         <div class="mb-3">
-                            <label for="password" class="form-label">Password Portal</label>
-                            <input type="text" class="form-control" id="password" name="password" placeholder="Default 123456 jika dikosongkan (minimal 6 karakter)">
-                            <small class="form-text text-muted">Password untuk login pelanggan ke portal. Biarkan kosong jika tidak ingin diset sekarang.</small>
+                            <label for="password" class="form-label">Password Portal Pelanggan</label>
+                            <input type="text" class="form-control" id="password" name="password" placeholder="Default 123456 jika dikosongkan">
                         </div>
                         <div class="mb-3">
                             <label for="phone" class="form-label">Telepon *</label>
@@ -1086,11 +1161,10 @@
                         </div>
                         <div class="mb-3">
                             <label for="email" class="form-label">Email</label>
-                            <input type="email" class="form-control" id="email" name="email" placeholder="Akan otomatis terisi dari nama (contoh: Test@cvlmedia.my.id)">
-                            <small class="form-text text-muted">Email akan digunakan untuk notifikasi. Jika kosong, format otomatis: namapelanggan@gmail.com</small>
+                            <input type="email" class="form-control" id="email" name="email" placeholder="Otomatis dari nama jika dikosongkan">
                         </div>
                         <div class="mb-3" id="addConnectionTypeBlock">
-                            <label class="form-label d-block">Tipe koneksi</label>
+                            <label class="form-label d-block">Pilih Tipe koneksi</label>
                             <div class="btn-group w-100 connection-type-switch" role="group" aria-label="Tipe koneksi pelanggan">
                                 <input type="radio" class="btn-check" name="connection_type" id="connection_type_pppoe" value="pppoe" checked autocomplete="off">
                                 <label class="btn btn-outline-primary" for="connection_type_pppoe">
@@ -1101,33 +1175,30 @@
                                     <i class="bi bi-hdd-network me-1"></i> IP Statik
                                 </label>
                             </div>
-                            <small class="form-text text-muted">Pilih salah satu: akun PPPoE atau pelanggan dengan IP tetap.</small>
                         </div>
                         <div id="addCustomerPppoeBlock">
+                        <div class="form-check mb-2">
+                            <input class="form-check-input" type="checkbox" id="create_pppoe_user" name="create_pppoe_user" checked>
+                            <label class="form-check-label" for="create_pppoe_user">
+                                Buat Username & Password PPPOE Baru Di Radius
+                            </label>
+                        </div>
                         <div class="mb-3">
-                            <label for="pppoe_username" class="form-label">PPPoE Username (opsional)</label>
+                            <label for="pppoe_username" class="form-label">PPPoE Username</label>
                             <div class="input-group">
-                                <input type="text" class="form-control" id="pppoe_username" name="pppoe_username" placeholder="Ketik untuk mencari PPPoE username..." autocomplete="off">
-                                <button class="btn btn-outline-secondary" type="button" id="loadPppoeUsers" title="Load PPPoE users from RADIUS Server">
+                                <input type="text" class="form-control" id="pppoe_username" name="pppoe_username" placeholder="PPPoE username..." autocomplete="off">
+                                <button class="btn btn-outline-secondary" type="button" id="loadPppoeUsers" title="Load PPPoE Dari Radius">
                                     <i class="bi bi-arrow-clockwise"></i>
                                 </button>
                             </div>
                             <div id="pppoe_dropdown" class="pppoe-dropdown" style="display: none;">
                                 <!-- Custom dropdown will be loaded here -->
                             </div>
-                            <small class="form-text text-muted">Klik tombol refresh untuk mengambil daftar PPPoE users dari RADIUS Server</small>
-                        </div>
-                        <div class="form-check mb-2">
-                            <input class="form-check-input" type="checkbox" id="create_pppoe_user" name="create_pppoe_user" checked>
-                            <label class="form-check-label" for="create_pppoe_user">
-                                Buat user PPPoE sekarang untuk mode RADIUS
-                            </label>
                         </div>
                         <div class="row g-2 align-items-end mb-3" id="pppoe_password_row">
                             <div class="col-8">
                                 <label for="pppoe_password" class="form-label">PPPoE Password</label>
-                                <input type="text" class="form-control" id="pppoe_password" name="pppoe_password" placeholder="Minimal 6 karakter">
-                                <small class="text-muted">Jika tidak diisi, sistem akan generate otomatis.</small>
+                                <input type="text" class="form-control" id="pppoe_password" name="pppoe_password" placeholder="Isi Password / Auto Generate Jika Kosong">
                             </div>
                             <div class="col-4">
                                 <button class="btn btn-outline-secondary w-100" type="button" id="genPppoePassBtn">Generate</button>
@@ -1138,95 +1209,102 @@
                         <div class="card border-secondary mb-3" id="add_static_ip_card" style="display: none;">
                             <div class="card-header bg-light py-2">
                                 <h6 class="mb-0"><i class="bi bi-hdd-network me-1"></i>IP Statik / MAC</h6>
-                                <small class="text-muted">IP &amp; MAC pelanggan — kecepatan queue Mikrotik otomatis dari paket</small>
                             </div>
                             <div class="card-body pt-2" id="static_ip_fields_wrap">
                                 <div class="mb-2">
                                     <label for="static_ip" class="form-label">IP Statik *</label>
                                     <input type="text" class="form-control form-control-sm" id="static_ip" name="static_ip" placeholder="192.168.1.100">
                                     <input type="hidden" id="assigned_ip" name="assigned_ip" value="">
-                                    <small class="text-muted">Queue Mikrotik (<code>cust_&lt;id&gt;</code>) dibuat otomatis dari limit/kecepatan paket</small>
                                 </div>
                                 <div class="mb-0">
                                     <label for="mac_address" class="form-label">MAC address <small class="text-muted">(opsional)</small></label>
                                     <input type="text" class="form-control form-control-sm" id="mac_address" name="mac_address" placeholder="00:11:22:33:44:55" pattern="^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$">
                                 </div>
-                                <small class="text-muted d-block mt-2">Isolir: address-list / DHCP / limit (<%= (typeof appSettings !== 'undefined' ? (appSettings.static_ip_suspension_method || 'address_list') : 'address_list') %>)</small>
                             </div>
                         </div>
                         
-                        <!-- Cable Connection Section -->
+                        <!-- Cable Connection Section (collapsible, default collapsed) -->
                         <div class="card border-success mb-3">
                             <div class="card-header bg-light py-2">
-                                <h6 class="mb-0"><i class="bi bi-diagram-3 me-1"></i>Sambungan kabel &amp; ODP</h6>
-                                <small class="text-muted">ODP &amp; jalur kabel ke pelanggan</small>
+                                <button type="button" id="addCableOdpToggle" class="add-optional-toggle d-flex align-items-center justify-content-between"
+                                    data-bs-toggle="collapse" data-bs-target="#addCableOdpBody"
+                                    aria-expanded="false" aria-controls="addCableOdpBody">
+                                    <h6 class="mb-0">
+                                        <i class="bi bi-diagram-3 me-1"></i>Sambungan kabel &amp; ODP
+                                        <small class="text-muted fw-normal ms-1">(opsional)</small>
+                                    </h6>
+                                    <span class="optional-fill-action">
+                                        <span class="optional-fill-now">Isi Sekarang</span>
+                                        <span class="optional-fill-later">Isi Nanti</span>
+                                    </span>
+                                </button>
                             </div>
-                            <div class="card-body pt-2">
-                                <div class="mb-3">
-                                    <label for="odp_id" class="form-label">ODP (Optical Distribution Point)</label>
-                                    <select class="form-select form-select-sm" id="odp_id" name="odp_id">
-                                        <option value="">— Opsional —</option>
-                                        <% if (odps && odps.length > 0) { %>
-                                            <% odps.forEach(function(odp) { %>
-                                                <option value="<%= odp.id %>" data-capacity="<%= odp.capacity %>" data-used="<%= odp.used_ports %>">
-                                                    <% if (odp.parent_name) { %>
-                                                        â””â”€ <%= odp.name %> (<%= odp.code %>) - <%= odp.used_ports %>/<%= odp.capacity %> ports
-                                                    <% } else { %>
-                                                        <%= odp.name %> (<%= odp.code %>) - <%= odp.used_ports %>/<%= odp.capacity %> ports
-                                                    <% } %>
-                                                </option>
-                                            <% }); %>
-                                        <% } %>
-                                    </select>
-                                    <small class="form-text text-muted">Sub-ODP ditandai dengan â””â”€. Bisa dikosongkan dulu.</small>
-                                </div>
-                                <div class="row">
-                                    <div class="col-md-6">
-                                        <div class="mb-3">
-                                            <label for="cable_type" class="form-label">Tipe Kabel</label>
-                                            <select class="form-select" id="cable_type" name="cable_type">
-                                                <option value="">Pilih Tipe Kabel</option>
-                                                <option value="fiber">Fiber Optic</option>
-                                                <option value="copper">Copper</option>
-                                                <option value="wireless">Wireless</option>
-                                            </select>
+                            <div id="addCableOdpBody" class="collapse">
+                                <div class="card-body pt-2">
+                                    <div class="mb-3">
+                                        <label for="odp_id" class="form-label">ODP</label>
+                                        <select class="form-select form-select-sm" id="odp_id" name="odp_id">
+                                            <option value="">— Opsional —</option>
+                                            <% if (odps && odps.length > 0) { %>
+                                                <% odps.forEach(function(odp) { %>
+                                                    <option value="<%= odp.id %>" data-capacity="<%= odp.capacity %>" data-used="<%= odp.used_ports %>">
+                                                        <% if (odp.parent_name) { %>
+                                                            └─ <%= odp.name %> (<%= odp.code %>) - <%= odp.used_ports %>/<%= odp.capacity %> ports
+                                                        <% } else { %>
+                                                            <%= odp.name %> (<%= odp.code %>) - <%= odp.used_ports %>/<%= odp.capacity %> ports
+                                                        <% } %>
+                                                    </option>
+                                                <% }); %>
+                                            <% } %>
+                                        </select>
+                                    </div>
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <div class="mb-3">
+                                                <label for="cable_type" class="form-label">Tipe Kabel</label>
+                                                <select class="form-select" id="cable_type" name="cable_type">
+                                                    <option value="">Pilih Tipe Kabel</option>
+                                                    <option value="fiber">Fiber Optic</option>
+                                                    <option value="copper">Copper</option>
+                                                    <option value="wireless">Wireless</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="mb-3">
+                                                <label for="cable_length" class="form-label">Panjang Kabel (meter)</label>
+                                                <input type="number" class="form-control" id="cable_length" name="cable_length" placeholder="50" min="1">
+                                            </div>
                                         </div>
                                     </div>
-                                    <div class="col-md-6">
-                                        <div class="mb-3">
-                                            <label for="cable_length" class="form-label">Panjang Kabel (meter)</label>
-                                            <input type="number" class="form-control" id="cable_length" name="cable_length" placeholder="50" min="1">
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <div class="mb-3">
+                                                <label for="port_number" class="form-label">Nomor Port ODP</label>
+                                                <input type="number" class="form-control" id="port_number" name="port_number" placeholder="1" min="1" max="24">
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="mb-3">
+                                                <label for="cable_status" class="form-label">Status Kabel</label>
+                                                <select class="form-select" id="cable_status" name="cable_status">
+                                                    <option value="connected">Terhubung</option>
+                                                    <option value="disconnected">Terputus</option>
+                                                    <option value="maintenance">Maintenance</option>
+                                                </select>
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                                <div class="row">
-                                    <div class="col-md-6">
-                                        <div class="mb-3">
-                                            <label for="port_number" class="form-label">Nomor Port ODP</label>
-                                            <input type="number" class="form-control" id="port_number" name="port_number" placeholder="1" min="1" max="24">
-                                        </div>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <div class="mb-3">
-                                            <label for="cable_status" class="form-label">Status Kabel</label>
-                                            <select class="form-select" id="cable_status" name="cable_status">
-                                                <option value="connected">Terhubung</option>
-                                                <option value="disconnected">Terputus</option>
-                                                <option value="maintenance">Maintenance</option>
-                                            </select>
-                                        </div>
+                                    <div class="mb-0">
+                                        <label for="cable_notes" class="form-label">Catatan kabel</label>
+                                        <textarea class="form-control form-control-sm" id="cable_notes" name="cable_notes" rows="2" placeholder="Opsional"></textarea>
                                     </div>
                                 </div>
-                                <div class="mb-2">
-                                    <label for="cable_notes" class="form-label">Catatan kabel</label>
-                                    <textarea class="form-control form-control-sm" id="cable_notes" name="cable_notes" rows="2" placeholder="Opsional"></textarea>
-                                </div>
-                                <small class="text-muted"><i class="bi bi-info-circle me-1"></i>Jika ODP dipilih, sistem membuat jalur kabel otomatis (cek kapasitas port).</small>
                             </div>
                         </div>
                         
                         <div class="mb-3">
-                            <label for="area_id" class="form-label">Area / wilayah <span class="text-danger">(wajib diisi)</span></label>
+                            <label for="area_id" class="form-label">Area / wilayah <span class="text-danger">*</span></label>
                             <select class="form-select" id="area_id" name="area_id" required>
                                 <option value="">-- Pilih Area --</option>
                                 <% if (typeof areasForDropdown !== 'undefined' && areasForDropdown.length > 0) { %>
@@ -1239,28 +1317,25 @@
                             </select>
                             <% if (typeof areasForDropdown === 'undefined' || areasForDropdown.length === 0) { %>
                             <div class="form-text">
-                                <i class="bi bi-info-circle text-warning"></i>
-                                Belum ada area terdaftar. <a href="/admin/billing/areas" target="_blank">Tambahkan area</a> terlebih dahulu.
+                                <a href="/admin/billing/areas" target="_blank">Tambahkan area</a> terlebih dahulu.
                             </div>
                             <% } %>
                         </div>
                         <div class="mb-3">
-                            <label for="address" class="form-label">Alamat lengkap <span class="text-danger">(wajib diisi)</span></label>
-                            <textarea class="form-control" id="address" name="address" rows="2" required placeholder="Alamat untuk instalasi / job teknisi"></textarea>
+                            <label for="address" class="form-label">Alamat lengkap <span class="text-danger">*</span></label>
+                            <textarea class="form-control" id="address" name="address" rows="2" required placeholder="Alamat instalasi"></textarea>
                         </div>
                         <div class="row">
                             <div class="col-md-6">
                                 <div class="mb-3">
-                                    <label for="latitude" class="form-label">Latitude (Koordinat)</label>
+                                    <label for="latitude" class="form-label">Latitude</label>
                                     <input type="number" class="form-control" id="latitude" name="latitude" step="0.00000001" placeholder="-6.2088">
-                                    <small class="text-muted">Contoh: -6.2088 (Jakarta)</small>
                                 </div>
                             </div>
                             <div class="col-md-6">
                                 <div class="mb-3">
-                                    <label for="longitude" class="form-label">Longitude (Koordinat)</label>
+                                    <label for="longitude" class="form-label">Longitude</label>
                                     <input type="number" class="form-control" id="longitude" name="longitude" step="0.00000001" placeholder="106.8456">
-                                    <small class="text-muted">Contoh: 106.8456 (Jakarta)</small>
                                 </div>
                             </div>
                         </div>
@@ -1273,10 +1348,6 @@
                                     <i class="bi bi-map me-1"></i> Pilih dari Peta
                                 </button>
                             </div>
-                            <small class="text-muted mt-1 d-block">
-                                <i class="bi bi-info-circle me-1"></i>
-                                GPS: Pastikan perangkat di area terbuka untuk akurasi terbaik
-                            </small>
                         </div>
                         <div class="mb-3">
                             <label for="package_id" class="form-label">Paket *</label>
@@ -1292,66 +1363,51 @@
                                     <% }); %>
                                 <% } %>
                             </select>
-                            <small class="form-text text-muted" id="package_help_default">Pilih paket — profil PPPoE &amp; limit kecepatan mengikuti paket.</small>
-                            <small class="form-text text-primary d-none" id="package_universal_hint"><i class="bi bi-info-circle me-1"></i>Paket jaringan: PPPoE → profil otomatis; IP statik → queue Mikrotik otomatis.</small>
-                            <small class="form-text text-success d-none" id="package_pppoe_hint"><i class="bi bi-check-circle me-1"></i>Profil PPPoE &amp; limit bandwidth diambil dari paket.</small>
-                            <small class="form-text text-success d-none" id="package_static_hint"><i class="bi bi-hdd-network me-1"></i>Queue Mikrotik akan dibuat otomatis dari kecepatan/limit paket.</small>
+                            <small class="form-text text-muted d-none" id="package_help_default"></small>
+                            <small class="form-text text-primary d-none" id="package_universal_hint"></small>
+                            <small class="form-text text-success d-none" id="package_pppoe_hint"></small>
+                            <small class="form-text text-success d-none" id="package_static_hint"></small>
                         </div>
                         <div id="addCustomerPppoeProfileNasBlock">
                         <div class="mb-3">
                             <label for="pppoe_profile" class="form-label">PPPoE Profile</label>
-                            <input type="text" class="form-control" id="pppoe_profile" name="pppoe_profile" placeholder="Profile akan otomatis terisi sesuai paket">
-                            <small class="form-text text-muted">Profile PPPoE yang akan digunakan untuk pelanggan ini</small>
+                            <input type="text" class="form-control" id="pppoe_profile" name="pppoe_profile" placeholder="Otomatis dari paket">
                         </div>
+                        <% if (typeof authMode !== 'undefined' && authMode === 'radius') { %>
+                            <input type="hidden" id="router_id" name="router_id" value="RADIUS">
+                        <% } else { %>
                         <div class="mb-3">
-                            <label for="router_id" class="form-label">NAS (Router) <small class="text-muted">(Opsional)</small></label>
-                            <select class="form-select" id="router_id" name="router_id" <% if (typeof authMode !== 'undefined' && authMode === 'radius') { %>disabled<% } %>>
-                                <% if (typeof authMode !== 'undefined' && authMode === 'radius') { %>
-                                    <option value="RADIUS" selected>RADIUS Server (Mode RADIUS)</option>
-                                <% } else { %>
-                                    <option value="">- Pilih NAS (Opsional) -</option>
-                                    <% if (typeof routers !== 'undefined') { routers.forEach(function(r){ %>
-                                        <option value="<%= r.id %>"><%= r.name %> (<%= r.nas_ip %>)</option>
-                                    <% }); } %>
-                                <% } %>
+                            <label for="router_id" class="form-label">NAS (Router) <small class="text-muted">(opsional)</small></label>
+                            <select class="form-select" id="router_id" name="router_id">
+                                <option value="">- Pilih NAS (Opsional) -</option>
+                                <% if (typeof routers !== 'undefined') { routers.forEach(function(r){ %>
+                                    <option value="<%= r.id %>"><%= r.name %> (<%= r.nas_ip %>)</option>
+                                <% }); } %>
                             </select>
-                            <small class="form-text text-muted">
-                                <% if (typeof authMode !== 'undefined' && authMode === 'radius') { %>
-                                    Mode RADIUS aktif - NAS otomatis menggunakan RADIUS Server
-                                <% } else { %>
-                                    Pilih router tempat pelanggan ini biasanya terkoneksi (untuk pelabelan & rekap per-router). Bisa dikosongkan.
-                                <% } %>
-                            </small>
-                            <% if (typeof authMode !== 'undefined' && authMode === 'radius') { %>
-                                <input type="hidden" id="router_id_hidden" name="router_id" value="RADIUS">
-                            <% } %>
                         </div>
+                        <% } %>
                         </div><!-- /addCustomerPppoeProfileNasBlock -->
                         <div class="mb-3">
-                            <label for="auto_suspension" class="form-label">Auto Suspension</label>
+                            <label for="renewal_type" class="form-label">Tipe Penagihan</label>
+                            <select class="form-control" id="renewal_type" name="renewal_type">
+                                <option value="fix_date" selected>Fix Date - Tanggal jatuh tempo tetap</option>
+                                <option value="renewal">Renewal - Mengikuti tanggal pembayaran</option>
+                            </select>
+                        </div>
+                        <div class="mb-3" id="fix_date_container">
+                            <label for="fix_date" class="form-label">Tanggal Jatuh Tempo (1-28)</label>
+                            <input type="number" class="form-control" id="fix_date" name="fix_date" min="1" max="28" value="15">
+                        </div>
+                        <div class="mb-3">
+                            <label for="auto_suspension" class="form-label">Aktifkan Auto Isolir</label>
                             <select class="form-control" id="auto_suspension" name="auto_suspension">
                                 <option value="1">Ya - Isolir otomatis saat telat bayar</option>
                                 <option value="0">Tidak - Tidak diisolir otomatis</option>
                             </select>
-                            <small class="form-text text-muted">Pilih apakah pelanggan akan diisolir otomatis saat telat bayar</small>
                         </div>
                         <div class="mb-3">
-                            <label for="billing_day" class="form-label">Tanggal Penagihan (1-28)</label>
-                            <input type="number" class="form-control" id="billing_day" name="billing_day" min="1" max="28" value="15">
-                            <small class="form-text text-muted">Tanggal jatuh tempo tagihan setiap bulan. Nilai di luar 28 akan disesuaikan.</small>
-                        </div>
-                        <div class="mb-3">
-                            <label for="renewal_type" class="form-label">Tipe Pembaruan</label>
-                            <select class="form-control" id="renewal_type" name="renewal_type">
-                                <option value="fix_date" selected>Fix Date - Tanggal jatuh tempo tetap sesuai tanggal yang ditentukan</option>
-                                <option value="renewal">Renewal - Tanggal jatuh tempo mengikuti tanggal pembayaran</option>
-                            </select>
-                            <small class="form-text text-muted">Pilih cara perhitungan tanggal jatuh tempo untuk tagihan berikutnya</small>
-                        </div>
-                        <div class="mb-3" id="fix_date_container">
-                            <label for="fix_date" class="form-label">Tanggal Tetap (1-28)</label>
-                            <input type="number" class="form-control" id="fix_date" name="fix_date" min="1" max="28" value="15">
-                            <small class="form-text text-muted">Tanggal tetap untuk jatuh tempo jika memilih Fix Date. Hanya berlaku jika renewal_type = fix_date</small>
+                            <label for="auto_suspension_day" class="form-label">Tanggal Isolir (1-28)</label>
+                            <input type="number" class="form-control" id="auto_suspension_day" name="auto_suspension_day" min="1" max="28" value="<%= (typeof appSettings !== 'undefined' && appSettings.auto_suspension_day) ? parseInt(appSettings.auto_suspension_day, 10) || 25 : 25 %>">
                         </div>
                         
                         <div class="mb-3">
@@ -1361,26 +1417,43 @@
                                 <option value="inactive">Nonaktif</option>
                                 <option value="suspended">Isolir</option>
                             </select>
-                            <small class="form-text text-muted">Menentukan posisi akun: aktif berlangganan, isolir (ditangguhkan), atau nonaktif.</small>
                         </div>
-                        <hr class="my-3">
-                        <h6 class="mb-3"><i class="bi bi-images me-2"></i>Upload Dokumen</h6>
-                        
-                        <div class="mb-3">
-                            <label for="add_ktp_photo" class="form-label">Upload Foto KTP</label>
-                            <input type="file" class="form-control" id="add_ktp_photo" name="ktp_photo" accept="image/*">
-                            <small class="form-text text-muted">Format: JPG, PNG, atau GIF. Maksimal 20MB</small>
-                            <div id="add_ktp_preview" class="mt-2" style="display: none;">
-                                <img id="add_ktp_preview_img" src="" alt="Preview KTP" class="img-thumbnail" style="max-width: 200px; max-height: 200px;">
+
+                        <!-- Upload Dokumen (collapsible, default collapsed) -->
+                        <div class="card border-secondary mb-3">
+                            <div class="card-header bg-light py-2">
+                                <button type="button" id="addDocsToggle" class="add-optional-toggle d-flex align-items-center justify-content-between"
+                                    data-bs-toggle="collapse" data-bs-target="#addDocsBody"
+                                    aria-expanded="false" aria-controls="addDocsBody">
+                                    <h6 class="mb-0">
+                                        <i class="bi bi-images me-1"></i>Upload Dokumen
+                                        <small class="text-muted fw-normal ms-1">(opsional)</small>
+                                    </h6>
+                                    <span class="optional-fill-action">
+                                        <span class="optional-fill-now">Isi Sekarang</span>
+                                        <span class="optional-fill-later">Isi Nanti</span>
+                                    </span>
+                                </button>
                             </div>
-                        </div>
-                        
-                        <div class="mb-3">
-                            <label for="add_house_photo" class="form-label">Upload Rumah Tampak Depan</label>
-                            <input type="file" class="form-control" id="add_house_photo" name="house_photo" accept="image/*">
-                            <small class="form-text text-muted">Format: JPG, PNG, atau GIF. Maksimal 20MB</small>
-                            <div id="add_house_preview" class="mt-2" style="display: none;">
-                                <img id="add_house_preview_img" src="" alt="Preview Rumah" class="img-thumbnail" style="max-width: 200px; max-height: 200px;">
+                            <div id="addDocsBody" class="collapse">
+                                <div class="card-body pt-2">
+                                    <div class="mb-3">
+                                        <label for="add_ktp_photo" class="form-label">Foto KTP</label>
+                                        <input type="file" class="form-control" id="add_ktp_photo" name="ktp_photo" accept="image/*">
+                                        <small class="form-text text-muted">JPG/PNG/GIF, max 20MB</small>
+                                        <div id="add_ktp_preview" class="mt-2" style="display: none;">
+                                            <img id="add_ktp_preview_img" src="" alt="Preview KTP" class="img-thumbnail" style="max-width: 200px; max-height: 200px;">
+                                        </div>
+                                    </div>
+                                    <div class="mb-0">
+                                        <label for="add_house_photo" class="form-label">Foto Rumah Tampak Depan</label>
+                                        <input type="file" class="form-control" id="add_house_photo" name="house_photo" accept="image/*">
+                                        <small class="form-text text-muted">JPG/PNG/GIF, max 20MB</small>
+                                        <div id="add_house_preview" class="mt-2" style="display: none;">
+                                            <img id="add_house_preview_img" src="" alt="Preview Rumah" class="img-thumbnail" style="max-width: 200px; max-height: 200px;">
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         <div class="modal-footer flex-wrap gap-2 mt-4 mx-n3 mb-n3 px-3 pb-3">
@@ -1615,29 +1688,20 @@
                             <input type="text" class="form-control" id="edit_pppoe_profile" name="pppoe_profile" placeholder="Profile akan otomatis terisi sesuai paket">
                             <small class="form-text text-muted">Profile PPPoE yang akan digunakan untuk pelanggan ini</small>
                         </div>
+                        <% if (typeof authMode !== 'undefined' && authMode === 'radius') { %>
+                            <input type="hidden" id="edit_router_id" name="router_id" value="RADIUS">
+                        <% } else { %>
                         <div class="mb-3">
                             <label for="edit_router_id" class="form-label">NAS (Router) <small class="text-muted">(Opsional)</small></label>
-                            <select class="form-select" id="edit_router_id" name="router_id" <% if (typeof authMode !== 'undefined' && authMode === 'radius') { %>disabled<% } %>>
-                                <% if (typeof authMode !== 'undefined' && authMode === 'radius') { %>
-                                    <option value="RADIUS" selected>RADIUS Server (Mode RADIUS)</option>
-                                <% } else { %>
-                                    <option value="">- Pilih NAS (Opsional) -</option>
-                                    <% if (typeof routers !== 'undefined') { routers.forEach(function(r){ %>
-                                        <option value="<%= r.id %>"><%= r.name %> (<%= r.nas_ip %>)</option>
-                                    <% }); } %>
-                                <% } %>
+                            <select class="form-select" id="edit_router_id" name="router_id">
+                                <option value="">- Pilih NAS (Opsional) -</option>
+                                <% if (typeof routers !== 'undefined') { routers.forEach(function(r){ %>
+                                    <option value="<%= r.id %>"><%= r.name %> (<%= r.nas_ip %>)</option>
+                                <% }); } %>
                             </select>
-                            <small class="form-text text-muted">
-                                <% if (typeof authMode !== 'undefined' && authMode === 'radius') { %>
-                                    Mode RADIUS aktif - NAS otomatis menggunakan RADIUS Server
-                                <% } else { %>
-                                    Pilih router tempat pelanggan ini terhubung untuk operasi isolir/restore. Bisa dikosongkan.
-                                <% } %>
-                            </small>
-                            <% if (typeof authMode !== 'undefined' && authMode === 'radius') { %>
-                                <input type="hidden" id="edit_router_id_hidden" name="router_id" value="RADIUS">
-                            <% } %>
+                            <small class="form-text text-muted">Pilih router tempat pelanggan ini terhubung untuk operasi isolir/restore. Bisa dikosongkan.</small>
                         </div>
+                        <% } %>
                         </div><!-- /editCustomerPppoeProfileNasBlock -->
                         <div class="mb-3">
                             <label for="edit_auto_suspension" class="form-label">Auto Suspension</label>
@@ -3432,17 +3496,21 @@
             formData.append('auto_suspension', safeValAdd('#auto_suspension'));
             formData.append('create_pppoe_user', (createPppoe && !staticIpEnabled) ? 1 : 0);
             formData.append('pppoe_password', staticIpEnabled ? '' : safeValAdd('#pppoe_password'));
-            formData.append('billing_day', (function() {
-                const v = parseInt($('#billing_day').val(), 10);
+            // Tanggal isolir per pelanggan (dipakai cron auto isolir)
+            formData.append('auto_suspension_day', (function() {
+                const v = parseInt($('#auto_suspension_day').val(), 10);
                 if (Number.isFinite(v)) return Math.min(Math.max(v, 1), 28);
-                return 15;
+                return 25;
             })());
             formData.append('renewal_type', safeValAdd('#renewal_type'));
-            formData.append('fix_date', safeValAdd('#renewal_type') === 'fix_date' ? (function() {
+            // Tanggal jatuh tempo (fix_date). billing_day disinkron agar fallback invoice/renewal tetap aman.
+            const dueDayVal = (function() {
                 const v = parseInt($('#fix_date').val(), 10);
                 if (Number.isFinite(v)) return Math.min(Math.max(v, 1), 28);
                 return 15;
-            })() : '');
+            })();
+            formData.append('fix_date', safeValAdd('#renewal_type') === 'fix_date' ? dueDayVal : '');
+            formData.append('billing_day', dueDayVal);
             formData.append('latitude', safeValAdd('#latitude'));
             formData.append('longitude', safeValAdd('#longitude'));
             formData.append('static_ip', staticIpEnabled ? staticIpVal : '');

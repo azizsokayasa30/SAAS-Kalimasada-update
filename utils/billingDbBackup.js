@@ -90,18 +90,29 @@ function shouldRunAutoBackup(intervalDays, backupDir = getBackupDir()) {
 
 function getAppSettings(db, tenantId = null) {
     return new Promise((resolve) => {
-        let sql = 'SELECT key, value FROM app_settings';
-        const params = [];
-        if (tenantId != null) {
-            sql += ' WHERE tenant_id = ?';
-            params.push(tenantId);
-        }
-        db.all(sql, params, (err, rows) => {
+        // key di app_settings UNIQUE global — filter ketat tenant_id membuat
+        // setting (mis. billing_autobackup_*) "hilang" untuk tenant selain default.
+        db.all('SELECT key, value, tenant_id FROM app_settings', [], (err, rows) => {
             const settingsObj = {};
             if (!err && rows) {
-                rows.forEach((row) => {
-                    settingsObj[row.key] = row.value;
-                });
+                if (tenantId == null) {
+                    rows.forEach((row) => {
+                        settingsObj[row.key] = row.value;
+                    });
+                } else {
+                    const tid = Number(tenantId);
+                    const byKey = new Map();
+                    rows.forEach((row) => {
+                        const existing = byKey.get(row.key);
+                        const isMatch = Number(row.tenant_id) === tid;
+                        if (!existing || isMatch) {
+                            byKey.set(row.key, row);
+                        }
+                    });
+                    byKey.forEach((row, key) => {
+                        settingsObj[key] = row.value;
+                    });
+                }
             }
             resolve(settingsObj);
         });
@@ -129,17 +140,35 @@ function walCheckpoint(db) {
     });
 }
 
-function onlineBackupToFile(db, destPath) {
+function onlineBackupToFile(db, destPath, timeoutMs = 90000) {
     return new Promise((resolve, reject) => {
         let backup;
+        let settled = false;
+        const done = (err) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            if (err) reject(err);
+            else resolve();
+        };
+        const timer = setTimeout(() => {
+            try {
+                backup && backup.finish(() => {});
+            } catch (_) {
+                /* ignore */
+            }
+            done(new Error('Online backup timeout'));
+        }, timeoutMs);
+
         try {
             // filenameIsDest=true → destPath adalah file tujuan
             backup = db.backup(destPath, 'main', 'main', true);
         } catch (err) {
-            return reject(err);
+            return done(err);
         }
 
         const stepAll = () => {
+            if (settled) return;
             try {
                 backup.step(-1);
             } catch (err) {
@@ -148,14 +177,14 @@ function onlineBackupToFile(db, destPath) {
                 } catch (_) {
                     /* ignore */
                 }
-                return reject(err);
+                return done(err);
             }
             if (backup.completed) {
-                return backup.finish((err) => (err ? reject(err) : resolve()));
+                return backup.finish((err) => done(err || null));
             }
             if (backup.failed) {
                 return backup.finish(() =>
-                    reject(new Error('Online backup gagal (database sedang sibuk)'))
+                    done(new Error('Online backup gagal (database sedang sibuk)'))
                 );
             }
             setImmediate(stepAll);
@@ -279,6 +308,85 @@ function isValidSqliteHeader(filePath) {
     }
 }
 
+/**
+ * Restore billing.db dari file sumber ke koneksi live via SQLite Online Backup API.
+ * Jangan copy-overwrite file .db saat koneksi WAL masih terbuka.
+ */
+async function restoreBillingDbFromFile(sourceAbsPath, options = {}) {
+    const dbPath = options.dbPath || path.join(process.cwd(), 'data', 'billing.db');
+    if (!isValidSqliteHeader(sourceAbsPath)) {
+        throw new Error('File bukan database SQLite yang valid');
+    }
+
+    const { db: liveDb } = resolveLiveDb(options);
+    if (!liveDb) {
+        throw new Error('Koneksi database aktif tidak tersedia untuk restore');
+    }
+
+    await walCheckpoint(liveDb);
+    try {
+        await createBillingDbBackup(dbPath, { prefix: 'pre_restore', db: liveDb });
+    } catch (e) {
+        logger.warn('[restore] Gagal membuat cadangan pra-restore: ' + e.message);
+    }
+
+    await new Promise((resolve, reject) => {
+        let backup;
+        try {
+            backup = liveDb.backup(sourceAbsPath, 'main', 'main', false, (err) => {
+                if (err) reject(err);
+            });
+        } catch (err) {
+            return reject(err);
+        }
+
+        const stepAll = () => {
+            try {
+                backup.step(-1);
+            } catch (err) {
+                try {
+                    backup.finish(() => {});
+                } catch (_) {
+                    /* ignore */
+                }
+                return reject(err);
+            }
+            if (backup.completed) {
+                return backup.finish((err) => (err ? reject(err) : resolve()));
+            }
+            if (backup.failed) {
+                return backup.finish(() =>
+                    reject(new Error('Restore gagal saat menyalin data database (database sedang sibuk)'))
+                );
+            }
+            setImmediate(stepAll);
+        };
+        stepAll();
+    });
+
+    await walCheckpoint(liveDb);
+
+    try {
+        const tenantStore = require('../config/platform/tenantStore');
+        await tenantStore.initPlatform();
+        logger.info('[restore] Skema platform SaaS dipastikan ulang (initPlatform)');
+    } catch (e) {
+        logger.error('[restore] Gagal menjalankan initPlatform setelah restore: ' + e.message);
+    }
+
+    try {
+        const { purgeDemoSeedData } = require('./demoSeedData');
+        const purged = await purgeDemoSeedData(liveDb);
+        if ((purged.collectorsRemoved || 0) + (purged.odpsRemoved || 0) > 0) {
+            logger.info(
+                `[restore] Demo seed guard: hapus ${purged.collectorsRemoved || 0} kolektor, ${purged.odpsRemoved || 0} ODP demo`
+            );
+        }
+    } catch (e) {
+        logger.warn('[restore] Demo seed guard dilewati: ' + e.message);
+    }
+}
+
 async function runBillingAutoBackupIfEnabled(options = {}) {
     const db = options.db || require('../config/billing').db;
     const sourceDbPath = options.sourceDbPath || path.join(process.cwd(), 'data', 'billing.db');
@@ -321,5 +429,7 @@ module.exports = {
     getAppSettings,
     runBillingAutoBackupIfEnabled,
     cleanupOldBillingBackups,
-    createBillingDbBackup
+    createBillingDbBackup,
+    restoreBillingDbFromFile,
+    isValidSqliteHeader
 };

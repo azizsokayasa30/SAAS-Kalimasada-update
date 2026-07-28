@@ -30,10 +30,24 @@
         }
         .toast-container { z-index: 99999 !important; }
         .toast { min-width: 300px; }
-        .pool-row { cursor: pointer; }
-        .pool-row.active-pool { background: rgba(13, 110, 253, 0.08); }
-        html[data-theme="dark"] .pool-row.active-pool { background: rgba(59, 130, 246, 0.15); }
+        .pool-row { cursor: default; }
         .stat-card .h4 { font-weight: 700; }
+        #btnSyncAllMikrotik.btn-success {
+            background-color: #198754 !important;
+            border-color: #157347 !important;
+            color: #fff !important;
+        }
+        #btnSyncAllMikrotik.btn-success:hover,
+        #btnSyncAllMikrotik.btn-success:focus {
+            background-color: #157347 !important;
+            border-color: #146c43 !important;
+            color: #fff !important;
+        }
+        #btnSyncAllMikrotik.btn-success:disabled {
+            background-color: #198754 !important;
+            border-color: #157347 !important;
+            opacity: 0.75;
+        }
     </style>
 </head>
 <body>
@@ -44,35 +58,46 @@
         <main class="col-md-10 ms-sm-auto main-content px-md-4 py-4">
             <div class="d-flex justify-content-between align-items-center border-bottom pb-2 mb-3">
                 <h1 class="h3 mb-0">Konfigurasi IP</h1>
-                <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#poolModal" onclick="openCreatePool()">
-                    <i class="bi bi-plus"></i> Tambah CIDR
-                </button>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-success btn-sm" type="button" id="btnSyncAllMikrotik" onclick="syncAllToMikrotik()">
+                        <i class="bi bi-arrow-repeat"></i> Sync ke Mikrotik
+                    </button>
+                    <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#poolModal" onclick="openCreatePool()">
+                        <i class="bi bi-plus"></i> Tambah CIDR
+                    </button>
+                </div>
             </div>
 
-            <% const gs = globalStats || { total: 0, used: 0, unused: 0, pools: 0 }; %>
+            <% const gs = globalStats || { total: 0, used: 0, unused: 0, isolir: 0, pools: 0 }; %>
             <div class="row g-2 mb-4">
-                <div class="col-6 col-md-3">
+                <div class="col-6 col-md">
                     <div class="card p-3 text-center stat-card">
                         <div class="h4 mb-0"><%= gs.pools %></div>
                         <div class="small text-muted">Total pool / CIDR</div>
                     </div>
                 </div>
-                <div class="col-6 col-md-3">
+                <div class="col-6 col-md">
                     <div class="card p-3 text-center stat-card">
                         <div class="h4 mb-0"><%= gs.total %></div>
                         <div class="small text-muted">Total IP</div>
                     </div>
                 </div>
-                <div class="col-6 col-md-3">
+                <div class="col-6 col-md">
                     <div class="card p-3 text-center stat-card">
                         <div class="h4 mb-0 text-success"><%= gs.used %></div>
                         <div class="small text-muted">IP terpakai</div>
                     </div>
                 </div>
-                <div class="col-6 col-md-3">
+                <div class="col-6 col-md">
                     <div class="card p-3 text-center stat-card">
                         <div class="h4 mb-0 text-danger"><%= gs.unused %></div>
                         <div class="small text-muted">IP belum di pakai</div>
+                    </div>
+                </div>
+                <div class="col-6 col-md">
+                    <div class="card p-3 text-center stat-card">
+                        <div class="h4 mb-0 text-warning"><%= gs.isolir || 0 %></div>
+                        <div class="small text-muted">IP ter isolir</div>
                     </div>
                 </div>
             </div>
@@ -90,17 +115,17 @@
                                 <th>Router</th>
                                 <th>IP terpakai</th>
                                 <th>IP belum di pakai</th>
+                                <th>IP ter isolir</th>
                                 <th>Status</th>
                                 <th></th>
                             </tr>
                         </thead>
                         <tbody>
                         <% if (!(pools || []).length) { %>
-                            <tr><td colspan="9" class="text-muted">Belum ada CIDR. Klik Tambah CIDR.</td></tr>
+                            <tr><td colspan="10" class="text-muted">Belum ada CIDR. Klik Tambah CIDR.</td></tr>
                         <% } %>
                         <% (pools || []).forEach(function(p) { %>
-                            <tr class="pool-row <%= selected && selected.id == p.id ? 'active-pool' : '' %>"
-                                onclick="location.href='/admin/static-ip/ip-config?pool_id=<%= p.id %>'">
+                            <tr class="pool-row">
                                 <td><strong><%= p.name %></strong></td>
                                 <td><code><%= p.network_cidr || '-' %></code></td>
                                 <td><code><%= p.range_start %>-<%= p.range_end %></code></td>
@@ -108,6 +133,7 @@
                                 <td><%= p.router_name || p.router_id %></td>
                                 <td><span class="text-success"><%= (p.stats && p.stats.used) || 0 %></span></td>
                                 <td><span class="text-danger"><%= (p.stats && p.stats.unused) || 0 %></span></td>
+                                <td><span class="text-warning"><%= (p.stats && p.stats.isolir) || 0 %></span></td>
                                 <td>
                                     <% if (p.enabled) { %>
                                         <span class="badge text-bg-success">Aktif</span>
@@ -115,13 +141,12 @@
                                         <span class="badge text-bg-secondary">Nonaktif</span>
                                     <% } %>
                                 </td>
-                                <td class="text-nowrap" onclick="event.stopPropagation()">
+                                <td class="text-nowrap">
                                     <button class="btn btn-sm btn-outline-secondary" onclick='openEditPool(<%= JSON.stringify({
                                         id: p.id, name: p.name, router_id: p.router_id, gateway: p.gateway,
                                         range_start: p.range_start, range_end: p.range_end, network_cidr: p.network_cidr,
                                         enabled: p.enabled
                                     }) %>)'>Edit</button>
-                                    <button class="btn btn-sm btn-outline-primary" onclick="syncPool(<%= p.id %>)">Sync</button>
                                     <button class="btn btn-sm btn-outline-danger" onclick="deletePool(<%= p.id %>)">Hapus</button>
                                 </td>
                             </tr>
@@ -131,22 +156,28 @@
                 </div>
             </div>
 
-            <% if (selected) { %>
+            <% const blockOn = typeof blockUnused === 'undefined' ? true : !!blockUnused; %>
+            <% const ipLists = allIps || { used: [], unused: [], isolir: [] }; %>
             <div class="d-flex justify-content-between align-items-center mb-2">
-                <h2 class="h6 mb-0">Detail: <%= selected.name %> <code class="ms-1"><%= selected.network_cidr || (selected.range_start + '-' + selected.range_end) %></code></h2>
+                <h2 class="h6 mb-0">Inventaris IP (semua pool)</h2>
+                <span class="small text-muted">Diurutkan A–Z berdasarkan IP</span>
             </div>
             <div class="row g-3">
-                <div class="col-md-6">
-                    <div class="card p-3">
-                        <h2 class="h6">IP terpakai</h2>
+                <div class="col-lg-4">
+                    <div class="card p-3 h-100">
+                        <h2 class="h6">IP terpakai <span class="badge text-bg-success"><%= (ipLists.used || []).length %></span></h2>
                         <div class="table-responsive" style="max-height:420px;overflow:auto">
                             <table class="table table-sm">
                                 <thead><tr><th>IP</th><th>Pelanggan</th><th>Status</th></tr></thead>
                                 <tbody>
-                                <% ((analysis && analysis.used) || []).forEach(function(u) { %>
-                                    <tr><td><code><%= u.ip %></code></td><td><%= u.name %></td><td><%= u.status %></td></tr>
+                                <% (ipLists.used || []).forEach(function(u) { %>
+                                    <tr>
+                                        <td><code><%= u.ip %></code></td>
+                                        <td><%= u.name %></td>
+                                        <td><%= u.status %></td>
+                                    </tr>
                                 <% }) %>
-                                <% if (!(analysis && analysis.used && analysis.used.length)) { %>
+                                <% if (!(ipLists.used && ipLists.used.length)) { %>
                                     <tr><td colspan="3" class="text-muted">Tidak ada</td></tr>
                                 <% } %>
                                 </tbody>
@@ -154,17 +185,39 @@
                         </div>
                     </div>
                 </div>
-                <div class="col-md-6">
-                    <div class="card p-3">
-                        <h2 class="h6">IP belum di pakai</h2>
+                <div class="col-lg-4">
+                    <div class="card p-3 h-100">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                            <h2 class="h6 mb-0">IP belum di pakai <span class="badge text-bg-danger"><%= (ipLists.unused || []).length %></span></h2>
+                            <div class="form-check form-switch mb-0">
+                                <input class="form-check-input" type="checkbox" role="switch" id="toggleBlockUnused" <%= blockOn ? 'checked' : '' %>>
+                                <label class="form-check-label small" for="toggleBlockUnused">Blokir IP tidak di pakai</label>
+                            </div>
+                        </div>
+                        <div class="small text-muted mb-2">
+                            <% if (blockOn) { %>
+                                Unused IP diarahkan ke halaman isolir (sinkron address-list MikroTik).
+                            <% } else { %>
+                                Blokir unused nonaktif — IP kosong tidak di-redirect.
+                            <% } %>
+                        </div>
                         <div class="table-responsive" style="max-height:420px;overflow:auto">
                             <table class="table table-sm">
                                 <thead><tr><th>IP</th><th></th></tr></thead>
                                 <tbody>
-                                <% ((analysis && analysis.unused) || []).forEach(function(u) { %>
-                                    <tr><td><code><%= u.ip %></code></td><td><span class="badge text-bg-warning">isolir</span></td></tr>
+                                <% (ipLists.unused || []).forEach(function(u) { %>
+                                    <tr>
+                                        <td><code><%= u.ip %></code></td>
+                                        <td>
+                                            <% if (blockOn) { %>
+                                                <span class="badge text-bg-warning">diblokir</span>
+                                            <% } else { %>
+                                                <span class="badge text-bg-secondary">bebas</span>
+                                            <% } %>
+                                        </td>
+                                    </tr>
                                 <% }) %>
-                                <% if (!(analysis && analysis.unused && analysis.unused.length)) { %>
+                                <% if (!(ipLists.unused && ipLists.unused.length)) { %>
                                     <tr><td colspan="2" class="text-muted">Tidak ada</td></tr>
                                 <% } %>
                                 </tbody>
@@ -172,8 +225,30 @@
                         </div>
                     </div>
                 </div>
+                <div class="col-lg-4">
+                    <div class="card p-3 h-100 border-warning">
+                        <h2 class="h6">IP ter isolir <span class="badge text-bg-warning"><%= (ipLists.isolir || []).length %></span></h2>
+                        <div class="small text-muted mb-2">Pelanggan suspended / isolir / inactive dari seluruh pool.</div>
+                        <div class="table-responsive" style="max-height:420px;overflow:auto">
+                            <table class="table table-sm">
+                                <thead><tr><th>IP</th><th>Pelanggan</th><th>Status</th></tr></thead>
+                                <tbody>
+                                <% (ipLists.isolir || []).forEach(function(u) { %>
+                                    <tr>
+                                        <td><code><%= u.ip %></code></td>
+                                        <td><%= u.name %></td>
+                                        <td><span class="badge text-bg-warning"><%= u.status %></span></td>
+                                    </tr>
+                                <% }) %>
+                                <% if (!(ipLists.isolir && ipLists.isolir.length)) { %>
+                                    <tr><td colspan="3" class="text-muted">Tidak ada IP ter isolir</td></tr>
+                                <% } %>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <% } %>
         </main>
     </div>
 </div>
@@ -316,26 +391,44 @@ poolForm.addEventListener('submit', async (e)=>{
           ? ('Block: '+(data.sync.block_addresses||[]).join(', '))
           : 'Block list tersinkron ke MikroTik');
     }
-    location.href = '/admin/static-ip/ip-config?pool_id='+poolId;
+    location.href = '/admin/static-ip/ip-config';
   } catch(err){
     showToast('error','Gagal menyimpan', err.message||String(err));
   } finally {
     btn.disabled = false; btn.textContent = 'Simpan & sync block';
   }
 });
-async function syncPool(id){
-  showToast('info','Menyinkronkan block ke MikroTik...');
+async function syncAllToMikrotik(){
+  const btn = document.getElementById('btnSyncAllMikrotik');
+  if(btn){ btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Syncing...'; }
+  showToast('info','Menyinkronkan seluruh pool ke MikroTik...');
   try {
-    const res = await fetch('/admin/static-ip/pools/'+id+'/sync',{method:'POST'});
+    const res = await fetch('/admin/static-ip/pools/sync-all',{method:'POST'});
     const data = await res.json().catch(()=>({}));
-    if(data.success){
-      showToast('success','Sync block berhasil',
-        'Block: '+(data.block_addresses||[]).join(', ')+' | Allowed: '+(data.allowed_count||0)+' IP');
+    if(!data.success){
+      showToast('error','Sync ke Mikrotik gagal', data.message||'');
+      return;
+    }
+    const results = data.results || [];
+    const ok = results.filter(r => r && r.success !== false && !r.error);
+    const fail = results.filter(r => r && (r.success === false || r.error));
+    if(!results.length){
+      showToast('warning','Tidak ada pool aktif untuk di-sync');
+      return;
+    }
+    if(fail.length){
+      showToast('warning',
+        'Sync sebagian berhasil ('+ok.length+'/'+results.length+')',
+        fail.map(f => f.error || f.message || 'gagal').join('; '));
     } else {
-      showToast('error','Sync block gagal', data.message||'');
+      const routers = ok.map(r => (r.router && r.router.name) || r.router_id || '#').join(', ');
+      showToast('success','Sync ke Mikrotik berhasil',
+        results.length+' router tersinkron'+(routers ? ': '+routers : ''));
     }
   } catch(err){
-    showToast('error','Sync block gagal', err.message||String(err));
+    showToast('error','Sync ke Mikrotik gagal', err.message||String(err));
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Sync ke Mikrotik'; }
   }
 }
 async function deletePool(id){
@@ -352,6 +445,40 @@ async function deletePool(id){
   } catch(err){
     showToast('error','Gagal menghapus CIDR', err.message||String(err));
   }
+}
+
+const toggleBlockUnused = document.getElementById('toggleBlockUnused');
+if(toggleBlockUnused){
+  toggleBlockUnused.addEventListener('change', async function(){
+    const enabled = !!this.checked;
+    this.disabled = true;
+    showToast('info', enabled ? 'Mengaktifkan blokir unused...' : 'Mematikan blokir unused...');
+    try {
+      const res = await fetch('/admin/static-ip/block-unused', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ enabled })
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!data.success){
+        this.checked = !enabled;
+        showToast('error','Gagal mengubah pengaturan', data.message||'');
+        return;
+      }
+      const syncOk = !(data.sync && data.sync.success === false);
+      flashToast(
+        syncOk ? 'success' : 'warning',
+        data.message || (enabled ? 'Blokir aktif' : 'Blokir nonaktif'),
+        data.sync && data.sync.message ? data.sync.message : ''
+      );
+      location.reload();
+    } catch(err){
+      this.checked = !enabled;
+      showToast('error','Gagal mengubah pengaturan', err.message||String(err));
+    } finally {
+      this.disabled = false;
+    }
+  });
 }
 </script>
 </body>

@@ -382,26 +382,38 @@ async function getUsedIpsForPool(pool, tenantId = getTenantId()) {
     return used;
 }
 
-async function analyzePool(pool, tenantId = getTenantId()) {
+function isIsolirStatus(status) {
+    const s = String(status || '').toLowerCase();
+    return s === 'suspended' || s === 'isolir' || s === 'inactive';
+}
+
+async function analyzePool(pool, tenantId = getTenantId(), { blockUnused = true } = {}) {
     const allIps = expandPoolRange(pool);
     const reserved = new Set(parseReserved(pool.reserved_ips));
     if (pool.gateway) reserved.add(pool.gateway);
     const usedRows = await getUsedIpsForPool(pool, tenantId);
     const usedMap = new Map(usedRows.map((u) => [u.ip, u]));
     const used = [];
+    const isolir = [];
     const unused = [];
     for (const ip of allIps) {
         if (reserved.has(ip)) continue;
-        if (usedMap.has(ip)) used.push(usedMap.get(ip));
-        else unused.push({ ip, blocked: true });
+        if (usedMap.has(ip)) {
+            const row = usedMap.get(ip);
+            if (isIsolirStatus(row.status)) isolir.push(row);
+            else used.push(row);
+        } else {
+            unused.push({ ip, blocked: !!blockUnused });
+        }
     }
     return {
         total: allIps.length,
         reserved: [...reserved],
         used,
+        isolir,
         unused,
         mikrotik_block_address: mikrotikRangeAddress(pool),
-        allowed_ips: used.filter((u) => String(u.status || '').toLowerCase() === 'active').map((u) => u.ip)
+        allowed_ips: used.map((u) => u.ip)
     };
 }
 
@@ -453,6 +465,7 @@ module.exports = {
     listStaticIpCustomers,
     getUsedIpsForPool,
     analyzePool,
+    isIsolirStatus,
     findPoolForIp,
     assertIpAvailable,
     withDb,

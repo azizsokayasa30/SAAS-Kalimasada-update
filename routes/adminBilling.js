@@ -75,6 +75,38 @@ function verifySuperAdminPassword(plain) {
     }
 }
 
+function resolveBillingTenantId(req) {
+    const raw = req?.session?.tenantId ?? req?.tenantId ?? req?.tenant?.id ?? null;
+    const id = parseInt(raw, 10);
+    return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+async function getSuspensionSetting(req, key, defaultValue) {
+    const tenantId = resolveBillingTenantId(req);
+    if (tenantId) {
+        const { getFullSettingsForTenantId } = require('../config/platform/tenantSettingsManager');
+        const ts = await getFullSettingsForTenantId(tenantId);
+        return ts[key] !== undefined && ts[key] !== null ? ts[key] : defaultValue;
+    }
+    return getSetting(key, defaultValue);
+}
+
+async function saveSuspensionSetting(req, key, value) {
+    const tenantId = resolveBillingTenantId(req);
+    if (tenantId) {
+        const { saveFullSettingsForTenantId } = require('../config/platform/tenantSettingsManager');
+        await saveFullSettingsForTenantId(tenantId, { [key]: value });
+        // Update live tenant context agar getTenantSetting langsung melihat nilai baru
+        if (req.tenant && req.tenant.settings && typeof req.tenant.settings === 'object') {
+            req.tenant.settings[key] = value;
+        }
+        return true;
+    }
+    const ok = setSetting(key, value);
+    if (ok) clearSettingsCache();
+    return ok;
+}
+
 // Configure multer for image uploads
 const imageStorage = multer.diskStorage({
     destination: function (req, file, cb) {
@@ -8090,7 +8122,7 @@ router.post('/customers', customerPhotoUpload.fields([
     { name: 'house_photo', maxCount: 1 }
 ]), async (req, res) => {
     try {
-        const { name, username, password, phone, pppoe_username, email, address, area, area_id, package_id, odp_id, pppoe_profile, status: bodyStatus, auto_suspension, billing_day, renewal_type, fix_date, create_pppoe_user, pppoe_password, static_ip, assigned_ip, mac_address, latitude, longitude, cable_type, cable_length, port_number, cable_status, cable_notes, router_id, save_mode } = req.body;
+        const { name, username, password, phone, pppoe_username, email, address, area, area_id, package_id, odp_id, pppoe_profile, status: bodyStatus, auto_suspension, auto_suspension_day, billing_day, renewal_type, fix_date, create_pppoe_user, pppoe_password, static_ip, assigned_ip, mac_address, latitude, longitude, cable_type, cable_length, port_number, cable_status, cable_notes, router_id, save_mode } = req.body;
         
         const phoneStored = parsePhoneFromSpreadsheetCell(phone);
 
@@ -8171,7 +8203,21 @@ router.post('/customers', customerPhotoUpload.fields([
             pppoe_profile: profileToUse ?? null,
             status: initialStatus,
             auto_suspension: auto_suspension !== undefined ? parseInt(auto_suspension) : 1,
+            auto_suspension_day: (() => {
+                if (auto_suspension_day === undefined || auto_suspension_day === null || String(auto_suspension_day).trim() === '') {
+                    return null; // null = pakai pengaturan global
+                }
+                const v = parseInt(auto_suspension_day, 10);
+                if (Number.isFinite(v)) return Math.min(Math.max(v, 1), 28);
+                return null;
+            })(),
             billing_day: (() => {
+                // Sinkron dengan fix_date bila mode fix_date, agar fallback due-date tetap konsisten
+                const rt = renewal_type || 'fix_date';
+                if (rt === 'fix_date') {
+                    const fd = parseInt(fix_date, 10);
+                    if (Number.isFinite(fd)) return Math.min(Math.max(fd, 1), 28);
+                }
                 const v = parseInt(billing_day, 10);
                 if (Number.isFinite(v)) return Math.min(Math.max(v, 1), 28);
                 return 15;
@@ -11538,8 +11584,8 @@ router.get('/service-suspension', getAppSettings, async (req, res) => {
 // Service Suspension: Grace Period Setting API
 router.get('/service-suspension/grace-period', adminAuth, async (req, res) => {
     try {
-        const value = getSetting('suspension_grace_period_days', '3');
-        res.json({ success: true, grace_period_days: value });
+        const value = await getSuspensionSetting(req, 'suspension_grace_period_days', '3');
+        res.json({ success: true, grace_period_days: String(value) });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -11557,13 +11603,10 @@ router.post('/service-suspension/grace-period', adminAuth, async (req, res) => {
             return res.status(400).json({ success: false, message: 'Grace period harus antara 1-30 hari' });
         }
 
-        const ok = setSetting('suspension_grace_period_days', days.toString());
+        const ok = await saveSuspensionSetting(req, 'suspension_grace_period_days', days.toString());
         if (!ok) {
-            return res.status(500).json({ success: false, message: 'Gagal menyimpan ke settings.json' });
+            return res.status(500).json({ success: false, message: 'Gagal menyimpan pengaturan' });
         }
-
-        // Clear cache agar pengaturan baru langsung berlaku
-        clearSettingsCache();
 
         res.json({ success: true, grace_period_days: days.toString() });
     } catch (error) {
@@ -11573,9 +11616,9 @@ router.post('/service-suspension/grace-period', adminAuth, async (req, res) => {
 
 router.get('/service-suspension/auto-suspension-day', adminAuth, async (req, res) => {
     try {
-        const serviceSuspension = require('../config/serviceSuspension');
-        const value = serviceSuspension.getAutoSuspensionDay();
-        res.json({ success: true, auto_suspension_day: String(value) });
+        const raw = await getSuspensionSetting(req, 'auto_suspension_day', '25');
+        const day = Math.min(Math.max(parseInt(raw, 10) || 25, 1), 28);
+        res.json({ success: true, auto_suspension_day: String(day) });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -11593,12 +11636,10 @@ router.post('/service-suspension/auto-suspension-day', adminAuth, async (req, re
             return res.status(400).json({ success: false, message: 'Tanggal isolir harus antara 1-28' });
         }
 
-        const ok = setSetting('auto_suspension_day', day.toString());
+        const ok = await saveSuspensionSetting(req, 'auto_suspension_day', day.toString());
         if (!ok) {
-            return res.status(500).json({ success: false, message: 'Gagal menyimpan ke settings.json' });
+            return res.status(500).json({ success: false, message: 'Gagal menyimpan pengaturan' });
         }
-
-        clearSettingsCache();
 
         res.json({ success: true, auto_suspension_day: day.toString() });
     } catch (error) {
@@ -11609,7 +11650,7 @@ router.post('/service-suspension/auto-suspension-day', adminAuth, async (req, re
 // Service Suspension: Isolir Profile Setting API
 router.get('/service-suspension/isolir-profile', adminAuth, async (req, res) => {
     try {
-        const value = getSetting('isolir_profile', 'isolir');
+        const value = await getSuspensionSetting(req, 'isolir_profile', 'isolir');
         res.json({ success: true, isolir_profile: value });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -11628,13 +11669,10 @@ router.post('/service-suspension/isolir-profile', adminAuth, async (req, res) =>
             return res.status(400).json({ success: false, message: 'Profile tidak boleh kosong' });
         }
 
-        const ok = setSetting('isolir_profile', profile);
+        const ok = await saveSuspensionSetting(req, 'isolir_profile', profile);
         if (!ok) {
-            return res.status(500).json({ success: false, message: 'Gagal menyimpan ke settings.json' });
+            return res.status(500).json({ success: false, message: 'Gagal menyimpan pengaturan' });
         }
-
-        // Clear cache agar pengaturan baru langsung berlaku
-        clearSettingsCache();
 
         res.json({ success: true, isolir_profile: profile });
     } catch (error) {
@@ -11651,16 +11689,90 @@ router.post('/service-suspension/toggle-feature', adminAuth, async (req, res) =>
         }
 
         const isEnabled = enabled === true || enabled === 'true';
-        const ok = setSetting('auto_suspension_enabled', isEnabled);
+        const ok = await saveSuspensionSetting(req, 'auto_suspension_enabled', isEnabled);
         
         if (!ok) {
-            return res.status(500).json({ success: false, message: 'Gagal menyimpan ke settings.json' });
+            return res.status(500).json({ success: false, message: 'Gagal menyimpan pengaturan' });
         }
 
-        clearSettingsCache();
         res.json({ success: true, enabled: isEnabled });
     } catch (error) {
         logger.error('Toggle auto suspension feature error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// Info sistem isolir static IP (address-list + redirect)
+router.get('/service-suspension/static-ip-isolir', adminAuth, async (req, res) => {
+    try {
+        const staticIPSuspension = require('../config/staticIPSuspension');
+        const info = staticIPSuspension.getStaticIpIsolirInfo();
+        const tenantId = resolveBillingTenantId(req);
+        const routers = await staticIPSuspension.listRoutersForTenant(tenantId);
+        res.json({
+            success: true,
+            info,
+            routers: (routers || []).map((r) => ({
+                id: r.id,
+                name: r.name,
+                nas_ip: r.nas_ip
+            }))
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// Sync firewall redirect isolir static IP ke semua router tenant
+router.post('/service-suspension/static-ip-isolir/sync', adminAuth, async (req, res) => {
+    try {
+        const staticIPSuspension = require('../config/staticIPSuspension');
+        const tenantId = resolveBillingTenantId(req);
+        if (!tenantId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Konteks tenant tidak ditemukan'
+            });
+        }
+        const result = await staticIPSuspension.syncIsolirFirewallForTenant(tenantId);
+        res.json(result);
+    } catch (error) {
+        logger.error('Sync static IP isolir firewall error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// Info + sync isolir PPPoE/RADIUS (pool + firewall walled garden)
+router.get('/service-suspension/pppoe-isolir', adminAuth, async (req, res) => {
+    try {
+        const { getPppoeIsolirInfo, listRoutersForTenant } = require('../config/radiusIsolirFirewallSync');
+        const info = getPppoeIsolirInfo();
+        const tenantId = resolveBillingTenantId(req);
+        const routers = await listRoutersForTenant(tenantId);
+        res.json({
+            success: true,
+            info,
+            routers: (routers || []).map((r) => ({ id: r.id, name: r.name, nas_ip: r.nas_ip }))
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/service-suspension/pppoe-isolir/sync', adminAuth, async (req, res) => {
+    try {
+        const { syncPppoeIsolirFirewallForTenant } = require('../config/radiusIsolirFirewallSync');
+        const tenantId = resolveBillingTenantId(req);
+        if (!tenantId) {
+            return res.status(400).json({
+                success: false,
+                message: 'Konteks tenant tidak ditemukan'
+            });
+        }
+        const result = await syncPppoeIsolirFirewallForTenant(tenantId);
+        res.json(result);
+    } catch (error) {
+        logger.error('Sync PPPoE/RADIUS isolir firewall error:', error);
         res.status(500).json({ success: false, message: error.message });
     }
 });

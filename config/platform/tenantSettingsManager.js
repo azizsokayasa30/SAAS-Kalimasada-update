@@ -80,6 +80,10 @@ async function saveFullSettingsForTenantId(tenantId, updates) {
     }
 
     await tenantStore.updateTenantSettings(tenantId, toStore);
+    try {
+        const { invalidateEnrichedSettingsCache } = require('../../middleware/resolveTenant');
+        invalidateEnrichedSettingsCache(tenantId);
+    } catch (_) {}
     return merged;
 }
 

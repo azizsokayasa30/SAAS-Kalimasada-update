@@ -64,6 +64,42 @@
         .backup-restore-section { margin-top: 40px; padding-top: 30px; scroll-margin-top: 100px; }
         .backup-restore-section .card { position: relative; z-index: 1; }
         .backup-restore-section .card-header { padding-top: 20px; padding-bottom: 15px; }
+        .backup-action-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.3rem 0.7rem;
+            border-radius: 0.4rem;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            line-height: 1.4;
+            vertical-align: middle;
+            text-decoration: none;
+            border: 1px solid transparent;
+            transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        }
+        .backup-action-btn i { font-size: 0.9em; }
+        a.backup-action-btn.backup-dl-btn {
+            background: #0d6efd;
+            border-color: #0d6efd;
+            color: #fff;
+        }
+        a.backup-action-btn.backup-dl-btn:hover {
+            background: #0b5ed7;
+            border-color: #0b5ed7;
+            color: #fff;
+            text-decoration: none;
+        }
+        button.backup-action-btn.restore-file-btn {
+            background: #ffc107;
+            border-color: #ffc107;
+            color: #212529;
+        }
+        button.backup-action-btn.restore-file-btn:hover {
+            background: #ffca2c;
+            border-color: #ffc720;
+            color: #212529;
+        }
         .legacy-whatsapp-settings { display: none !important; }
         .settings-group { border: 1px solid #eef2f7; border-radius: 12px; padding: 14px; background: var(--panel-bg, #fff); }
         .settings-group-title { font-weight: 700; font-size: 0.9rem; color: #475569; text-transform: uppercase; letter-spacing: .03em; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #eef2f7; }
@@ -584,41 +620,16 @@
                                 <div class="d-flex align-items-start">
                                     <i class="bi bi-info-circle-fill me-2 fs-5 mt-1"></i>
                                     <div class="small">
-                                        <strong>Apa yang di-backup?</strong>
+                                        <strong>Backup data tenant (ZIP)</strong>
                                         <p class="mb-2 mt-1">
-                                            Tombol <strong>Buat Backup</strong> menyalin <strong>seluruh isi</strong> database
-                                            <code>data/billing.db</code> (termasuk data di WAL) ke folder <code>data/backup/</code>.
-                                            Restore mengembalikan <strong>semua isi database billing</strong> ke kondisi saat backup dibuat.
+                                            Backup mencakup <strong>data aplikasi milik tenant Anda</strong>:
+                                            pelanggan, tagihan, PPPoE/RADIUS, karyawan, absen, tugas, gudang, dll.
+                                            Hasil berupa <strong>satu file ZIP</strong> (tanpa file gambar agar ukuran ringan).
+                                            Restore hanya menimpa data tenant Anda — <strong>tidak mengganggu tenant lain</strong>.
                                         </p>
-                                        <div class="row g-2">
-                                            <div class="col-md-6">
-                                                <strong class="text-success"><i class="bi bi-check-circle me-1"></i>Ikut ter-backup</strong>
-                                                <ul class="mb-0 ps-3">
-                                                    <li>Data pelanggan, paket, tagihan &amp; pembayaran</li>
-                                                    <li>Router/NAS, area, mapping pelanggan–router</li>
-                                                    <li>Teknisi, kolektor, job instalasi, laporan gangguan</li>
-                                                    <li>Keuangan, voucher, hotspot, agent</li>
-                                                    <li>Manajemen gudang (item, batch, unit QR)</li>
-                                                    <li>Absensi karyawan, cuti, payroll, shift &amp; cabang</li>
-                                                    <li>Activity log admin &amp; pengaturan di tabel <code>app_settings</code></li>
-                                                </ul>
-                                            </div>
-                                            <div class="col-md-6">
-                                                <strong class="text-danger"><i class="bi bi-x-circle me-1"></i>Tidak ikut backup ini</strong>
-                                                <ul class="mb-0 ps-3">
-                                                    <li>Foto instalasi job &amp; tiket (<code>public/img/field-completion/</code>)</li>
-                                                    <li>Bukti transfer / bukti bayar (<code>public/uploads/payments/</code>)</li>
-                                                    <li>Foto KTP/rumah pelanggan (<code>public/img/</code>)</li>
-                                                    <li><code>settings.json</code> — host, password admin, WhatsApp, dll.</li>
-                                                    <li>Database RADIUS MySQL terpisah (jika dipakai)</li>
-                                                    <li>Sesi WhatsApp &amp; backup RADIUS (.tar.gz di menu RADIUS)</li>
-                                                </ul>
-                                            </div>
-                                        </div>
-                                        <p class="mb-0 mt-2 text-muted">
-                                            <i class="bi bi-shield-check me-1"></i>
-                                            Sistem otomatis menyimpan <strong>maksimal 3 file backup terbaru</strong>; file lebih lama dihapus otomatis.
-                                            Sebelum restore, sistem membuat salinan <code>pre_restore_*.db</code> sebagai cadangan singkat.
+                                        <p class="mb-0 text-muted">
+                                            Full database semua tenant hanya tersedia di
+                                            <strong>Management Portal → Pengaturan → Backup &amp; Restore</strong>.
                                         </p>
                                     </div>
                                 </div>
@@ -629,17 +640,17 @@
                                         <div class="card-header bg-primary text-white">
                                             <h5 class="card-title mb-0">
                                                 <i class="bi bi-download"></i>
-                                                Backup Database
+                                                Backup Data Tenant
                                             </h5>
                                         </div>
                                         <div class="card-body">
                                             <p class="text-muted">
-                                                Buat backup database billing untuk keamanan data.
-                                                Sistem otomatis menyimpan <strong>maksimal 3 backup terakhir</strong> untuk hemat penyimpanan.
+                                                Buat backup ZIP data tenant Anda (tanpa file gambar).
+                                                Sistem menyimpan beberapa backup terakhir per tenant.
                                             </p>
                                             <button type="button" class="btn btn-primary" id="createBackupBtn">
                                                 <i class="bi bi-download"></i>
-                                                Buat Backup
+                                                Buat Backup ZIP
                                             </button>
 
                                             <hr class="my-3">
@@ -672,12 +683,12 @@
                                         <div class="card-header bg-warning text-white">
                                             <h5 class="card-title mb-0">
                                                 <i class="bi bi-upload"></i>
-                                                Restore Database
+                                                Restore Data Tenant
                                             </h5>
                                         </div>
                                         <div class="card-body">
                                             <p class="text-muted">
-                                                Restore database dari backup di server, atau unggah file dari komputer.
+                                                Restore dari ZIP backup tenant di server, atau unggah file ZIP dari komputer.
                                             </p>
                                             <div class="mb-3">
                                                 <label for="backupFile" class="form-label">Dari Backup di Server:</label>
@@ -687,7 +698,7 @@
                                             </div>
                                             <button type="button" class="btn btn-warning" id="restoreBackupBtn" disabled>
                                                 <i class="bi bi-upload"></i>
-                                                Restore Database
+                                                Restore Data Tenant
                                             </button>
 
                                             <hr class="my-3">
@@ -695,13 +706,12 @@
                                             <div class="mb-2">
                                                 <label for="uploadDbFile" class="form-label">
                                                     <i class="bi bi-file-earmark-arrow-up"></i>
-                                                    Upload File Backup dari Komputer:
+                                                    Upload File Backup ZIP:
                                                 </label>
                                                 <input type="file" class="form-control" id="uploadDbFile"
-                                                    accept=".db,.sqlite,.sqlite3">
+                                                    accept=".zip,application/zip">
                                                 <small class="text-muted d-block mt-1">
-                                                    Unggah file database (<code>.db</code>, <code>.sqlite</code>, <code>.sqlite3</code>).
-                                                    Setelah berhasil, file akan muncul di daftar <strong>"Dari Backup di Server"</strong> di atas untuk di-restore.
+                                                    Unggah file <code>.zip</code> hasil backup tenant. Setelah berhasil, file muncul di daftar untuk di-restore atau diunduh.
                                                 </small>
                                             </div>
                                             <div class="progress mb-2 d-none" id="uploadProgressWrap" style="height: 22px;">
@@ -1901,6 +1911,9 @@ $(document).ready(function() {
             success: function(response) {
                 if (response.success) {
                     showNotification('success', response.message);
+                    if (response.auto_backup) {
+                        updateBillingAutoBackupStatus(response.auto_backup);
+                    }
                     loadBackupFiles();
                 } else {
                     showNotification('danger', response.message || 'Gagal menyimpan pengaturan auto backup');
@@ -1953,7 +1966,7 @@ $(document).ready(function() {
             return;
         }
         
-        if (!confirm('⚠️ PERHATIAN!\n\nRestore database akan mengganti semua data saat ini dengan data dari backup.\n\nData yang ada saat ini akan hilang!\n\nLanjutkan restore?')) {
+        if (!confirm('PERHATIAN!\n\nRestore akan mengganti data tenant Anda dengan isi backup ZIP.\nData tenant lain tidak terpengaruh.\n\nLanjutkan restore?')) {
             return;
         }
         
@@ -2128,14 +2141,18 @@ $(document).ready(function() {
         backups.forEach(backup => {
             const size = formatFileSize(backup.size);
             const date = new Date(backup.created).toLocaleString('id-ID');
+            const dl = backup.download_url || (`/admin/settings/backups/${encodeURIComponent(backup.filename)}/download`);
             
             tbody.append(`
                 <tr>
-                    <td><i class="bi bi-database-fill"></i>${backup.filename}</td>
+                    <td><i class="bi bi-file-earmark-zip"></i> ${backup.filename}</td>
                     <td>${size}</td>
                     <td>${date}</td>
-                    <td>
-                        <button class="btn btn-sm btn-warning restore-file-btn" data-file="${backup.filename}">
+                    <td class="text-nowrap">
+                        <a class="backup-action-btn backup-dl-btn" href="${dl}">
+                            <i class="bi bi-download"></i> Unduh
+                        </a>
+                        <button type="button" class="backup-action-btn restore-file-btn" data-file="${backup.filename}">
                             <i class="bi bi-upload"></i> Restore
                         </button>
                     </td>

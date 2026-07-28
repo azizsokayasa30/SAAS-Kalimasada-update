@@ -796,6 +796,13 @@ app.use(session({
 }));
 
 app.use((req, res, next) => {
+  // Expose ke view agar idle timeout client selalu sinkron dengan setting
+  try {
+    res.locals.adminSessionTimeoutMinutes = getAdminSessionTimeoutMinutes();
+  } catch (_e) {
+    res.locals.adminSessionTimeoutMinutes = DEFAULT_ADMIN_SESSION_TIMEOUT_MINUTES;
+  }
+
   if (!req.session?.isAdmin) {
     return next();
   }

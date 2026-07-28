@@ -665,6 +665,17 @@
                             if (!skipRadiusSync) {
                                 await this._autoSyncStatusToRadius(existing, oldStatus, status);
                             }
+                            // Static IP: sync allow/block pool ke MikroTik saat status berubah
+                            if (String(oldStatus || '') !== String(status || '')) {
+                                setImmediate(() => {
+                                    try {
+                                        const { syncPoolAfterCustomerChange } = require('./staticIpPoolSync');
+                                        syncPoolAfterCustomerChange({ ...existing, status }).catch((e) => {
+                                            logger.warn(`[BILLING] static pool sync after status: ${e.message}`);
+                                        });
+                                    } catch (_) {}
+                                });
+                            }
                         } catch (_) {}
                         const oldSt = String(oldStatus || '').toLowerCase();
                         const nowIsolir = st === 'suspended' || st === 'isolir';
@@ -769,6 +780,14 @@
                                     status: newStatus
                                 };
                                 await this._autoSyncStatusToRadius(updatedCustomer, oldStatus, newStatus);
+                                setImmediate(() => {
+                                    try {
+                                        const { syncPoolAfterCustomerChange } = require('./staticIpPoolSync');
+                                        syncPoolAfterCustomerChange(updatedCustomer).catch((e) => {
+                                            logger.warn(`[BILLING] static pool sync after updateCustomer: ${e.message}`);
+                                        });
+                                    } catch (_) {}
+                                });
                                 const nst = String(newStatus || '').toLowerCase();
                                 const ost = String(oldStatus || '').toLowerCase();
                                 const nowIsolir = nst === 'suspended' || nst === 'isolir';
@@ -2387,7 +2406,7 @@
             const skipGenieacsSync = skipExternalSync || Boolean(customerData && customerData.__skip_genieacs_sync);
             const skipRadiusSync = skipExternalSync || Boolean(customerData && customerData.__skip_radius_sync);
             
-            const { name, username, password, phone, pppoe_username, email, address, area, area_id, package_id, odp_id, pppoe_profile, status, auto_suspension, billing_day, static_ip, assigned_ip, mac_address, latitude, longitude, cable_type, cable_length, port_number, cable_status, cable_notes, ktp_photo_path, house_photo_path } = customerData;
+            const { name, username, password, phone, pppoe_username, email, address, area, area_id, package_id, odp_id, pppoe_profile, status, auto_suspension, auto_suspension_day, billing_day, renewal_type, fix_date, static_ip, assigned_ip, mac_address, latitude, longitude, cable_type, cable_length, port_number, cable_status, cable_notes, ktp_photo_path, house_photo_path } = customerData;
 
             // Antisipasi double-submit / simpan ganda: tolak nomor HP yang sudah ada di tenant yang sama
             if (!customerData.__allow_duplicate_phone) {
@@ -2437,8 +2456,23 @@
                 return reject(new Error('Failed to generate customer ID'));
             }
             
-            // Normalisasi billing_day (1-28)
+            // Normalisasi billing_day (1-28) — tetap untuk due-date / fallback invoice
             const normBillingDay = Math.min(Math.max(parseInt(billing_day ?? 15, 10) || 15, 1), 28);
+            // renewal_type + fix_date (jatuh tempo)
+            const normRenewalType = (renewal_type === 'fix_date' || renewal_type === 'renewal')
+                ? renewal_type
+                : 'fix_date';
+            const normFixDate = normRenewalType === 'fix_date'
+                ? Math.min(Math.max(parseInt(fix_date ?? normBillingDay, 10) || 15, 1), 28)
+                : null;
+            // Tanggal isolir per pelanggan (null = pakai pengaturan global auto_suspension_day)
+            let normAutoSuspensionDay = null;
+            if (auto_suspension_day !== undefined && auto_suspension_day !== null && String(auto_suspension_day).trim() !== '') {
+                const asd = parseInt(auto_suspension_day, 10);
+                if (Number.isFinite(asd)) {
+                    normAutoSuspensionDay = Math.min(Math.max(asd, 1), 28);
+                }
+            }
             
             // Pastikan status 'register' tidak di-override
             // Jika status sudah diset (termasuk 'register'), gunakan itu
@@ -2479,7 +2513,10 @@
                 { name: 'pppoe_profile', value: () => pppoe_profile },
                 { name: 'status', value: () => finalStatus },
                 { name: 'auto_suspension', value: () => (auto_suspension !== undefined ? auto_suspension : 1) },
-                { name: 'billing_day', value: () => normBillingDay },
+                { name: 'auto_suspension_day', value: () => normAutoSuspensionDay },
+                { name: 'billing_day', value: () => (normRenewalType === 'fix_date' ? (normFixDate || normBillingDay) : normBillingDay) },
+                { name: 'renewal_type', value: () => normRenewalType },
+                { name: 'fix_date', value: () => normFixDate },
                 { name: 'static_ip', value: () => static_ip || null },
                 { name: 'assigned_ip', value: () => assigned_ip || null },
                 { name: 'mac_address', value: () => mac_address || null },
@@ -5142,6 +5179,7 @@ ${lifetimePaymentStatusSql}
 
     async getInvoicesByCustomer(customerId) {
         return new Promise((resolve, reject) => {
+            const _t = this._tenantWhere('i');
             const sql = `
                 SELECT i.*, 
                        COALESCE(c.username, m.hotspot_username, m.username) as username,
@@ -5154,11 +5192,11 @@ ${lifetimePaymentStatusSql}
                 LEFT JOIN members m ON i.member_id = m.id
                 LEFT JOIN packages p ON (i.customer_id IS NOT NULL AND i.package_id = p.id)
                 LEFT JOIN member_packages mp ON (i.member_id IS NOT NULL AND i.package_id = mp.id)
-                WHERE i.customer_id = ? OR i.member_id = ?
+                WHERE (i.customer_id = ? OR i.member_id = ?)${_t.sql}
                 ORDER BY i.created_at DESC
             `;
             
-            this.db.all(sql, [customerId, customerId], (err, rows) => {
+            this.db.all(sql, [customerId, customerId, ..._t.params], (err, rows) => {
                 if (err) {
                     reject(err);
                 } else {
@@ -8360,6 +8398,7 @@ ${lifetimePaymentStatusSql}
 
     async getOverdueInvoices(limit = null) {
         return new Promise((resolve, reject) => {
+            const _t = this._tenantWhere('i');
             let sql = `
                 SELECT i.*, 
                        c.username, c.name as customer_name, c.phone as customer_phone,
@@ -8371,11 +8410,11 @@ ${lifetimePaymentStatusSql}
                 LEFT JOIN members m ON i.member_id = m.id
                 LEFT JOIN packages p ON i.package_id = p.id
                 LEFT JOIN member_packages mp ON i.package_id = mp.id
-                WHERE i.status = 'unpaid' AND date(i.due_date) < date('now', 'localtime')
+                WHERE i.status = 'unpaid' AND date(i.due_date) < date('now', 'localtime')${_t.sql}
                 ORDER BY i.due_date ASC
             `;
             
-            const params = [];
+            const params = [..._t.params];
             if (limit) {
                 sql += ` LIMIT ?`;
                 params.push(limit);
@@ -8692,6 +8731,8 @@ ${lifetimePaymentStatusSql}
     /** Semua tagihan belum lunas — dipakai isolir otomatis di tanggal tetap (mis. tgl 25). */
     async getUnpaidInvoicesForAutoSuspension(limit = null) {
         return new Promise((resolve, reject) => {
+            // Tangkap tenant scope SINKRON sebelum callback sqlite (ALS hilang di callback).
+            const _t = this._tenantWhere('i');
             let sql = `
                 SELECT i.*, 
                        c.username, c.name as customer_name, c.phone as customer_phone,
@@ -8703,11 +8744,11 @@ ${lifetimePaymentStatusSql}
                 LEFT JOIN members m ON i.member_id = m.id
                 LEFT JOIN packages p ON i.package_id = p.id
                 LEFT JOIN member_packages mp ON i.package_id = mp.id
-                WHERE i.status = 'unpaid'
+                WHERE i.status = 'unpaid'${_t.sql}
                 ORDER BY i.due_date ASC
             `;
 
-            const params = [];
+            const params = [..._t.params];
             if (limit) {
                 sql += ` LIMIT ?`;
                 params.push(limit);

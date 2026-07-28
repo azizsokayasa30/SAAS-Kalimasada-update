@@ -1,6 +1,9 @@
 'use strict';
 
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const tenantStore = require('../config/platform/tenantStore');
 const platformAdminService = require('../config/platform/platformAdminService');
 const platformSettingsService = require('../config/platform/platformSettingsService');
@@ -8,8 +11,52 @@ const { platformAuth } = require('../middleware/platformAuth');
 const { formatRupiah } = require('../config/platform/formatRupiah');
 const managementMasterPackagesRouter = require('./managementMasterPackages');
 const managementNginxRouter = require('./managementNginx');
+const billing = require('../config/billing');
+const {
+    createBillingDbBackup,
+    restoreBillingDbFromFile,
+    listBackupDbFiles,
+    getBackupDir,
+    DEFAULT_KEEP_COUNT,
+    isValidSqliteHeader
+} = require('../utils/billingDbBackup');
 
 const router = express.Router();
+
+const platformBackupDir = getBackupDir();
+fs.mkdirSync(platformBackupDir, { recursive: true });
+
+const platformDbUpload = multer({
+    storage: multer.diskStorage({
+        destination: (_req, _file, cb) => cb(null, platformBackupDir),
+        filename: (_req, file, cb) => {
+            const safe = path.basename(file.originalname || 'upload.db').replace(/[^\w.\-]+/g, '_');
+            const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+            cb(null, `uploaded_${stamp}_${safe}`);
+        }
+    }),
+    limits: { fileSize: 1024 * 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+        const name = String(file.originalname || '').toLowerCase();
+        if (name.endsWith('.db') || name.endsWith('.sqlite') || name.endsWith('.sqlite3')) {
+            return cb(null, true);
+        }
+        cb(new Error('Hanya file .db / .sqlite / .sqlite3 yang diizinkan'));
+    }
+});
+
+function resolvePlatformBackupFile(filename) {
+    const safe = path.basename(String(filename || ''));
+    if (!safe || !safe.endsWith('.db')) return null;
+    const full = path.join(platformBackupDir, safe);
+    const resolved = path.resolve(full);
+    const root = path.resolve(platformBackupDir);
+    if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+        return null;
+    }
+    if (!fs.existsSync(resolved)) return null;
+    return resolved;
+}
 
 router.use(platformAuth);
 
@@ -224,6 +271,106 @@ router.get('/activity-logs/:id', async (req, res) => {
         });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+// ── Backup & Restore (full billing.db) ──
+router.get('/backup-restore', async (req, res) => {
+    try {
+        const backups = listBackupDbFiles(platformBackupDir);
+        res.render('platform/settings/backup-restore', {
+            title: 'Backup & Restore',
+            active: 'settings-backup',
+            settingsSection: 'backup',
+            backups,
+            keepCount: DEFAULT_KEEP_COUNT,
+            adminName: req.session.platformAdminName,
+            flash: req.query
+        });
+    } catch (err) {
+        console.error('[platform] settings backup-restore:', err);
+        res.status(500).send('Error loading backup page');
+    }
+});
+
+router.post('/backup-restore/create', async (req, res) => {
+    try {
+        const result = await createBillingDbBackup(path.join(__dirname, '../data/billing.db'), {
+            db: billing.db,
+            prefix: 'billing_backup'
+        });
+        await tenantStore.auditLog({
+            actorType: 'SuperAdmin',
+            actorId: req.session.platformAdminId,
+            action: 'platform_billing_backup_created',
+            details: { filename: result.filename, method: result.method },
+            ip: req.ip
+        });
+        res.redirect(
+            `/management/settings/backup-restore?success=created&filename=${encodeURIComponent(result.filename)}`
+        );
+    } catch (err) {
+        res.redirect(`/management/settings/backup-restore?error=${encodeURIComponent(err.message)}`);
+    }
+});
+
+router.post('/backup-restore/upload', (req, res) => {
+    platformDbUpload.single('backup_file')(req, res, async (err) => {
+        if (err) {
+            return res.redirect(`/management/settings/backup-restore?error=${encodeURIComponent(err.message)}`);
+        }
+        try {
+            if (!req.file || !req.file.path) {
+                throw new Error('File backup tidak ditemukan');
+            }
+            if (!isValidSqliteHeader(req.file.path)) {
+                try {
+                    fs.unlinkSync(req.file.path);
+                } catch (_) {
+                    /* ignore */
+                }
+                throw new Error('File bukan database SQLite yang valid');
+            }
+            await tenantStore.auditLog({
+                actorType: 'SuperAdmin',
+                actorId: req.session.platformAdminId,
+                action: 'platform_billing_backup_uploaded',
+                details: { filename: req.file.filename },
+                ip: req.ip
+            });
+            res.redirect(
+                `/management/settings/backup-restore?success=uploaded&filename=${encodeURIComponent(req.file.filename)}`
+            );
+        } catch (e) {
+            res.redirect(`/management/settings/backup-restore?error=${encodeURIComponent(e.message)}`);
+        }
+    });
+});
+
+router.get('/backup-restore/file/:filename', (req, res) => {
+    const full = resolvePlatformBackupFile(req.params.filename);
+    if (!full) return res.status(404).send('File tidak ditemukan');
+    res.download(full, path.basename(full));
+});
+
+router.post('/backup-restore/restore/:filename', async (req, res) => {
+    try {
+        const full = resolvePlatformBackupFile(req.params.filename);
+        if (!full) throw new Error('File backup tidak ditemukan');
+        await restoreBillingDbFromFile(full, {
+            db: billing.db,
+            dbPath: path.join(__dirname, '../data/billing.db')
+        });
+        await tenantStore.auditLog({
+            actorType: 'SuperAdmin',
+            actorId: req.session.platformAdminId,
+            action: 'platform_billing_backup_restored',
+            details: { filename: path.basename(full) },
+            ip: req.ip
+        });
+        res.redirect('/management/settings/backup-restore?success=restored');
+    } catch (err) {
+        res.redirect(`/management/settings/backup-restore?error=${encodeURIComponent(err.message)}`);
     }
 });
 
