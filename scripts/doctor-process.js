@@ -68,8 +68,16 @@ function main() {
   console.log(portOutput.trim() || '(tidak ada output)');
   console.log('');
 
+  if (appProcs.length > 1) {
+    console.log('STATUS: CONFLICT - Lebih dari 1 proses app.js (risiko cron invoice dobel).');
+    console.log('Perbaikan:');
+    console.log(`  sudo pkill -f "${appPath}" ; pm2 start ecosystem.config.cjs --only billing-kalimasada --update-env`);
+    return;
+  }
+
   if (!ownerConflict) {
     console.log('STATUS: OK - Tidak ada konflik owner proses.');
+    console.log('Catatan: app production hanya boleh via PM2 (lihat RUN_VIA_PM2 di ecosystem.config.cjs).');
     return;
   }
 

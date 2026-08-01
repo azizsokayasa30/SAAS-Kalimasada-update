@@ -135,6 +135,7 @@ router.get('/connection-settings', adminAuth, async (req, res) => {
       vpnTunnelIp,
       isolirPagePort,
       tenantPrefix,
+      tenantId,
       tenantName: req.tenant?.name || tenantPrefix,
     });
   } catch (e) {

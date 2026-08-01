@@ -35,9 +35,10 @@ async function syncCustomerToRadius(customer, options = {}) {
     const pppoePassword = String(options.pppoe_password || customer?.pppoe_password || '').trim();
     const profileHint = pickFirstProfileHint(options, customer);
     const framedIp = sanitizeIp(options.static_ip || options.assigned_ip || customer?.static_ip || customer?.assigned_ip || null);
-    /** Jangan timpa radusergroup ke profil paket saat pelanggan isolir — grup 'isolir' diatur suspendUserRadius / serviceSuspension */
+    /** Isolir / nonaktif: jangan restore profil paket (atau password) lewat sync generik */
     const effectiveStatus = String(customer?.status || options?.status || '').toLowerCase();
-    const skipGroupAssign = effectiveStatus === 'suspended';
+    const isInactive = effectiveStatus === 'inactive' || effectiveStatus === 'nonaktif';
+    const skipGroupAssign = effectiveStatus === 'suspended' || effectiveStatus === 'isolir' || isInactive;
 
     if (!pppoeUsername) {
         return { success: false, skipped: true, message: 'PPPoE username kosong, skip sync RADIUS' };
@@ -46,6 +47,13 @@ async function syncCustomerToRadius(customer, options = {}) {
     const authMode = await getUserAuthModeAsync();
     if (authMode !== 'radius') {
         return { success: false, skipped: true, message: `Mode auth ${authMode}, sync RADIUS di-skip` };
+    }
+
+    // Nonaktif: pastikan Auth-Type Reject (jangan tulis password/profil paket)
+    if (isInactive) {
+        const { disablePppoeUserRadius } = require('../config/mikrotik');
+        logger.info(`[RADIUS-SYNC] Customer ${pppoeUsername} inactive — disable auth`);
+        return disablePppoeUserRadius(pppoeUsername);
     }
 
     let conn;
@@ -85,7 +93,9 @@ async function syncCustomerToRadius(customer, options = {}) {
                 );
             }
         } else if (profileHint && skipGroupAssign) {
-            logger.info(`[RADIUS-SYNC] Skip radusergroup untuk ${pppoeUsername} (status suspended, biarkan grup isolir)`);
+            logger.info(
+                `[RADIUS-SYNC] Skip radusergroup untuk ${pppoeUsername} (status ${effectiveStatus})`
+            );
         }
 
         if (framedIp) {

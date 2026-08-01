@@ -40,7 +40,7 @@ CREATE INDEX IF NOT EXISTS idx_wh_batches_created ON warehouse_inbound_batches(c
 
 CREATE TABLE IF NOT EXISTS installation_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_number VARCHAR(50) UNIQUE,
+    job_number VARCHAR(50) NOT NULL,
     customer_name VARCHAR(255) NOT NULL,
     customer_phone VARCHAR(20),
     customer_address TEXT,
@@ -66,8 +66,10 @@ CREATE TABLE IF NOT EXISTS installation_jobs (
     tech_completion_longitude REAL,
     install_cable_length_m REAL,
     install_ont_sticker_photo_path TEXT,
+    tenant_id INTEGER NOT NULL DEFAULT 1,
     created_at DATETIME DEFAULT (datetime('now','localtime')),
     updated_at DATETIME DEFAULT (datetime('now','localtime')),
+    UNIQUE(tenant_id, job_number),
     FOREIGN KEY (package_id) REFERENCES packages(id),
     FOREIGN KEY (assigned_technician_id) REFERENCES technicians(id)
 );
@@ -100,3 +102,5 @@ CREATE INDEX IF NOT EXISTS idx_installation_jobs_status ON installation_jobs(sta
 CREATE INDEX IF NOT EXISTS idx_installation_jobs_technician ON installation_jobs(assigned_technician_id);
 CREATE INDEX IF NOT EXISTS idx_installation_jobs_date ON installation_jobs(installation_date);
 CREATE INDEX IF NOT EXISTS idx_job_status_history_job ON installation_job_status_history(job_id);
+CREATE INDEX IF NOT EXISTS idx_installation_jobs_tenant_id ON installation_jobs(tenant_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_installation_jobs_tenant_job_number ON installation_jobs(tenant_id, job_number);

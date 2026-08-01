@@ -647,18 +647,32 @@ async function connectToWhatsApp(tenantId = null) {
         
         const { state, saveCreds } = authState;
         
-                // Fetch the latest WhatsApp Web version dynamically
+                // Prefer Baileys version catalog — fetchLatestWaWebVersion sering 429 → versi usang → 405
         let version;
         const botName = 'CV Lintas Multimedia Genieacs Bot Mikrotik';
-        
         try {
-            const versionInfo = await fetchLatestWaWebVersion();
-            version = versionInfo.version;
-            console.log(`📱 [${botName}] Using WA Web v${version.join(".")}, isLatest: ${versionInfo.isLatest}`);
-        } catch (error) {
-            console.warn(`⚠️ [${botName}] Failed to fetch latest version, using fallback:`, error.message);
-            // Fallback to a known working version
-            version = [2, 3000, 1025190524];
+            const registry = require('./baileys-session-registry');
+            if (typeof registry.resolveWaVersion === 'function') {
+                const versionInfo = await registry.resolveWaVersion();
+                version = versionInfo.version;
+                console.log(`📱 [${botName}] Using WA v${version.join('.')} (${versionInfo.source})`);
+            }
+        } catch (_) { /* fallback below */ }
+        if (!version) {
+            try {
+                const baileys = require('@whiskeysockets/baileys');
+                if (typeof baileys.fetchLatestBaileysVersion === 'function') {
+                    const versionInfo = await baileys.fetchLatestBaileysVersion();
+                    version = versionInfo.version;
+                    console.log(`📱 [${botName}] Using Baileys WA v${version.join('.')}`);
+                }
+            } catch (error) {
+                console.warn(`⚠️ [${botName}] Failed to fetch WA version:`, error.message);
+            }
+        }
+        if (!version) {
+            version = [2, 3000, 1043857760];
+            console.warn(`⚠️ [${botName}] Using fallback WA version ${version.join('.')}`);
         }
         
         sock = makeWASocket({

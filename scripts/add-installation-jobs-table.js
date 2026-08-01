@@ -18,7 +18,7 @@ console.log('🔧 Starting Installation Jobs Table Migration...');
 const createInstallationJobsTable = `
     CREATE TABLE IF NOT EXISTS installation_jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        job_number VARCHAR(50) UNIQUE NOT NULL,
+        job_number VARCHAR(50) NOT NULL,
         customer_name VARCHAR(255) NOT NULL,
         customer_phone VARCHAR(20) NOT NULL,
         customer_address TEXT NOT NULL,
@@ -36,8 +36,10 @@ const createInstallationJobsTable = `
         completion_notes TEXT,
         customer_latitude DECIMAL(10, 8),
         customer_longitude DECIMAL(11, 8),
+        tenant_id INTEGER NOT NULL DEFAULT 1,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(tenant_id, job_number),
         FOREIGN KEY (package_id) REFERENCES packages(id),
         FOREIGN KEY (assigned_technician_id) REFERENCES technicians(id)
     )

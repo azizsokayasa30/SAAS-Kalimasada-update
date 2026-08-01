@@ -578,9 +578,51 @@
          */
         async _autoSyncStatusToRadius(customer, oldStatus, newStatus) {
             try {
-                // Hanya sync jika status benar-benar berubah
-                if (newStatus === 'suspended' && oldStatus !== 'suspended') {
-                    // Status berubah menjadi suspended - langsung sync ke RADIUS
+                const norm = (s) => String(s || '').toLowerCase();
+                const from = norm(oldStatus);
+                const to = norm(newStatus);
+                if (from === to) return;
+
+                const isInactive = (s) => s === 'inactive' || s === 'nonaktif';
+                const isSuspended = (s) => s === 'suspended' || s === 'isolir';
+                const serviceSuspension = require('./serviceSuspension');
+
+                // Nonaktif → tolak auth / disable secret (bukan isolir captive)
+                if (isInactive(to) && !isInactive(from)) {
+                    logger.info(`[BILLING] Auto-disable network for nonaktif: ${customer.username}`);
+                    await serviceSuspension.deactivateCustomerNetwork(
+                        { ...customer, status: 'inactive' },
+                        `Status ${from} → inactive`
+                    );
+                    return;
+                }
+
+                // Nonaktif → Aktif → restore auth + profil paket
+                if (to === 'active' && isInactive(from)) {
+                    logger.info(`[BILLING] Auto-enable network from nonaktif: ${customer.username}`);
+                    await serviceSuspension.reactivateCustomerNetwork(
+                        { ...customer, status: 'active' },
+                        'Status inactive → active'
+                    );
+                    return;
+                }
+
+                // Nonaktif → Isolir: restore password dulu lalu pindah ke grup isolir
+                if (isSuspended(to) && isInactive(from)) {
+                    logger.info(`[BILLING] inactive → suspended: enable then isolir ${customer.username}`);
+                    await serviceSuspension.reactivateCustomerNetwork(
+                        { ...customer, status: 'active' },
+                        'Prep isolir from inactive'
+                    );
+                    await serviceSuspension.suspendCustomerService(
+                        { ...customer, status: 'suspended' },
+                        'Status inactive → suspended',
+                        { skipBillingStatus: true }
+                    );
+                    return;
+                }
+
+                if (isSuspended(to) && !isSuspended(from)) {
                     const { getUserAuthModeAsync } = require('./mikrotik');
                     const authMode = await getUserAuthModeAsync();
                     
@@ -601,9 +643,14 @@
                                 logger.error(`[BILLING] ❌ Failed to move ${pppUser} to isolir: ${suspendResult?.message || 'Unknown error'}`);
                             }
                         }
+                    } else {
+                        await serviceSuspension.suspendCustomerService(
+                            { ...customer, status: 'suspended' },
+                            `Status ${from} → suspended`,
+                            { skipBillingStatus: true }
+                        );
                     }
-                } else if (newStatus === 'active' && oldStatus === 'suspended') {
-                    // Status berubah dari suspended ke active - restore dari isolir
+                } else if (to === 'active' && isSuspended(from)) {
                     const { getUserAuthModeAsync } = require('./mikrotik');
                     const authMode = await getUserAuthModeAsync();
                     
@@ -624,6 +671,11 @@
                                 logger.error(`[BILLING] ❌ Failed to restore ${pppUser} from isolir: ${restoreResult?.message || 'Unknown error'}`);
                             }
                         }
+                    } else {
+                        await serviceSuspension.restoreCustomerService(
+                            { ...customer, status: 'active' },
+                            'Status suspended → active'
+                        );
                     }
                 }
             } catch (syncError) {
@@ -919,9 +971,10 @@
 
         // Get customer by PPPoE username (untuk mapping device)
         async getCustomerByPPPoE(pppoeUsername) {
+            const _t = this._tenantWhere();
             return new Promise((resolve, reject) => {
-                const sql = `SELECT * FROM customers WHERE pppoe_username = ?`;
-                this.db.get(sql, [pppoeUsername], (err, row) => {
+                const sql = `SELECT * FROM customers WHERE pppoe_username = ?${_t.sql}`;
+                this.db.get(sql, [pppoeUsername, ..._t.params], (err, row) => {
                     if (err) {
                         reject(err);
                     } else {
@@ -1544,7 +1597,7 @@
         this.db.run(
             `CREATE TABLE IF NOT EXISTS installation_jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_number VARCHAR(50) UNIQUE,
+                job_number VARCHAR(50) NOT NULL,
                 customer_name VARCHAR(255) NOT NULL,
                 customer_phone VARCHAR(20),
                 customer_address TEXT,
@@ -1570,13 +1623,23 @@
                 tech_completion_longitude REAL,
                 install_cable_length_m REAL,
                 install_ont_sticker_photo_path TEXT,
+                tenant_id INTEGER NOT NULL DEFAULT 1,
                 created_at DATETIME DEFAULT (datetime('now','localtime')),
                 updated_at DATETIME DEFAULT (datetime('now','localtime')),
+                UNIQUE(tenant_id, job_number),
                 FOREIGN KEY (package_id) REFERENCES packages(id),
                 FOREIGN KEY (assigned_technician_id) REFERENCES technicians(id)
             )`,
             (err) => {
                 if (err) console.error('Error ensuring installation_jobs:', err.message);
+                try {
+                    const {
+                        migrateInstallationJobsJobNumberUniqueAsync
+                    } = require('../utils/migrateInstallationJobsJobNumberUnique');
+                    migrateInstallationJobsJobNumberUniqueAsync(this.db);
+                } catch (migErr) {
+                    console.error('Error migrating installation_jobs job_number unique:', migErr.message);
+                }
             }
         );
         this.db.run(
@@ -2731,16 +2794,19 @@
         return `COALESCE(${areaAlias}.area, ${areaAlias}.area_name)`;
     }
 
-    /** JOIN ON sederhana: customers.area teks ↔ collector_areas (tanpa area_id). */
+    /** JOIN ON: customers.area teks ↔ collector_areas, wajib tenant yang sama. */
     _sqlCollectorAreasJoinForCustomer(customerAlias = 'c', areaAlias = 'cra') {
         const collectorAreaVal = this._sqlCollectorAreaValueExpr(areaAlias);
-        return `(TRIM(IFNULL(${customerAlias}.area, '')) != '' AND LOWER(TRIM(${customerAlias}.area)) = LOWER(TRIM(${collectorAreaVal})))`;
+        return `(TRIM(IFNULL(${customerAlias}.area, '')) != ''
+            AND LOWER(TRIM(${customerAlias}.area)) = LOWER(TRIM(${collectorAreaVal}))
+            AND ${areaAlias}.tenant_id = ${customerAlias}.tenant_id)`;
     }
 
     /**
      * Nama kolektor sebagai scalar subquery (1 nilai per pelanggan).
      * Prioritas: penugasan manual (collector_assignments), lalu mapping area aktif.
-     * Hindari LEFT JOIN collector_areas yang bisa menggandakan baris list.
+     * Semua join di-scope tenant_id pelanggan — cegah kebocoran nama kolektor antar tenant
+     * saat nama area sama (mis. PRIGI di beberapa ISP).
      */
     _sqlCollectorNameExpr(customerAlias = 'c') {
         const areaJoin = this._sqlCollectorAreasJoinForCustomer(customerAlias, 'cra');
@@ -2748,16 +2814,22 @@
             (
                 SELECT col.name
                 FROM collector_assignments ca
-                INNER JOIN collectors col ON col.id = ca.collector_id
+                INNER JOIN collectors col
+                  ON col.id = ca.collector_id
+                 AND col.tenant_id = ${customerAlias}.tenant_id
                 WHERE ca.customer_id = ${customerAlias}.id
+                  AND ca.tenant_id = ${customerAlias}.tenant_id
                 ORDER BY ca.id ASC
                 LIMIT 1
             ),
             (
                 SELECT col.name
                 FROM collector_areas cra
-                INNER JOIN collectors col ON col.id = cra.collector_id
+                INNER JOIN collectors col
+                  ON col.id = cra.collector_id
+                 AND col.tenant_id = ${customerAlias}.tenant_id
                 WHERE ${areaJoin}
+                  AND cra.tenant_id = ${customerAlias}.tenant_id
                 ORDER BY cra.id ASC
                 LIMIT 1
             )
@@ -2767,12 +2839,15 @@
     /**
      * SQL boolean: pelanggan c berada di wilayah yang sama dengan baris collector_areas (alias).
      * Mendukung c.area (teks) dan c.area_id → areas.nama_area / kode_area.
+     * Wajib tenant sama pada collector_areas dan areas.
      */
     _sqlCustomerMatchesCollectorAreaRow(hasAreas, areaAlias = 'cra', customerAlias = 'c') {
         const a = areaAlias;
         const cust = customerAlias;
         const collectorAreaVal = this._sqlCollectorAreaValueExpr(a);
-        const byCustomerAreaText = `(TRIM(IFNULL(${cust}.area, '')) != '' AND LOWER(TRIM(${cust}.area)) = LOWER(TRIM(${collectorAreaVal})))`;
+        const byCustomerAreaText = `(TRIM(IFNULL(${cust}.area, '')) != ''
+            AND LOWER(TRIM(${cust}.area)) = LOWER(TRIM(${collectorAreaVal}))
+            AND ${a}.tenant_id = ${cust}.tenant_id)`;
         if (!hasAreas) {
             return byCustomerAreaText;
         }
@@ -2782,6 +2857,8 @@
                 ${cust}.area_id IS NOT NULL AND EXISTS (
                     SELECT 1 FROM areas ar
                     WHERE ar.id = ${cust}.area_id
+                      AND ar.tenant_id = ${cust}.tenant_id
+                      AND ${a}.tenant_id = ${cust}.tenant_id
                     AND (
                         (TRIM(IFNULL(ar.nama_area, '')) != '' AND LOWER(TRIM(ar.nama_area)) = LOWER(TRIM(${collectorAreaVal})))
                         OR (TRIM(IFNULL(ar.kode_area, '')) != '' AND LOWER(TRIM(ar.kode_area)) = LOWER(TRIM(${collectorAreaVal})))
@@ -2921,8 +2998,8 @@
                 COALESCE(SUM(CASE WHEN i.status = 'unpaid' THEN i.amount ELSE 0 END), 0) AS unpaid_amount,
                 COALESCE(SUM(CASE WHEN i.status = 'unpaid' AND DATE(i.due_date) < DATE('now','localtime') THEN i.amount ELSE 0 END), 0) AS overdue_amount
             FROM invoices i
-            LEFT JOIN customers c ON i.customer_id = c.id
-            LEFT JOIN members m ON i.member_id = m.id
+            LEFT JOIN customers c ON i.customer_id = c.id AND c.tenant_id = i.tenant_id
+            LEFT JOIN members m ON i.member_id = m.id AND m.tenant_id = i.tenant_id
             WHERE 1=1 ${filterSql}
         `;
         return new Promise((resolve, reject) => {
@@ -3124,17 +3201,20 @@
         const isYearRange = String(month) === 'all' || String(month) === '0';
         const hasYear = year != null && String(year).trim() !== '';
         const hasMonth = month != null && String(month).trim() !== '' && !isYearRange;
+        // amount > 0: paket gratis (Rp0) tidak dihitung "belum lunas"
+        const unpaidBillable = `i.status = 'unpaid' AND CAST(i.amount AS REAL) > 0`;
+        const paidBillable = `i.status = 'paid' AND CAST(i.amount AS REAL) > 0`;
         const lifetimePaymentStatusSql = `
                        CASE 
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid'
+                               AND ${unpaidBillable}
                            ) THEN 'unpaid'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
-                               AND i.status = 'paid'
+                               AND ${paidBillable}
                            ) THEN 'paid'
                            ELSE 'no_invoice'
                        END as lifetime_payment_status`;
@@ -3147,13 +3227,13 @@
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
                                AND strftime('%Y', i.created_at) = '${y}' 
-                               AND i.status = 'unpaid'
+                               AND ${unpaidBillable}
                            ) THEN 'unpaid'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
                                AND strftime('%Y', i.created_at) = '${y}' 
-                               AND i.status = 'paid'
+                               AND ${paidBillable}
                            ) THEN 'paid'
                            ELSE 'no_invoice'
                        END as payment_status`;
@@ -3167,14 +3247,14 @@
                                WHERE i.customer_id = c.id 
                                AND strftime('%m', i.created_at) = '${m}' 
                                AND strftime('%Y', i.created_at) = '${y}' 
-                               AND i.status = 'unpaid'
+                               AND ${unpaidBillable}
                            ) THEN 'unpaid'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
                                AND strftime('%m', i.created_at) = '${m}' 
                                AND strftime('%Y', i.created_at) = '${y}' 
-                               AND i.status = 'paid'
+                               AND ${paidBillable}
                            ) THEN 'paid'
                            ELSE 'no_invoice'
                        END as payment_status`;
@@ -3184,12 +3264,12 @@
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid'
+                               AND ${unpaidBillable}
                            ) THEN 'unpaid'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
-                               AND i.status = 'paid'
+                               AND ${paidBillable}
                            ) THEN 'paid'
                            ELSE 'no_invoice'
                        END as payment_status`;
@@ -3302,12 +3382,12 @@ ${lifetimePaymentStatusSql}
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid'
+                               AND i.status = 'unpaid' AND CAST(i.amount AS REAL) > 0
                            ) THEN 'unpaid'
                            WHEN EXISTS (
                                SELECT 1 FROM invoices i 
                                WHERE i.customer_id = c.id 
-                               AND i.status = 'paid'
+                               AND i.status = 'paid' AND CAST(i.amount AS REAL) > 0
                            ) THEN 'paid'
                            ELSE 'no_invoice'
                        END as payment_status
@@ -3697,12 +3777,12 @@ ${lifetimePaymentStatusSql}
                     SELECT 1 FROM invoices i 
                     WHERE i.customer_id = c.id 
                     AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
-                    AND i.status = 'paid'
+                    AND i.status = 'paid' AND CAST(i.amount AS REAL) > 0
                 ) AND NOT EXISTS (
                     SELECT 1 FROM invoices i 
                     WHERE i.customer_id = c.id 
                     AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
-                    AND i.status = 'unpaid'
+                    AND i.status = 'unpaid' AND CAST(i.amount AS REAL) > 0
                 )`;
                 params.push(startDate, endDateLast, startDate, endDateLast);
             } else if (filters.payment_status === 'unpaid') {
@@ -3710,7 +3790,7 @@ ${lifetimePaymentStatusSql}
                     SELECT 1 FROM invoices i 
                     WHERE i.customer_id = c.id 
                     AND DATE(i.created_at) >= ? AND DATE(i.created_at) <= ?
-                    AND i.status = 'unpaid'
+                    AND i.status = 'unpaid' AND CAST(i.amount AS REAL) > 0
                 )`;
                 params.push(startDate, endDateLast);
             } else if (filters.payment_status === 'no_invoice') {
@@ -4018,13 +4098,18 @@ ${lifetimePaymentStatusSql}
         const _t = this._tenantWhere('c');
         return new Promise((resolve, reject) => {
             try {
+                const exactPhone = String(phone ?? '').trim();
                 const variants = this.getIndonesianPhoneLookupVariants(phone);
                 if (!variants.length) {
                     resolve(null);
                     return;
                 }
+                if (exactPhone && !variants.includes(exactPhone)) {
+                    variants.unshift(exactPhone);
+                }
                 const placeholders = variants.map(() => '?').join(', ');
 
+                // Jika ada 2 langganan (08… vs 62…), utamakan nomor yang sama persis
                 const sql = `
                 SELECT c.*, p.name as package_name, p.price as package_price, p.speed as package_speed, p.image as package_image, p.tax_rate,
                        CASE 
@@ -4043,9 +4128,11 @@ ${lifetimePaymentStatusSql}
                 FROM customers c 
                 LEFT JOIN packages p ON c.package_id = p.id 
                 WHERE c.phone IN (${placeholders})${_t.sql}
+                ORDER BY CASE WHEN c.phone = ? THEN 0 ELSE 1 END, c.id ASC
+                LIMIT 1
             `;
 
-                this.db.get(sql, [...variants, ..._t.params], (err, row) => {
+                this.db.get(sql, [...variants, ..._t.params, exactPhone], (err, row) => {
                     if (err) {
                         reject(err);
                     } else {
@@ -4202,7 +4289,14 @@ ${lifetimePaymentStatusSql}
             
             // Dapatkan data customer lama untuk membandingkan nomor telepon
             try {
-                const oldCustomer = await this.getCustomerByPhone(oldPhone);
+                // Import/restore: gunakan id yang sudah di-resolve (hindari 08… vs 62… tertukar)
+                let oldCustomer = null;
+                if (customerData.__existing_id != null) {
+                    oldCustomer = await this.getCustomerById(customerData.__existing_id);
+                }
+                if (!oldCustomer) {
+                    oldCustomer = await this.getCustomerByPhone(oldPhone);
+                }
                 if (!oldCustomer) {
                     return reject(new Error('Pelanggan tidak ditemukan'));
                 }
@@ -4664,18 +4758,21 @@ ${lifetimePaymentStatusSql}
     }
 
     /**
-     * Perbaiki hanya kasus Excel: angka HP kehilangan awalan 0 (852… → 0852…).
-     * Format 628… vs 085… sengaja tidak disamakan agar 2 langganan dengan "nomor sama" tetap terbeda.
+     * Perbaiki hanya kasus Excel numeric: angka HP kehilangan awalan 0 (852… → 0852…).
+     * String teks "8…", "08…", dan "62…" disimpan apa adanya agar 1 nomor bisa dipakai
+     * untuk 2 langganan lewat awalan berbeda.
      */
     fixExcelStrippedPhoneForStorage(raw) {
+        const wasNumber = raw != null && typeof raw === 'number' && Number.isFinite(raw);
         let digits;
-        if (raw != null && typeof raw === 'number' && Number.isFinite(raw)) {
+        if (wasNumber) {
             digits = String(Math.trunc(raw));
         } else {
             digits = String(raw ?? '').replace(/\D/g, '');
         }
         if (!digits || digits.length < 9 || digits.length > 15) return '';
-        if (/^8[1-9][0-9]{7,11}$/.test(digits)) return `0${digits}`;
+        // Hanya pulihkan leading 0 jika Excel menyimpan sebagai NUMBER (bukan teks "8…").
+        if (wasNumber && /^8[1-9][0-9]{7,11}$/.test(digits)) return `0${digits}`;
         return digits;
     }
 
@@ -4694,50 +4791,101 @@ ${lifetimePaymentStatusSql}
 
     // Helper function to calculate price with tax
     calculatePriceWithTax(price, taxRate) {
-        if (!taxRate || taxRate === 0) {
-            return Math.round(price);
+        const rate = Number(taxRate);
+        if (!Number.isFinite(rate) || rate === 0) {
+            return Math.round(Number(price) || 0);
         }
-        const amount = price * (1 + taxRate / 100);
+        const amount = Number(price) * (1 + rate / 100);
         return Math.round(amount); // Konsisten rounding untuk menghilangkan desimal
+    }
+
+    /** tax_rate dari SQLite sering berupa string — normalisasi sebelum default 11%. */
+    resolvePackageTaxRate(packageData, defaultRate = 11) {
+        if (!packageData || packageData.tax_rate === null || packageData.tax_rate === undefined || packageData.tax_rate === '') {
+            return defaultRate;
+        }
+        const n = Number(packageData.tax_rate);
+        if (!Number.isFinite(n) || n < 0) return defaultRate;
+        return n;
+    }
+
+    /** Paket GRATIS / harga 0 — tidak dibuatkan tagihan (kolektor & dashboard tidak usah tampil). */
+    isBillablePackage(packageData) {
+        if (!packageData) return false;
+        const price = Number(packageData.price);
+        return Number.isFinite(price) && price > 0;
     }
 
     // Invoice Management
     async createInvoice(invoiceData) {
-        const { hasTenantContext } = require('./platform/tenantContext');
-        // Tangkap ALS SINKRON dulu; fallback ke tenant pelanggan bila tanpa konteks (cron/legacy).
-        let tenantIdForRow = this._resolveTenantIdForInsert(invoiceData && invoiceData.tenant_id);
-        if (
-            !hasTenantContext() &&
-            (invoiceData == null || invoiceData.tenant_id == null) &&
-            invoiceData &&
-            invoiceData.customer_id
-        ) {
-            try {
-                const cust = await new Promise((resolve, reject) => {
-                    this.db.get(
-                        'SELECT tenant_id FROM customers WHERE id = ?',
-                        [invoiceData.customer_id],
-                        (err, row) => (err ? reject(err) : resolve(row))
-                    );
-                });
-                if (cust && cust.tenant_id != null && Number.isFinite(Number(cust.tenant_id))) {
-                    tenantIdForRow = parseInt(cust.tenant_id, 10);
-                }
-            } catch (_) { /* keep ALS/default */ }
+        const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
+        // tenant_id invoice HARUS mengikuti pemilik customer/member (source of truth),
+        // bukan hanya ALS — agar generate di tenant A tidak menstempel pelanggan tenant B.
+        let ownerTenantId = null;
+        if (invoiceData && invoiceData.customer_id) {
+            const cust = await new Promise((resolve, reject) => {
+                this.db.get(
+                    'SELECT tenant_id FROM customers WHERE id = ?',
+                    [invoiceData.customer_id],
+                    (err, row) => (err ? reject(err) : resolve(row))
+                );
+            });
+            if (!cust) {
+                throw new Error(`Customer #${invoiceData.customer_id} tidak ditemukan`);
+            }
+            if (cust.tenant_id != null && Number.isFinite(Number(cust.tenant_id))) {
+                ownerTenantId = parseInt(cust.tenant_id, 10);
+            }
+        } else if (invoiceData && invoiceData.member_id) {
+            const mem = await new Promise((resolve, reject) => {
+                this.db.get(
+                    'SELECT tenant_id FROM members WHERE id = ?',
+                    [invoiceData.member_id],
+                    (err, row) => (err ? reject(err) : resolve(row))
+                );
+            });
+            if (!mem) {
+                throw new Error(`Member #${invoiceData.member_id} tidak ditemukan`);
+            }
+            if (mem.tenant_id != null && Number.isFinite(Number(mem.tenant_id))) {
+                ownerTenantId = parseInt(mem.tenant_id, 10);
+            }
         }
+
+        if (hasTenantContext() && ownerTenantId != null) {
+            const ctxTenantId = Number(getTenantId());
+            if (Number.isFinite(ctxTenantId) && ctxTenantId !== ownerTenantId) {
+                throw new Error(
+                    `Isolasi tenant: pelanggan/member milik tenant ${ownerTenantId}, bukan tenant ${ctxTenantId}`
+                );
+            }
+        }
+
+        const tenantIdForRow = ownerTenantId != null
+            ? ownerTenantId
+            : this._resolveTenantIdForInsert(invoiceData && invoiceData.tenant_id);
 
         return new Promise((resolve, reject) => {
             const { customer_id, member_id, package_id, amount, due_date, notes, base_amount, tax_rate, invoice_type = 'monthly', package_name, description } = invoiceData;
+            const invType = String(invoice_type || 'monthly').toLowerCase();
+            // Tagihan bulanan Rp0 (paket gratis) tidak boleh dibuat — merusak daftar kolektor "belum lunas"
+            if (invType === 'monthly' && !(Number(amount) > 0)) {
+                return reject(new Error('Paket gratis / nominal 0 tidak dibuatkan invoice'));
+            }
             const invoice_number = this.generateInvoiceNumber();
+            // Pakai waktu kalender app (Asia/Jakarta), bukan CURRENT_TIMESTAMP UTC —
+            // agar strftime('%Y-%m', created_at) di Kelola Tenant tidak geser ke bulan lalu.
+            const { toLocalDateTimeString } = require('../utils/localDate');
+            const createdAtLocal = toLocalDateTimeString(new Date());
             
             // Check if base_amount and tax_rate columns exist
             let sql, params;
             if (base_amount !== undefined && tax_rate !== undefined) {
-                sql = `INSERT INTO invoices (customer_id, member_id, package_id, invoice_number, amount, base_amount, tax_rate, due_date, notes, invoice_type, package_name, description, tenant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-                params = [customer_id || null, member_id || null, package_id, invoice_number, amount, base_amount, tax_rate, due_date, notes || null, invoice_type, package_name || null, description || null, tenantIdForRow];
+                sql = `INSERT INTO invoices (customer_id, member_id, package_id, invoice_number, amount, base_amount, tax_rate, due_date, notes, invoice_type, package_name, description, tenant_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+                params = [customer_id || null, member_id || null, package_id, invoice_number, amount, base_amount, tax_rate, due_date, notes || null, invoice_type, package_name || null, description || null, tenantIdForRow, createdAtLocal];
             } else {
-                sql = `INSERT INTO invoices (customer_id, member_id, package_id, invoice_number, amount, due_date, notes, invoice_type, package_name, description, tenant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-                params = [customer_id || null, member_id || null, package_id, invoice_number, amount, due_date, notes || null, invoice_type, package_name || null, description || null, tenantIdForRow];
+                sql = `INSERT INTO invoices (customer_id, member_id, package_id, invoice_number, amount, due_date, notes, invoice_type, package_name, description, tenant_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+                params = [customer_id || null, member_id || null, package_id, invoice_number, amount, due_date, notes || null, invoice_type, package_name || null, description || null, tenantIdForRow, createdAtLocal];
             }
             
             this.db.run(sql, params, function(err) {
@@ -4779,8 +4927,8 @@ ${lifetimePaymentStatusSql}
         let sql = `
             ${selectClause}
             FROM invoices i
-            LEFT JOIN customers c ON i.customer_id = c.id
-            LEFT JOIN members m ON i.member_id = m.id
+            LEFT JOIN customers c ON i.customer_id = c.id AND c.tenant_id = i.tenant_id
+            LEFT JOIN members m ON i.member_id = m.id AND m.tenant_id = i.tenant_id
             LEFT JOIN packages p ON i.package_id = p.id
             WHERE 1=1 ${filterSql}
             ORDER BY i.created_at DESC, i.id DESC
@@ -4837,8 +4985,8 @@ ${lifetimePaymentStatusSql}
         const sql = `
             SELECT COUNT(*) as count
             FROM invoices i
-            LEFT JOIN customers c ON i.customer_id = c.id
-            LEFT JOIN members m ON i.member_id = m.id
+            LEFT JOIN customers c ON i.customer_id = c.id AND c.tenant_id = i.tenant_id
+            LEFT JOIN members m ON i.member_id = m.id AND m.tenant_id = i.tenant_id
             WHERE 1=1 ${filterSql}
         `;
         return new Promise((resolve, reject) => {
@@ -4885,8 +5033,8 @@ ${lifetimePaymentStatusSql}
                     let sql = `
                         ${selectClause}
                         FROM invoices i
-                        LEFT JOIN customers c ON i.customer_id = c.id
-                        LEFT JOIN members m ON i.member_id = m.id
+                        LEFT JOIN customers c ON i.customer_id = c.id AND c.tenant_id = i.tenant_id
+                        LEFT JOIN members m ON i.member_id = m.id AND m.tenant_id = i.tenant_id
                         LEFT JOIN packages p ON (i.customer_id IS NOT NULL AND i.package_id = p.id)
                     `;
                     if (hasMembersTable) {
@@ -5152,9 +5300,9 @@ ${lifetimePaymentStatusSql}
             const currentMonth = currentDate.getMonth();
             const currentYear = currentDate.getFullYear();
             
-            // Hitung tanggal awal bulan berjalan saja
+            // Hitung tanggal awal bulan berjalan saja (kalender lokal, bukan UTC)
             const currentMonthStart = new Date(currentYear, currentMonth, 1);
-            const currentMonthStartStr = currentMonthStart.toISOString().split('T')[0]; // Format: YYYY-MM-DD
+            const currentMonthStartStr = this._toLocalDateString(currentMonthStart);
             
             let sql = 'SELECT COUNT(*) as count FROM invoices i WHERE DATE(i.created_at) >= ?';
             const params = [currentMonthStartStr];
@@ -5257,11 +5405,33 @@ ${lifetimePaymentStatusSql}
 
     /** Rentang tanggal lokal YYYY-MM-DD untuk filter invoice bulan ini (hindari offset UTC). */
     _localMonthDateRange(year, monthIndex0) {
-        const y = year;
-        const m = monthIndex0;
-        const startStr = `${y}-${String(m + 1).padStart(2, '0')}-01`;
-        const endStr = new Date(y, m + 1, 0).toISOString().split('T')[0];
-        return { startStr, endStr };
+        const { localMonthDateRange } = require('../utils/localDate');
+        return localMonthDateRange(year, monthIndex0);
+    }
+
+    _toLocalDateString(date) {
+        const { toLocalDateString } = require('../utils/localDate');
+        return toLocalDateString(date);
+    }
+
+    /** Ada invoice non-voucher pelanggan di bulan YYYY-MM (kalender lokal / strftime DB). */
+    async customerHasMonthlyInvoiceInMonth(customerId, year, month) {
+        const ym = `${Number(year)}-${String(Number(month)).padStart(2, '0')}`;
+        const _t = this._tenantWhere('i');
+        return new Promise((resolve, reject) => {
+            const sql = `
+                SELECT 1 AS ok FROM invoices i
+                WHERE i.customer_id = ?
+                  AND strftime('%Y-%m', i.created_at) = ?
+                  AND (i.invoice_type IS NULL OR i.invoice_type != 'voucher')
+                  ${_t.sql}
+                LIMIT 1
+            `;
+            this.db.get(sql, [customerId, ym, ..._t.params], (err, row) => {
+                if (err) reject(err);
+                else resolve(Boolean(row));
+            });
+        });
     }
 
     /** Bulan terakhir yang punya invoice tagihan (default ringkasan jika bulan berjalan masih kosong). */
@@ -5292,16 +5462,28 @@ ${lifetimePaymentStatusSql}
         });
     }
 
-    /** Pelanggan aktif — tanpa JOIN berat / RADIUS (untuk bulk auto invoice). */
+    /** Pelanggan aktif — tanpa JOIN berat / RADIUS (untuk bulk auto invoice). WAJIB ter-scope tenant. */
     async getActiveCustomersForInvoiceGeneration() {
+        const _t = this._tenantWhere();
+        if (!_t.sql) {
+            throw new Error(
+                'getActiveCustomersForInvoiceGeneration membutuhkan konteks tenant (hindari generate lintas-tenant)'
+            );
+        }
         return new Promise((resolve, reject) => {
+            // Kecualikan paket gratis (price <= 0) — tidak perlu tagihan
+            // _tenantWhere() tanpa alias → " AND tenant_id = ?" ; remap ke c.tenant_id
+            const tenantSql = _t.sql
+                ? _t.sql.replace(/(\s+)tenant_id(\s*=)/g, '$1c.tenant_id$2')
+                : '';
             const sql = `
-                SELECT id, username, status, package_id, billing_day, renewal_type, fix_date
-                FROM customers
-                WHERE status = 'active' AND package_id IS NOT NULL
-                ORDER BY id ASC
+                SELECT c.id, c.username, c.status, c.package_id, c.billing_day, c.renewal_type, c.fix_date, c.tenant_id
+                FROM customers c
+                INNER JOIN packages p ON p.id = c.package_id AND CAST(p.price AS REAL) > 0
+                WHERE c.status = 'active' AND c.package_id IS NOT NULL${tenantSql}
+                ORDER BY c.id ASC
             `;
-            this.db.all(sql, [], (err, rows) => {
+            this.db.all(sql, [..._t.params], (err, rows) => {
                 if (err) reject(err);
                 else resolve(rows || []);
             });
@@ -5310,20 +5492,17 @@ ${lifetimePaymentStatusSql}
 
     /** Satu query untuk cek duplikat bulanan — hindari N× getInvoicesByCustomerAndDateRange saat bulk generate */
     async getDistinctCustomerUsernamesWithInvoicesBetween(startDate, endDate) {
-        const startStr = startDate instanceof Date
-            ? startDate.toISOString().split('T')[0]
-            : String(startDate).slice(0, 10);
-        const endStr = endDate instanceof Date
-            ? endDate.toISOString().split('T')[0]
-            : String(endDate).slice(0, 10);
+        const _t = this._tenantWhere('i');
+        const startStr = this._toLocalDateString(startDate);
+        const endStr = this._toLocalDateString(endDate);
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT DISTINCT c.username
                 FROM invoices i
-                JOIN customers c ON i.customer_id = c.id
-                WHERE DATE(i.created_at) >= DATE(?) AND DATE(i.created_at) <= DATE(?)
+                JOIN customers c ON i.customer_id = c.id AND c.tenant_id = i.tenant_id
+                WHERE DATE(i.created_at) >= DATE(?) AND DATE(i.created_at) <= DATE(?)${_t.sql}
             `;
-            this.db.all(sql, [startStr, endStr], (err, rows) => {
+            this.db.all(sql, [startStr, endStr, ..._t.params], (err, rows) => {
                 if (err) reject(err);
                 else resolve(new Set((rows || []).map((r) => r.username).filter(Boolean)));
             });
@@ -5332,20 +5511,17 @@ ${lifetimePaymentStatusSql}
 
     /** Cek duplikat bulanan per customer_id (lebih akurat dari username). */
     async getDistinctCustomerIdsWithInvoicesBetween(startDate, endDate) {
-        const startStr = startDate instanceof Date
-            ? startDate.toISOString().split('T')[0]
-            : String(startDate).slice(0, 10);
-        const endStr = endDate instanceof Date
-            ? endDate.toISOString().split('T')[0]
-            : String(endDate).slice(0, 10);
+        const _t = this._tenantWhere('i');
+        const startStr = this._toLocalDateString(startDate);
+        const endStr = this._toLocalDateString(endDate);
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT DISTINCT i.customer_id AS customer_id
                 FROM invoices i
                 WHERE i.customer_id IS NOT NULL
-                  AND DATE(i.created_at) >= DATE(?) AND DATE(i.created_at) <= DATE(?)
+                  AND DATE(i.created_at) >= DATE(?) AND DATE(i.created_at) <= DATE(?)${_t.sql}
             `;
-            this.db.all(sql, [startStr, endStr], (err, rows) => {
+            this.db.all(sql, [startStr, endStr, ..._t.params], (err, rows) => {
                 if (err) reject(err);
                 else {
                     const ids = new Set();
@@ -5361,20 +5537,17 @@ ${lifetimePaymentStatusSql}
 
     /** Kunci yang dipakai scheduler member (hotspot_username || username) jika ada invoice di rentang tanggal */
     async getMemberIdentityKeysWithInvoicesBetween(startDate, endDate) {
+        const _t = this._tenantWhere('i');
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT m.hotspot_username, m.username
                 FROM invoices i
-                JOIN members m ON i.member_id = m.id
-                WHERE DATE(i.created_at) >= DATE(?) AND DATE(i.created_at) <= DATE(?)
+                JOIN members m ON i.member_id = m.id AND m.tenant_id = i.tenant_id
+                WHERE DATE(i.created_at) >= DATE(?) AND DATE(i.created_at) <= DATE(?)${_t.sql}
             `;
-            const startStr = startDate instanceof Date
-                ? startDate.toISOString().split('T')[0]
-                : String(startDate).slice(0, 10);
-            const endStr = endDate instanceof Date
-                ? endDate.toISOString().split('T')[0]
-                : String(endDate).slice(0, 10);
-            this.db.all(sql, [startStr, endStr], (err, rows) => {
+            const startStr = this._toLocalDateString(startDate);
+            const endStr = this._toLocalDateString(endDate);
+            this.db.all(sql, [startStr, endStr, ..._t.params], (err, rows) => {
                 if (err) {
                     reject(err);
                     return;
@@ -5395,7 +5568,9 @@ ${lifetimePaymentStatusSql}
         });
     }
 
-    /** Semua baris packages untuk cache id → row (termasuk non-aktif) */
+    /** Packages untuk cache id → row (bulk generate). Tidak difilter tenant:
+     * pelanggan tenant A bisa mereferensi package_id historis lintas-tenant;
+     * isolasi tetap di seleksi pelanggan / createInvoice. */
     async getAllPackagesByIdMap() {
         return new Promise((resolve, reject) => {
             this.db.all('SELECT * FROM packages', [], (err, rows) => {
@@ -5420,8 +5595,8 @@ ${lifetimePaymentStatusSql}
                         COALESCE(p.name, mp.name) as package_name, 
                         COALESCE(p.speed, mp.speed) as package_speed
                     FROM invoices i
-                    LEFT JOIN customers c ON i.customer_id = c.id
-                    LEFT JOIN members m ON i.member_id = m.id
+                    LEFT JOIN customers c ON i.customer_id = c.id AND c.tenant_id = i.tenant_id
+                    LEFT JOIN members m ON i.member_id = m.id AND m.tenant_id = i.tenant_id
                     LEFT JOIN packages p ON (i.customer_id IS NOT NULL AND i.package_id = p.id)
                 `;
                 if (hasMembersTable) {
@@ -6387,6 +6562,7 @@ ${lifetimePaymentStatusSql}
             const poolWhere = `
                 (cra.collector_id IS NOT NULL OR casm.collector_id IS NOT NULL)
                 AND ${invoicePeriodWhere}
+                AND CAST(i.amount AS REAL) > 0
             `;
             const poolJoin = `
                 FROM invoices i
@@ -7206,11 +7382,14 @@ ${lifetimePaymentStatusSql}
 
     // Utility functions
     generateInvoiceNumber() {
+        // Format lama INV-YYYYMM-#### (hanya 10.000 slot/bulan) habis → UNIQUE constraint massal.
+        // Pakai 10 hex (40 bit) agar aman untuk puluhan ribu tagihan + generate paralel.
+        const crypto = require('crypto');
         const date = new Date();
         const year = date.getFullYear();
         const month = String(date.getMonth() + 1).padStart(2, '0');
-        const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-        return `INV-${year}${month}-${random}`;
+        const suffix = crypto.randomBytes(5).toString('hex');
+        return `INV-${year}${month}-${suffix}`;
     }
 
     // Calculate next due date based on renewal type

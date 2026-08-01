@@ -22,7 +22,9 @@ module.exports = {
       kill_timeout: 8000,
       env: {
         NODE_ENV: 'production',
-        PM2_APP_NAME: 'billing-kalimasada'
+        PM2_APP_NAME: 'billing-kalimasada',
+        // Dipakai app.js untuk menolak start di luar PM2 (cegah nohup/node ganda → cron invoice dobel)
+        RUN_VIA_PM2: '1'
       }
     }
   ]

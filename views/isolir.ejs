@@ -358,9 +358,11 @@
             <a class="btn-action btn-main" href="<%= invoiceUrl %>">
               <i class="bi bi-receipt"></i> Cek Tagihan
             </a>
+            <% if (adminWA) { %>
             <a class="btn-action btn-wa" href="<%= waProofIntentUrl %>" data-wa-app="<%= waProofAppUrl %>" data-wa-text="<%= waProofText %>" onclick="openWhatsApp(event, this)">
               <i class="bi bi-whatsapp"></i> Kirim Bukti
             </a>
+            <% } %>
           </div>
         </div>
       </header>
@@ -439,13 +441,19 @@
               </div>
             <% } %>
 
+            <% if (!qrFile && !(paymentAccounts && (paymentAccounts.bank_transfer || paymentAccounts.cash))) { %>
+              <div class="note mb-2">Info pembayaran tenant belum diatur. Gunakan Customer App atau hubungi admin.</div>
+            <% } %>
+
             <div class="actions">
               <a class="btn-action btn-light-action" href="<%= billingPortalUrl %>">
                 <i class="bi bi-phone"></i> Customer App
               </a>
+              <% if (adminWA) { %>
               <a class="btn-action btn-wa" href="<%= waCheckIntentUrl %>" data-wa-app="<%= waCheckAppUrl %>" data-wa-text="<%= waCheckText %>" onclick="openWhatsApp(event, this)">
                 <i class="bi bi-whatsapp"></i> WhatsApp
               </a>
+              <% } %>
             </div>
           </section>
 

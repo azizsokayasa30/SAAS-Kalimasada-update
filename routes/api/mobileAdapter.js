@@ -13,6 +13,9 @@ const logger = require('../../config/logger');
 const { getSetting, getLocalTimestamp } = require('../../config/settingsManager');
 require('../../config/technicianFieldNotifications');
 require('../../config/collectorFieldNotifications');
+const {
+    migrateInstallationJobsJobNumberUniqueAsync
+} = require('../../utils/migrateInstallationJobsJobNumberUnique');
 
 const dbPath = path.join(__dirname, '../../data/billing.db');
 const db = new sqlite3.Database(dbPath);
@@ -113,7 +116,7 @@ function ensureFieldOpsTables() {
     const tableDdl = [
         `CREATE TABLE IF NOT EXISTS installation_jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_number VARCHAR(50) UNIQUE,
+            job_number VARCHAR(50) NOT NULL,
             customer_name VARCHAR(255) NOT NULL,
             customer_phone VARCHAR(20),
             customer_address TEXT,
@@ -139,8 +142,10 @@ function ensureFieldOpsTables() {
             tech_completion_longitude REAL,
             install_cable_length_m REAL,
             install_ont_sticker_photo_path TEXT,
+            tenant_id INTEGER NOT NULL DEFAULT 1,
             created_at DATETIME DEFAULT (datetime('now','localtime')),
             updated_at DATETIME DEFAULT (datetime('now','localtime')),
+            UNIQUE(tenant_id, job_number),
             FOREIGN KEY (package_id) REFERENCES packages(id),
             FOREIGN KEY (assigned_technician_id) REFERENCES technicians(id)
         )`,
@@ -190,6 +195,15 @@ function ensureFieldOpsTables() {
                 if (err) logger.warn('[mobile-adapter] ensureFieldOpsTables index:', err.message);
             });
         }
+        db.run(
+            `ALTER TABLE installation_jobs ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1`,
+            (err) => {
+                if (err && !/duplicate column/i.test(String(err.message))) {
+                    logger.warn('[mobile-adapter] installation_jobs tenant_id:', err.message);
+                }
+                migrateInstallationJobsJobNumberUniqueAsync(db);
+            }
+        );
     });
 }
 ensureFieldOpsTables();
@@ -3853,57 +3867,79 @@ router.post('/tasks/installations', verifyToken, allowFieldOps, async (req, res)
 
         const ymd = localTs.slice(0, 10).replace(/-/g, '');
         const psbPrefix = `PSB-${ymd}`;
-        const lastJobNumber = await new Promise((resolve, reject) => {
-            db.get(
-                'SELECT job_number FROM installation_jobs WHERE job_number LIKE ? AND tenant_id = ? ORDER BY job_number DESC LIMIT 1',
-                [`${psbPrefix}%`, tenantId],
-                (err, row) => (err ? reject(err) : resolve(row ? row.job_number : null))
-            );
-        });
-        let jobCounter = 1;
-        if (lastJobNumber && String(lastJobNumber).startsWith(psbPrefix)) {
-            const lastCounter = parseInt(String(lastJobNumber).slice(psbPrefix.length), 10);
-            if (Number.isFinite(lastCounter) && lastCounter >= 0) jobCounter = lastCounter + 1;
-        }
-        const jobNumber = `${psbPrefix}${String(jobCounter).padStart(3, '0')}`;
         const assignedAt = hasAssignedTechnician ? getLocalTimestamp() : null;
         const initialStatus = hasAssignedTechnician ? 'assigned' : 'scheduled';
 
-        const jobId = await new Promise((resolve, reject) => {
-            db.run(
-                `INSERT INTO installation_jobs (
+        async function nextPsbJobNumber() {
+            const lastJobNumber = await new Promise((resolve, reject) => {
+                db.get(
+                    'SELECT job_number FROM installation_jobs WHERE job_number LIKE ? AND tenant_id = ? ORDER BY job_number DESC LIMIT 1',
+                    [`${psbPrefix}%`, tenantId],
+                    (err, row) => (err ? reject(err) : resolve(row ? row.job_number : null))
+                );
+            });
+            let jobCounter = 1;
+            if (lastJobNumber && String(lastJobNumber).startsWith(psbPrefix)) {
+                const lastCounter = parseInt(String(lastJobNumber).slice(psbPrefix.length), 10);
+                if (Number.isFinite(lastCounter) && lastCounter >= 0) jobCounter = lastCounter + 1;
+            }
+            return `${psbPrefix}${String(jobCounter).padStart(3, '0')}`;
+        }
+
+        let jobNumber = null;
+        let jobId = null;
+        const insertSql = `INSERT INTO installation_jobs (
                     job_number, customer_name, customer_phone, customer_address, customer_id,
                     package_id, installation_date, installation_time, assigned_technician_id,
                     status, priority, notes, equipment_needed, estimated_duration,
                     customer_latitude, customer_longitude, created_by_admin_id, assigned_at, tenant_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [
-                    jobNumber,
-                    customerName,
-                    customerPhone,
-                    customerAddress,
-                    customer ? customer.id : null,
-                    resolvedPackageId,
-                    installationDate,
-                    installationTime,
-                    hasAssignedTechnician ? technicianId : null,
-                    initialStatus,
-                    priority,
-                    notes || null,
-                    equipmentNeeded || null,
-                    parseInt(body.estimated_duration, 10) || 120,
-                    customer ? customer.latitude || null : null,
-                    customer ? customer.longitude || null : null,
-                    req.user && req.user.id ? req.user.id : null,
-                    assignedAt,
-                    tenantId
-                ],
-                function (err) {
-                    if (err) reject(err);
-                    else resolve(this.lastID);
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+        for (let attempt = 0; attempt < 8; attempt++) {
+            jobNumber = await nextPsbJobNumber();
+            try {
+                jobId = await new Promise((resolve, reject) => {
+                    db.run(
+                        insertSql,
+                        [
+                            jobNumber,
+                            customerName,
+                            customerPhone,
+                            customerAddress,
+                            customer ? customer.id : null,
+                            resolvedPackageId,
+                            installationDate,
+                            installationTime,
+                            hasAssignedTechnician ? technicianId : null,
+                            initialStatus,
+                            priority,
+                            notes || null,
+                            equipmentNeeded || null,
+                            parseInt(body.estimated_duration, 10) || 120,
+                            customer ? customer.latitude || null : null,
+                            customer ? customer.longitude || null : null,
+                            req.user && req.user.id ? req.user.id : null,
+                            assignedAt,
+                            tenantId
+                        ],
+                        function (err) {
+                            if (err) reject(err);
+                            else resolve(this.lastID);
+                        }
+                    );
+                });
+                break;
+            } catch (insErr) {
+                const msg = String(insErr && insErr.message || '');
+                if (/UNIQUE/i.test(msg) && attempt < 7) {
+                    logger.warn(`[mobile-adapter] job_number conflict ${jobNumber}, retry ${attempt + 1}`);
+                    continue;
                 }
-            );
-        });
+                throw insErr;
+            }
+        }
+        if (!jobId) {
+            throw new Error('Gagal mengalokasikan nomor job instalasi');
+        }
 
         db.run(
             `INSERT INTO installation_job_status_history (
@@ -6332,7 +6368,7 @@ router.get('/collector/customer-invoices/:customerId', verifyToken, requireColle
                 `SELECT i.*, p.name as package_name
                  FROM invoices i
                  LEFT JOIN packages p ON i.package_id = p.id
-                 WHERE i.customer_id = ? AND i.status = 'unpaid'
+                 WHERE i.customer_id = ? AND i.status = 'unpaid' AND CAST(i.amount AS REAL) > 0
                  ORDER BY i.created_at DESC`,
                 [customerId],
                 (err, rows) => (err ? reject(err) : resolve(rows || []))

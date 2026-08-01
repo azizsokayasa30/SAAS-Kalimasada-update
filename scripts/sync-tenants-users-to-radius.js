@@ -166,6 +166,11 @@ async function syncOne(conn, customer, passwordMap) {
     );
 
     const status = String(customer.status || '').toLowerCase();
+    if (status === 'inactive' || status === 'nonaktif') {
+        const { disablePppoeUserRadius } = require('../config/mikrotik');
+        await disablePppoeUserRadius(username);
+        return { status: 'synced', passwordSource, note: 'inactive → Auth-Type Reject' };
+    }
     if (status === 'suspended') {
         return { status: 'synced', passwordSource, note: 'password ok; skip group (suspended)' };
     }

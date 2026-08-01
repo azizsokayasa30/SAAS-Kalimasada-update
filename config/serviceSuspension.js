@@ -1,6 +1,14 @@
 const logger = require('./logger');
 const billingManager = require('./billing');
-const { getMikrotikConnectionForCustomer, suspendUserRadius, unsuspendUserRadius, updateIsolirPreviousGroupRadius } = require('./mikrotik');
+const {
+    getMikrotikConnectionForCustomer,
+    suspendUserRadius,
+    unsuspendUserRadius,
+    updateIsolirPreviousGroupRadius,
+    disablePppoeUserRadius,
+    enablePppoeUserRadius,
+    disconnectPPPoEUser
+} = require('./mikrotik');
 const { classifySuspendReason, isSuspendedStatus, shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
 const { findDeviceByPhoneNumber, findDeviceByPPPoE, setParameterValues } = require('./genieacs');
 const { getSetting } = require('./settingsManager');
@@ -1332,6 +1340,164 @@ class ServiceSuspensionManager {
         } catch (error) {
             logger.error('Error in automatic service restoration check:', error);
             throw error;
+        }
+    }
+
+    /**
+     * Nonaktif (berhenti langganan): tolak auth PPPoE / disable secret — tidak bisa internet sama sekali.
+     * Beda dari isolir (masih bisa login ke captive portal).
+     */
+    async deactivateCustomerNetwork(customer, reason = 'Status Nonaktif') {
+        try {
+            logger.info(`Deactivating network for customer: ${customer.username} (${reason})`);
+            const results = { mikrotik: false, radius: false, static_ip: false };
+
+            const explicitPppoe = customer.pppoe_username && String(customer.pppoe_username).trim();
+            const hasStaticIP = !!(customer.static_ip || customer.ip_address || customer.assigned_ip);
+            const hasMacAddress = !!customer.mac_address;
+            const pppUser = explicitPppoe
+                || (!hasStaticIP && !hasMacAddress && customer.username ? String(customer.username).trim() : '');
+
+            if (pppUser) {
+                const authMode = await getUserAuthMode();
+                if (authMode === 'radius') {
+                    const disableResult = await disablePppoeUserRadius(pppUser);
+                    if (disableResult && disableResult.success) {
+                        results.radius = true;
+                        results.mikrotik = true;
+                        logger.info(
+                            `RADIUS: ${pppUser} nonaktif (Reject), kicked ${disableResult.disconnected || 0} sesi`
+                        );
+                    }
+                } else {
+                    try {
+                        const mikrotik = await getMikrotikConnectionForCustomer(customer);
+                        let secretId = null;
+                        const secrets = await mikrotik.write('/ppp/secret/print', [`?name=${pppUser}`]);
+                        if (secrets && secrets.length > 0) secretId = secrets[0]['.id'];
+                        const setParams = secretId
+                            ? [`=.id=${secretId}`, '=disabled=yes', `=comment=INACTIVE - ${reason}`]
+                            : [`=name=${pppUser}`, '=disabled=yes', `=comment=INACTIVE - ${reason}`];
+                        await mikrotik.write('/ppp/secret/set', setParams);
+                        try {
+                            await withTimeout(disconnectPPPoEUser(pppUser, mikrotik), 8000, `disconnect ${pppUser}`);
+                        } catch (e) {
+                            logger.warn(`Mikrotik disconnect after inactive: ${e.message}`);
+                        }
+                        results.mikrotik = true;
+                        logger.info(`Mikrotik: PPPoE secret ${pppUser} disabled=yes (nonaktif)`);
+                    } catch (mikrotikError) {
+                        logger.error(`Mikrotik deactivate failed for ${customer.username}:`, mikrotikError.message);
+                    }
+                }
+            } else if (hasStaticIP || hasMacAddress) {
+                try {
+                    const { syncPoolAfterCustomerChange } = require('./staticIpPoolSync');
+                    await syncPoolAfterCustomerChange({ ...customer, status: 'inactive' });
+                    results.static_ip = true;
+                } catch (e) {
+                    logger.warn(`Static IP deactivate sync: ${e.message}`);
+                }
+            }
+
+            return { success: results.mikrotik || results.radius || results.static_ip, results };
+        } catch (error) {
+            logger.error(`Error deactivating network for ${customer.username}:`, error.message);
+            return { success: false, message: error.message };
+        }
+    }
+
+    /**
+     * Kembalikan akses jaringan saat status Nonaktif → Aktif.
+     */
+    async reactivateCustomerNetwork(customer, reason = 'Status Aktif') {
+        try {
+            logger.info(`Reactivating network for customer: ${customer.username} (${reason})`);
+            const results = { mikrotik: false, radius: false, static_ip: false };
+
+            const explicitPppoe = customer.pppoe_username && String(customer.pppoe_username).trim();
+            const hasStaticIP = !!(customer.static_ip || customer.ip_address || customer.assigned_ip);
+            const hasMacAddress = !!customer.mac_address;
+            const pppUser = explicitPppoe
+                || (!hasStaticIP && !hasMacAddress && customer.username ? String(customer.username).trim() : '');
+
+            if (pppUser) {
+                const authMode = await getUserAuthMode();
+                if (authMode === 'radius') {
+                    const enableResult = await enablePppoeUserRadius(pppUser, customer);
+                    if (enableResult && enableResult.success) {
+                        results.radius = true;
+                        results.mikrotik = true;
+                        logger.info(`RADIUS: ${pppUser} diaktifkan kembali dari nonaktif`);
+                    }
+                } else {
+                    try {
+                        const mikrotik = await getMikrotikConnectionForCustomer(customer);
+                        const profile =
+                            customer.pppoe_profile ||
+                            customer.package_pppoe_profile ||
+                            getTenantSetting('default_pppoe_profile', getSetting('default_pppoe_profile', 'default'));
+                        let secretId = null;
+                        const secrets = await mikrotik.write('/ppp/secret/print', [`?name=${pppUser}`]);
+                        if (secrets && secrets.length > 0) secretId = secrets[0]['.id'];
+                        const setParams = secretId
+                            ? [`=.id=${secretId}`, '=disabled=no', `=profile=${profile}`, `=comment=ACTIVE`]
+                            : [`=name=${pppUser}`, '=disabled=no', `=profile=${profile}`, `=comment=ACTIVE`];
+                        await mikrotik.write('/ppp/secret/set', setParams);
+                        try {
+                            await withTimeout(disconnectPPPoEUser(pppUser, mikrotik), 8000, `disconnect ${pppUser}`);
+                        } catch (_) {}
+                        results.mikrotik = true;
+                        logger.info(`Mikrotik: PPPoE secret ${pppUser} enabled (profile=${profile})`);
+                    } catch (mikrotikError) {
+                        logger.error(`Mikrotik reactivate failed for ${customer.username}:`, mikrotikError.message);
+                    }
+                }
+            } else if (hasStaticIP || hasMacAddress) {
+                try {
+                    const { syncPoolAfterCustomerChange } = require('./staticIpPoolSync');
+                    await syncPoolAfterCustomerChange({ ...customer, status: 'active' });
+                    results.static_ip = true;
+                } catch (e) {
+                    logger.warn(`Static IP reactivate sync: ${e.message}`);
+                }
+            }
+
+            return { success: results.mikrotik || results.radius || results.static_ip, results };
+        } catch (error) {
+            logger.error(`Error reactivating network for ${customer.username}:`, error.message);
+            return { success: false, message: error.message };
+        }
+    }
+
+    /** Pastikan semua pelanggan status inactive tertolak di RADIUS / secret disabled. */
+    async syncInactiveStatusToNetwork() {
+        try {
+            logger.info('Starting sync inactive (nonaktif) customers to network disable...');
+            const customers = await billingManager.getCustomers();
+            const inactiveCustomers = customers.filter(
+                (c) => String(c.status || '').toLowerCase() === 'inactive'
+            );
+            logger.info(`Found ${inactiveCustomers.length} inactive customers`);
+
+            let synced = 0;
+            let errors = 0;
+            for (const customer of inactiveCustomers) {
+                try {
+                    const r = await this.deactivateCustomerNetwork(customer, 'Sync nonaktif');
+                    if (r && r.success) synced++;
+                    else errors++;
+                    await new Promise((res) => setTimeout(res, 30));
+                } catch (e) {
+                    errors++;
+                    logger.error(`Sync inactive ${customer.username}: ${e.message}`);
+                }
+            }
+            logger.info(`Sync inactive completed: synced=${synced}, errors=${errors}`);
+            return { synced, errors, total: inactiveCustomers.length };
+        } catch (error) {
+            logger.error(`Error in syncInactiveStatusToNetwork: ${error.message}`);
+            return { synced: 0, errors: 1, total: 0 };
         }
     }
 }

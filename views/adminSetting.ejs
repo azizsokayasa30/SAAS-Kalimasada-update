@@ -1419,7 +1419,6 @@ $(function() {
             dataType: 'json',
             success: function(res) {
                 console.log('WA Status Response:', res); // Debug log
-                
                 // Update status koneksi
                 if (res.connected) {
                     let statusHtml = '<span class="badge bg-success status-badge"><i class="bi bi-check-circle"></i> Terhubung';
@@ -1434,19 +1433,22 @@ $(function() {
                     $('#wa-status').html(statusHtml);
                     $('#wa-qr-container').addClass('d-none');
                 } else {
-                    $('#wa-status').html('<span class="badge bg-warning text-dark status-badge"><i class="bi bi-exclamation-triangle"></i> Belum Terhubung</span>');
+                    const stLabel = res.status || 'disconnected';
+                    $('#wa-status').html(`<span class="badge bg-warning text-dark status-badge"><i class="bi bi-exclamation-triangle"></i> Belum Terhubung <small>(${stLabel})</small></span>`);
                     
-                    // Tampilkan QR code jika tersedia
-                    if (res.qr) {
+                    // Prioritas: gambar QR dari server (stabil, tanpa lib browser)
+                    if (res.qrImage) {
+                        $('#wa-qr-container').removeClass('d-none');
+                        $('#wa-qr-div').empty().hide();
+                        $('#wa-qr').attr('src', res.qrImage).show();
+                        $('#wa-status').append(`<div class="text-info small mt-2"><i class="bi bi-info-circle"></i> Scan dari WhatsApp > Perangkat tertaut. QR otomatis diperbarui.</div>`);
+                    } else if (res.qr) {
                         console.log('QR Code received, length:', res.qr.length);
                         $('#wa-qr-container').removeClass('d-none');
-                        
-                        // Hapus QR lama jika ada
                         $('#wa-qr').attr('src', '').hide();
                         const qrDiv = $('#wa-qr-div');
                         qrDiv.empty().show();
                         
-                        // Cek apakah QRCode library sudah ter-load
                         if (typeof QRCode === 'undefined') {
                             console.error('QRCode library tidak ter-load!');
                             qrDiv.html(`
@@ -1457,21 +1459,17 @@ $(function() {
                             `);
                         } else {
                             try {
-                                // Coba buat QR code langsung
                                 new QRCode(qrDiv[0], {
                                     text: res.qr,
-                                    // QR WhatsApp cukup padat, gunakan ukuran lebih besar supaya mudah dipindai kamera.
                                     width: 320,
                                     height: 320,
                                     colorDark: '#000000',
                                     colorLight: '#ffffff',
                                     correctLevel: QRCode.CorrectLevel.M || 2
                                 });
-                                console.log('QR Code generated successfully');
                                 $('#wa-status').append(`<div class="text-info small mt-2"><i class="bi bi-info-circle"></i> Scan dari WhatsApp > Perangkat tertaut. QR akan berubah otomatis tiap beberapa detik.</div>`);
                             } catch (e) {
                                 console.error('Error generating QR code:', e);
-                                // Fallback: tampilkan QR sebagai text atau image
                                 qrDiv.html(`
                                     <div class="alert alert-info">
                                         <p><strong>QR Code tersedia</strong></p>
@@ -1486,10 +1484,9 @@ $(function() {
                         $('#wa-qr-container').addClass('d-none');
                         if (res.error) {
                             $('#wa-status').append(`<div class="alert alert-danger mt-2">${res.error}</div>`);
-                        } else if (res.status === 'connecting' || res.status === 'qr_code') {
-                            // Jika status connecting atau qr_code tapi QR belum ada, tampilkan pesan
+                        } else {
                             $('#wa-status').append(`<div class="alert alert-info mt-2">
-                                <i class="bi bi-hourglass-split"></i> Menunggu QR code... Silakan refresh dalam beberapa detik.
+                                <i class="bi bi-hourglass-split"></i> Menunggu QR code (${stLabel})… halaman memuat ulang otomatis.
                             </div>`);
                         }
                     }
@@ -1529,29 +1526,33 @@ $(function() {
             .done(function(resp) {
                 showNotification('info', (resp && resp.message) || 'Sesi direset, menunggu QR code baru...');
 
-                // Bersihkan polling lama jika ada
                 if (waRefreshPolling) {
                     clearInterval(waRefreshPolling);
                     waRefreshPolling = null;
                 }
 
+                setTimeout(function() {
+                    if (typeof window.loadWAStatus === 'function') window.loadWAStatus();
+                }, 1500);
+
                 let attempts = 0;
-                const maxAttempts = 4; // ~40 detik (tiap 10 detik)
+                const maxAttempts = 30; // ~60 detik (tiap 2 detik)
                 waRefreshPolling = setInterval(function() {
                     attempts += 1;
                     if (typeof window.loadWAStatus === 'function') {
                         window.loadWAStatus();
                     }
-                    // Stop polling jika QR sudah muncul di container
-                    const hasQrDom = $('#wa-qr-div canvas').length > 0 || $('#wa-qr-div img').length > 0;
+                    const hasQrDom = $('#wa-qr[src^="data:image"]').length > 0
+                        || $('#wa-qr-div canvas').length > 0
+                        || $('#wa-qr-div img').length > 0;
                     if (hasQrDom || attempts >= maxAttempts) {
                         clearInterval(waRefreshPolling);
                         waRefreshPolling = null;
                         if (!hasQrDom && attempts >= maxAttempts) {
-                            showNotification('warning', 'QR belum muncul. Coba refresh sekali lagi atau restart PM2.');
+                            showNotification('warning', 'QR belum muncul. Pastikan Baileys Enable tersimpan, lalu Refresh QR lagi.');
                         }
                     }
-                }, 10000);
+                }, 2000);
             })
             .fail(function(xhr) {
                 const msg = (xhr.responseJSON && (xhr.responseJSON.error || xhr.responseJSON.message)) || 'Gagal refresh QR';
@@ -1576,27 +1577,22 @@ $(function() {
             }
         }
     });
-    // Auto refresh status tiap 10 detik (hanya jika Baileys enabled)
+    // Auto refresh status tiap 3 detik saat menunggu QR (stabil multi-tenant)
     let waStatusInterval = null;
     function startWAStatusInterval() {
-        // Clear interval lama jika ada
         if (waStatusInterval) {
             clearInterval(waStatusInterval);
             waStatusInterval = null;
         }
-        // Start interval baru hanya jika Baileys enabled
         if ($('#baileys_enabled').is(':checked')) {
             waStatusInterval = setInterval(function() {
                 if ($('#baileys_enabled').is(':checked')) {
                     loadWAStatus();
-                } else {
-                    // Stop interval jika Baileys disabled
-                    if (waStatusInterval) {
-                        clearInterval(waStatusInterval);
-                        waStatusInterval = null;
-                    }
+                } else if (waStatusInterval) {
+                    clearInterval(waStatusInterval);
+                    waStatusInterval = null;
                 }
-            }, 10000);
+            }, 3000);
         }
     }
     

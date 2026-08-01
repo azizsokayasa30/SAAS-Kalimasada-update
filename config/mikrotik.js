@@ -920,7 +920,24 @@ async function getPPPoEUsersRadius(options = {}) {
         const resolveProfileLabel = (groupname) => {
             const gn = groupname != null ? String(groupname).trim() : '';
             if (!gn) return 'default';
-            // Profil tenant-prefixed: tampilkan groupname fisik (bukan display_name legacy)
+            // Jangan tampilkan groupname tenant lain apa adanya (kebocoran UI)
+            try {
+                const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
+                if (hasTenantContext()) {
+                    const tid = getTenantId();
+                    const m = gn.match(/^t(\d+)_/i);
+                    if (m && parseInt(m[1], 10) !== parseInt(tid, 10)) {
+                        const {
+                            toCanonicalTenantPppoeProfile,
+                            stripTenantProfilePrefix
+                        } = require('../utils/tenantPppoeProfileOwnership');
+                        const foreignTid = parseInt(m[1], 10);
+                        const logical = stripTenantProfilePrefix(gn, foreignTid) || gn.replace(/^t\d+_/, '');
+                        return toCanonicalTenantPppoeProfile(tid, logical) || toCanonicalTenantPppoeProfile(tid, gn) || logical || 'default';
+                    }
+                }
+            } catch (_) { /* optional */ }
+            // Profil tenant-prefixed milik tenant ini: tampilkan groupname fisik
             if (/^t\d+_/i.test(gn)) return gn;
             const meta =
                 metaByExact[gn] ||
@@ -2307,6 +2324,174 @@ async function enableHotspotUserRadius(username) {
     }
 }
 
+/**
+ * Nonaktifkan PPPoE di RADIUS: tolak auth (Auth-Type Reject), simpan password,
+ * lepas radusergroup paket, kick sesi aktif. Beda dari isolir (yang masih bisa login ke captive).
+ */
+async function disablePppoeUserRadius(username) {
+    const conn = await getRadiusConnection();
+    try {
+        const user = String(username || '').trim();
+        if (!user) {
+            await conn.end();
+            return { success: false, message: 'Username kosong' };
+        }
+        logger.info(`[RADIUS] Disable PPPoE (nonaktif) for ${user}`);
+
+        const [passwordRows] = await conn.execute(
+            "SELECT value FROM radcheck WHERE username = ? AND attribute = 'Cleartext-Password'",
+            [user]
+        );
+        if (passwordRows && passwordRows.length > 0) {
+            const oldPassword = passwordRows[0].value;
+            await conn.execute(
+                "DELETE FROM radcheck WHERE username = ? AND attribute = 'X-Old-Password'",
+                [user]
+            );
+            await conn.execute(
+                "INSERT INTO radcheck (username, attribute, op, value) VALUES (?, 'X-Old-Password', ':=', ?)",
+                [user, oldPassword]
+            );
+        }
+
+        await conn.execute(
+            "DELETE FROM radcheck WHERE username = ? AND attribute = 'Cleartext-Password'",
+            [user]
+        );
+        await conn.execute(
+            "DELETE FROM radcheck WHERE username = ? AND attribute = 'Auth-Type'",
+            [user]
+        );
+        await conn.execute(
+            "INSERT INTO radcheck (username, attribute, op, value) VALUES (?, 'Auth-Type', ':=', 'Reject')",
+            [user]
+        );
+
+        // Lepas dari profil paket / isolir — auth tetap Reject
+        await conn.execute('DELETE FROM radusergroup WHERE username = ?', [user]);
+
+        await conn.end();
+        await syncRadiusToFreeRadiusMysql({ force: true });
+        const kick = await disconnectPPPoEUserAllRouters(user);
+        if (kick.disconnected > 0) {
+            logger.info(
+                `[RADIUS] Kicked ${kick.disconnected} PPPoE session(s) for ${user} after nonaktif`
+            );
+        }
+        return {
+            success: true,
+            message: 'PPPoE user disabled (Auth-Type Reject)',
+            disconnected: kick.disconnected || 0
+        };
+    } catch (error) {
+        try {
+            await conn.end();
+        } catch (_) {}
+        logger.error(`Error disabling PPPoE user in RADIUS: ${error.message}`);
+        throw error;
+    }
+}
+
+/**
+ * Aktifkan kembali PPPoE setelah Nonaktif: restore password, hapus Reject, assign grup paket.
+ */
+async function enablePppoeUserRadius(username, customer = null) {
+    const conn = await getRadiusConnection();
+    try {
+        const user = String(username || '').trim();
+        if (!user) {
+            await conn.end();
+            return { success: false, message: 'Username kosong' };
+        }
+        logger.info(`[RADIUS] Enable PPPoE (dari nonaktif) for ${user}`);
+
+        let passwordToRestore = null;
+        const [oldPasswordRows] = await conn.execute(
+            "SELECT value FROM radcheck WHERE username = ? AND attribute = 'X-Old-Password'",
+            [user]
+        );
+        if (oldPasswordRows && oldPasswordRows.length > 0) {
+            passwordToRestore = oldPasswordRows[0].value;
+        } else if (customer && customer.pppoe_password) {
+            passwordToRestore = String(customer.pppoe_password).trim();
+        } else {
+            try {
+                const billingManager = require('./billing');
+                let cust = customer;
+                if (!cust || !cust.pppoe_password) {
+                    cust = await billingManager.getCustomerByUsername(user).catch(() => null);
+                    if (!cust) {
+                        cust = await new Promise((resolve, reject) => {
+                            billingManager.db.get(
+                                `SELECT * FROM customers WHERE pppoe_username = ? OR username = ? LIMIT 1`,
+                                [user, user],
+                                (err, row) => (err ? reject(err) : resolve(row))
+                            );
+                        }).catch(() => null);
+                    }
+                }
+                if (cust && cust.pppoe_password) {
+                    passwordToRestore = String(cust.pppoe_password).trim();
+                }
+                if (!customer) customer = cust;
+            } catch (_) {}
+        }
+
+        if (passwordToRestore) {
+            await conn.execute(
+                "INSERT INTO radcheck (username, attribute, op, value) VALUES (?, 'Cleartext-Password', ':=', ?) ON CONFLICT(username, attribute) DO UPDATE SET value = excluded.value",
+                [user, passwordToRestore]
+            );
+            await conn.execute(
+                "DELETE FROM radcheck WHERE username = ? AND attribute = 'X-Old-Password'",
+                [user]
+            );
+        } else {
+            logger.warn(`[RADIUS] No password to restore for ${user} — set password PPPoE di billing`);
+        }
+
+        await conn.execute(
+            "DELETE FROM radcheck WHERE username = ? AND attribute = 'Auth-Type'",
+            [user]
+        );
+
+        let profileHint =
+            customer?.pppoe_profile || customer?.package_pppoe_profile || null;
+        if (!profileHint && customer?.package_id) {
+            try {
+                const billingManager = require('./billing');
+                const pkg = await billingManager.getPackageById(customer.package_id);
+                profileHint = pkg?.pppoe_profile || null;
+            } catch (_) {}
+        }
+        if (profileHint) {
+            const resolved = await resolvePppoeProfileHintToRadiusGroup(conn, profileHint);
+            if (resolved) {
+                await conn.execute('DELETE FROM radusergroup WHERE username = ?', [user]);
+                await conn.execute(
+                    'INSERT INTO radusergroup (username, groupname, priority) VALUES (?, ?, 1)',
+                    [user, resolved]
+                );
+            }
+        }
+
+        await conn.end();
+        await syncRadiusToFreeRadiusMysql({ force: true });
+        const kick = await disconnectPPPoEUserAllRouters(user);
+        return {
+            success: true,
+            message: 'PPPoE user enabled',
+            disconnected: kick.disconnected || 0
+        };
+    } catch (error) {
+        try {
+            await conn.end();
+        } catch (_) {}
+        logger.error(`Error enabling PPPoE user in RADIUS: ${error.message}`);
+        throw error;
+    }
+}
+
 // Fungsi untuk unsuspend user (kembalikan ke package sebelumnya)
 async function unsuspendUserRadius(username, customer = null) {
     const conn = await getRadiusConnection();
@@ -2573,6 +2758,40 @@ async function editPPPoEUserRadius({ oldUsername, username, password, profile = 
                     message: `Profil "${String(profile).trim()}" tidak ditemukan di RADIUS (radgroupreply/radgroupcheck). Pilih profil dari daftar.`,
                     error: 'unknown_profile'
                 };
+            }
+        }
+
+        // Jika user sedang di grup isolir, JANGAN timpa ke profil paket.
+        // Simpan profil paket sebagai PREVGROUP agar restore tetap benar.
+        if (resolvedProfile) {
+            const [curRows] = await conn.execute(
+                "SELECT groupname FROM radusergroup WHERE username = ? LIMIT 1",
+                [usernameToUpdate]
+            );
+            const curGroup = curRows && curRows[0] && curRows[0].groupname
+                ? String(curRows[0].groupname).trim().toLowerCase()
+                : '';
+            const targetNorm = String(resolvedProfile).trim().toLowerCase();
+            if (curGroup === 'isolir' && targetNorm !== 'isolir') {
+                logger.info(
+                    `[RADIUS] User ${usernameToUpdate} sedang isolir — keep group isolir, update PREVGROUP → ${resolvedProfile}`
+                );
+                try {
+                    await conn.execute(
+                        "DELETE FROM radcheck WHERE username = ? AND attribute = 'NT-Password' AND value LIKE 'PREVGROUP:%'",
+                        [usernameToUpdate]
+                    );
+                    await conn.execute(
+                        "INSERT INTO radcheck (username, attribute, op, value) VALUES (?, 'NT-Password', ':=', ?)",
+                        [usernameToUpdate, `PREVGROUP:${resolvedProfile}`]
+                    );
+                } catch (prevErr) {
+                    logger.warn(`[RADIUS] Gagal update PREVGROUP untuk ${usernameToUpdate}: ${prevErr.message}`);
+                }
+                resolvedProfile = null; // jangan ganti radusergroup
+                if (!password) {
+                    return { success: true, message: 'User isolir: profil paket disimpan untuk restore, grup tetap isolir' };
+                }
             }
         }
 
@@ -11439,6 +11658,8 @@ module.exports = {
     disconnectHotspotUser,
     disableHotspotUserRadius,
     enableHotspotUserRadius,
+    disablePppoeUserRadius,
+    enablePppoeUserRadius,
     generateHotspotVouchers,
     getInterfaceTraffic,
     // RADIUS functions

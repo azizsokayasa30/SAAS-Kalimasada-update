@@ -1535,6 +1535,317 @@ async function syncCanonicalPppoeProfileDisplayNames(options = {}) {
     return { updated, ownership_cleaned: ownershipCleaned };
 }
 
+/**
+ * Remount radusergroup yang masih mengarah ke prefix tenant lain (t9_* di tenant 26, dll).
+ * Juga rapikan customers/packages.pppoe_profile yang masih menyimpan nama foreign.
+ *
+ * @param {{ tenantId?: number|null, dryRun?: boolean }} options
+ */
+async function repairForeignTenantRadusergroupAssignments(options = {}) {
+    await ensureTenantPppoeProfilesTable();
+    const db = getBillingDb();
+    const onlyTid =
+        options.tenantId != null && Number.isFinite(Number(options.tenantId))
+            ? parseInt(options.tenantId, 10)
+            : null;
+    const dryRun = Boolean(options.dryRun);
+
+    const custRows = await dbAll(
+        db,
+        onlyTid
+            ? `SELECT tenant_id, TRIM(pppoe_username) AS u, TRIM(IFNULL(pppoe_profile, '')) AS p
+               FROM customers
+               WHERE tenant_id = ?
+                 AND pppoe_username IS NOT NULL AND TRIM(pppoe_username) != ''`
+            : `SELECT tenant_id, TRIM(pppoe_username) AS u, TRIM(IFNULL(pppoe_profile, '')) AS p
+               FROM customers
+               WHERE tenant_id IS NOT NULL
+                 AND pppoe_username IS NOT NULL AND TRIM(pppoe_username) != ''`,
+        onlyTid ? [onlyTid] : []
+    );
+
+    let manualRows = [];
+    try {
+        manualRows = await dbAll(
+            db,
+            onlyTid
+                ? `SELECT tenant_id, TRIM(username) AS u FROM tenant_pppoe_users
+                   WHERE tenant_id = ? AND username IS NOT NULL AND TRIM(username) != ''`
+                : `SELECT tenant_id, TRIM(username) AS u FROM tenant_pppoe_users
+                   WHERE tenant_id IS NOT NULL AND username IS NOT NULL AND TRIM(username) != ''`,
+            onlyTid ? [onlyTid] : []
+        );
+    } catch (_) {
+        manualRows = [];
+    }
+
+    /** @type {Map<string, Set<number>>} */
+    const ownersByUser = new Map();
+    /** @type {Map<string, Map<number, string>>} userLower -> tid -> billing profile */
+    const profileByUserTenant = new Map();
+    /** @type {Map<string, string>} userLower -> preferred exact username casing */
+    const exactUsername = new Map();
+
+    const addOwner = (tidRaw, username, profile = '') => {
+        const tid = parseInt(tidRaw, 10);
+        const u = String(username || '').trim();
+        if (!tid || !u) return;
+        const key = u.toLowerCase();
+        if (!ownersByUser.has(key)) ownersByUser.set(key, new Set());
+        ownersByUser.get(key).add(tid);
+        if (!exactUsername.has(key)) exactUsername.set(key, u);
+        if (!profileByUserTenant.has(key)) profileByUserTenant.set(key, new Map());
+        const p = String(profile || '').trim();
+        if (p) profileByUserTenant.get(key).set(tid, p);
+    };
+
+    for (const r of custRows || []) addOwner(r.tenant_id, r.u, r.p);
+    for (const r of manualRows || []) addOwner(r.tenant_id, r.u, '');
+
+    let radiusConn = null;
+    try {
+        const { getRadiusConnection } = require('../config/radiusSQLite');
+        radiusConn = await getRadiusConnection();
+    } catch (err) {
+        throw new Error(`RADIUS unavailable: ${err.message}`);
+    }
+
+    const summary = {
+        success: true,
+        dry_run: dryRun,
+        tenants_touched: new Set(),
+        foreign_found: 0,
+        remounted: 0,
+        skipped_shared_username: 0,
+        groups_ensured: 0,
+        customers_profile_fixed: 0,
+        packages_profile_fixed: 0,
+        by_tenant: {},
+        samples: [],
+        skipped_samples: []
+    };
+
+    const bumpTenant = (tid, field, n = 1) => {
+        if (!summary.by_tenant[tid]) {
+            summary.by_tenant[tid] = {
+                foreign_found: 0,
+                remounted: 0,
+                skipped_shared_username: 0,
+                groups_ensured: 0
+            };
+        }
+        summary.by_tenant[tid][field] += n;
+    };
+
+    /** @type {Map<string, true>} dest groups already ensured this run */
+    const ensuredGroups = new Map();
+    /** Batch: key = `${tid}||${oldGroup}||${newGroup}` → usernames[] */
+    const batches = new Map();
+
+    try {
+        const [rugRows] = await radiusConn.execute(
+            `SELECT username, groupname FROM radusergroup
+             WHERE groupname GLOB 't[0-9]*_*'`
+        );
+
+        for (const row of Array.isArray(rugRows) ? rugRows : []) {
+            const username = String(row.username || '').trim();
+            const groupname = String(row.groupname || '').trim();
+            if (!username || !groupname) continue;
+            const key = username.toLowerCase();
+            const owners = ownersByUser.get(key);
+            if (!owners || !owners.size) continue;
+
+            const m = groupname.match(/^t(\d+)_/i);
+            if (!m) continue;
+            const foreignTid = parseInt(m[1], 10);
+            if (!Number.isFinite(foreignTid)) continue;
+
+            // Username dipakai >1 tenant → jangan otomatis remount (bentrok RADIUS 1 baris)
+            if (owners.size > 1) {
+                // Hanya skip jika group foreign terhadap SEMUA owner, atau foreign terhadap sebagian
+                // Tetap skip aman: shared username tidak disentuh
+                const anyOwnerMatches = owners.has(foreignTid);
+                if (!anyOwnerMatches || [...owners].some((ot) => ot !== foreignTid)) {
+                    summary.skipped_shared_username++;
+                    if (summary.skipped_samples.length < 30) {
+                        summary.skipped_samples.push({
+                            username,
+                            groupname,
+                            owners: [...owners],
+                            reason: 'shared_username'
+                        });
+                    }
+                    for (const ot of owners) {
+                        if (onlyTid && ot !== onlyTid) continue;
+                        if (ot !== foreignTid) bumpTenant(ot, 'skipped_shared_username');
+                    }
+                }
+                continue;
+            }
+
+            const ownerTid = [...owners][0];
+            if (onlyTid && ownerTid !== onlyTid) continue;
+            if (ownerTid === foreignTid) continue;
+
+            summary.foreign_found++;
+            bumpTenant(ownerTid, 'foreign_found');
+            summary.tenants_touched.add(ownerTid);
+
+            const billingProfile = profileByUserTenant.get(key)?.get(ownerTid) || '';
+            const target =
+                toCanonicalTenantPppoeProfile(ownerTid, billingProfile || groupname, null) ||
+                toCanonicalTenantPppoeProfile(ownerTid, groupname, null);
+            if (!target || normalizeGroupname(target) === normalizeGroupname(groupname)) {
+                continue;
+            }
+
+            const batchKey = `${ownerTid}||${groupname}||${target}`;
+            if (!batches.has(batchKey)) batches.set(batchKey, []);
+            // Pakai username exact dari RADIUS (hindari beda LOWER unicode JS vs SQLite)
+            batches.get(batchKey).push(username);
+
+            if (summary.samples.length < 40) {
+                summary.samples.push({
+                    tenant_id: ownerTid,
+                    username,
+                    from: groupname,
+                    to: target,
+                    billing_profile: billingProfile || null
+                });
+            }
+        }
+
+        for (const [batchKey, usernames] of batches.entries()) {
+            const [tidStr, oldGroup, newGroup] = batchKey.split('||');
+            const tid = parseInt(tidStr, 10);
+            const uniqueUsers = [...new Set(usernames.filter(Boolean))];
+            if (!uniqueUsers.length) continue;
+
+            if (!ensuredGroups.has(newGroup)) {
+                const destExists = await findRadiusGroupPhysicalName(radiusConn, [newGroup]);
+                if (!destExists) {
+                    if (!dryRun) {
+                        const sourcePhysical = await findRadiusGroupPhysicalName(radiusConn, [oldGroup]);
+                        if (sourcePhysical && normalizeGroupname(sourcePhysical) !== newGroup) {
+                            await cloneRadiusGroupAttributes(radiusConn, sourcePhysical, newGroup);
+                        } else {
+                            await radiusConn.execute(
+                                `INSERT INTO radgroupreply (groupname, attribute, op, value)
+                                 VALUES (?, 'Reply-Message', ':=', ?)`,
+                                [newGroup, `Profile repaired for tenant ${tid}`]
+                            );
+                        }
+                        try {
+                            await claimTenantPppoeProfile(newGroup, tid);
+                        } catch (_) {
+                            /* claim best-effort */
+                        }
+                    }
+                    summary.groups_ensured++;
+                    bumpTenant(tid, 'groups_ensured');
+                }
+                ensuredGroups.set(newGroup, true);
+            }
+
+            if (dryRun) {
+                summary.remounted += uniqueUsers.length;
+                bumpTenant(tid, 'remounted', uniqueUsers.length);
+                continue;
+            }
+
+            const chunkSize = 200;
+            for (let i = 0; i < uniqueUsers.length; i += chunkSize) {
+                const chunk = uniqueUsers.slice(i, i + chunkSize);
+                const placeholders = chunk.map(() => '?').join(',');
+                // Match case-insensitive username + exact old group
+                const [result] = await radiusConn.execute(
+                    `UPDATE radusergroup
+                     SET groupname = ?
+                     WHERE groupname = ?
+                       AND username IN (${placeholders})`,
+                    [newGroup, oldGroup, ...chunk]
+                );
+                const n = result?.affectedRows || result?.changes || 0;
+                summary.remounted += n;
+                bumpTenant(tid, 'remounted', n);
+            }
+
+            logger.info(
+                `[repairForeignRadusergroup] tenant=${tid} ${oldGroup} → ${newGroup} users≈${uniqueUsers.length}`
+            );
+        }
+
+        // Rapikan referensi billing yang masih menyimpan prefix tenant asing
+        const profileFixTargets = await dbAll(
+            db,
+            onlyTid
+                ? `SELECT DISTINCT tenant_id, TRIM(pppoe_profile) AS p FROM customers
+                   WHERE tenant_id = ?
+                     AND pppoe_profile IS NOT NULL AND TRIM(pppoe_profile) != ''
+                     AND LOWER(TRIM(pppoe_profile)) GLOB 't[0-9]*_*'`
+                : `SELECT DISTINCT tenant_id, TRIM(pppoe_profile) AS p FROM customers
+                   WHERE tenant_id IS NOT NULL
+                     AND pppoe_profile IS NOT NULL AND TRIM(pppoe_profile) != ''
+                     AND LOWER(TRIM(pppoe_profile)) GLOB 't[0-9]*_*'`,
+            onlyTid ? [onlyTid] : []
+        );
+        const pkgFixTargets = await dbAll(
+            db,
+            onlyTid
+                ? `SELECT DISTINCT tenant_id, TRIM(pppoe_profile) AS p FROM packages
+                   WHERE tenant_id = ?
+                     AND pppoe_profile IS NOT NULL AND TRIM(pppoe_profile) != ''
+                     AND LOWER(TRIM(pppoe_profile)) GLOB 't[0-9]*_*'`
+                : `SELECT DISTINCT tenant_id, TRIM(pppoe_profile) AS p FROM packages
+                   WHERE tenant_id IS NOT NULL
+                     AND pppoe_profile IS NOT NULL AND TRIM(pppoe_profile) != ''
+                     AND LOWER(TRIM(pppoe_profile)) GLOB 't[0-9]*_*'`,
+            onlyTid ? [onlyTid] : []
+        );
+
+        const fixBillingProfile = async (table, tid, fromRaw) => {
+            const m = String(fromRaw || '').match(/^t(\d+)_/i);
+            if (!m) return 0;
+            const foreignTid = parseInt(m[1], 10);
+            if (foreignTid === tid) return 0;
+            const to = toCanonicalTenantPppoeProfile(tid, fromRaw, null);
+            if (!to || normalizeGroupname(to) === normalizeGroupname(fromRaw)) return 0;
+            if (dryRun) return 1;
+            const res = await dbRun(
+                db,
+                `UPDATE ${table} SET pppoe_profile = ?
+                 WHERE tenant_id = ? AND TRIM(pppoe_profile) = ?`,
+                [to, tid, fromRaw]
+            );
+            try {
+                await claimTenantPppoeProfile(to, tid);
+            } catch (_) {}
+            return res?.changes || 0;
+        };
+
+        for (const row of profileFixTargets || []) {
+            const tid = parseInt(row.tenant_id, 10);
+            if (!tid) continue;
+            summary.customers_profile_fixed += await fixBillingProfile('customers', tid, row.p);
+        }
+        for (const row of pkgFixTargets || []) {
+            const tid = parseInt(row.tenant_id, 10);
+            if (!tid) continue;
+            summary.packages_profile_fixed += await fixBillingProfile('packages', tid, row.p);
+        }
+    } finally {
+        if (radiusConn && typeof radiusConn.end === 'function') {
+            try {
+                await radiusConn.end();
+            } catch (_) {}
+        }
+    }
+
+    summary.tenants_touched = [...summary.tenants_touched].sort((a, b) => a - b);
+    return summary;
+}
+
 module.exports = {
     SYSTEM_PROFILES,
     ensureTenantPppoeProfilesTable,
@@ -1554,5 +1865,6 @@ module.exports = {
     extractSpeedMbps,
     toCanonicalTenantPppoeProfile,
     standardizeTenantPppoeProfileNames,
-    syncCanonicalPppoeProfileDisplayNames
+    syncCanonicalPppoeProfileDisplayNames,
+    repairForeignTenantRadusergroupAssignments
 };

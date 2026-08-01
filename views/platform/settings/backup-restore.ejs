@@ -1,0 +1,95 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active, adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Backup &amp; Restore</h2>
+      <p class="km-subtitle">Disaster recovery full database billing (semua tenant)</p>
+    </div>
+  </div>
+
+  <%- include('_nav', { settingsSection }) %>
+
+  <% if (flash && flash.success === 'created') { %><div class="alert alert-success">Backup full database berhasil dibuat<%= flash.filename ? ': ' + flash.filename : '' %>.</div><% } %>
+  <% if (flash && flash.success === 'restored') { %><div class="alert alert-success">Restore full database berhasil. Cadangan pra-restore telah dibuat otomatis.</div><% } %>
+  <% if (flash && flash.success === 'uploaded') { %><div class="alert alert-success">File backup berhasil diunggah<%= flash.filename ? ': ' + flash.filename : '' %>.</div><% } %>
+  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+
+  <div class="alert alert-warning mb-4">
+    <i class="bi bi-exclamation-triangle-fill me-1"></i>
+    Fitur ini men-backup / me-restore <strong>seluruh</strong> <code>billing.db</code> (semua tenant).
+    Backup per-tenant (ZIP) tetap dikelola di Setting Umum masing-masing tenant.
+  </div>
+
+  <div class="km-card km-master-backup-card">
+    <div class="km-master-backup-card__head">
+      <div>
+        <h3 class="km-master-backup-card__title"><i class="bi bi-database me-2"></i>Full Database Billing</h3>
+        <p class="km-subtitle mb-0">Salinan SQLite lengkap; file gambar di disk tidak ikut</p>
+      </div>
+      <form method="POST" action="/management/settings/backup-restore/create" class="d-inline">
+        <button type="submit" class="btn btn-km-primary btn-sm px-3">
+          <i class="bi bi-download me-1"></i> Buat Backup Sekarang
+        </button>
+      </form>
+    </div>
+    <div class="row g-4 km-master-backup-card__body">
+      <div class="col-lg-5">
+        <div class="km-form-section km-form-section--flat h-100">
+          <h6 class="km-form-section__title mb-2"><i class="bi bi-upload me-1"></i> Upload &amp; Restore</h6>
+          <p class="text-muted small mb-3">Unggah file <code>.db</code> lalu restore, atau restore dari daftar di kanan.</p>
+          <form method="POST" action="/management/settings/backup-restore/upload" enctype="multipart/form-data" class="mb-3">
+            <div class="mb-3">
+              <input type="file" name="backup_file" class="form-control form-control-sm" accept=".db,.sqlite,.sqlite3" required>
+            </div>
+            <button type="submit" class="btn btn-outline-secondary btn-sm px-3">
+              <i class="bi bi-cloud-arrow-up me-1"></i> Upload File
+            </button>
+          </form>
+          <p class="text-muted small mb-0">
+            Restore menimpa seluruh data live. Sistem membuat cadangan <code>pre_restore_*.db</code> otomatis sebelum restore.
+          </p>
+        </div>
+      </div>
+      <div class="col-lg-7">
+        <h6 class="km-form-section__title mb-2"><i class="bi bi-clock-history me-1"></i> Riwayat Backup Server</h6>
+        <div class="table-responsive">
+          <table class="table table-sm table-hover align-middle mb-0 km-tenant-table">
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Ukuran</th>
+                <th>Tanggal</th>
+                <th class="text-end">Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              <% if (!backups || !backups.length) { %>
+                <tr><td colspan="4" class="text-center py-3 text-muted">Belum ada backup full DB tersimpan.</td></tr>
+              <% } %>
+              <% (backups || []).forEach(function(b) { %>
+                <tr>
+                  <td><code class="small"><%= b.filename %></code></td>
+                  <td class="text-muted small"><%= (b.size / (1024 * 1024)).toFixed(2) %> MB</td>
+                  <td class="text-muted small"><%= new Date(b.modified || b.created).toLocaleString('id-ID') %></td>
+                  <td class="text-end text-nowrap">
+                    <a href="/management/settings/backup-restore/file/<%= encodeURIComponent(b.filename) %>" class="btn btn-sm btn-outline-secondary" title="Unduh">
+                      <i class="bi bi-download"></i>
+                    </a>
+                    <form method="POST" action="/management/settings/backup-restore/restore/<%= encodeURIComponent(b.filename) %>" class="d-inline">
+                      <button type="submit" class="btn btn-sm btn-outline-danger" title="Restore" onclick="return confirm('PERHATIAN: Restore akan menimpa SELURUH billing.db (semua tenant) dari <%= b.filename %>. Lanjutkan?')">
+                        <i class="bi bi-arrow-counterclockwise"></i>
+                      </button>
+                    </form>
+                  </td>
+                </tr>
+              <% }); %>
+            </tbody>
+          </table>
+        </div>
+        <p class="text-muted small mt-2 mb-0">Sistem menyimpan maksimal <%= keepCount || 3 %> file backup terbaru (termasuk pre_restore).</p>
+      </div>
+    </div>
+  </div>
+</main>
+<%- include('../partials/footer') %>

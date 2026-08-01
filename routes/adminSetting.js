@@ -62,6 +62,12 @@ const billingQrStorage = multer.diskStorage({
     },
     filename: function (req, file, cb) {
         const ext = path.extname(file.originalname).toLowerCase();
+        const tid = resolveRequestTenantId(req);
+        // Isolasi file QR per tenant agar upload tidak menimpa QR tenant lain.
+        if (tid) {
+            cb(null, `billing-qr-t${tid}${ext}`);
+            return;
+        }
         cb(null, 'billing-qr' + ext);
     }
 });
@@ -646,13 +652,21 @@ router.post('/upload-billing-qr', billingQrUpload.single('billingQr'), async (re
         }
 
         if (settings.billing_qr_filename && settings.billing_qr_filename !== filename) {
-            const oldQrPath = path.join(__dirname, '../public/img', settings.billing_qr_filename);
-            if (fs.existsSync(oldQrPath)) {
-                try {
-                    fs.unlinkSync(oldQrPath);
-                    console.log('QR penagihan lama dihapus:', oldQrPath);
-                } catch (err) {
-                    logger.warn('Gagal menghapus QR penagihan lama:', err.message);
+            const oldName = String(settings.billing_qr_filename);
+            const tid = resolveRequestTenantId(req);
+            // Jangan hapus file shared legacy (billing-qr.jpg) — bisa masih dipakai tenant lain.
+            const isOwnTenantFile = tid
+                && (oldName === `billing-qr-t${tid}${path.extname(oldName)}`
+                    || oldName.startsWith(`billing-qr-t${tid}.`));
+            if (isOwnTenantFile) {
+                const oldQrPath = path.join(__dirname, '../public/img', oldName);
+                if (fs.existsSync(oldQrPath)) {
+                    try {
+                        fs.unlinkSync(oldQrPath);
+                        console.log('QR penagihan lama dihapus:', oldQrPath);
+                    } catch (err) {
+                        logger.warn('Gagal menghapus QR penagihan lama:', err.message);
+                    }
                 }
             }
         }
@@ -734,14 +748,14 @@ router.get('/wa-status', async (req, res) => {
                 return null;
             }
         };
-        const waitForQr = async (timeoutMs = 6000) => {
+        const waitForQrOrProgress = async (timeoutMs = 22000) => {
             const startedAt = Date.now();
             while (Date.now() - startedAt < timeoutMs) {
                 const current = getCurrentStatus();
-                if (current && (current.qrCode || current.qr)) {
+                if (current && (current.connected || current.qrCode || current.qr)) {
                     return current;
                 }
-                await new Promise(resolve => setTimeout(resolve, 500));
+                await new Promise((resolve) => setTimeout(resolve, 400));
             }
             return getCurrentStatus();
         };
@@ -751,55 +765,75 @@ router.get('/wa-status', async (req, res) => {
         const activeProvider = String(settings.whatsapp_active_provider || 'baileys').toLowerCase();
         let hasQr = !!(status && (status.qrCode || status.qr));
         let isConnected = !!(status && status.connected);
+        const pending =
+            status &&
+            ['connecting', 'queued', 'reconnecting', 'qr_code'].includes(String(status.status || ''));
 
         const kickKey = normalizedTid ? `__baileysQrKickAt_${normalizedTid}` : '__baileysQrKickAt_legacy';
-        if (baileysEnabled && activeProvider === 'baileys' && !isConnected && !hasQr) {
+        const alreadyBusy =
+            status &&
+            (status.isConnecting ||
+                ['connecting', 'queued', 'reconnecting', 'qr_code'].includes(String(status.status || '')));
+        // Jangan spam connect saat reconnecting (picu 405). Kick hanya jika idle/disconnected.
+        if (baileysEnabled && activeProvider === 'baileys' && !isConnected && !hasQr && !alreadyBusy) {
             const now = Date.now();
-            if (!global[kickKey] || now - global[kickKey] > 10000) {
+            if (!global[kickKey] || now - global[kickKey] > 15000) {
                 global[kickKey] = now;
-                console.log(`Memicu koneksi Baileys wa-status (${normalizedTid ? 'tenant-' + normalizedTid : 'legacy'})`);
+                console.log(
+                    `Memicu koneksi Baileys wa-status (${normalizedTid ? 'tenant-' + normalizedTid : 'legacy'})`
+                );
                 connectToWhatsApp(normalizedTid).catch((connectError) => {
                     console.warn('Gagal memicu koneksi Baileys dari wa-status:', connectError.message);
                 });
             }
-            status = await waitForQr();
+        }
+        if (baileysEnabled && activeProvider === 'baileys' && !isConnected && !hasQr) {
+            status = await waitForQrOrProgress(pending || alreadyBusy ? 8000 : 18000);
             hasQr = !!(status && (status.qrCode || status.qr));
             isConnected = !!(status && status.connected);
         }
 
-        // Tenant: hanya pakai status registry tenant ini (jangan mirror global legacy QR)
+        const qrCode = status?.qrCode || status?.qr || null;
+        const st = status?.status || 'disconnected';
+        const retryAfterMs =
+            isConnected || qrCode
+                ? 8000
+                : st === 'reconnecting'
+                  ? 5000
+                  : ['connecting', 'queued'].includes(st)
+                    ? 3000
+                    : 4000;
+
+        // Tenant: HANYA status registry tenant ini — jangan pernah fallback legacy global QR
         if (normalizedTid) {
-            const qrCode = status?.qrCode || status?.qr || null;
             return res.json({
                 connected: !!(status && status.connected),
                 qr: qrCode,
                 qrImage: await buildQrImage(qrCode),
                 phoneNumber: status?.phoneNumber || null,
-                status: status?.status || 'disconnected',
+                status: st,
+                reason: status?.reason || null,
                 connectedSince: status?.connectedSince || null,
                 tenantId: normalizedTid,
-                sessionDir: status?.sessionDir || null
+                sessionDir: status?.sessionDir || null,
+                hasCreds: !!status?.hasCreds,
+                retryAfterMs,
+                qrUpdatedAt: status?.qrUpdatedAt || null
             });
         }
 
-        // Legacy / non-tenant: boleh pakai global.whatsappStatus
-        if (global.whatsappStatus && global.whatsappStatus.qrCode) {
-            const qrImage = await buildQrImage(global.whatsappStatus.qrCode);
+        // Legacy / non-tenant
+        if (!qrCode && global.whatsappStatus && global.whatsappStatus.qrCode) {
+            const legacyQr = global.whatsappStatus.qrCode;
             return res.json({
                 connected: false,
-                qr: global.whatsappStatus.qrCode,
-                qrImage,
+                qr: legacyQr,
+                qrImage: await buildQrImage(legacyQr),
                 phoneNumber: null,
                 status: global.whatsappStatus.status || 'qr_code',
-                connectedSince: null
+                connectedSince: null,
+                retryAfterMs: 3000
             });
-        }
-
-        let qrCode = null;
-        if (status && status.qrCode) {
-            qrCode = status.qrCode;
-        } else if (status && status.qr) {
-            qrCode = status.qr;
         }
 
         res.json({
@@ -807,15 +841,18 @@ router.get('/wa-status', async (req, res) => {
             qr: qrCode,
             qrImage: await buildQrImage(qrCode),
             phoneNumber: status?.phoneNumber || null,
-            status: status?.status || 'disconnected',
-            connectedSince: status?.connectedSince || null
+            status: st,
+            reason: status?.reason || null,
+            connectedSince: status?.connectedSince || null,
+            retryAfterMs
         });
     } catch (e) {
         console.error('Error getting WhatsApp status:', e);
         res.status(500).json({
             connected: false,
             qr: null,
-            error: e.message
+            error: e.message,
+            retryAfterMs: 3000
         });
     }
 });

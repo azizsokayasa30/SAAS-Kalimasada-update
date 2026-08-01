@@ -1,25 +1,173 @@
 const cron = require('node-cron');
+const fs = require('fs');
+const path = require('path');
 const billingManager = require('./billing');
 const logger = require('./logger');
 const { getServerTimezone } = require('./settingsManager');
+const { toLocalDateString, currentLocalMonthDateRange } = require('../utils/localDate');
 const {
     getDaysUntilDueDate,
     getBillingNotifySchedule,
     resolveBillingWaNotificationKind
 } = require('./billing-wa-schedule');
 
+const MONTHLY_INVOICE_LOCK = path.join(__dirname, '..', 'data', '.monthly-invoice.lock');
+const MONTHLY_INVOICE_LOCK_STALE_MS = 6 * 60 * 60 * 1000;
+const TENANT_INVOICE_LOCK_DIR = path.join(__dirname, '..', 'data');
+
 class InvoiceScheduler {
     constructor() {
-        this.initScheduler();
+        this._monthlyGenerateRunning = false;
+        // CLI repair/generate: set SKIP_INVOICE_SCHEDULER=1 agar tidak daftar cron ganda
+        if (process.env.SKIP_INVOICE_SCHEDULER === '1') {
+            logger.info('Invoice scheduler cron skipped (SKIP_INVOICE_SCHEDULER=1)');
+        } else {
+            this.initScheduler();
+        }
+    }
+
+    /** Lock lintas-proses: cegah 2 instance Node (PM2 + nohup) generate bersamaan → tagihan dobel. */
+    _tryAcquireMonthlyInvoiceLock() {
+        try {
+            const fd = fs.openSync(MONTHLY_INVOICE_LOCK, 'wx');
+            fs.writeFileSync(fd, `${process.pid}\n${Date.now()}\n`);
+            fs.closeSync(fd);
+            return true;
+        } catch (err) {
+            if (err && err.code === 'EEXIST') {
+                try {
+                    const raw = fs.readFileSync(MONTHLY_INVOICE_LOCK, 'utf8');
+                    const lines = String(raw).split('\n');
+                    const lockPid = parseInt(lines[0], 10);
+                    const lockAt = parseInt(lines[1], 10);
+                    const stale = !Number.isFinite(lockAt) || (Date.now() - lockAt) > MONTHLY_INVOICE_LOCK_STALE_MS;
+                    let alive = false;
+                    if (Number.isFinite(lockPid) && lockPid > 0) {
+                        try {
+                            process.kill(lockPid, 0);
+                            alive = true;
+                        } catch (_) {
+                            alive = false;
+                        }
+                    }
+                    if (stale || !alive) {
+                        fs.unlinkSync(MONTHLY_INVOICE_LOCK);
+                        return this._tryAcquireMonthlyInvoiceLock();
+                    }
+                } catch (_) {
+                    /* ignore parse errors */
+                }
+                return false;
+            }
+            throw err;
+        }
+    }
+
+    _releaseMonthlyInvoiceLock() {
+        try {
+            if (fs.existsSync(MONTHLY_INVOICE_LOCK)) {
+                const raw = fs.readFileSync(MONTHLY_INVOICE_LOCK, 'utf8');
+                const lockPid = parseInt(String(raw).split('\n')[0], 10);
+                if (!Number.isFinite(lockPid) || lockPid === process.pid) {
+                    fs.unlinkSync(MONTHLY_INVOICE_LOCK);
+                }
+            }
+        } catch (_) {
+            /* ignore */
+        }
+    }
+
+    _tenantInvoiceLockPath(tenantId) {
+        return path.join(TENANT_INVOICE_LOCK_DIR, `.monthly-invoice-tenant-${tenantId}.lock`);
+    }
+
+    _tryAcquireTenantInvoiceLock(tenantId) {
+        const lockPath = this._tenantInvoiceLockPath(tenantId);
+        try {
+            const fd = fs.openSync(lockPath, 'wx');
+            fs.writeFileSync(fd, `${process.pid}\n${Date.now()}\n`);
+            fs.closeSync(fd);
+            return true;
+        } catch (err) {
+            if (err && err.code === 'EEXIST') {
+                try {
+                    const raw = fs.readFileSync(lockPath, 'utf8');
+                    const lines = String(raw).split('\n');
+                    const lockPid = parseInt(lines[0], 10);
+                    const lockAt = parseInt(lines[1], 10);
+                    const stale = !Number.isFinite(lockAt) || (Date.now() - lockAt) > MONTHLY_INVOICE_LOCK_STALE_MS;
+                    let alive = false;
+                    if (Number.isFinite(lockPid) && lockPid > 0) {
+                        try {
+                            process.kill(lockPid, 0);
+                            alive = true;
+                        } catch (_) {
+                            alive = false;
+                        }
+                    }
+                    if (stale || !alive) {
+                        fs.unlinkSync(lockPath);
+                        return this._tryAcquireTenantInvoiceLock(tenantId);
+                    }
+                } catch (_) {
+                    /* ignore */
+                }
+                return false;
+            }
+            throw err;
+        }
+    }
+
+    _releaseTenantInvoiceLock(tenantId) {
+        try {
+            const lockPath = this._tenantInvoiceLockPath(tenantId);
+            if (fs.existsSync(lockPath)) {
+                const raw = fs.readFileSync(lockPath, 'utf8');
+                const lockPid = parseInt(String(raw).split('\n')[0], 10);
+                if (!Number.isFinite(lockPid) || lockPid === process.pid) {
+                    fs.unlinkSync(lockPath);
+                }
+            }
+        } catch (_) {
+            /* ignore */
+        }
+    }
+
+    async runMonthlyInvoiceGenerationForAllTenants(options = {}) {
+        const { skipNotifications = true, label = 'auto-invoice' } = options;
+        if (this._monthlyGenerateRunning) {
+            logger.warn(`[${label}] generate bulanan sudah berjalan di proses ini — skip`);
+            return { skipped: true, reason: 'in-process' };
+        }
+        if (!this._tryAcquireMonthlyInvoiceLock()) {
+            logger.warn(`[${label}] generate bulanan di-skip — lock dipegang proses lain (cegah tagihan dobel)`);
+            return { skipped: true, reason: 'locked' };
+        }
+        this._monthlyGenerateRunning = true;
+        try {
+            const { forEachOperationalTenant } = require('./platform/tenantJobs');
+            logger.info(`[${label}] Starting monthly invoice generation (per-tenant)...`);
+            const results = await forEachOperationalTenant(async (tenant) => {
+                logger.info(`[${label}] tenant #${tenant.id} (${tenant.subdomain || tenant.name})`);
+                return this.generateMonthlyInvoices({ skipNotifications });
+            }, { label });
+            const ok = results.filter((r) => r.success).length;
+            logger.info(`[${label}] Monthly invoice generation completed for ${ok}/${results.length} tenants`);
+            return { skipped: false, results };
+        } finally {
+            this._monthlyGenerateRunning = false;
+            this._releaseMonthlyInvoiceLock();
+        }
     }
 
     initScheduler() {
-        // Schedule monthly invoice generation on 1st of every month at 08:00
+        // Schedule monthly invoice generation on 1st of every month at 08:00 (per-tenant)
         cron.schedule('0 8 1 * *', async () => {
             try {
-                logger.info('Starting automatic monthly invoice generation (08:00)...');
-                await this.generateMonthlyInvoices({ skipNotifications: true });
-                logger.info('Automatic monthly invoice generation completed');
+                await this.runMonthlyInvoiceGenerationForAllTenants({
+                    skipNotifications: true,
+                    label: 'auto-invoice'
+                });
             } catch (error) {
                 logger.error('Error in automatic monthly invoice generation:', error);
             }
@@ -148,13 +296,14 @@ class InvoiceScheduler {
                 const serviceSuspension = require('./serviceSuspension');
                 const results = await forEachOperationalTenant(async (tenant) => {
                     const result = await serviceSuspension.syncSuspendedStatusToRadius();
+                    const inactiveResult = await serviceSuspension.syncInactiveStatusToNetwork();
                     logger.info(
-                        `[radius-sync] tenant #${tenant.id}: synced=${result.synced}, alreadyIsolir=${result.alreadyIsolir}, errors=${result.errors}`
+                        `[radius-sync] tenant #${tenant.id}: isolir synced=${result.synced}, alreadyIsolir=${result.alreadyIsolir}, errors=${result.errors}; inactive synced=${inactiveResult.synced}, errors=${inactiveResult.errors}`
                     );
-                    return result;
+                    return { isolir: result, inactive: inactiveResult };
                 }, { label: 'radius-isolir-sync' });
                 const ok = results.filter((r) => r.success).length;
-                logger.info(`Sync suspended status completed for ${ok}/${results.length} tenants`);
+                logger.info(`Sync suspended/inactive status completed for ${ok}/${results.length} tenants`);
             } catch (error) {
                 logger.error('Error in sync suspended status to RADIUS:', error);
             }
@@ -520,14 +669,28 @@ class InvoiceScheduler {
     }
 
     /**
-     * Generate invoice bulan ini untuk semua pelanggan/member aktif yang belum punya invoice.
+     * Generate invoice bulan ini untuk pelanggan/member aktif tenant saat ini yang belum punya invoice.
+     * WAJIB dijalankan di dalam runWithTenant / forEachOperationalTenant.
      * @param {object} options
      * @param {boolean} options.skipNotifications — tidak kirim email per invoice (bulk)
      * @param {function} options.onProgress — ({ processed, total, created, skipped, failed, phase })
      */
     async generateMonthlyInvoices(options = {}) {
+        const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
+        if (!hasTenantContext()) {
+            throw new Error(
+                'generateMonthlyInvoices membutuhkan konteks tenant — gunakan forEachOperationalTenant / runWithTenant'
+            );
+        }
+        const tenantId = getTenantId();
+        if (!this._tryAcquireTenantInvoiceLock(tenantId)) {
+            throw new Error(
+                `Generate tagihan tenant #${tenantId} sedang berjalan — cegah tagihan dobel, coba lagi nanti`
+            );
+        }
         const { skipNotifications = false, onProgress } = options;
         const stats = {
+            tenant_id: tenantId,
             customers_total: 0,
             customers_created: 0,
             customers_skipped: 0,
@@ -543,11 +706,14 @@ class InvoiceScheduler {
         try {
             const activeCustomers = await billingManager.getActiveCustomersForInvoiceGeneration();
             stats.customers_total = activeCustomers.length;
-            logger.info(`Found ${activeCustomers.length} active customers for invoice generation`);
+            logger.info(
+                `[auto-invoice] tenant #${tenantId}: ${activeCustomers.length} active customers for invoice generation`
+            );
 
             const currentDate = new Date();
-            const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
-            const endOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
+            const monthRange = currentLocalMonthDateRange(currentDate);
+            const startOfMonth = monthRange.startStr;
+            const endOfMonth = monthRange.endStr;
 
             const [packageById, customersWithInvoiceThisMonth] = await Promise.all([
                 billingManager.getAllPackagesByIdMap(),
@@ -573,10 +739,28 @@ class InvoiceScheduler {
             for (const customer of activeCustomers) {
                 processed++;
                 try {
+                    // Defense-in-depth: jangan buat invoice untuk pelanggan tenant lain
+                    if (customer.tenant_id != null && Number(customer.tenant_id) !== Number(tenantId)) {
+                        stats.customers_skipped++;
+                        stats.skipped++;
+                        logger.warn(
+                            `[auto-invoice] skip customer #${customer.id} — tenant_id=${customer.tenant_id} != context ${tenantId}`
+                        );
+                        continue;
+                    }
+
                     const packageData = packageById.get(customer.package_id);
                     if (!packageData) {
                         stats.customers_failed++;
                         stats.failed++;
+                        continue;
+                    }
+
+                    // Paket GRATIS / harga 0 — tidak dibuatkan invoice
+                    if (!billingManager.isBillablePackage(packageData)) {
+                        stats.customers_skipped++;
+                        stats.skipped++;
+                        if (processed % 50 === 0) report();
                         continue;
                     }
 
@@ -587,11 +771,22 @@ class InvoiceScheduler {
                         continue;
                     }
 
+                    // Cek ulang ke DB (race / generate ulang)
+                    const already = await billingManager.customerHasMonthlyInvoiceInMonth(
+                        customer.id,
+                        monthRange.year,
+                        monthRange.month
+                    );
+                    if (already) {
+                        customersWithInvoiceThisMonth.add(customer.id);
+                        stats.customers_skipped++;
+                        stats.skipped++;
+                        continue;
+                    }
+
                     const dueDate = this._computeCustomerDueDate(customer, currentDate);
                     const basePrice = packageData.price;
-                    const taxRate = (packageData.tax_rate === 0 || (typeof packageData.tax_rate === 'number' && packageData.tax_rate > -1))
-                        ? Number(packageData.tax_rate)
-                        : 11.00;
+                    const taxRate = billingManager.resolvePackageTaxRate(packageData);
                     const amountWithTax = billingManager.calculatePriceWithTax(basePrice, taxRate);
                     const renewalType = customer.renewal_type || 'renewal';
 
@@ -601,10 +796,11 @@ class InvoiceScheduler {
                         amount: amountWithTax,
                         base_amount: basePrice,
                         tax_rate: taxRate,
-                        due_date: dueDate.toISOString().split('T')[0],
+                        due_date: toLocalDateString(dueDate),
                         notes: `Tagihan bulanan ${monthLabel} - ${renewalType === 'fix_date' ? 'Fix Date' : 'Renewal'} type`,
                         invoice_type: 'monthly',
-                        package_name: packageData.name
+                        package_name: packageData.name,
+                        tenant_id: tenantId
                     });
 
                     customersWithInvoiceThisMonth.add(customer.id);
@@ -636,17 +832,21 @@ class InvoiceScheduler {
             stats.failed = stats.customers_failed + stats.members_failed;
 
             logger.info(
-                `Monthly invoice generation done: created=${stats.created}, skipped=${stats.skipped}, failed=${stats.failed}`
+                `[auto-invoice] tenant #${tenantId} done: created=${stats.created}, skipped=${stats.skipped}, failed=${stats.failed}`
             );
             return stats;
         } catch (error) {
-            logger.error('Error in generateMonthlyInvoices:', error);
+            logger.error(`Error in generateMonthlyInvoices (tenant #${tenantId}):`, error);
             throw error;
+        } finally {
+            this._releaseTenantInvoiceLock(tenantId);
         }
     }
 
     async generateMonthlyInvoicesForMembers(options = {}) {
         const { skipNotifications = false } = options;
+        const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
+        const tenantId = hasTenantContext() ? getTenantId() : null;
         const stats = {
             members_created: 0,
             members_skipped: 0,
@@ -659,11 +859,14 @@ class InvoiceScheduler {
                 member.status === 'active' && member.package_id
             );
 
-            logger.info(`Found ${activeMembers.length} active members for invoice generation`);
+            logger.info(
+                `[auto-invoice] tenant #${tenantId}: ${activeMembers.length} active members for invoice generation`
+            );
 
             const currentDate = new Date();
-            const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
-            const endOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
+            const monthRange = currentLocalMonthDateRange(currentDate);
+            const startOfMonth = monthRange.startStr;
+            const endOfMonth = monthRange.endStr;
             const monthLabel = currentDate.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
 
             const [allMemberPackages, memberKeysWithInvoice] = await Promise.all([
@@ -674,9 +877,23 @@ class InvoiceScheduler {
 
             for (const member of activeMembers) {
                 try {
+                    if (
+                        tenantId != null &&
+                        member.tenant_id != null &&
+                        Number(member.tenant_id) !== Number(tenantId)
+                    ) {
+                        stats.members_skipped++;
+                        continue;
+                    }
+
                     const packageData = memberPackageById.get(member.package_id);
                     if (!packageData) {
                         stats.members_failed++;
+                        continue;
+                    }
+
+                    if (!billingManager.isBillablePackage(packageData)) {
+                        stats.members_skipped++;
                         continue;
                     }
 
@@ -701,9 +918,7 @@ class InvoiceScheduler {
                     const dueDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), targetDay);
 
                     const basePrice = packageData.price;
-                    const taxRate = (packageData.tax_rate === 0 || (typeof packageData.tax_rate === 'number' && packageData.tax_rate > -1))
-                        ? Number(packageData.tax_rate)
-                        : 11.00;
+                    const taxRate = billingManager.resolvePackageTaxRate(packageData);
                     const amountWithTax = billingManager.calculatePriceWithTax(basePrice, taxRate);
 
                     const newInvoice = await this._createInvoiceWithRetry({
@@ -712,11 +927,12 @@ class InvoiceScheduler {
                         amount: amountWithTax,
                         base_amount: basePrice,
                         tax_rate: taxRate,
-                        due_date: dueDate.toISOString().split('T')[0],
+                        due_date: toLocalDateString(dueDate),
                         notes: `Tagihan bulanan member ${monthLabel}`,
                         invoice_type: 'monthly',
                         package_name: packageData.name,
-                        description: `Tagihan paket ${packageData.name}`
+                        description: `Tagihan paket ${packageData.name}`,
+                        tenant_id: tenantId
                     });
 
                     memberKeysWithInvoice.add(String(memberUsername).trim());
@@ -740,7 +956,14 @@ class InvoiceScheduler {
     // Generate invoices daily for customers whose billing_day is today
     async generateDailyInvoicesByBillingDay() {
         try {
-            // Get all active customers
+            const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
+            if (!hasTenantContext()) {
+                throw new Error(
+                    'generateDailyInvoicesByBillingDay membutuhkan konteks tenant — gunakan forEachOperationalTenant'
+                );
+            }
+            const tenantId = getTenantId();
+            // Get active customers of current tenant only
             const customers = await billingManager.getCustomers();
             const activeCustomers = customers.filter(customer => 
                 customer.status === 'active' && customer.package_id
@@ -751,9 +974,10 @@ class InvoiceScheduler {
             const currentYear = today.getFullYear();
             const currentMonth = today.getMonth();
 
-            // Compute start and end of current month for duplicate checks
+            // Compute start and end of current month for duplicate checks (kalender lokal)
+            const monthRange = currentLocalMonthDateRange(today);
             const startOfMonth = new Date(currentYear, currentMonth, 1);
-            const endOfMonth = new Date(currentYear, currentMonth + 1, 0);
+            const endOfMonth = new Date(currentYear, currentMonth + 1, 0, 23, 59, 59, 999);
 
             // For each active customer whose billing_day == today (capped 1-28)
             for (const customer of activeCustomers) {
@@ -775,8 +999,15 @@ class InvoiceScheduler {
                         logger.warn(`Package not found for customer ${customer.username}`);
                         continue;
                     }
+                    if (!billingManager.isBillablePackage(packageData)) {
+                        continue;
+                    }
 
                     // Check if invoice already exists for this month
+                    if (await billingManager.customerHasMonthlyInvoiceInMonth(customer.id, monthRange.year, monthRange.month)) {
+                        logger.info(`Invoice already exists for customer ${customer.username} this month (daily generator)`);
+                        continue;
+                    }
                     const existingInvoices = await billingManager.getInvoicesByCustomerAndDateRange(
                         customer.username,
                         startOfMonth,
@@ -788,15 +1019,11 @@ class InvoiceScheduler {
                     }
 
                     // Set due date to today's date (which equals billing_day)
-                    const dueDate = new Date(currentYear, currentMonth, normalizedBillingDay)
-                        .toISOString()
-                        .split('T')[0];
+                    const dueDate = toLocalDateString(new Date(currentYear, currentMonth, normalizedBillingDay));
 
                     // Calculate amount with tax
                     const basePrice = packageData.price;
-                    const taxRate = (packageData.tax_rate === 0 || (typeof packageData.tax_rate === 'number' && packageData.tax_rate > -1))
-                        ? Number(packageData.tax_rate)
-                        : 11.00;
+                    const taxRate = billingManager.resolvePackageTaxRate(packageData);
                     const amountWithTax = billingManager.calculatePriceWithTax(basePrice, taxRate); // Sudah include rounding
 
                     const invoiceData = {

@@ -1770,6 +1770,9 @@
         }
     }
 
+    let waPollMs = 3000;
+    let lastWaQrSrc = '';
+
     async function loadWAStatus() {
         const status = document.getElementById('wa-status');
         const qrContainer = document.getElementById('wa-qr-container');
@@ -1779,8 +1782,13 @@
         if (!status || !qrContainer || !qrDiv) return;
 
         try {
-            const response = await fetch('/admin/settings/wa-status');
+            const response = await fetch('/admin/settings/wa-status', { cache: 'no-store' });
             const data = await response.json();
+            const nextPoll = Number(data.retryAfterMs);
+            if (Number.isFinite(nextPoll) && nextPoll >= 1500) {
+                waPollMs = nextPoll;
+                startWAStatusInterval();
+            }
 
             if (data.connected) {
                 const phone = data.phoneNumber ? ` (${data.phoneNumber})` : '';
@@ -1788,24 +1796,25 @@
                 status.innerHTML = `<span class="badge bg-success status-badge"><i class="bi bi-check-circle"></i> Terhubung${phone}${since}</span>`;
                 qrContainer.classList.add('d-none');
                 qrDiv.innerHTML = '';
+                lastWaQrSrc = '';
+                waPollMs = 12000;
+                startWAStatusInterval();
                 return;
             }
 
-            status.innerHTML = '<span class="badge bg-warning text-dark status-badge"><i class="bi bi-exclamation-triangle"></i> Belum Terhubung</span>';
-            qrContainer.classList.add('d-none');
-            qrDiv.innerHTML = '';
-            if (qrImage) {
-                qrImage.setAttribute('src', '#');
-                qrImage.style.display = 'none';
-            }
+            const stLabel = data.status ? String(data.status) : 'disconnected';
+            status.innerHTML = `<span class="badge bg-warning text-dark status-badge"><i class="bi bi-exclamation-triangle"></i> Belum Terhubung <small class="ms-1">(${stLabel})</small></span>`;
 
-            if (data.qr) {
+            if (data.qr || data.qrImage) {
                 qrContainer.classList.remove('d-none');
                 if (data.qrImage && qrImage) {
-                    qrImage.setAttribute('src', data.qrImage);
+                    if (lastWaQrSrc !== data.qrImage) {
+                        qrImage.setAttribute('src', data.qrImage);
+                        lastWaQrSrc = data.qrImage;
+                    }
                     qrImage.style.display = 'block';
                     qrDiv.innerHTML = '';
-                    status.insertAdjacentHTML('beforeend', '<div class="text-info small mt-2"><i class="bi bi-info-circle"></i> Scan dari WhatsApp &gt; Perangkat tertaut.</div>');
+                    status.insertAdjacentHTML('beforeend', '<div class="text-info small mt-2"><i class="bi bi-info-circle"></i> Scan dari WhatsApp &gt; Perangkat tertaut. QR otomatis diperbarui.</div>');
                     return;
                 }
 
@@ -1815,6 +1824,7 @@
                 }
 
                 try {
+                    qrDiv.innerHTML = '';
                     new QRCode(qrDiv, {
                         text: data.qr,
                         width: 320,
@@ -1828,10 +1838,22 @@
                     console.error('Error rendering QR code:', qrError);
                     qrDiv.innerHTML = '<div class="alert alert-warning">QR tersedia, tetapi gagal dirender di browser. Klik Refresh QR atau refresh halaman.</div>';
                 }
-            } else if (data.error) {
-                status.insertAdjacentHTML('beforeend', `<div class="alert alert-danger mt-2">${data.error}</div>`);
             } else {
-                status.insertAdjacentHTML('beforeend', '<div class="alert alert-info mt-2"><i class="bi bi-hourglass-split"></i> Menunggu QR code. Klik Refresh QR jika belum muncul.</div>');
+                qrContainer.classList.add('d-none');
+                qrDiv.innerHTML = '';
+                if (qrImage) {
+                    qrImage.setAttribute('src', '#');
+                    qrImage.style.display = 'none';
+                }
+                lastWaQrSrc = '';
+                if (data.error) {
+                    status.insertAdjacentHTML('beforeend', `<div class="alert alert-danger mt-2">${data.error}</div>`);
+                } else {
+                    const hint = ['connecting', 'queued', 'reconnecting'].includes(stLabel)
+                        ? `Menunggu QR (${stLabel})… halaman akan memuat ulang otomatis.`
+                        : 'Menunggu QR code… Klik Refresh QR jika lebih dari 30 detik belum muncul.';
+                    status.insertAdjacentHTML('beforeend', `<div class="alert alert-info mt-2"><i class="bi bi-hourglass-split"></i> ${hint}</div>`);
+                }
             }
         } catch (error) {
             console.error('Error getting WhatsApp status:', error);
@@ -1863,6 +1885,8 @@
             }
 
             showAlert(data.message || 'Sesi direset, menunggu QR code baru...', 'info');
+            lastWaQrSrc = '';
+            await new Promise((r) => setTimeout(r, 1500));
             loadWAStatus();
 
             if (waRefreshPolling) clearInterval(waRefreshPolling);
@@ -1871,14 +1895,14 @@
                 attempts += 1;
                 loadWAStatus();
                 const hasQr = document.querySelector('#wa-qr[src^="data:image"], #wa-qr-div canvas, #wa-qr-div img');
-                if (hasQr || attempts >= 4) {
+                if (hasQr || attempts >= 30) {
                     clearInterval(waRefreshPolling);
                     waRefreshPolling = null;
-                    if (!hasQr && attempts >= 4) {
-                        showAlert('QR belum muncul. Coba refresh sekali lagi atau restart service.', 'warning');
+                    if (!hasQr && attempts >= 30) {
+                        showAlert('QR belum muncul. Pastikan Baileys Enable tersimpan, lalu Refresh QR lagi.', 'warning');
                     }
                 }
-            }, 10000);
+            }, 2000);
         } catch (error) {
             console.error('Error refreshing QR:', error);
             showAlert('Error refresh QR WhatsApp', 'danger');
@@ -1922,7 +1946,7 @@
             } else {
                 stopWAStatusInterval();
             }
-        }, 10000);
+        }, waPollMs || 3000);
     }
 
     function stopWAStatusInterval() {

@@ -1,6 +1,8 @@
 <% const cfg = typeof settings !== 'undefined' && settings ? settings : {}; %>
 <% const defaultServerHost = (typeof vpnTunnelIp !== 'undefined' && vpnTunnelIp) ? vpnTunnelIp : '10.10.0.1'; %>
 <% const defaultIsolirPort = (typeof isolirPagePort !== 'undefined' && isolirPagePort) ? String(isolirPagePort) : (cfg.isolir_page_port || '8899'); %>
+<% const isolirTenantId = (typeof tenantId !== 'undefined' && tenantId) ? String(tenantId) : ''; %>
+<% const defaultIsolirPath = isolirTenantId ? ('/isolir?tenant=' + isolirTenantId) : '/isolir'; %>
 <div class="card p-3 mt-4" id="isolirScriptGeneratorSection">
     <h5 class="mb-3"><i class="bi bi-router"></i> Script Generator Menu Isolir Mikrotik</h5>
     <p class="small text-muted mb-3">Generate script untuk mengatur menu isolir di Mikrotik. Pelanggan yang diisolir akan langsung diarahkan ke halaman isolir.</p>
@@ -15,8 +17,8 @@
     <div class="row g-3 mb-3">
         <div class="col-md-12">
             <label class="form-label small fw-bold">Path Halaman Isolir (default)</label>
-            <input type="text" class="form-control form-control-sm" id="isolirPath" placeholder="/isolir" value="/isolir">
-            <div class="form-text">Path di server billing benar di <code>/isolir</code>. Portal port khusus juga melayani semua path (captive portal). Tes dari HP isolir: <code>http://neverssl.com</code> (bukan HTTPS).</div>
+            <input type="text" class="form-control form-control-sm" id="isolirPath" placeholder="<%= defaultIsolirPath %>" value="<%= defaultIsolirPath %>">
+            <div class="form-text">Sertakan <code>?tenant=<%= isolirTenantId || 'ID' %></code> agar portal isolir (port bersama) menampilkan nomor admin, QR, dan alamat pembayaran milik tenant ini saja. Tes dari HP isolir: <code>http://neverssl.com</code> (bukan HTTPS).</div>
         </div>
     </div>
 

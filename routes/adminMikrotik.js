@@ -159,8 +159,99 @@ const {
 } = require('../utils/tenantPppoeOwnership');
 
 const {
-  claimTenantPppoeProfile
+  claimTenantPppoeProfile,
+  toCanonicalTenantPppoeProfile,
+  stripTenantProfilePrefix
 } = require('../utils/tenantPppoeProfileOwnership');
+
+/**
+ * Cegah kebocoran tampilan groupname tenant lain (mis. t9_profil_50_mbps di tenant 26).
+ * Remap ke canonical tenant saat ini bila RADIUS group foreign.
+ *
+ * JANGAN menimpa profil sistem (isolir/default) dengan customers.pppoe_profile —
+ * kolom billing sengaja menyimpan profil paket untuk restore; live RADIUS
+ * group saat isolir adalah "isolir".
+ */
+function sanitizeUserProfileForTenant(user, tid, billingProfileByUsername = null) {
+  if (!user || tid == null) return user;
+  const name = String(user.name || user.username || '').trim();
+  const key = name.toLowerCase();
+  const rawProfile = String(user.profile || user.profile_display || '').trim() || 'default';
+  const billingProfile = billingProfileByUsername && key
+    ? billingProfileByUsername.get(key)
+    : null;
+
+  const foreignMatch = rawProfile.match(/^t(\d+)_/i);
+  const foreignTid = foreignMatch ? parseInt(foreignMatch[1], 10) : null;
+  const isForeign = Number.isFinite(foreignTid) && foreignTid !== parseInt(tid, 10);
+  const rawNorm = rawProfile.toLowerCase().replace(/\s+/g, '_');
+  const isSystemProfile = rawNorm === 'isolir' || rawNorm === 'default';
+
+  // Profil sistem RADIUS (isolir/default) harus tampil apa adanya — jangan diganti profil paket billing.
+  if (isSystemProfile) {
+    return {
+      ...user,
+      profile: rawNorm === 'isolir' ? 'isolir' : rawProfile,
+      profile_display: rawNorm === 'isolir' ? 'isolir' : rawProfile
+    };
+  }
+
+  let safeProfile = rawProfile;
+  if (billingProfile && String(billingProfile).trim()) {
+    const fromBilling =
+      toCanonicalTenantPppoeProfile(tid, billingProfile) || String(billingProfile).trim();
+    safeProfile = isForeign ? fromBilling : (toCanonicalTenantPppoeProfile(tid, rawProfile) || rawProfile);
+    // Jika RADIUS belum tenant-prefixed tapi billing punya profil tenant → pakai billing
+    // (kecuali raw sudah sistem — di-handle di atas)
+    if (!/^t\d+_/i.test(rawProfile) && /^t\d+_/i.test(fromBilling)) {
+      safeProfile = fromBilling;
+    }
+  } else if (isForeign) {
+    const logical = stripTenantProfilePrefix(rawProfile, foreignTid) || rawProfile.replace(/^t\d+_/, '');
+    safeProfile = toCanonicalTenantPppoeProfile(tid, logical) || toCanonicalTenantPppoeProfile(tid, rawProfile) || logical || 'default';
+  } else if (/^t\d+_/i.test(rawProfile)) {
+    safeProfile = toCanonicalTenantPppoeProfile(tid, rawProfile) || rawProfile;
+  }
+
+  const out = {
+    ...user,
+    profile: safeProfile,
+    profile_display: safeProfile
+  };
+  if (isForeign) {
+    out.profile_foreign_raw = rawProfile;
+  }
+  return out;
+}
+
+async function getTenantBillingPppoeProfileMap() {
+  if (!hasTenantContext()) return null;
+  const _t = billingManager._tenantWhere();
+  return new Promise((resolve) => {
+    billingManager.db.all(
+      `SELECT LOWER(TRIM(pppoe_username)) AS u, TRIM(pppoe_profile) AS p
+       FROM customers
+       WHERE pppoe_username IS NOT NULL AND TRIM(pppoe_username) != ''
+         AND pppoe_profile IS NOT NULL AND TRIM(pppoe_profile) != ''${_t.sql}`,
+      [..._t.params],
+      (err, rows) => {
+        if (err) return resolve(new Map());
+        const map = new Map();
+        for (const r of rows || []) {
+          if (r.u && r.p) map.set(String(r.u), String(r.p));
+        }
+        resolve(map);
+      }
+    );
+  });
+}
+
+async function sanitizeUsersListProfiles(users) {
+  if (!hasTenantContext() || !Array.isArray(users) || users.length === 0) return users || [];
+  const tid = getTenantId();
+  const billingMap = await getTenantBillingPppoeProfileMap();
+  return users.map((u) => sanitizeUserProfileForTenant(u, tid, billingMap));
+}
 
 function clearPppoeAdminPageCache() {
   _pppoeAdminPageCacheByKey.clear();
@@ -354,6 +445,7 @@ router.get('/mikrotik', adminAuth, async (req, res) => {
             tenantPppoeUsers || [],
             tenantBillingSet
           );
+          combined = await sanitizeUsersListProfiles(combined);
         }
 
         logger.info(
@@ -407,6 +499,7 @@ router.get('/mikrotik', adminAuth, async (req, res) => {
       // Flatten hasil dari semua router
       combined = allRouterResults.flat();
       combined = filterUsersForTenant(combined, tenantUserSet);
+      combined = await sanitizeUsersListProfiles(combined);
     }
     
     const userStats = computeUserStats(combined);
@@ -666,6 +759,7 @@ router.get('/mikrotik/export-pppoe-users', adminAuth, async (req, res) => {
         skipMikrotikActive: true
       });
       users = await mergeRadiusAndBillingUsers(radiusUsers || [], tenantPppoeUsers, tenantBillingSet);
+      users = await sanitizeUsersListProfiles(users);
     } else {
       const result = await getPPPoEUsers();
       users = Array.isArray(result) ? result : result?.data || [];
@@ -673,6 +767,7 @@ router.get('/mikrotik/export-pppoe-users', adminAuth, async (req, res) => {
         const allow = new Set(tenantPppoeUsers.map((u) => String(u).toLowerCase().trim()));
         users = users.filter((u) => allow.has(String(u.name || u.username || '').toLowerCase().trim()));
       }
+      users = await sanitizeUsersListProfiles(users);
     }
 
     const rows = (users || []).map((u) => {
@@ -2848,3 +2943,4 @@ router.post('/mikrotik/hotspot-servers/delete', adminAuth, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.clearPppoeAdminPageCache = clearPppoeAdminPageCache;

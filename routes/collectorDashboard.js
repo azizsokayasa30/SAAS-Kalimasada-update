@@ -228,7 +228,7 @@ router.get('/api/customer-invoices/:customerId', collectorAuth, async (req, res)
                 SELECT i.*, p.name as package_name
                 FROM invoices i
                 LEFT JOIN packages p ON i.package_id = p.id
-                WHERE i.customer_id = ? AND i.status = 'unpaid'
+                WHERE i.customer_id = ? AND i.status = 'unpaid' AND CAST(i.amount AS REAL) > 0
                 ORDER BY i.created_at DESC
             `, [customerId], (err, rows) => {
                 if (err) reject(err);

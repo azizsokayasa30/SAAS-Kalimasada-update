@@ -8,6 +8,34 @@ process.env.TZ = 'Asia/Jakarta';
 require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 // ==========================================
+// PM2-ONLY GUARD
+// App web + cron HANYA boleh dijalankan via PM2 (ecosystem.config.cjs).
+// `node app.js` / `nohup` membuat cron ganda → tagihan dobel/kacau.
+// Bypass lokal: ALLOW_DIRECT_NODE=1
+// ==========================================
+(() => {
+    if (process.env.ALLOW_DIRECT_NODE === '1') {
+        console.warn('[PM2-GUARD] ALLOW_DIRECT_NODE=1 — start langsung diizinkan (hanya untuk debug)');
+        return;
+    }
+    const viaPm2 =
+        process.env.RUN_VIA_PM2 === '1' ||
+        process.env.PM2_HOME != null ||
+        process.env.pm_id != null ||
+        process.env.NODE_APP_INSTANCE != null;
+    if (!viaPm2) {
+        console.error('\n[PM2-GUARD] ❌ Aplikasi hanya boleh dijalankan via PM2.');
+        console.error('[PM2-GUARD] Jangan pakai: node app.js / nohup node app.js');
+        console.error('[PM2-GUARD] Gunakan:');
+        console.error('  cd /root/Saas-Kalimasada_Inti_Sarana');
+        console.error('  pm2 start ecosystem.config.cjs --only billing-kalimasada --update-env');
+        console.error('  # atau: pm2 restart billing-kalimasada --update-env');
+        console.error('[PM2-GUARD] Debug lokal saja: ALLOW_DIRECT_NODE=1 node app.js\n');
+        process.exit(1);
+    }
+})();
+
+// ==========================================
 // GLOBAL CRASH GUARD — harus dipasang sedini mungkin
 // Mencegah crash dari error non-fatal di module eksternal
 // (WhatsApp, Mikrotik, DB connection, dll)
@@ -86,21 +114,66 @@ process.on('unhandledRejection', (reason, promise) => {
             // Deteksi proses node app.js yang sama, bukan node -e.
             const isNode = /\bnode\b/.test(args) || /\bnodemon\b/.test(args);
             if (!isNode) continue;
-            if (!args.includes(appPath)) continue;
+            if (!args.includes(appPath) && !args.includes('app.js')) continue;
+            // Cocokkan path repo ini (hindari false positive app.js di folder lain)
+            if (!args.includes('Saas-Kalimasada_Inti_Sarana') && !args.includes(appPath)) continue;
             if (/\s-e\s/.test(args)) continue;
 
             if (user !== currentUser) {
-                conflicts.push({ pid, user, args });
+                conflicts.push({ pid, user, args, reason: 'owner' });
+            } else {
+                // Instance kedua (mis. pm2 name lain / sisa nohup) — tolak start
+                conflicts.push({ pid, user, args, reason: 'duplicate-instance' });
             }
         }
 
-        if (conflicts.length > 0) {
+        const ownerConflicts = conflicts.filter((c) => c.reason === 'owner');
+        let dupConflicts = conflicts.filter((c) => c.reason === 'duplicate-instance');
+
+        if (ownerConflicts.length > 0) {
             console.error('\n[OWNERSHIP-GUARD] ❌ Ditemukan proses app dengan owner berbeda.');
             console.error(`[OWNERSHIP-GUARD] Current user: ${currentUser}`);
-            conflicts.forEach((c) => {
+            ownerConflicts.forEach((c) => {
                 console.error(`[OWNERSHIP-GUARD] Conflict PID=${c.pid} user=${c.user}`);
             });
             console.error('[OWNERSHIP-GUARD] Jalankan aplikasi hanya dari satu jalur owner (root semua ATAU non-root semua).');
+            process.exit(1);
+        }
+
+        // Saat pm2 restart, proses lama bisa masih hidup sebentar — tunggu lalu cek ulang
+        if (dupConflicts.length > 0) {
+            try {
+                execSync('sleep 2');
+                const output2 = execSync('ps -eo pid,user,args', { encoding: 'utf8' });
+                const still = [];
+                for (const line of output2.split('\n').slice(1).filter(Boolean)) {
+                    const match = line.trim().match(/^(\d+)\s+(\S+)\s+(.*)$/);
+                    if (!match) continue;
+                    const pid = Number(match[1]);
+                    const user = match[2];
+                    const args = match[3] || '';
+                    if (!pid || pid === currentPid) continue;
+                    if (user !== currentUser) continue;
+                    const isNode = /\bnode\b/.test(args) || /\bnodemon\b/.test(args);
+                    if (!isNode) continue;
+                    if (!args.includes(appPath) && !args.includes('app.js')) continue;
+                    if (!args.includes('Saas-Kalimasada_Inti_Sarana') && !args.includes(appPath)) continue;
+                    if (/\s-e\s/.test(args)) continue;
+                    still.push({ pid, user, args });
+                }
+                dupConflicts = still;
+            } catch (_) {
+                /* pakai daftar awal */
+            }
+        }
+
+        if (dupConflicts.length > 0) {
+            console.error('\n[INSTANCE-GUARD] ❌ Sudah ada proses app.js lain untuk billing ini.');
+            dupConflicts.forEach((c) => {
+                console.error(`[INSTANCE-GUARD] PID=${c.pid} user=${c.user}`);
+                console.error(`[INSTANCE-GUARD]   ${String(c.args).slice(0, 160)}`);
+            });
+            console.error('[INSTANCE-GUARD] Matikan proses lain, lalu: pm2 restart billing-kalimasada --update-env');
             process.exit(1);
         }
     } catch (e) {
@@ -1300,22 +1373,92 @@ function formatDisplayPhone(value) {
     return raw;
 }
 
+function pickIsolirTenantIdFromRequest(req) {
+    const candidates = [
+        req.params?.tenantId,
+        req.params?.tenant,
+        req.tenantId,
+        req.tenant?.id,
+        req.session?.tenantId,
+        req.query.tenant_id,
+        req.query.tenant,
+    ];
+    for (const raw of candidates) {
+        const n = parseInt(raw, 10);
+        if (Number.isFinite(n) && n > 0) return n;
+    }
+    // Subdomain slug sebagai ?tenant=slug (bukan angka)
+    const slug = String(req.query.tenant || req.params?.tenant || '').trim().toLowerCase();
+    if (slug && !/^\d+$/.test(slug)) return { slug };
+    return null;
+}
+
+function buildIsolirPaymentAccounts(settings = {}) {
+    // Prefer nested payment_accounts; fallback ke flat keys pengaturan tenant.
+    const nested = settings.payment_accounts && typeof settings.payment_accounts === 'object'
+        ? settings.payment_accounts
+        : {};
+    const bankName = nested.bank_transfer?.bank_name || settings.payment_bank_name || '';
+    const accountNumber = nested.bank_transfer?.account_number || settings.payment_account_number || '';
+    const accountName = nested.bank_transfer?.account_name || settings.payment_account_holder || '';
+    const cashAddress = nested.cash?.office_address || settings.payment_cash_address || '';
+    const cashHours = nested.cash?.office_hours || settings.payment_cash_hours || '';
+
+    const paymentAccounts = {};
+    if (bankName || accountNumber || accountName) {
+        paymentAccounts.bank_transfer = {
+            bank_name: bankName,
+            account_number: accountNumber,
+            account_name: accountName,
+        };
+    }
+    if (cashAddress || cashHours) {
+        paymentAccounts.cash = {
+            office_address: cashAddress,
+            office_hours: cashHours,
+        };
+    }
+    return paymentAccounts;
+}
+
+function pickIsolirSetting(settings, key, fallback = '') {
+    if (!settings || typeof settings !== 'object') return fallback;
+    const val = settings[key];
+    if (val === undefined || val === null || val === '') return fallback;
+    return val;
+}
+
 async function renderIsolirPage(req, res) {
     try {
-        const { getSettingsWithCache, getSetting } = require('./config/settingsManager');
         const { getPublicAppBaseUrl } = require('./config/public-endpoint');
+        const { getFullSettingsForTenantId } = require('./config/platform/tenantSettingsManager');
+        const { runWithTenant } = require('./config/platform/tenantContext');
+        const tenantStore = require('./config/platform/tenantStore');
         const billingManager = require('./config/billing');
+        const { getTenantAppScheme, getTenantHostname } = require('./config/platform/tenantUrls');
 
-        const settings = getSettingsWithCache();
-        const companyHeader = getSetting('company_header', 'GEMBOK');
-        const adminWA = normalizeWaNumber(
-            getSetting('contact_whatsapp', '') || getSetting('admins.0', '6281234567890')
-        );
-        const adminDisplay = formatDisplayPhone(adminWA);
-        const billingBaseUrl = getPublicAppBaseUrl();
+        // 1) Resolusi tenant awal dari middleware / query (jangan pakai settings global).
+        let tenantHint = pickIsolirTenantIdFromRequest(req);
+        let tenantRecord = req.tenant || null;
+        let resolvedTenantId = null;
 
-        let customer = null;
-        const resolveCustomer = async () => {
+        if (tenantHint && typeof tenantHint === 'object' && tenantHint.slug) {
+            try {
+                tenantRecord = await tenantStore.getTenantBySubdomain(tenantHint.slug) || tenantRecord;
+                if (tenantRecord?.id) resolvedTenantId = Number(tenantRecord.id);
+            } catch (_) {}
+        } else if (Number.isFinite(tenantHint) && tenantHint > 0) {
+            resolvedTenantId = tenantHint;
+            if (!tenantRecord || Number(tenantRecord.id) !== resolvedTenantId) {
+                try {
+                    tenantRecord = await tenantStore.getTenantById(resolvedTenantId);
+                } catch (_) {}
+            }
+        } else if (tenantRecord?.id) {
+            resolvedTenantId = Number(tenantRecord.id);
+        }
+
+        const lookupCustomer = async () => {
             const sessionUsername = req.session && (req.session.customer_username || req.session.username);
             const qUser = (req.query.pppoe || req.query.username || req.query.user || '').toString().trim();
             const qPhone = (req.query.phone || req.query.nohp || '').toString().trim();
@@ -1345,7 +1488,64 @@ async function renderIsolirPage(req, res) {
             return null;
         };
 
-        customer = await resolveCustomer();
+        // 2) Lookup pelanggan dalam konteks tenant jika sudah diketahui (hindari salah tenant).
+        let customer = null;
+        if (resolvedTenantId && tenantRecord) {
+            customer = await runWithTenant(tenantRecord, lookupCustomer);
+        } else if (resolvedTenantId) {
+            customer = await runWithTenant({ id: resolvedTenantId }, lookupCustomer);
+        } else {
+            customer = await lookupCustomer();
+        }
+
+        // 3) Tenant dari pelanggan mengalahkan hint yang ambigu, tapi harus konsisten.
+        if (customer?.tenant_id) {
+            const customerTenantId = Number(customer.tenant_id);
+            if (resolvedTenantId && resolvedTenantId !== customerTenantId) {
+                logger.warn(
+                    `[ISOLIR] Tenant mismatch: hint=${resolvedTenantId} customer=${customer.id} tenant_id=${customerTenantId} — memakai tenant pelanggan`
+                );
+            }
+            resolvedTenantId = customerTenantId;
+            if (!tenantRecord || Number(tenantRecord.id) !== customerTenantId) {
+                try {
+                    tenantRecord = await tenantStore.getTenantById(customerTenantId);
+                } catch (_) {}
+            }
+        }
+
+        // 4) Settings: hanya dari tenant yang teridentifikasi. Tanpa tenant → kosong (jangan bocorkan settings global/tenant lain).
+        let settings = {};
+        if (resolvedTenantId) {
+            try {
+                settings = await getFullSettingsForTenantId(resolvedTenantId);
+            } catch (settingsErr) {
+                logger.warn(`[ISOLIR] Gagal load settings tenant ${resolvedTenantId}: ${settingsErr.message}`);
+                settings = {};
+            }
+        } else {
+            // Portal tanpa identitas tenant: jangan tampilkan nomor/QR/alamat global (bisa milik tenant lain).
+            settings = {};
+            logger.warn('[ISOLIR] Tenant tidak teridentifikasi — menyembunyikan info pembayaran/admin agar tidak bocor lintas tenant');
+        }
+
+        const companyHeader = pickIsolirSetting(settings, 'company_header', tenantRecord?.name || 'Isolir');
+        const adminWA = normalizeWaNumber(
+            pickIsolirSetting(settings, 'contact_whatsapp', '')
+            || pickIsolirSetting(settings, 'admins.0', '')
+            || pickIsolirSetting(settings, 'contact_phone', '')
+            || tenantRecord?.owner_phone
+            || ''
+        );
+        const adminDisplay = formatDisplayPhone(adminWA);
+
+        let billingBaseUrl = getPublicAppBaseUrl();
+        const subdomain = tenantRecord?.subdomain || tenantRecord?.slug;
+        if (subdomain) {
+            try {
+                billingBaseUrl = `${getTenantAppScheme()}://${getTenantHostname(subdomain)}`;
+            } catch (_) {}
+        }
 
         // Auto-resolve nama pelanggan: query -> data pelanggan -> session -> fallback.
         let customerName = (req.query.nama || req.query.name || '').toString().trim();
@@ -1355,7 +1555,10 @@ async function renderIsolirPage(req, res) {
         let unpaidInvoices = [];
         if (customer && customer.id) {
             try {
-                const invoices = await billingManager.getInvoicesByCustomer(customer.id);
+                const fetchInvoices = () => billingManager.getInvoicesByCustomer(customer.id);
+                const invoices = (resolvedTenantId && (tenantRecord || resolvedTenantId))
+                    ? await runWithTenant(tenantRecord || { id: resolvedTenantId }, fetchInvoices)
+                    : await fetchInvoices();
                 unpaidInvoices = (invoices || [])
                     .filter((invoice) => String(invoice.status || '').toLowerCase() === 'unpaid')
                     .sort((a, b) => new Date(a.due_date || 0) - new Date(b.due_date || 0));
@@ -1365,13 +1568,13 @@ async function renderIsolirPage(req, res) {
         }
         const totalUnpaid = unpaidInvoices.reduce((sum, invoice) => sum + (Number(invoice.amount) || 0), 0);
 
-        // Logo path dari settings.json (served via /public or /storage pattern)
-        const logoFile = settings.logo_filename || 'logo.png';
+        const logoFile = pickIsolirSetting(settings, 'logo_filename', 'logo.png');
         const logoPath = `/img/${logoFile}`;
 
-        // Payment accounts from settings.json (bank transfer & cash)
-        const paymentAccounts = settings.payment_accounts || {};
-        const qrFile = settings.billing_qr_filename || settings.qr_filename || '';
+        // QR & rekening hanya dari settings tenant ini — tanpa fallback ke settings.json global.
+        const paymentAccounts = buildIsolirPaymentAccounts(settings);
+        const qrFile = pickIsolirSetting(settings, 'billing_qr_filename', '')
+            || pickIsolirSetting(settings, 'qr_filename', '');
 
         res.render('isolir', {
             companyHeader,
@@ -1397,6 +1600,7 @@ async function renderIsolirPage(req, res) {
 
 // Halaman Isolir - tersedia di port utama dan port khusus 8899.
 app.get(['/isolir', '/isolir/'], renderIsolirPage);
+app.get(['/isolir/t/:tenantId', '/isolir/tenant/:tenantId'], renderIsolirPage);
 
 // Import dan gunakan route tukang tagih (collector)
 const { router: collectorAuthRouter } = require('./routes/collectorAuth');
@@ -1777,6 +1981,7 @@ function startIsolirPortal(portToUse) {
         etag: true
     }));
     isolirApp.get(['/', '/isolir', '/isolir/'], renderIsolirPage);
+    isolirApp.get(['/isolir/t/:tenantId', '/isolir/tenant/:tenantId', '/t/:tenantId'], renderIsolirPage);
     isolirApp.get('*', renderIsolirPage);
 
     isolirApp.listen(isolirPort, '0.0.0.0', () => {

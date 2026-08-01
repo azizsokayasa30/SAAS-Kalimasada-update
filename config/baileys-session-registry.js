@@ -18,11 +18,18 @@ const {
     sessionKeyFor
 } = require('./baileys-config');
 
+/** Reconnect dengan creds — batasi agar tidak banjir socket */
 const MAX_CONCURRENT_CONNECTING = 2;
-const DEFAULT_RECONNECT_MS = 8000;
-const MAX_RECONNECT_MS = 120000;
+/** Connect untuk scan QR — jangan terlalu banyak (WA sering 405 jika banjir dari 1 IP) */
+const MAX_CONCURRENT_QR_CONNECTING = 3;
+const DEFAULT_RECONNECT_MS = 12000;
+const MAX_RECONNECT_MS = 180000;
 const KEEP_ALIVE_MS = 25000;
 const BAD_SESSION_WIPE_AFTER = 3;
+const QR_QUEUE_RETRY_MS = 4000;
+/** Versi WA Web known-good (fetchLatestBaileysVersion 2026-08); hindari fallback usang → 405 */
+const FALLBACK_WA_VERSION = [2, 3000, 1043857760];
+const METHOD_NOT_ALLOWED = 405;
 
 /** @type {Map<string, object>} */
 const sessions = new Map();
@@ -31,11 +38,14 @@ let makeWASocket = null;
 let DisconnectReason = null;
 let useMultiFileAuthState = null;
 let fetchLatestWaWebVersion = null;
+let fetchLatestBaileysVersion = null;
 let baileysLoadPromise = null;
 let connectingCount = 0;
+/** @type {{ version: number[], source: string, fetchedAt: number } | null} */
+let cachedWaVersion = null;
 
 async function ensureBaileysLoaded() {
-    if (makeWASocket && DisconnectReason && useMultiFileAuthState && fetchLatestWaWebVersion) {
+    if (makeWASocket && DisconnectReason && useMultiFileAuthState) {
         return;
     }
     try {
@@ -44,6 +54,7 @@ async function ensureBaileysLoaded() {
         DisconnectReason = baileys.DisconnectReason;
         useMultiFileAuthState = baileys.useMultiFileAuthState;
         fetchLatestWaWebVersion = baileys.fetchLatestWaWebVersion;
+        fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
         if (makeWASocket && useMultiFileAuthState) return;
     } catch (_) { /* ESM fallback */ }
 
@@ -53,6 +64,7 @@ async function ensureBaileysLoaded() {
             DisconnectReason = baileys.DisconnectReason;
             useMultiFileAuthState = baileys.useMultiFileAuthState;
             fetchLatestWaWebVersion = baileys.fetchLatestWaWebVersion;
+            fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
             if (!makeWASocket || !useMultiFileAuthState) {
                 throw new Error('Export Baileys tidak lengkap');
             }
@@ -64,6 +76,95 @@ async function ensureBaileysLoaded() {
     return baileysLoadPromise;
 }
 
+function parseEnvWaVersion() {
+    const raw = String(process.env.WA_BAILEYS_VERSION || '').trim();
+    if (!raw) return null;
+    const parts = raw.split(/[.,\s]+/).map((n) => parseInt(n, 10));
+    if (parts.length >= 3 && parts.every((n) => Number.isFinite(n))) {
+        return parts.slice(0, 3);
+    }
+    return null;
+}
+
+/**
+ * Ambil versi WA yang diterima server. fetchLatestWaWebVersion sering 429 → fallback usang → 405 loop.
+ * Prioritas: env → cache → fetchLatestBaileysVersion → fetchLatestWaWebVersion (jika isLatest) → FALLBACK.
+ */
+async function resolveWaVersion(forceRefresh = false) {
+    const envVer = parseEnvWaVersion();
+    if (envVer) {
+        return { version: envVer, source: 'env' };
+    }
+
+    if (
+        !forceRefresh &&
+        cachedWaVersion &&
+        Array.isArray(cachedWaVersion.version) &&
+        Date.now() - cachedWaVersion.fetchedAt < 6 * 60 * 60 * 1000
+    ) {
+        return cachedWaVersion;
+    }
+
+    await ensureBaileysLoaded();
+
+    if (typeof fetchLatestBaileysVersion === 'function') {
+        try {
+            const info = await fetchLatestBaileysVersion();
+            if (info?.version?.length >= 3 && info.isLatest !== false) {
+                cachedWaVersion = {
+                    version: info.version,
+                    source: 'baileys',
+                    fetchedAt: Date.now()
+                };
+                return cachedWaVersion;
+            }
+            if (info?.version?.length >= 3) {
+                cachedWaVersion = {
+                    version: info.version,
+                    source: 'baileys-cached',
+                    fetchedAt: Date.now()
+                };
+                return cachedWaVersion;
+            }
+        } catch (err) {
+            logger.warn(`⚠️ fetchLatestBaileysVersion gagal: ${err.message}`);
+        }
+    }
+
+    if (typeof fetchLatestWaWebVersion === 'function') {
+        try {
+            const info = await fetchLatestWaWebVersion();
+            // Abaikan hasil 429/stale (isLatest:false) — itu penyebab utama 405
+            if (info?.version?.length >= 3 && info.isLatest === true && !info.error) {
+                cachedWaVersion = {
+                    version: info.version,
+                    source: 'wa-web',
+                    fetchedAt: Date.now()
+                };
+                return cachedWaVersion;
+            }
+            if (info?.error) {
+                logger.warn(
+                    `⚠️ fetchLatestWaWebVersion stale/error — pakai fallback (isLatest=${info.isLatest})`
+                );
+            }
+        } catch (err) {
+            logger.warn(`⚠️ fetchLatestWaWebVersion gagal: ${err.message}`);
+        }
+    }
+
+    cachedWaVersion = {
+        version: FALLBACK_WA_VERSION.slice(),
+        source: 'fallback',
+        fetchedAt: Date.now()
+    };
+    return cachedWaVersion;
+}
+
+function invalidateWaVersionCache() {
+    cachedWaVersion = null;
+}
+
 function getOrCreateEntry(tenantId) {
     const key = sessionKeyFor(tenantId);
     if (!sessions.has(key)) {
@@ -73,6 +174,7 @@ function getOrCreateEntry(tenantId) {
             sock: null,
             status: 'disconnected',
             qrCode: null,
+            qrUpdatedAt: null,
             phoneNumber: null,
             connectedSince: null,
             isConnecting: false,
@@ -82,6 +184,7 @@ function getOrCreateEntry(tenantId) {
             reason: null,
             reconnectAttempt: 0,
             badSessionStreak: 0,
+            methodNotAllowedStreak: 0,
             lastDisconnectAt: null,
             lastConnectedAt: null
         });
@@ -93,11 +196,21 @@ function getOrCreateEntry(tenantId) {
 
 function getStatus(tenantId) {
     const entry = getOrCreateEntry(tenantId);
+    const qrAgeMs = entry.qrUpdatedAt ? Date.now() - entry.qrUpdatedAt : null;
+    // QR Baileys kadaluarsa ~60s — jangan sajikan yang sudah basi
+    const qrFresh = !!(entry.qrCode && qrAgeMs != null && qrAgeMs < 55000);
+    if (entry.qrCode && !qrFresh) {
+        entry.qrCode = null;
+        entry.qrUpdatedAt = null;
+        if (entry.status === 'qr_code') entry.status = 'connecting';
+    }
     return {
         connected: entry.status === 'connected' && !!entry.sock,
         status: entry.status,
-        qrCode: entry.qrCode,
-        qr: entry.qrCode,
+        qrCode: qrFresh ? entry.qrCode : null,
+        qr: qrFresh ? entry.qrCode : null,
+        qrUpdatedAt: qrFresh ? entry.qrUpdatedAt : null,
+        qrAgeMs: qrFresh ? qrAgeMs : null,
         phoneNumber: entry.phoneNumber,
         connectedSince: entry.connectedSince,
         reason: entry.reason,
@@ -105,7 +218,9 @@ function getStatus(tenantId) {
         sessionDir: entry.sessionDir,
         hasCreds: hasCreds(tenantId),
         reconnectAttempt: entry.reconnectAttempt || 0,
-        lastDisconnectAt: entry.lastDisconnectAt || null
+        lastDisconnectAt: entry.lastDisconnectAt || null,
+        isConnecting: !!entry.isConnecting,
+        connectingCount
     };
 }
 
@@ -257,6 +372,20 @@ function scheduleReconnect(entry, delayMs) {
     }, wait);
 }
 
+/** Antrean singkat tanpa naikkan reconnectAttempt (khusus tunggu slot connect / QR). */
+function scheduleQueuedConnect(entry, delayMs = QR_QUEUE_RETRY_MS) {
+    clearReconnect(entry);
+    entry.status = entry.qrCode ? 'qr_code' : 'queued';
+    entry.reason = entry.reason || 'max_concurrent_connecting';
+    entry.reconnectTimer = setTimeout(() => {
+        entry.reconnectTimer = null;
+        connect(entry.tenantId).catch((err) => {
+            logger.warn(`⚠️ Baileys queued connect tenant=${entry.tenantId ?? 'legacy'} gagal: ${err.message}`);
+            scheduleQueuedConnect(entry, QR_QUEUE_RETRY_MS);
+        });
+    }, Math.max(500, delayMs));
+}
+
 function resetSessionDirectory(sessionDir) {
     try {
         if (fs.existsSync(sessionDir)) {
@@ -352,6 +481,8 @@ function cleanupRootAuthFiles(base) {
 async function connect(tenantId = null) {
     const entry = getOrCreateEntry(tenantId);
     const label = entry.tenantId ? `tenant-${entry.tenantId}` : 'legacy';
+    const needsQr = !hasCreds(tenantId);
+    const maxSlots = needsQr ? MAX_CONCURRENT_QR_CONNECTING : MAX_CONCURRENT_CONNECTING;
 
     if (entry.isConnecting) {
         logger.info(`⏳ Baileys ${label} sedang connecting, skip`);
@@ -366,16 +497,44 @@ async function connect(tenantId = null) {
         } catch (_) { /* reconnect */ }
     }
 
-    if (connectingCount >= MAX_CONCURRENT_CONNECTING) {
-        entry.status = entry.qrCode ? 'qr_code' : 'queued';
+    // QR segar + socket masih hidup — jangan restart (QR hangus / picu 405)
+    if (
+        needsQr &&
+        entry.sock &&
+        entry.qrCode &&
+        entry.qrUpdatedAt &&
+        Date.now() - entry.qrUpdatedAt < 50000 &&
+        entry.status === 'qr_code'
+    ) {
+        return entry.sock;
+    }
+
+    // Sudah dijadwalkan reconnect — biarkan timer, jangan dobel-kick dari poll UI
+    if (entry.reconnectTimer && !entry.sock && !entry.isConnecting) {
+        if (!entry.status || entry.status === 'disconnected') {
+            entry.status = needsQr ? 'queued' : 'reconnecting';
+        }
+        return entry.sock;
+    }
+
+    if (connectingCount >= maxSlots) {
+        entry.status = entry.qrCode && entry.sock ? 'qr_code' : 'queued';
         entry.reason = 'max_concurrent_connecting';
-        scheduleReconnect(entry, 8000);
+        logger.info(
+            `⏳ Baileys ${label} antre (connecting=${connectingCount}/${maxSlots}, qr=${needsQr})`
+        );
+        scheduleQueuedConnect(entry, needsQr ? QR_QUEUE_RETRY_MS : 5000);
         return null;
     }
 
     entry.isConnecting = true;
     connectingCount += 1;
     clearReconnect(entry);
+    // QR lama invalid saat sock baru dibuat
+    entry.qrCode = null;
+    entry.qrUpdatedAt = null;
+    entry.status = 'connecting';
+    entry.reason = null;
 
     try {
         await ensureBaileysLoaded();
@@ -386,7 +545,7 @@ async function connect(tenantId = null) {
         if (entry.sock) {
             try {
                 if (entry.sock.ev) entry.sock.ev.removeAllListeners();
-                if (entry.sock.end) entry.sock.end();
+                if (entry.sock.end) entry.sock.end(undefined);
             } catch (_) { /* ignore */ }
             entry.sock = null;
         }
@@ -395,29 +554,25 @@ async function connect(tenantId = null) {
         const baileysLogger = pino({ level: logLevel });
         const { state, saveCreds } = await useMultiFileAuthState(entry.sessionDir);
 
-        let version;
-        try {
-            const versionInfo = await fetchLatestWaWebVersion();
-            version = versionInfo.version;
-        } catch (_) {
-            version = [2, 3000, 1025190524];
-        }
+        const forceVersionRefresh = (entry.methodNotAllowedStreak || 0) > 0;
+        const versionInfo = await resolveWaVersion(forceVersionRefresh);
+        const version = versionInfo.version;
+        logger.info(
+            `📱 Baileys ${label} WA version ${version.join('.')} (${versionInfo.source})`
+        );
 
         const sock = makeWASocket({
             auth: state,
             logger: baileysLogger,
-            browser: [
-                entry.tenantId ? `Kalimasada Tenant ${entry.tenantId}` : 'Kalimasada Legacy Bot',
-                'Chrome',
-                '120.0.0'
-            ],
+            // Browser “normal” mengurangi penolakan pairing (405) vs label bot per-tenant
+            browser: ['Windows', 'Chrome', '120.0.0'],
             connectTimeoutMs: 90000,
             qrTimeout: 60000,
             defaultQueryTimeoutMs: 60000,
-            keepAliveIntervalMs: 15000,
-            retryRequestDelayMs: 500,
+            keepAliveIntervalMs: 25000,
+            retryRequestDelayMs: 1000,
             syncFullHistory: false,
-            markOnlineOnConnect: true,
+            markOnlineOnConnect: false,
             generateHighQualityLinkPreview: false,
             version,
             printQRInTerminal: false
@@ -428,14 +583,16 @@ async function connect(tenantId = null) {
         sock.ev.on('creds.update', saveCreds);
 
         sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr, isNewLogin } = update;
-            if (isNewLogin === true) return;
+            const { connection, lastDisconnect, qr } = update;
+            // Jangan early-return pada isNewLogin — bisa mengunci status open/QR
 
             if (qr) {
                 entry.qrCode = qr;
+                entry.qrUpdatedAt = Date.now();
                 entry.status = 'qr_code';
                 entry.phoneNumber = null;
                 entry.connectedSince = null;
+                entry.reason = null;
                 // QR means socket created; allow another tenant to start connecting
                 if (entry.isConnecting) {
                     entry.isConnecting = false;
@@ -470,6 +627,7 @@ async function connect(tenantId = null) {
                 entry.reason = null;
                 entry.reconnectAttempt = 0;
                 entry.badSessionStreak = 0;
+                entry.methodNotAllowedStreak = 0;
                 startKeepAlive(entry);
                 writeTenantMeta(entry.tenantId, entry.sessionDir);
                 logger.info(`✅ Baileys terhubung (${label}) phone=${entry.phoneNumber || '-'}`);
@@ -496,8 +654,10 @@ async function connect(tenantId = null) {
                     || lastDisconnect?.error?.message
                     || '';
                 const errorMessage = String(rawMessage).toLowerCase();
+                const hadCreds = hasCreds(entry.tenantId);
                 let shouldReconnect = true;
                 let wipeSession = false;
+                let reconnectDelay = DEFAULT_RECONNECT_MS;
 
                 // Pertahankan creds sebisa mungkin agar jarang scan QR ulang
                 if (
@@ -512,6 +672,30 @@ async function connect(tenantId = null) {
                 ) {
                     shouldReconnect = true;
                     wipeSession = false;
+                    entry.methodNotAllowedStreak = 0;
+                    // 515 setelah scan QR = normal, reconnect cepat
+                    if (statusCode === DisconnectReason.restartRequired) {
+                        reconnectDelay = 2500;
+                    }
+                } else if (statusCode === METHOD_NOT_ALLOWED || errorMessage.includes('method not allowed')) {
+                    // 405 = versi WA ditolak / banjir connect — JANGAN loop agresif
+                    entry.methodNotAllowedStreak = (entry.methodNotAllowedStreak || 0) + 1;
+                    invalidateWaVersionCache();
+                    shouldReconnect = true;
+                    wipeSession = false;
+                    reconnectDelay = Math.min(
+                        MAX_RECONNECT_MS,
+                        20000 + entry.methodNotAllowedStreak * 15000
+                    );
+                    logger.warn(
+                        `⚠️ Baileys ${label} 405 Method Not Allowed (streak=${entry.methodNotAllowedStreak}) — refresh versi WA, delay ${reconnectDelay}ms`
+                    );
+                    // Tanpa creds: pairing gagal berulang → biarkan QR baru setelah delay
+                    // Dengan creds rusak berulang → wipe supaya bisa scan ulang
+                    if (hadCreds && entry.methodNotAllowedStreak >= BAD_SESSION_WIPE_AFTER) {
+                        wipeSession = true;
+                        entry.methodNotAllowedStreak = 0;
+                    }
                 } else if (statusCode === DisconnectReason.loggedOut) {
                     wipeSession = true;
                     shouldReconnect = false;
@@ -529,10 +713,10 @@ async function connect(tenantId = null) {
                     statusCode === DisconnectReason.connectionReplaced
                     || errorMessage.includes('conflict')
                 ) {
-                    // Coba reconnect dulu tanpa hapus sesi (sering transient)
                     entry.badSessionStreak = (entry.badSessionStreak || 0) + 1;
                     wipeSession = entry.badSessionStreak >= BAD_SESSION_WIPE_AFTER;
                     shouldReconnect = true;
+                    reconnectDelay = 20000;
                     if (wipeSession) entry.badSessionStreak = 0;
                 } else if (
                     statusCode === DisconnectReason.multideviceMismatch
@@ -542,26 +726,27 @@ async function connect(tenantId = null) {
                     shouldReconnect = true;
                 }
 
-                const keepQr = !!entry.qrCode && !wipeSession;
+                // Socket mati = QR pairing sudah invalid — jangan tampilkan QR mati
                 entry.sock = null;
                 entry.phoneNumber = null;
                 entry.connectedSince = null;
-                entry.reason = rawMessage || 'connection_closed';
+                entry.qrCode = null;
+                entry.qrUpdatedAt = null;
+                entry.reason = rawMessage || (statusCode === METHOD_NOT_ALLOWED ? 'method_not_allowed_405' : 'connection_closed');
                 entry.lastDisconnectAt = new Date().toISOString();
-                entry.status = keepQr ? 'qr_code' : (shouldReconnect ? 'reconnecting' : 'disconnected');
+                entry.status = shouldReconnect ? 'reconnecting' : 'disconnected';
 
                 if (wipeSession) {
                     logger.warn(`🧹 Baileys ${label}: wipe session (code=${statusCode ?? 'n/a'})`);
                     resetSessionDirectory(entry.sessionDir);
-                    entry.qrCode = null;
-                    entry.status = 'disconnected';
+                    entry.status = shouldReconnect ? 'reconnecting' : 'disconnected';
                     entry.reconnectAttempt = 0;
                 }
 
                 if (!entry.tenantId) {
                     global.whatsappStatus = {
                         connected: false,
-                        qrCode: entry.qrCode,
+                        qrCode: null,
                         phoneNumber: null,
                         connectedSince: null,
                         status: entry.status,
@@ -573,7 +758,7 @@ async function connect(tenantId = null) {
                     `⚠️ Baileys ${label} close code=${statusCode ?? 'n/a'} wipe=${wipeSession} reconnect=${shouldReconnect}`
                 );
                 if (shouldReconnect) {
-                    scheduleReconnect(entry, wipeSession ? 5000 : DEFAULT_RECONNECT_MS);
+                    scheduleReconnect(entry, wipeSession ? 8000 : reconnectDelay);
                 }
             }
         });
@@ -603,6 +788,7 @@ async function disconnect(tenantId = null) {
     entry.sock = null;
     entry.status = 'disconnected';
     entry.qrCode = null;
+    entry.qrUpdatedAt = null;
     entry.phoneNumber = null;
     entry.connectedSince = null;
     entry.isConnecting = false;
@@ -674,5 +860,7 @@ module.exports = {
     deleteSession,
     migrateLegacyOwnerIfNeeded,
     startTenantsWithExistingCreds,
+    resolveWaVersion,
+    invalidateWaVersionCache,
     sessions
 };

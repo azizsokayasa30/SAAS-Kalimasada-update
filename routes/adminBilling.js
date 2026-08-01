@@ -597,7 +597,7 @@ router.get('/api/customer-invoices/:customerId', adminAuth, async (req, res) => 
                 SELECT i.*, p.name as package_name
                 FROM invoices i
                 LEFT JOIN packages p ON i.package_id = p.id
-                WHERE i.customer_id = ? AND i.status = 'unpaid'${tAnd('i')}
+                WHERE i.customer_id = ? AND i.status = 'unpaid' AND CAST(i.amount AS REAL) > 0${tAnd('i')}
                 ORDER BY i.created_at DESC
             `, [customerId], (err, rows) => {
                 if (err) reject(err);
@@ -3017,14 +3017,22 @@ const CUSTOMER_IMPORT_HEADER_ALIASES = {
     payment_status: 'payment_status',
     'pppoe username': 'pppoe_username',
     pppoe_username: 'pppoe_username',
+    'username pppoe': 'pppoe_username',
+    'user pppoe': 'pppoe_username',
+    'pppoe user': 'pppoe_username',
+    'pppoe username / password': 'pppoe_username',
+    'pppoe username password': 'pppoe_username',
     'pppoe password': 'pppoe_password',
     pppoe_password: 'pppoe_password',
+    'password pppoe': 'pppoe_password',
     'pppoe profile': 'pppoe_profile',
     pppoe_profile: 'pppoe_profile',
+    'profil pppoe': 'pppoe_profile',
     'mode koneksi': 'connection_type',
     'tipe koneksi': 'connection_type',
     connection_type: 'connection_type',
     'connection type': 'connection_type',
+    mode: 'connection_type',
     'static ip': 'static_ip',
     'ip statik': 'static_ip',
     'ip static': 'static_ip',
@@ -3083,16 +3091,59 @@ function isValidImportIpv4(value) {
     return /^(\d{1,3}\.){3}\d{1,3}$/.test(String(value || '').trim());
 }
 
+/** Normalisasi header Excel: BOM, NBSP, newline, spasi ganda. */
+function normalizeImportHeaderKey(raw) {
+    const unwrapped = unwrapExcelCellValue(raw);
+    return String(unwrapped ?? '')
+        .replace(/^\uFEFF/, '')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .replace(/[\u00A0\u2007\u202F]/g, ' ')
+        .toLowerCase()
+        .replace(/[\/_|]+/g, ' ')
+        .replace(/[^a-z0-9\s]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function resolveImportHeaderAlias(normalizedKey) {
+    if (!normalizedKey) return null;
+    if (CUSTOMER_IMPORT_HEADER_ALIASES[normalizedKey]) {
+        return CUSTOMER_IMPORT_HEADER_ALIASES[normalizedKey];
+    }
+    const compact = normalizedKey.replace(/\s+/g, '');
+    if (CUSTOMER_IMPORT_HEADER_ALIASES[compact]) {
+        return CUSTOMER_IMPORT_HEADER_ALIASES[compact];
+    }
+    if (compact.includes('pppoe') && (compact.includes('user') || compact.includes('username'))) {
+        if (compact.includes('profile') || compact.includes('profil')) return 'pppoe_profile';
+        if (compact.includes('pass') && !compact.includes('user')) return 'pppoe_password';
+        return 'pppoe_username';
+    }
+    if (compact.includes('pppoe') && compact.includes('pass')) return 'pppoe_password';
+    if ((compact.includes('mode') || compact.includes('tipe')) && compact.includes('koneksi')) {
+        return 'connection_type';
+    }
+    return normalizedKey;
+}
+
 function buildCustomerImportUnifiedHeaderMap(headerRow) {
     const headerMap = {};
-    headerRow.eachCell((cell, colNumber) => {
-        const key = String(cell.value || '').toLowerCase().trim();
+    headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+        const key = normalizeImportHeaderKey(cell.value);
         if (key) headerMap[key] = colNumber;
     });
+    const maxCol = Math.max(headerRow.cellCount || 0, headerRow.actualCellCount || 0, 40);
+    for (let colNumber = 1; colNumber <= maxCol; colNumber++) {
+        const key = normalizeImportHeaderKey(headerRow.getCell(colNumber).value);
+        if (key && headerMap[key] == null) headerMap[key] = colNumber;
+    }
     const unifiedHeaderMap = {};
     Object.keys(headerMap).forEach((key) => {
-        const normalizedKey = CUSTOMER_IMPORT_HEADER_ALIASES[key] || key;
-        unifiedHeaderMap[normalizedKey] = headerMap[key];
+        const normalizedKey = resolveImportHeaderAlias(key);
+        if (!normalizedKey) return;
+        if (unifiedHeaderMap[normalizedKey] == null) {
+            unifiedHeaderMap[normalizedKey] = headerMap[key];
+        }
     });
     return unifiedHeaderMap;
 }
@@ -3968,7 +4019,11 @@ async function runCustomerXlsxImport(req, res) {
                     const n = Number(String(v).replace(',', '.'));
                     return Number.isFinite(n) ? n : null;
                 };
+                const rawIdVal = getVal(row, 'id');
+                const rawIdNum = rawIdVal === '' || rawIdVal == null ? null : Number(String(rawIdVal).replace(/\D/g, ''));
                 const raw = {
+                    id: Number.isFinite(rawIdNum) && rawIdNum > 0 ? rawIdNum : null,
+                    customer_id: cellStr('customer_id'),
                     name,
                     phone: phoneRawVal,
                     username: cellStr('username'),
@@ -4131,11 +4186,47 @@ async function runCustomerXlsxImport(req, res) {
 
                 const connType = resolveImportConnectionType(raw);
                 const packageRow = packageById.get(Number(resolvedPackageId)) || null;
-                const resolvedPppoeProfile = connType === 'static_ip'
-                    ? null
-                    : (resolveCustomerPppoeProfile(raw.pppoe_profile, packageRow, null) || 'default');
                 const staticIpVal = String(raw.static_ip || raw.assigned_ip || '').trim();
-                const pppoeUsernameKey = String(raw.pppoe_username || '').trim();
+                let pppoeUsernameKey = String(raw.pppoe_username || '').trim();
+
+                let existing = null;
+                if (raw.id) {
+                    existing = await dbGet(
+                        `SELECT * FROM customers WHERE id = ?${impT.and()} LIMIT 1`,
+                        [raw.id]
+                    );
+                }
+                if (!existing && pppoeUsernameKey) {
+                    existing = await dbGet(
+                        `SELECT * FROM customers WHERE TRIM(COALESCE(pppoe_username, '')) = ?${impT.and()} LIMIT 1`,
+                        [pppoeUsernameKey]
+                    );
+                }
+                if (!existing && phoneStored) {
+                    existing = await dbGet(
+                        `SELECT * FROM customers WHERE TRIM(COALESCE(phone, '')) = ?${impT.and()} LIMIT 1`,
+                        [phoneStored]
+                    );
+                }
+                if (!existing && raw.customer_id) {
+                    existing = await dbGet(
+                        `SELECT * FROM customers WHERE TRIM(COALESCE(customer_id, '')) = ?${impT.and()} LIMIT 1`,
+                        [raw.customer_id]
+                    );
+                }
+                if (!existing && connType === 'static_ip' && staticIpVal) {
+                    existing = await dbGet(
+                        `SELECT * FROM customers WHERE (TRIM(COALESCE(static_ip, '')) = ? OR TRIM(COALESCE(assigned_ip, '')) = ?)${impT.and()} LIMIT 1`,
+                        [staticIpVal, staticIpVal]
+                    );
+                }
+
+                if (!pppoeUsernameKey && existing && existing.pppoe_username) {
+                    pppoeUsernameKey = String(existing.pppoe_username).trim();
+                }
+                if (!pppoeUsernameKey && !existing && raw.username) {
+                    pppoeUsernameKey = String(raw.username).trim();
+                }
 
                 if (connType === 'static_ip') {
                     if (!staticIpVal || !isValidImportIpv4(staticIpVal)) {
@@ -4156,38 +4247,22 @@ async function runCustomerXlsxImport(req, res) {
                         row: r,
                         name: raw.name || '',
                         phone: raw.phone || '',
-                        error: 'PPPoE username wajib diisi (mode pppoe)'
+                        error: 'PPPoE username wajib diisi (mode pppoe) — isi kolom PPPoE Username, atau pastikan ID DB/Phone cocok pelanggan existing'
                     });
                     processedRows++;
                     reportProgress();
                     continue;
                 }
 
-                let existing = null;
-                if (connType === 'pppoe' && pppoeUsernameKey) {
-                    existing = await dbGet(
-                        `SELECT * FROM customers WHERE TRIM(COALESCE(pppoe_username, '')) = ?${impT.and()} LIMIT 1`,
-                        [pppoeUsernameKey]
-                    );
-                }
-                if (!existing && phoneStored) {
-                    existing = await dbGet(
-                        `SELECT * FROM customers WHERE TRIM(COALESCE(phone, '')) = ?${impT.and()} LIMIT 1`,
-                        [phoneStored]
-                    );
-                }
-                if (!existing && connType === 'static_ip' && staticIpVal) {
-                    existing = await dbGet(
-                        `SELECT * FROM customers WHERE (TRIM(COALESCE(static_ip, '')) = ? OR TRIM(COALESCE(assigned_ip, '')) = ?)${impT.and()} LIMIT 1`,
-                        [staticIpVal, staticIpVal]
-                    );
-                }
+                const resolvedPppoeProfile = connType === 'static_ip'
+                    ? null
+                    : (resolveCustomerPppoeProfile(raw.pppoe_profile, packageRow, existing && existing.pppoe_profile) || 'default');
 
                 const customerData = {
                     tenant_id: impT.tenantId,
                     name: raw.name.trim(),
                     phone: phoneStored,
-                    pppoe_username: connType === 'static_ip' ? null : (pppoeUsernameKey || ''),
+                    pppoe_username: connType === 'static_ip' ? null : pppoeUsernameKey,
                     pppoe_password: connType === 'static_ip' ? '' : (raw.pppoe_password ? raw.pppoe_password.trim() : ''),
                     email: raw.email ? raw.email.trim() : '',
                     address: raw.address ? raw.address.trim() : '',
@@ -4195,7 +4270,8 @@ async function runCustomerXlsxImport(req, res) {
                     pppoe_profile: resolvedPppoeProfile,
                     status: raw.status || 'active',
                     auto_suspension: typeof raw.auto_suspension !== 'undefined' ? parseInt(raw.auto_suspension, 10) : 1,
-                    billing_day: raw.billing_day ? Math.min(Math.max(parseInt(raw.billing_day, 10), 1), 28) : 15
+                    billing_day: raw.billing_day ? Math.min(Math.max(parseInt(raw.billing_day, 10), 1), 28) : 15,
+                    __allow_duplicate_phone: true
                 };
                 if (connType === 'static_ip') {
                     customerData.static_ip = staticIpVal;
@@ -4230,6 +4306,7 @@ async function runCustomerXlsxImport(req, res) {
                 let result;
                 if (existing) {
                     const beforeSnapshot = importFastMode ? null : await dbGet(`SELECT * FROM customers WHERE id = ?${impT.and()}`, [existing.id]);
+                    customerData.__existing_id = existing.id;
                     result = await billingManager.updateCustomer(existing.phone, customerData);
                     if (raw.join_date) {
                         await applyCustomerJoinAndCreatedDates(db, existing.id, raw.join_date);
@@ -5164,66 +5241,87 @@ const {
     cleanupOldInvoiceJobs
 } = require('../config/invoiceGenerationJobs');
 
-let invoiceGenRunning = false;
+let invoiceGenRunningByTenant = new Map();
 
-// Generate invoices manually (background — satu klik untuk semua pelanggan)
+// Generate invoices manually (background — hanya pelanggan tenant saat ini)
 router.post('/auto-invoice/generate', async (req, res) => {
     try {
-        if (invoiceGenRunning) {
+        const { runWithTenant, hasTenantContext, getTenantId } = require('../config/platform/tenantContext');
+        const tenantForJob = req.tenant || (req.tenantId ? { id: req.tenantId } : null);
+        const tenantId = tenantForJob && tenantForJob.id != null
+            ? Number(tenantForJob.id)
+            : (hasTenantContext() ? Number(getTenantId()) : null);
+
+        if (!tenantId || !Number.isFinite(tenantId)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Konteks tenant tidak ditemukan. Generate invoice hanya boleh per-tenant.'
+            });
+        }
+
+        if (invoiceGenRunningByTenant.get(tenantId)) {
             return res.status(409).json({
                 success: false,
-                message: 'Generate invoice masih berjalan. Tunggu selesai atau cek status job.'
+                message: 'Generate invoice masih berjalan untuk tenant ini. Tunggu selesai atau cek status job.'
             });
         }
 
         cleanupOldInvoiceJobs();
         const job = createInvoiceGenerationJob();
-        invoiceGenRunning = true;
-        updateInvoiceGenerationJob(job.id, { status: 'running', progress: { phase: 'starting', processed: 0, total: 0 } });
+        invoiceGenRunningByTenant.set(tenantId, true);
+        updateInvoiceGenerationJob(job.id, {
+            status: 'running',
+            progress: { phase: 'starting', processed: 0, total: 0 },
+            tenant_id: tenantId
+        });
 
         const invoiceScheduler = require('../config/scheduler');
 
-        setImmediate(async () => {
-            try {
-                const result = await invoiceScheduler.triggerMonthlyInvoices({
-                    skipNotifications: true,
-                    onProgress: (p) => {
-                        updateInvoiceGenerationJob(job.id, {
-                            status: 'running',
-                            progress: {
-                                phase: p.phase || 'customers',
-                                processed: p.processed || 0,
-                                total: p.total || 0,
-                                created: p.created || 0,
-                                skipped: p.skipped || 0,
-                                failed: p.failed || 0
-                            }
-                        });
-                    }
-                });
-                const stats = result.stats || {};
-                const total = stats.customers_total || 0;
-                updateInvoiceGenerationJob(job.id, {
-                    status: 'completed',
-                    stats,
-                    progress: {
-                        phase: 'done',
-                        processed: total,
-                        total,
-                        created: stats.created || 0,
-                        skipped: stats.skipped || 0,
-                        failed: stats.failed || 0
-                    }
-                });
-            } catch (error) {
-                logger.error('Background invoice generation failed:', error);
-                updateInvoiceGenerationJob(job.id, {
-                    status: 'failed',
-                    error: error.message || String(error)
-                });
-            } finally {
-                invoiceGenRunning = false;
-            }
+        setImmediate(() => {
+            const runJob = async () => {
+                try {
+                    const result = await invoiceScheduler.triggerMonthlyInvoices({
+                        skipNotifications: true,
+                        onProgress: (p) => {
+                            updateInvoiceGenerationJob(job.id, {
+                                status: 'running',
+                                progress: {
+                                    phase: p.phase || 'customers',
+                                    processed: p.processed || 0,
+                                    total: p.total || 0,
+                                    created: p.created || 0,
+                                    skipped: p.skipped || 0,
+                                    failed: p.failed || 0
+                                }
+                            });
+                        }
+                    });
+                    const stats = result.stats || {};
+                    const total = stats.customers_total || 0;
+                    updateInvoiceGenerationJob(job.id, {
+                        status: 'completed',
+                        stats,
+                        progress: {
+                            phase: 'done',
+                            processed: total,
+                            total,
+                            created: stats.created || 0,
+                            skipped: stats.skipped || 0,
+                            failed: stats.failed || 0
+                        }
+                    });
+                } catch (error) {
+                    logger.error(`Background invoice generation failed (tenant #${tenantId}):`, error);
+                    updateInvoiceGenerationJob(job.id, {
+                        status: 'failed',
+                        error: error.message || String(error)
+                    });
+                } finally {
+                    invoiceGenRunningByTenant.delete(tenantId);
+                }
+            };
+
+            runWithTenant(tenantForJob || { id: tenantId }, runJob);
         });
 
         res.json({
@@ -5232,7 +5330,10 @@ router.post('/auto-invoice/generate', async (req, res) => {
             job_id: job.id
         });
     } catch (error) {
-        invoiceGenRunning = false;
+        try {
+            const tid = req.tenantId || (req.tenant && req.tenant.id);
+            if (tid != null) invoiceGenRunningByTenant.delete(Number(tid));
+        } catch (_) { /* ignore */ }
         logger.error('Error starting invoice generation:', error);
         res.status(500).json({
             success: false,
@@ -8345,6 +8446,20 @@ router.post('/customers', customerPhotoUpload.fields([
                     pppoeCreate.message = `User PPPoE berhasil dibuat di ${authMode === 'radius' ? 'RADIUS' : 'Mikrotik'}`;
                     pppoeCreate.password = passwordToUse; // Return password untuk ditampilkan ke user
                     logger.info(`✅ PPPoE user ${pppoe_username} created successfully in ${authMode} mode`);
+                    // Jika dibuat dengan status nonaktif — langsung tolak auth
+                    if (String(status || '').toLowerCase() === 'inactive') {
+                        try {
+                            const serviceSuspension = require('../config/serviceSuspension');
+                            const createdCustomer = await billingManager.getCustomerById(result.id);
+                            await serviceSuspension.deactivateCustomerNetwork(
+                                createdCustomer || { ...customerData, id: result.id, pppoe_username, status: 'inactive' },
+                                'Created as inactive'
+                            );
+                            pppoeCreate.message += ' (auth dinonaktifkan karena status Nonaktif)';
+                        } catch (deErr) {
+                            logger.warn(`[BILLING] Failed to disable new inactive PPPoE ${pppoe_username}: ${deErr.message}`);
+                        }
+                    }
                 } else {
                     pppoeCreate.created = false;
                     pppoeCreate.message = (addRes && addRes.message) ? addRes.message : 'Gagal membuat user PPPoE';
@@ -8938,7 +9053,12 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
         const oldStatus = currentCustomer.status;
         const newStatus = status || currentCustomer.status;
         const statusChanged = newStatus !== oldStatus;
-        if (statusChanged && (newStatus === 'suspended' || newStatus === 'active')) {
+        const isNewSuspended = newStatus === 'suspended' || newStatus === 'isolir';
+        const wasSuspended = oldStatus === 'suspended' || oldStatus === 'isolir';
+        const isNewInactive = newStatus === 'inactive';
+        const wasInactive = oldStatus === 'inactive';
+        // Skip syncCustomerToRadius generik — orchestrator status di bawah yang menangani jaringan
+        if (statusChanged && (isNewSuspended || isNewInactive || newStatus === 'active')) {
             customerData.__skip_radius_sync = true;
         }
         
@@ -8946,21 +9066,57 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
         const result = await billingManager.updateCustomerByPhone(phone, customerData);
 
         // PENTING: Jika status berubah, sync ke RADIUS/Mikrotik
-        if (statusChanged && customerData.pppoe_username) {
+        if (statusChanged && (customerData.pppoe_username || currentCustomer.pppoe_username || currentCustomer.static_ip || currentCustomer.mac_address)) {
             try {
                 const serviceSuspension = require('../config/serviceSuspension');
                 const updatedCustomer = await billingManager.getCustomerByPhone(customerData.phone || phone);
-                
-                if (newStatus === 'suspended' && oldStatus !== 'suspended') {
-                    // Status berubah ke suspended -> isolir
+                const clearCache = () => {
+                    try {
+                        const { clearPppoeAdminPageCache } = require('./adminMikrotik');
+                        if (typeof clearPppoeAdminPageCache === 'function') clearPppoeAdminPageCache();
+                    } catch (_) { /* cache clear optional */ }
+                };
+
+                if (isNewInactive && !wasInactive) {
+                    logger.info(`[BILLING] Status → inactive for ${updatedCustomer.username}, disable PPPoE/RADIUS...`);
+                    await serviceSuspension.deactivateCustomerNetwork(
+                        updatedCustomer,
+                        'Status changed to inactive via admin panel'
+                    );
+                    clearCache();
+                } else if (newStatus === 'active' && wasInactive) {
+                    logger.info(`[BILLING] Status inactive → active for ${updatedCustomer.username}, enable PPPoE/RADIUS...`);
+                    await serviceSuspension.reactivateCustomerNetwork(
+                        updatedCustomer,
+                        'Status changed to active via admin panel'
+                    );
+                    clearCache();
+                } else if (isNewSuspended && wasInactive) {
+                    // Nonaktif → Isolir: enable dulu lalu isolir
+                    logger.info(`[BILLING] Status inactive → suspended for ${updatedCustomer.username}`);
+                    await serviceSuspension.reactivateCustomerNetwork(updatedCustomer, 'Prep isolir from inactive');
+                    await serviceSuspension.suspendCustomerService(
+                        updatedCustomer,
+                        'Status changed to suspended via admin panel'
+                    );
+                    clearCache();
+                } else if (isNewSuspended && !wasSuspended) {
                     logger.info(`[BILLING] Status changed to suspended for ${updatedCustomer.username}, calling suspendCustomerService...`);
                     await serviceSuspension.suspendCustomerService(updatedCustomer, 'Status changed to suspended via admin panel');
                     logger.info(`[BILLING] Successfully suspended customer ${updatedCustomer.username}`);
-                } else if (newStatus === 'active' && oldStatus === 'suspended') {
-                    // Status berubah dari suspended ke active -> restore
+                    clearCache();
+                } else if (newStatus === 'active' && wasSuspended) {
                     logger.info(`[BILLING] Status changed from suspended to active for ${updatedCustomer.username}, calling restoreCustomerService...`);
                     await serviceSuspension.restoreCustomerService(updatedCustomer, 'Status changed to active via admin panel');
                     logger.info(`[BILLING] Successfully restored customer ${updatedCustomer.username}`);
+                    clearCache();
+                } else if (isNewInactive && wasSuspended) {
+                    logger.info(`[BILLING] Status suspended → inactive for ${updatedCustomer.username}, full disable...`);
+                    await serviceSuspension.deactivateCustomerNetwork(
+                        updatedCustomer,
+                        'Status changed to inactive via admin panel'
+                    );
+                    clearCache();
                 }
             } catch (statusSyncError) {
                 logger.error(`[BILLING] Failed to sync status change for ${customerData.username}:`, statusSyncError.message);
@@ -9029,11 +9185,17 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
                     ? String(pppoePassword).trim()
                     : (Math.random().toString(36).slice(-8) + Math.floor(Math.random()*10));
 
+                // Saat status isolir: RADIUS harus tetap/jadi "isolir".
+                // Profil paket tetap disimpan di customers.pppoe_profile untuk restore.
+                const radiusProfileToUse = (isNewSuspended || (wasSuspended && isNewSuspended))
+                    ? 'isolir'
+                    : profileToUse;
+
                 const { addPPPoEUser, editPPPoEUser, getUserAuthModeAsync, getPPPoEUsers } = require('../config/mikrotik');
                 
                 // Cek mode autentikasi untuk logging
                 const authMode = await getUserAuthModeAsync();
-                logger.info(`Creating/updating PPPoE user ${newPPPoEUsername} with profile ${profileToUse} (Mode: ${authMode})`);
+                logger.info(`Creating/updating PPPoE user ${newPPPoEUsername} with profile ${radiusProfileToUse} (Mode: ${authMode})`);
                 
                 // Cek apakah user sudah ada di RADIUS atau Mikrotik
                 const existingUsers = await getPPPoEUsers();
@@ -9050,7 +9212,7 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
                         addRes = await editPPPoEUserRadius({ 
                             username: newPPPoEUsername, 
                             password: passwordToUse, 
-                            profile: profileToUse 
+                            profile: radiusProfileToUse 
                         });
                     } else {
                         // Mode Mikrotik: cari ID user dulu
@@ -9060,7 +9222,7 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
                                 id: existingUser.id, 
                                 username: newPPPoEUsername, 
                                 password: passwordToUse, 
-                                profile: profileToUse 
+                                profile: radiusProfileToUse 
                             });
                         } else {
                             // Fallback: create new jika tidak ketemu ID
@@ -9072,7 +9234,7 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
                             addRes = await addPPPoEUser({ 
                                 username: newPPPoEUsername, 
                                 password: passwordToUse, 
-                                profile: profileToUse, 
+                                profile: radiusProfileToUse, 
                                 customer: { id: customerId },
                                 routerObj: routerObj
                             });
@@ -9089,7 +9251,7 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
                     addRes = await addPPPoEUser({ 
                         username: newPPPoEUsername, 
                         password: passwordToUse, 
-                        profile: profileToUse, 
+                        profile: radiusProfileToUse, 
                         customer: { id: customerId },
                         routerObj: routerObj
                     });
@@ -9100,6 +9262,17 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
                     pppoeCreate.message = `User PPPoE berhasil ${pppoeCreate.updated ? 'diupdate' : 'dibuat'} di ${authMode === 'radius' ? 'RADIUS' : 'Mikrotik'}`;
                     pppoeCreate.password = passwordToUse; // Return password untuk ditampilkan ke user
                     logger.info(`✅ PPPoE user ${newPPPoEUsername} ${pppoeCreate.updated ? 'updated' : 'created'} successfully in ${authMode} mode`);
+                    // Jika baru dibuat dengan status isolir tapi add memakai isolir — sudah benar.
+                    // Jika status isolir tapi somehow masih paket, pastikan suspend.
+                    if (isNewSuspended && radiusProfileToUse !== 'isolir') {
+                        try {
+                            const serviceSuspension = require('../config/serviceSuspension');
+                            await serviceSuspension.suspendCustomerService(
+                                updatedCustomer || { pppoe_username: newPPPoEUsername, username: customerData.username },
+                                'PPPoE created while status isolir'
+                            );
+                        } catch (_) { /* non-fatal */ }
+                    }
                 } else {
                     pppoeCreate.created = false;
                     pppoeCreate.message = (addRes && addRes.message) ? addRes.message : 'Gagal membuat/update user PPPoE';
@@ -9633,6 +9806,10 @@ router.post('/invoices', async (req, res) => {
     try {
         const { customer_id, member_id, package_id, amount, due_date, notes, base_amount, tax_rate, invoice_type_select } = req.body;
         const safeNotes = (notes || '').toString().trim();
+        const { hasTenantContext, getTenantId } = require('../config/platform/tenantContext');
+        const currentTenantId = req.tenantId
+            ?? (req.tenant && req.tenant.id)
+            ?? (hasTenantContext() ? getTenantId() : null);
         
         // Determine if this is a member invoice
         const isMemberInvoice = invoice_type_select === 'member' && member_id;
@@ -9658,6 +9835,41 @@ router.post('/invoices', async (req, res) => {
                 success: false,
                 message: 'Semua field harus diisi'
             });
+        }
+
+        // Isolasi tenant: pastikan customer/member milik tenant yang sedang login
+        if (currentTenantId != null) {
+            if (invoiceData.customer_id) {
+                const cust = await new Promise((resolve, reject) => {
+                    billingManager.db.get(
+                        'SELECT id, tenant_id FROM customers WHERE id = ?',
+                        [invoiceData.customer_id],
+                        (err, row) => (err ? reject(err) : resolve(row))
+                    );
+                });
+                if (!cust || Number(cust.tenant_id) !== Number(currentTenantId)) {
+                    return res.status(403).json({
+                        success: false,
+                        message: 'Pelanggan tidak ditemukan di tenant ini'
+                    });
+                }
+            }
+            if (invoiceData.member_id) {
+                const mem = await new Promise((resolve, reject) => {
+                    billingManager.db.get(
+                        'SELECT id, tenant_id FROM members WHERE id = ?',
+                        [invoiceData.member_id],
+                        (err, row) => (err ? reject(err) : resolve(row))
+                    );
+                });
+                if (!mem || Number(mem.tenant_id) !== Number(currentTenantId)) {
+                    return res.status(403).json({
+                        success: false,
+                        message: 'Member tidak ditemukan di tenant ini'
+                    });
+                }
+            }
+            invoiceData.tenant_id = Number(currentTenantId);
         }
 
         const newInvoice = await billingManager.createInvoice(invoiceData);

@@ -8,6 +8,9 @@ const { attachTenantAppSettings } = require('../config/platform/tenantAppSetting
 const { adminAuth } = require('./adminAuth');
 const { getLocalTimestamp } = require('../config/settingsManager');
 const logger = require('../config/logger');
+const {
+    migrateInstallationJobsJobNumberUniqueAsync
+} = require('../utils/migrateInstallationJobsJobNumberUnique');
 
 function tAnd(alias = '') {
     const t = billingManager._tenantWhere(alias);
@@ -35,7 +38,7 @@ const db = new sqlite3.Database(dbPath);
 const installationJobTableDdl = [
     `CREATE TABLE IF NOT EXISTS installation_jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        job_number VARCHAR(50) UNIQUE,
+        job_number VARCHAR(50) NOT NULL,
         customer_name VARCHAR(255) NOT NULL,
         customer_phone VARCHAR(20),
         customer_address TEXT,
@@ -54,8 +57,10 @@ const installationJobTableDdl = [
         completion_notes TEXT,
         customer_latitude DECIMAL(10, 8),
         customer_longitude DECIMAL(11, 8),
+        tenant_id INTEGER NOT NULL DEFAULT 1,
         created_at DATETIME DEFAULT (datetime('now','localtime')),
         updated_at DATETIME DEFAULT (datetime('now','localtime')),
+        UNIQUE(tenant_id, job_number),
         FOREIGN KEY (package_id) REFERENCES packages(id),
         FOREIGN KEY (assigned_technician_id) REFERENCES technicians(id)
     )`,
@@ -122,6 +127,8 @@ db.serialize(() => {
             if (err && !/duplicate column/i.test(String(err.message))) {
                 logger.warn('[admin-install-jobs] tenant_id column:', err.message);
             }
+            // Setelah kolom tenant_id tersedia: lepas UNIQUE(job_number) global
+            migrateInstallationJobsJobNumberUniqueAsync(db);
         }
     );
 });
@@ -378,67 +385,83 @@ router.post('/create', adminAuth, async (req, res) => {
         }
 
         // Nomor job: PSB-{TANGGAL}{NOMOR URUT} — tanggal YYYYMMDD zona waktu aplikasi, urut 3 digit per hari (contoh PSB-20260502001)
+        // Unik per tenant (UNIQUE(tenant_id, job_number)); retry jika race/unique conflict.
         const localTs = getLocalTimestamp();
         const ymd = localTs.slice(0, 10).replace(/-/g, '');
         const psbPrefix = `PSB-${ymd}`;
+        const initialStatus = assigned_technician_id ? 'assigned' : 'scheduled';
+        const defaultDate = localTs.slice(0, 10);
+        const defaultTime = localTs.slice(11, 16);
+        const safeInstallationDate = installation_date || defaultDate;
+        const safeInstallationTime = installation_time || defaultTime;
+        const assignedAtOnCreate = assigned_technician_id ? getLocalTimestamp() : null;
+        const insertTenantId = tenantIdForInsert();
 
-        const lastJobNumber = await new Promise((resolve, reject) => {
-            db.get(
-                'SELECT job_number FROM installation_jobs WHERE job_number LIKE ?' + tAnd('') + ' ORDER BY job_number DESC LIMIT 1',
-                [`${psbPrefix}%`],
-                (err, row) => {
-                    if (err) reject(err);
-                    else resolve(row ? row.job_number : null);
+        async function nextPsbJobNumber() {
+            const lastJobNumber = await new Promise((resolve, reject) => {
+                db.get(
+                    'SELECT job_number FROM installation_jobs WHERE job_number LIKE ?' + tAnd('') + ' ORDER BY job_number DESC LIMIT 1',
+                    [`${psbPrefix}%`],
+                    (err, row) => {
+                        if (err) reject(err);
+                        else resolve(row ? row.job_number : null);
+                    }
+                );
+            });
+            let jobCounter = 1;
+            if (lastJobNumber && String(lastJobNumber).startsWith(psbPrefix)) {
+                const suffix = String(lastJobNumber).slice(psbPrefix.length);
+                const lastCounter = parseInt(suffix, 10);
+                if (Number.isFinite(lastCounter) && lastCounter >= 0) {
+                    jobCounter = lastCounter + 1;
                 }
-            );
-        });
-
-        let jobCounter = 1;
-        if (lastJobNumber && String(lastJobNumber).startsWith(psbPrefix)) {
-            const suffix = String(lastJobNumber).slice(psbPrefix.length);
-            const lastCounter = parseInt(suffix, 10);
-            if (Number.isFinite(lastCounter) && lastCounter >= 0) {
-                jobCounter = lastCounter + 1;
             }
+            return `${psbPrefix}${String(jobCounter).padStart(3, '0')}`;
         }
 
-        const jobNumber = `${psbPrefix}${String(jobCounter).padStart(3, '0')}`;
-
-        // Insert installation job (custIdForJob sudah divalidasi di atas)
-        const jobId = await new Promise((resolve, reject) => {
-            const insertQuery = `
-                INSERT INTO installation_jobs (
-                    job_number, customer_name, customer_phone, customer_address,
-                    customer_id,
-                    package_id, installation_date, installation_time, assigned_technician_id,
-                    status, priority, notes, equipment_needed, estimated_duration,
-                    customer_latitude, customer_longitude, created_by_admin_id,
-                    assigned_at, tenant_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `;
-            const initialStatus = assigned_technician_id ? 'assigned' : 'scheduled';
-
-            // Pastikan installation_date tidak NULL jika kolom NOT NULL di DB (tanggal lokal WIB, bukan UTC)
-            const defaultDate = localTs.slice(0, 10);
-            const defaultTime = localTs.slice(11, 16);
-            const safeInstallationDate = installation_date || defaultDate;
-            const safeInstallationTime = installation_time || defaultTime;
-            const assignedAtOnCreate = assigned_technician_id ? getLocalTimestamp() : null;
-
-            db.run(insertQuery, [
-                jobNumber, customer_name, customer_phone, customer_address,
-                custIdForJob,
-                package_id, safeInstallationDate, safeInstallationTime, assigned_technician_id || null,
-                initialStatus, priority || 'normal', notes || null, equipment_needed || null,
-                estimated_duration || 120, customer_latitude || null, customer_longitude || null,
-                req.session.adminUser || 'admin',
-                assignedAtOnCreate,
-                tenantIdForInsert()
-            ], function(err) {
-                if (err) reject(err);
-                else resolve(this.lastID);
-            });
-        });
+        let jobNumber = null;
+        let jobId = null;
+        const insertQuery = `
+            INSERT INTO installation_jobs (
+                job_number, customer_name, customer_phone, customer_address,
+                customer_id,
+                package_id, installation_date, installation_time, assigned_technician_id,
+                status, priority, notes, equipment_needed, estimated_duration,
+                customer_latitude, customer_longitude, created_by_admin_id,
+                assigned_at, tenant_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `;
+        for (let attempt = 0; attempt < 8; attempt++) {
+            jobNumber = await nextPsbJobNumber();
+            try {
+                jobId = await new Promise((resolve, reject) => {
+                    db.run(insertQuery, [
+                        jobNumber, customer_name, customer_phone, customer_address,
+                        custIdForJob,
+                        package_id, safeInstallationDate, safeInstallationTime, assigned_technician_id || null,
+                        initialStatus, priority || 'normal', notes || null, equipment_needed || null,
+                        estimated_duration || 120, customer_latitude || null, customer_longitude || null,
+                        req.session.adminUser || 'admin',
+                        assignedAtOnCreate,
+                        insertTenantId
+                    ], function(err) {
+                        if (err) reject(err);
+                        else resolve(this.lastID);
+                    });
+                });
+                break;
+            } catch (insErr) {
+                const msg = String(insErr && insErr.message || '');
+                if (/UNIQUE/i.test(msg) && attempt < 7) {
+                    logger.warn(`[admin-install-jobs] job_number conflict ${jobNumber}, retry ${attempt + 1}`);
+                    continue;
+                }
+                throw insErr;
+            }
+        }
+        if (!jobId) {
+            throw new Error('Gagal mengalokasikan nomor job instalasi');
+        }
 
         // Log status history
         await new Promise((resolve, reject) => {
