@@ -32,22 +32,61 @@ function getRouterApiPassword(routerObj) {
     return routerObj.password || routerObj.secret || '';
 }
 
+/**
+ * node-routeros wraps socket errors as RosException(errno) using numeric errno (-104)
+ * while its message table is keyed by string names (ECONNRESET) — so message is often empty.
+ */
+function resolveSocketErrorCode(err) {
+    if (!err) return '';
+    if (err.code && typeof err.code === 'string' && /^[A-Z]/.test(err.code)) return err.code;
+    if (typeof err.errno === 'string' && /^[A-Z]/.test(err.errno)) return err.errno;
+    if (typeof err.errno === 'number') {
+        try {
+            const map = require('os').constants.errno || {};
+            for (const [name, num] of Object.entries(map)) {
+                if (num === err.errno) return name;
+            }
+        } catch (_) {
+            // ignore
+        }
+        // Common Linux fallbacks if os.constants missing entries
+        const fallback = { [-104]: 'ECONNRESET', [-111]: 'ECONNREFUSED', [-113]: 'EHOSTUNREACH', [-101]: 'ENETUNREACH', [-110]: 'ETIMEDOUT' };
+        if (fallback[err.errno]) return fallback[err.errno];
+    }
+    return '';
+}
+
 function formatMikrotikConnectError(host, port, err) {
-    const msg = (err && err.message) ? String(err.message) : String(err || 'unknown');
-    const lower = msg.toLowerCase();
-    if (lower.includes('timeout') || lower.includes('etimedout') || lower.includes('timed out')) {
+    const sockCode = resolveSocketErrorCode(err);
+    const msg = (err && err.message) ? String(err.message) : '';
+    const lower = `${msg} ${sockCode}`.toLowerCase().trim();
+    const detail = msg || sockCode || String(err || 'unknown');
+
+    if (sockCode === 'ECONNRESET' || lower.includes('econnreset') || lower.includes('connection reset')) {
+        return (
+            `TCP ke ${host}:${port} terbuka tapi di-reset saat handshake API RouterOS (ECONNRESET). ` +
+            `nc -zv sukses TIDAK berarti API jalan. Biasanya /ip service api address=... tidak mengizinkan IP VPS, ` +
+            `atau filter firewall MikroTik. Solusi: pakai Tunnel IP VPN (10.10.0.x) sebagai NAS IP, ` +
+            `atau di MikroTik: /ip service set api address=0.0.0.0/0 (atau izinkan IP VPS) + pastikan firewall allow TCP ${port}.`
+        );
+    }
+    if (lower.includes('timeout') || lower.includes('etimedout') || lower.includes('timed out') || sockCode === 'ETIMEDOUT') {
         return `Timeout ke ${host}:${port} (TCP RouterOS API). Pastikan VPN tunnel aktif, IP NAS = Tunnel IP, service api enabled, dan firewall mengizinkan TCP ${port} dari VPS.`;
     }
-    if (lower.includes('econnrefused') || lower.includes('refused')) {
+    if (sockCode === 'ECONNREFUSED' || lower.includes('econnrefused') || lower.includes('refused')) {
         return `Koneksi ditolak di ${host}:${port}. Service API MikroTik kemungkinan nonaktif atau port salah (default 8728).`;
     }
-    if (lower.includes('ehostunreach') || lower.includes('enetunreach') || lower.includes('no route')) {
-        return `Host ${host} tidak terjangkau dari VPS. Cek Tunnel IP NAS dan status VPN (bukan ping dari sisi MikroTik ke VPS).`;
+    if (
+        sockCode === 'EHOSTUNREACH' || sockCode === 'ENETUNREACH' ||
+        lower.includes('ehostunreach') || lower.includes('enetunreach') || lower.includes('no route') ||
+        lower.includes('host is unreachable')
+    ) {
+        return `Host ${host} tidak terjangkau dari VPS (VPN peer kemungkinan offline / belum handshake). Cek Tunnel IP NAS dan status WireGuard/L2TP di MikroTik (bukan hanya ping/nc ke IP publik).`;
     }
-    if (lower.includes('cannot log in') || lower.includes('invalid user') || lower.includes('login failure') || lower.includes('authentication')) {
+    if (lower.includes('cannot log in') || lower.includes('invalid user') || lower.includes('login failure') || lower.includes('authentication') || lower.includes('cantlogin')) {
         return `Autentikasi gagal ke ${host}:${port}. Periksa username/password API MikroTik.`;
     }
-    return `Gagal koneksi ke ${host}:${port} - ${msg}`;
+    return `Gagal koneksi ke ${host}:${port} - ${detail}`;
 }
 
 async function withRouterConnectLock(routerKey, fn) {
@@ -402,7 +441,12 @@ async function getMikrotikConnectionForRouter(routerObj) {
             
             return conn;
         } catch (connectError) {
-            logger.error(`[MIKROTIK] ✗ Failed to connect to ${host}:${port}:`, connectError.message);
+            const code = resolveSocketErrorCode(connectError);
+            logger.error(
+                `[MIKROTIK] ✗ Failed to connect to ${host}:${port}:`,
+                connectError.message || code || connectError,
+                code ? `(${code})` : ''
+            );
             throw new Error(formatMikrotikConnectError(host, port, connectError));
         }
     });
@@ -452,7 +496,12 @@ async function testMikrotikConnectionForRouter(routerObj) {
             port
         };
     } catch (connectError) {
-        logger.error(`[MIKROTIK] ✗ Connection test failed ${host}:${port}:`, connectError.message);
+        const code = resolveSocketErrorCode(connectError);
+        logger.error(
+            `[MIKROTIK] ✗ Connection test failed ${host}:${port}:`,
+            connectError.message || code || connectError,
+            code ? `(${code})` : ''
+        );
         throw new Error(formatMikrotikConnectError(host, port, connectError));
     } finally {
         if (conn) {

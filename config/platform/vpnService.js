@@ -344,7 +344,11 @@ async function saveServer(data) {
             existing.id,
         ]
     );
-    return getServer();
+    const saved = await getServer();
+    if (saved.server_private_key) {
+        await persistWgConfigSafe();
+    }
+    return saved;
 }
 
 async function generateAndSaveKeys() {
@@ -565,6 +569,7 @@ async function createPeer(data) {
         await syncPeerToLiveWg(peer).catch((err) => {
             console.warn('[vpnService] sync peer to wg:', err.message);
         });
+        await persistWgConfigSafe();
     } else {
         await syncL2tpSecrets().catch((err) => {
             console.warn('[vpnService] sync l2tp secrets:', err.message);
@@ -740,6 +745,9 @@ async function updatePeer(id, data) {
             console.warn('[vpnService] sync peer to wg:', err.message);
         });
     }
+    if (isWireGuardPeer(existing) || isWireGuardPeer(peer)) {
+        await persistWgConfigSafe();
+    }
     if (isL2tpPeer(existing) || isL2tpPeer(peer)) {
         await syncL2tpSecrets().catch((err) => {
             console.warn('[vpnService] sync l2tp secrets:', err.message);
@@ -755,6 +763,9 @@ async function deletePeer(id) {
         await removePeerFromLiveWg(existing.peer_public_key).catch(() => {});
     }
     await tenantStore.dbRun('DELETE FROM platform_vpn_peers WHERE id = ?', [id]);
+    if (existing && isWireGuardPeer(existing)) {
+        await persistWgConfigSafe();
+    }
     if (existing && isL2tpPeer(existing)) {
         await syncL2tpSecrets().catch((err) => {
             console.warn('[vpnService] sync l2tp secrets after delete:', err.message);
@@ -825,6 +836,134 @@ async function syncL2tpSecrets() {
     }
 }
 
+function buildWgConfContent(server, peers) {
+    const iface = server.interface_name || 'wg0';
+    const port = server.listen_port || 51820;
+    const wan = server.wan_interface || 'ens18';
+    const tunnel = server.tunnel_address || '10.10.0.1/24';
+    const priv = String(server.server_private_key || '').trim();
+    if (!priv) {
+        throw new Error('Server private key WireGuard belum diisi — tidak bisa menulis konfigurasi.');
+    }
+
+    const activePeers = (peers || []).filter(
+        (p) => p.is_active && isWireGuardPeer(p) && p.peer_public_key && !String(p.peer_public_key).startsWith('l2tp:')
+    );
+
+    const peerBlocks = activePeers
+        .map(
+            (p) => `# ${p.name}
+[Peer]
+PublicKey = ${p.peer_public_key}
+AllowedIPs = ${p.allowed_ips || defaultAllowedIps(p.tunnel_ip)}
+PersistentKeepalive = ${p.persistent_keepalive != null ? p.persistent_keepalive : 25}`
+        )
+        .join('\n\n');
+
+    return `[Interface]
+Address = ${tunnel}
+ListenPort = ${port}
+PrivateKey = ${priv}
+SaveConfig = false
+PostUp = iptables -A FORWARD -i ${iface} -j ACCEPT; iptables -t nat -A POSTROUTING -o ${wan} -j MASQUERADE
+PostDown = iptables -D FORWARD -i ${iface} -j ACCEPT; iptables -t nat -D POSTROUTING -o ${wan} -j MASQUERADE
+
+${peerBlocks}
+`.trim() + '\n';
+}
+
+async function writeWgConfigFromDb() {
+    const [server, peers] = await Promise.all([getServer(), listPeers()]);
+    const iface = String(server.interface_name || 'wg0').trim() || 'wg0';
+    const confPath = `/etc/wireguard/${iface}.conf`;
+    const content = buildWgConfContent(server, peers);
+
+    const dir = path.dirname(confPath);
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    }
+
+    if (fs.existsSync(confPath)) {
+        const bak = `${confPath}.bak.${new Date().toISOString().replace(/[:.]/g, '').slice(0, 15)}`;
+        try {
+            fs.copyFileSync(confPath, bak);
+        } catch (_) {
+            /* ignore backup failure */
+        }
+    }
+
+    const tmp = `/tmp/platform-vpn-${iface}-${process.pid}.conf`;
+    fs.writeFileSync(tmp, content, { mode: 0o600 });
+    try {
+        fs.copyFileSync(tmp, confPath);
+        fs.chmodSync(confPath, 0o600);
+    } catch (_) {
+        await execFileAsync('sudo', ['cp', tmp, confPath], { timeout: 8000 });
+        await execFileAsync('sudo', ['chmod', '600', confPath], { timeout: 5000 });
+    }
+    try { fs.unlinkSync(tmp); } catch (_) { /* ignore */ }
+
+    // Keep key files in sync for operators / scripts
+    try {
+        fs.writeFileSync('/etc/wireguard/private.key', `${server.server_private_key}\n`, { mode: 0o600 });
+        fs.writeFileSync('/etc/wireguard/public.key', `${server.server_public_key || ''}\n`, { mode: 0o600 });
+    } catch (_) {
+        /* non-fatal */
+    }
+
+    return { confPath, peerCount: (peers || []).filter((p) => p.is_active && isWireGuardPeer(p)).length };
+}
+
+async function runSystemctl(action, unit) {
+    const tryCmds = [
+        ['systemctl', [action, unit]],
+        ['sudo', ['systemctl', action, unit]],
+    ];
+    let lastErr = null;
+    for (const [cmd, args] of tryCmds) {
+        try {
+            const { stdout, stderr } = await execFileAsync(cmd, args, { timeout: 45000 });
+            return { ok: true, stdout: String(stdout || ''), stderr: String(stderr || '') };
+        } catch (err) {
+            lastErr = err;
+        }
+    }
+    throw new Error(lastErr?.stderr || lastErr?.message || `systemctl ${action} ${unit} gagal`);
+}
+
+async function getSystemdStatus(unit) {
+    try {
+        const { stdout } = await execFileAsync(
+            'systemctl',
+            ['show', unit, '--no-page', '-p', 'ActiveState', '-p', 'SubState', '-p', 'ActiveEnterTimestamp', '-p', 'Result'],
+            { timeout: 5000 }
+        );
+        const map = {};
+        for (const line of String(stdout || '').split('\n')) {
+            const idx = line.indexOf('=');
+            if (idx > 0) map[line.slice(0, idx)] = line.slice(idx + 1).trim();
+        }
+        return {
+            unit,
+            activeState: map.ActiveState || 'unknown',
+            subState: map.SubState || 'unknown',
+            activeEnterTimestamp: map.ActiveEnterTimestamp || null,
+            result: map.Result || null,
+            active: map.ActiveState === 'active',
+        };
+    } catch (err) {
+        return {
+            unit,
+            activeState: 'unknown',
+            subState: 'unknown',
+            activeEnterTimestamp: null,
+            result: null,
+            active: false,
+            error: err.message,
+        };
+    }
+}
+
 async function syncPeerToLiveWg(peer) {
     if (!peer || !peer.is_active || !peer.peer_public_key || !isWireGuardPeer(peer)) return;
     if (String(peer.peer_public_key).startsWith('l2tp:')) return;
@@ -858,6 +997,188 @@ async function removePeerFromLiveWg(publicKey) {
             /* ignore if wg not running */
         }
     }
+}
+
+async function persistWgConfigSafe() {
+    try {
+        return await writeWgConfigFromDb();
+    } catch (err) {
+        console.warn('[vpnService] persist wg config:', err.message);
+        return null;
+    }
+}
+
+async function readInterfaceUp(iface) {
+    try {
+        const { stdout } = await execFileAsync('ip', ['-br', 'link', 'show', iface], { timeout: 4000 });
+        const line = String(stdout || '').trim();
+        const up = /\bUP\b/.test(line) || /LOWER_UP/.test(line) || /UNKNOWN/.test(line);
+        return { exists: !!line, up, raw: line };
+    } catch (_) {
+        return { exists: false, up: false, raw: '' };
+    }
+}
+
+async function getServerRuntimeStatus() {
+    const server = await getServer();
+    const iface = String(server.interface_name || 'wg0').trim() || 'wg0';
+    const wgUnit = `wg-quick@${iface}`;
+    const [wgSystemd, xl2tpd, strongswan, ifaceState, dump, peers] = await Promise.all([
+        getSystemdStatus(wgUnit),
+        getSystemdStatus('xl2tpd'),
+        getSystemdStatus('strongswan-starter').then(async (s) => {
+            if (s.activeState === 'active' || s.activeState === 'activating') return s;
+            const alt = await getSystemdStatus('strongswan');
+            return alt.active ? alt : s;
+        }),
+        readInterfaceUp(iface),
+        readWgDump(iface),
+        listPeers(),
+    ]);
+
+    const wgPeers = (peers || []).filter((p) => isWireGuardPeer(p));
+    const l2tpPeers = (peers || []).filter((p) => isL2tpPeer(p));
+    const activeWg = wgPeers.filter((p) => p.is_active);
+    const activeL2tp = l2tpPeers.filter((p) => p.is_active);
+
+    let online = 0;
+    let stale = 0;
+    let offline = 0;
+    let transferRx = 0;
+    let transferTx = 0;
+    const now = Math.floor(Date.now() / 1000);
+
+    for (const peer of activeWg) {
+        const live = dump.peers.get(peer.peer_public_key);
+        if (!live || !live.latestHandshake) {
+            offline += 1;
+            continue;
+        }
+        const age = now - live.latestHandshake;
+        if (age <= HANDSHAKE_ONLINE_SEC) online += 1;
+        else if (age <= HANDSHAKE_STALE_SEC) stale += 1;
+        else offline += 1;
+        transferRx += live.transferRx || 0;
+        transferTx += live.transferTx || 0;
+    }
+
+    // Orphan live peers (in kernel but not DB) still count toward transfer
+    for (const [pub, live] of dump.peers.entries()) {
+        if (activeWg.some((p) => p.peer_public_key === pub)) continue;
+        transferRx += live.transferRx || 0;
+        transferTx += live.transferTx || 0;
+    }
+
+    const listeningPort = Number(server.listen_port) || 51820;
+    let portListening = false;
+    try {
+        const { stdout } = await execFileAsync('ss', ['-ulnH', `sport = :${listeningPort}`], { timeout: 4000 });
+        portListening = String(stdout || '').includes(`:${listeningPort}`);
+    } catch (_) {
+        portListening = dump.available && ifaceState.up;
+    }
+
+    const running = !!(wgSystemd.active && ifaceState.up && dump.available);
+
+    return {
+        checkedAt: new Date().toISOString(),
+        running,
+        interfaceName: iface,
+        interfaceExists: ifaceState.exists,
+        interfaceUp: ifaceState.up,
+        listenPort: listeningPort,
+        portListening,
+        publicEndpoint: server.public_endpoint || null,
+        tunnelAddress: server.tunnel_address || null,
+        wanInterface: server.wan_interface || null,
+        serverPublicKey: server.server_public_key || null,
+        wgAvailable: dump.available,
+        wgError: dump.error || null,
+        systemd: {
+            wireguard: wgSystemd,
+            xl2tpd,
+            strongswan,
+        },
+        peers: {
+            wireguardTotal: wgPeers.length,
+            wireguardActive: activeWg.length,
+            wireguardOnline: online,
+            wireguardStale: stale,
+            wireguardOffline: offline,
+            l2tpTotal: l2tpPeers.length,
+            l2tpActive: activeL2tp.length,
+            livePeerCount: dump.peers.size,
+        },
+        transfer: {
+            rx: transferRx,
+            tx: transferTx,
+            rxLabel: formatBytes(transferRx),
+            txLabel: formatBytes(transferTx),
+        },
+        l2tp: {
+            enabled: Number(server.l2tp_enabled) !== 0,
+            ready: isL2tpServerReady(server),
+            xl2tpdActive: !!xl2tpd.active,
+            strongswanActive: !!strongswan.active,
+        },
+        wgReady: isVpnServerReady(server),
+        l2tpReady: isL2tpServerReady(server),
+    };
+}
+
+/**
+ * Tulis ulang /etc/wireguard/<iface>.conf dari DB lalu restart layanan VPN.
+ * @param {{ applyConfig?: boolean, includeL2tp?: boolean }} opts
+ */
+async function restartVpnServer(opts = {}) {
+    const applyConfig = opts.applyConfig !== false;
+    const includeL2tp = !!opts.includeL2tp;
+    const server = await getServer();
+    const iface = String(server.interface_name || 'wg0').trim() || 'wg0';
+    const unit = `wg-quick@${iface}`;
+    const steps = [];
+
+    if (applyConfig) {
+        const written = await writeWgConfigFromDb();
+        steps.push({ step: 'write_wg_config', ok: true, ...written });
+        await syncL2tpSecrets().then(() => {
+            steps.push({ step: 'sync_l2tp_secrets', ok: true });
+        }).catch((err) => {
+            steps.push({ step: 'sync_l2tp_secrets', ok: false, message: err.message });
+        });
+    }
+
+    try {
+        await runSystemctl('restart', unit);
+        steps.push({ step: 'restart_wireguard', ok: true, unit });
+    } catch (err) {
+        steps.push({ step: 'restart_wireguard', ok: false, unit, message: err.message });
+        throw new Error(`Gagal restart WireGuard (${unit}): ${err.message}`);
+    }
+
+    // Pastikan enable agar survive reboot
+    try {
+        await runSystemctl('enable', unit);
+        steps.push({ step: 'enable_wireguard', ok: true, unit });
+    } catch (err) {
+        steps.push({ step: 'enable_wireguard', ok: false, message: err.message });
+    }
+
+    if (includeL2tp && Number(server.l2tp_enabled) !== 0) {
+        for (const l2tpUnit of ['strongswan-starter', 'xl2tpd']) {
+            try {
+                await runSystemctl('restart', l2tpUnit);
+                steps.push({ step: `restart_${l2tpUnit}`, ok: true });
+            } catch (err) {
+                steps.push({ step: `restart_${l2tpUnit}`, ok: false, message: err.message });
+            }
+        }
+    }
+
+    // Beri waktu interface naik sebelum status
+    await new Promise((r) => setTimeout(r, 800));
+    const status = await getServerRuntimeStatus();
+    return { success: status.running, steps, status };
 }
 
 function formatBytes(n) {
@@ -1439,6 +1760,9 @@ module.exports = {
     updatePeer,
     deletePeer,
     getDevicesStatus,
+    getServerRuntimeStatus,
+    restartVpnServer,
+    writeWgConfigFromDb,
     getVpsSetupScript,
     getVpsL2tpSetupScript,
     getMikrotikScript,

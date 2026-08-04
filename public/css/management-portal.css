@@ -2242,6 +2242,30 @@
   gap: 0.4rem;
 }
 
+.km-tenant-toolbar__search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 11rem;
+  flex: 1 1 11rem;
+  max-width: 16rem;
+}
+
+.km-tenant-toolbar__search > .bi-search {
+  position: absolute;
+  left: 0.55rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  pointer-events: none;
+}
+
+.km-tenant-toolbar__search .form-control {
+  height: 1.85rem;
+  padding: 0.15rem 0.55rem 0.15rem 1.7rem;
+  font-size: 0.8rem;
+  line-height: 1.2;
+}
+
 .km-tenant-toolbar__filters .form-select {
   width: auto;
   min-width: 7.25rem;
@@ -2289,6 +2313,11 @@
 
   .km-tenant-toolbar__actions {
     justify-content: stretch;
+  }
+
+  .km-tenant-toolbar__search {
+    flex: 1 1 100%;
+    max-width: none;
   }
 
   .km-tenant-toolbar__actions .btn {

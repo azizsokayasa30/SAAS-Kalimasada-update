@@ -193,15 +193,36 @@ function packageUsesPPPoEProfile(pkg) {
     return String(pkg.pppoe_profile).trim() !== '';
 }
 
-/** Gabungan profil dari form + definisi paket; paket non-PPPoE menghasilkan null (bukan string 'default'). */
-function resolveCustomerPppoeProfile(explicitProfile, packageRow, fallbackCustomerProfile) {
+/**
+ * Gabungan profil dari form + definisi paket; paket non-PPPoE menghasilkan null (bukan string 'default').
+ * Jika tenantId diberikan, paksa kanonikal t{tenantId}_… agar tidak bocor ke profil tenant lain.
+ */
+function resolveCustomerPppoeProfile(explicitProfile, packageRow, fallbackCustomerProfile, tenantId = null) {
     const ex = explicitProfile != null ? String(explicitProfile).trim() : '';
-    if (ex) return ex;
-    if (packageRow && packageUsesPPPoEProfile(packageRow)) {
-        return String(packageRow.pppoe_profile).trim();
+    let profile = null;
+    if (ex) {
+        profile = ex;
+    } else if (packageRow && packageUsesPPPoEProfile(packageRow)) {
+        profile = String(packageRow.pppoe_profile).trim();
+    } else {
+        const fb = fallbackCustomerProfile != null ? String(fallbackCustomerProfile).trim() : '';
+        profile = fb || null;
     }
-    const fb = fallbackCustomerProfile != null ? String(fallbackCustomerProfile).trim() : '';
-    return fb || null;
+    if (!profile) return null;
+
+    const tid = tenantId != null ? parseInt(tenantId, 10) : NaN;
+    if (!Number.isFinite(tid) || tid < 1) return profile;
+
+    try {
+        const { toCanonicalTenantPppoeProfile } = require('../utils/tenantPppoeProfileOwnership');
+        const speedHint = packageRow
+            ? (packageRow.speed || packageRow.download_limit || packageRow.name || null)
+            : null;
+        const canonical = toCanonicalTenantPppoeProfile(tid, profile, speedHint);
+        return canonical || profile;
+    } catch (_) {
+        return profile;
+    }
 }
 
 /** Impor pelanggan: normalisasi join_date ke YYYY-MM-DD. Mendukung dd-mm-yy, serial Excel, tanggal JS, dan dd-MonthName-yyyy (mis. 01-October-2024). */
@@ -3283,14 +3304,14 @@ async function buildCustomerImportTemplateWorkbook() {
         ['Kolom', 'Penjelasan'],
         ['Nama *', 'Nama lengkap pelanggan (wajib). Sama dengan kolom export.'],
         ['Phone *', 'Nomor HP (wajib). 628… dan 085… disimpan apa adanya (bisa beda langganan). Hanya angka 852… (tanpa 0/62) diperbaiki jadi 0852… karena Excel.'],
-        ['Paket *', 'Nama paket sesuai menu Paket (wajib). Boleh isi Package ID sebagai alternatif.'],
+        ['Paket *', 'Nama paket sesuai menu Paket tenant ini (wajib). Tidak boleh memakai paket tenant lain — sistem hanya mencocokkan paket milik tenant aktif.'],
         ['Mode Koneksi *', 'Pilih pppoe atau static_ip. Kosong = otomatis: ada Static IP → static_ip, selain itu pppoe.'],
         ['PPPoE Username / Password', 'Wajib jika Mode = pppoe. Login PPPoE; jika password diisi sistem push ke RADIUS/Mikrotik.'],
         ['Static IP / MAC Address', 'Wajib Static IP jika Mode = static_ip (format 192.168.x.x). MAC opsional untuk isolir DHCP. Jangan isi username PPPoE.'],
-        ['PPPoE Profile', 'Profil paket (mode pppoe). Boleh kosong — sistem bisa ambil dari paket.'],
+        ['PPPoE Profile', 'Profil paket (mode pppoe). Boleh kosong — sistem ambil dari paket dan otomatis memakai prefix t{tenant}_…'],
         ['Username', 'Username login portal. Kosong = digenerate dari nomor HP.'],
         ['Login Password', 'Password login portal (bukan PPPoE).'],
-        ['Area', 'Nama wilayah / cluster.'],
+        ['Area', 'Nama wilayah / cluster. Jika belum ada di Manajemen Area, otomatis dibuat saat import (per tenant).'],
         ['Router ID', 'ID router (angka) atau kosong untuk mode RADIUS.'],
         ['Status Layanan', 'active, suspended, register, isolir, dll. Default active.'],
         ['Auto Suspension', '1/ya = aktif, 0/tidak = nonaktif.'],
@@ -3936,6 +3957,7 @@ async function runCustomerXlsxImport(req, res) {
 
         db = require('../config/billing').db;
         await ensureCustomersPhoneNonUnique(db);
+        await ensureAreasTable(db);
         dbRun = (sql, params = []) => new Promise((resolve, reject) => {
             db.run(sql, params, function (err) {
                 if (err) return reject(err);
@@ -3970,6 +3992,9 @@ async function runCustomerXlsxImport(req, res) {
         const radiusSync = { attempted: 0, success: 0, failed: 0, skipped: 0 };
         const opCreatedIds = [];
         const opUpdatedBefore = [];
+        const areaIdCache = new Map();
+        const usedAreaKodes = new Set();
+        let areasAutoCreated = 0;
         const stagedTotal = parseInt(String(req.headers['x-import-total-rows'] || ''), 10);
         const totalRowsForProgress = (Number.isFinite(stagedTotal) && stagedTotal > 0)
             ? stagedTotal
@@ -4087,10 +4112,15 @@ async function runCustomerXlsxImport(req, res) {
             .replace(/\s+/g, ' ');
         const normalizePackageCompact = (v) => normalizePackageName(v).replace(/\s+/g, '');
 
-        const activePackages = await billingManager.getPackages();
-        const allPackagesByIdMap = await billingManager.getAllPackagesByIdMap();
-        const allPackages = Array.from(allPackagesByIdMap.values());
-        const packageCandidates = allPackages.length ? allPackages : activePackages;
+        // WAJIB hanya paket tenant ini — getAllPackagesByIdMap lintas-tenant membuat
+        // nama paket bentrok (mis. "paket 165") mengambil profil t15_/t33_/dll.
+        const packageCandidates = await new Promise((resolve, reject) => {
+            db.all(
+                `SELECT * FROM packages WHERE tenant_id = ?`,
+                [impT.tenantId],
+                (err, rows) => (err ? reject(err) : resolve(rows || []))
+            );
+        });
         const packageByName = new Map();
         const packageByCompactName = new Map();
         const packageById = new Map();
@@ -4100,23 +4130,25 @@ async function runCustomerXlsxImport(req, res) {
                 packageById.set(Number(pkg.id), pkg);
                 const norm = normalizePackageName(pkg.name);
                 const compact = normalizePackageCompact(pkg.name);
-                if (norm) packageByName.set(norm, pkg);
-                if (compact) packageByCompactName.set(compact, pkg);
+                // Prefer paket aktif jika nama bentrok di tenant yang sama
+                const prefer = (map, key) => {
+                    if (!key) return;
+                    const prev = map.get(key);
+                    if (!prev || (Number(prev.is_active) !== 1 && Number(pkg.is_active) === 1)) {
+                        map.set(key, pkg);
+                    }
+                };
+                prefer(packageByName, norm);
+                prefer(packageByCompactName, compact);
             });
 
         const resolveAreaIdByName = async (areaName) => {
-            const area = String(areaName || '').trim();
-            if (!area) return null;
-            return await new Promise((resolve) => {
-                db.get(
-                    `SELECT id FROM areas WHERE LOWER(TRIM(nama_area)) = LOWER(TRIM(?))${impT.and()} LIMIT 1`,
-                    [area],
-                    (err, row) => {
-                        if (err) return resolve(null);
-                        resolve(row && row.id ? row.id : null);
-                    }
-                );
+            const result = await resolveOrCreateAreaIdByName(db, impT.tenantId, areaName, {
+                cache: areaIdCache,
+                usedKodes: usedAreaKodes
             });
+            if (result.created) areasAutoCreated++;
+            return result.id;
         };
 
         // Now sequentially process rows for DB ops
@@ -4186,6 +4218,18 @@ async function runCustomerXlsxImport(req, res) {
 
                 const connType = resolveImportConnectionType(raw);
                 const packageRow = packageById.get(Number(resolvedPackageId)) || null;
+                if (!packageRow || Number(packageRow.tenant_id) !== Number(impT.tenantId)) {
+                    failed++;
+                    errors.push({
+                        row: r,
+                        name: raw.name || '',
+                        phone: raw.phone || '',
+                        error: `Paket tidak valid untuk tenant ini: "${raw.package_name || raw.package_id || ''}"`
+                    });
+                    processedRows++;
+                    reportProgress();
+                    continue;
+                }
                 const staticIpVal = String(raw.static_ip || raw.assigned_ip || '').trim();
                 let pppoeUsernameKey = String(raw.pppoe_username || '').trim();
 
@@ -4256,7 +4300,12 @@ async function runCustomerXlsxImport(req, res) {
 
                 const resolvedPppoeProfile = connType === 'static_ip'
                     ? null
-                    : (resolveCustomerPppoeProfile(raw.pppoe_profile, packageRow, existing && existing.pppoe_profile) || 'default');
+                    : (resolveCustomerPppoeProfile(
+                        raw.pppoe_profile,
+                        packageRow,
+                        existing && existing.pppoe_profile,
+                        impT.tenantId
+                    ) || 'default');
 
                 const customerData = {
                     tenant_id: impT.tenantId,
@@ -4519,6 +4568,7 @@ async function runCustomerXlsxImport(req, res) {
                 failed,
                 total: Math.max(worksheet.rowCount - 1, 0),
                 success_count: created + updated,
+                areas_auto_created: areasAutoCreated,
                 bypass_mode: true,
                 match_key: 'pppoe_username',
                 radius_sync: radiusSync
@@ -4785,6 +4835,7 @@ async function runCustomerJsonImport(req, res) {
 
         db = require('../config/billing').db;
         await ensureCustomersPhoneNonUnique(db);
+        await ensureAreasTable(db);
         dbRun = (sql, params = []) => new Promise((resolve, reject) => {
             db.run(sql, params, function (err) {
                 if (err) return reject(err);
@@ -4815,9 +4866,13 @@ async function runCustomerJsonImport(req, res) {
 
         let created = 0, updated = 0, failed = 0;
         const errors = [];
+        const radiusSync = { attempted: 0, success: 0, failed: 0, skipped: 0 };
         const totalRowsForProgress = items.length;
         let processedRows = 0;
         let successRows = 0;
+        const areaIdCache = new Map();
+        const usedAreaKodes = new Set();
+        let areasAutoCreated = 0;
         const reportProgress = (force = false) => {
             if (!importJobId) return;
             if (!force && processedRows % 5 !== 0 && processedRows !== totalRowsForProgress) return;
@@ -4892,13 +4947,48 @@ async function runCustomerJsonImport(req, res) {
                 if (packageIdForProfile) {
                     try {
                         packageRow = await billingManager.getPackageById(packageIdForProfile);
+                        // Tolak paket milik tenant lain (isolasi)
+                        if (packageRow && Number(packageRow.tenant_id) !== Number(impT.tenantId)) {
+                            logger.warn(
+                                `[IMPORT-JSON] Tolak package_id=${packageIdForProfile} milik tenant ${packageRow.tenant_id} (import tenant=${impT.tenantId})`
+                            );
+                            packageRow = null;
+                        }
                     } catch (pkgErr) {
                         logger.warn(`[IMPORT-JSON] Failed to load package ${packageIdForProfile}: ${pkgErr.message}`);
                     }
                 }
+                // Fallback: cari paket tenant ini by nama jika ID tidak valid / lintas-tenant
+                if (!packageRow && raw.package_name) {
+                    const pkgName = String(raw.package_name).trim();
+                    if (pkgName) {
+                        packageRow = await new Promise((resolve) => {
+                            db.get(
+                                `SELECT * FROM packages
+                                 WHERE tenant_id = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?))
+                                 ORDER BY CASE WHEN COALESCE(is_active, 1) = 1 THEN 0 ELSE 1 END
+                                 LIMIT 1`,
+                                [impT.tenantId, pkgName],
+                                (err, row) => resolve(err ? null : (row || null))
+                            );
+                        });
+                    }
+                }
+                const resolvedPackageId = packageRow && packageRow.id ? packageRow.id : null;
+                if (!resolvedPackageId) {
+                    failed++;
+                    errors.push({
+                        name,
+                        phone,
+                        error: `Paket tidak ditemukan di tenant ini: "${raw.package_name || raw.package_id || ''}"`
+                    });
+                    processedRows++;
+                    reportProgress();
+                    continue;
+                }
                 const resolvedPppoeProfile = connType === 'static_ip'
                     ? null
-                    : (resolveCustomerPppoeProfile(raw.pppoe_profile, packageRow, null) || 'default');
+                    : (resolveCustomerPppoeProfile(raw.pppoe_profile, packageRow, null, impT.tenantId) || 'default');
                 const customerData = {
                     tenant_id: impT.tenantId,
                     name,
@@ -4907,7 +4997,7 @@ async function runCustomerJsonImport(req, res) {
                     pppoe_password: connType === 'static_ip' ? '' : (raw.pppoe_password ? String(raw.pppoe_password).trim() : ''),
                     email: raw.email || '',
                     address: raw.address || '',
-                    package_id: packageIdForProfile,
+                    package_id: resolvedPackageId,
                     pppoe_profile: resolvedPppoeProfile,
                     status: raw.status || 'active',
                     auto_suspension: raw.auto_suspension !== undefined ? parseInt(raw.auto_suspension, 10) : 1,
@@ -4935,7 +5025,16 @@ async function runCustomerJsonImport(req, res) {
                 if (lngJ !== undefined) customerData.longitude = lngJ;
                 if (raw.area) customerData.area = String(raw.area).trim();
                 const aid = optNum(raw.area_id);
-                if (aid !== undefined) customerData.area_id = aid;
+                if (aid !== undefined) {
+                    customerData.area_id = aid;
+                } else if (raw.area) {
+                    const areaResult = await resolveOrCreateAreaIdByName(db, impT.tenantId, raw.area, {
+                        cache: areaIdCache,
+                        usedKodes: usedAreaKodes
+                    });
+                    if (areaResult.created) areasAutoCreated++;
+                    if (areaResult.id != null) customerData.area_id = areaResult.id;
+                }
                 const oid = optNum(raw.odp_id);
                 if (oid !== undefined) customerData.odp_id = oid;
                 if (raw.renewal_type) customerData.renewal_type = String(raw.renewal_type).trim();
@@ -5151,6 +5250,7 @@ async function runCustomerJsonImport(req, res) {
                 failed,
                 total: created + updated + failed,
                 success_count: created + updated,
+                areas_auto_created: areasAutoCreated,
                 bypass_mode: true,
                 match_key: 'pppoe_username',
                 radius_sync: radiusSync
@@ -7359,6 +7459,76 @@ function resolveAreaDeskripsi(deskripsi, namaArea) {
     return nama || null;
 }
 
+/**
+ * Lookup area by nama (tenant-scoped). Jika belum ada di Manajemen Area,
+ * otomatis membuat area baru agar import pelanggan bisa mengisi area_id.
+ * @param {object} [opts]
+ * @param {Map<string, number>} [opts.cache] cache lower(nama) -> id dalam batch yang sama
+ * @param {Set<string>} [opts.usedKodes] kode yang sudah dipesan di batch yang sama
+ * @returns {Promise<{ id: number|null, created: boolean }>}
+ */
+async function resolveOrCreateAreaIdByName(db, tenantId, areaName, opts = {}) {
+    const area = String(areaName || '').trim();
+    const tid = parseInt(tenantId, 10);
+    if (!area || !Number.isFinite(tid) || tid < 1) return { id: null, created: false };
+
+    const cache = opts.cache || null;
+    const usedKodes = opts.usedKodes || null;
+    const cacheKey = area.toLowerCase();
+    if (cache && cache.has(cacheKey)) {
+        return { id: cache.get(cacheKey), created: false };
+    }
+
+    const tenantAnd = ` AND tenant_id = ${tid}`;
+    const findExisting = () => new Promise((resolve) => {
+        db.get(
+            `SELECT id FROM areas WHERE LOWER(TRIM(nama_area)) = LOWER(TRIM(?))${tenantAnd} LIMIT 1`,
+            [area],
+            (err, row) => {
+                if (err) return resolve(null);
+                resolve(row && row.id ? row.id : null);
+            }
+        );
+    });
+
+    let id = await findExisting();
+    if (id) {
+        if (cache) cache.set(cacheKey, id);
+        return { id, created: false };
+    }
+
+    await ensureAreasTable(db);
+    const kode = await resolveUniqueAreaCode(db, tid, area, null, usedKodes);
+    const deskripsi = resolveAreaDeskripsi(null, area);
+
+    try {
+        id = await new Promise((resolve, reject) => {
+            db.run(
+                `INSERT INTO areas (kode_area, nama_area, deskripsi, status, tenant_id) VALUES (?, ?, ?, ?, ?)`,
+                [kode, area, deskripsi, 'aktif', tid],
+                function (err) {
+                    if (err) return reject(err);
+                    resolve(this.lastID);
+                }
+            );
+        });
+    } catch (insertErr) {
+        // Race / UNIQUE conflict: ambil ulang
+        id = await findExisting();
+        if (!id) {
+            logger.warn(`[IMPORT] Gagal auto-create area "${area}" (tenant=${tid}): ${insertErr.message}`);
+            return { id: null, created: false };
+        }
+        if (cache) cache.set(cacheKey, id);
+        return { id, created: false };
+    }
+
+    if (usedKodes && kode) usedKodes.add(kode);
+    if (cache && id) cache.set(cacheKey, id);
+    logger.info(`[IMPORT] Auto-create area "${area}" (id=${id}, kode=${kode}, tenant=${tid})`);
+    return { id, created: true };
+}
+
 // Helper: Ensure areas table exists + area_id di customers
 async function ensureAreasTable(db) {
     await new Promise((resolve) => db.run(`
@@ -8271,7 +8441,12 @@ router.post('/customers', customerPhotoUpload.fields([
         const pureStaticIp = hasStaticIpIntent && !wantsCreatePppoe && !hasPppoeUsername;
         const profileToUse = pureStaticIp
             ? null
-            : resolveCustomerPppoeProfile(pppoe_profile, packageData, null);
+            : resolveCustomerPppoeProfile(
+                pppoe_profile,
+                packageData,
+                null,
+                req.tenantId || req.session?.tenantId || packageData?.tenant_id
+            );
 
         // Password portal: default 123456 jika kosong (sesuai kebijakan form tambah pelanggan)
         const bcrypt = require('bcrypt');
@@ -8943,7 +9118,12 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
         }
 
         const packageRowForProfile = package_id ? await billingManager.getPackageById(package_id) : null;
-        const profileToUse = resolveCustomerPppoeProfile(pppoe_profile, packageRowForProfile, currentCustomer.pppoe_profile);
+        const profileToUse = resolveCustomerPppoeProfile(
+            pppoe_profile,
+            packageRowForProfile,
+            currentCustomer.pppoe_profile,
+            req.tenantId || req.session?.tenantId || currentCustomer.tenant_id
+        );
 
         // Extract new phone from request body, fallback to current if not provided
         const newPhone = req.body.phone
@@ -11767,6 +11947,36 @@ router.post('/service-suspension/check-paid', async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error checking paid customers: ' + error.message
+        });
+    }
+});
+
+// Sync ulang pelanggan isolir ke MikroTik/RADIUS (tanpa ubah status billing / kirim WA)
+router.post('/service-suspension/sync-isolir', adminAuth, async (req, res) => {
+    try {
+        const serviceSuspension = require('../config/serviceSuspension');
+        const kickSessions = req.body && req.body.kick_sessions === false ? false : true;
+        const result = await serviceSuspension.syncIsolirCustomersToMikrotik({ kickSessions });
+
+        const status = result.busy ? 409 : 200;
+        res.status(status).json({
+            success: !!result.success,
+            message: result.message || (result.success ? 'Sync Isolir selesai' : 'Sync Isolir gagal'),
+            total: result.total || 0,
+            synced: result.synced || 0,
+            alreadyOk: result.alreadyOk || 0,
+            kicked: result.kicked || 0,
+            skipped: result.skipped || 0,
+            errors: result.errors || 0,
+            pppoe: result.pppoe || 0,
+            static_ip: result.static_ip || 0,
+            busy: !!result.busy
+        });
+    } catch (error) {
+        logger.error('Sync Isolir error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error sync isolir: ' + error.message
         });
     }
 });

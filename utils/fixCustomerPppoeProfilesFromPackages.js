@@ -32,6 +32,19 @@ async function fixCustomerPppoeProfilesFromPackages(tenantId, options = {}) {
         throw new Error('tenantId tidak valid');
     }
 
+    const { runWithTenant, hasTenantContext, getTenantId } = require('../config/platform/tenantContext');
+    // Klaim/sync profil RADIUS butuh ALS tenant — bungkus jika pemanggil belum set konteks.
+    if (!hasTenantContext() || Number(getTenantId()) !== tid) {
+        const db = require('../config/billing').db;
+        const tenant = await new Promise((resolve, reject) => {
+            db.get(`SELECT * FROM tenants WHERE id = ? LIMIT 1`, [tid], (err, row) => {
+                if (err) return reject(err);
+                resolve(row || { id: tid });
+            });
+        });
+        return runWithTenant(tenant, () => fixCustomerPppoeProfilesFromPackages(tid, options));
+    }
+
     const {
         standardizeTenantPppoeProfileNames
     } = require('./tenantPppoeProfileOwnership');
@@ -181,29 +194,27 @@ async function fixCustomerPppoeProfilesFromPackages(tenantId, options = {}) {
             continue;
         }
 
-        // Username ada tapi tidak ada sandi PPPoE di RADIUS → anggap belum siap PPPoE / static-like
-        if (!hasPppoePassword) {
-            skipped++;
-            continue;
-        }
+        // Username ada tapi tidak ada sandi PPPoE di RADIUS → tetap perbaiki billing,
+        // skip assign RADIUS saja.
+        const canAssignRadius = hasPppoePassword;
 
         const status = String(row.customer_status || '').toLowerCase().trim();
-        if (status === 'isolir' || status === 'suspended') {
-            skipped++;
-            continue;
-        }
+        const isSuspended = status === 'isolir' || status === 'suspended';
 
         const currentRadiusGroup = radiusGroupByUser.get(userKey) || '';
-        if (currentRadiusGroup.toLowerCase() === 'isolir') {
-            skipped++;
-            continue;
-        }
+        const radiusIsIsolir = currentRadiusGroup.toLowerCase() === 'isolir';
 
         let targetPkg = null;
         const linkedId = row.package_id != null ? Number(row.package_id) : null;
-        if (linkedId != null && packageById.has(linkedId)) {
+        const linkedIsForeign =
+            row.package_tenant_id != null && Number(row.package_tenant_id) !== tid;
+
+        // Paket milik tenant ini via ID
+        if (linkedId != null && !linkedIsForeign && packageById.has(linkedId)) {
             targetPkg = packageById.get(linkedId);
-        } else if (row.package_name) {
+        }
+        // Remap by nama: paket lintas-tenant / ID hilang / ID tidak ada di tenant
+        if (!targetPkg && row.package_name) {
             const norm = normalizePackageName(row.package_name);
             const compact = normalizePackageCompact(row.package_name);
             targetPkg = packageByName.get(norm) || packageByCompact.get(compact) || null;
@@ -216,15 +227,30 @@ async function fixCustomerPppoeProfilesFromPackages(tenantId, options = {}) {
 
         const targetProfile = String(targetPkg.pppoe_profile).trim();
         const billingProfile = String(row.customer_profile || '').trim();
-        const needsPackageRemap = linkedId == null || Number(linkedId) !== Number(targetPkg.id);
+        const bp = billingProfile.toLowerCase();
+        const tp = targetProfile.toLowerCase();
+        const needsPackageRemap =
+            linkedIsForeign ||
+            linkedId == null ||
+            Number(linkedId) !== Number(targetPkg.id);
+        // Untuk isolir: tetap simpan profil paket (untuk restore), jangan paksa ke group Isolir di billing
+        // kecuali billing masih menyimpan prefix tenant asing.
         const needsBillingProfile =
             !billingProfile ||
-            billingProfile.toLowerCase() === 'default' ||
-            billingProfile.toLowerCase() !== targetProfile.toLowerCase();
+            bp === 'default' ||
+            (bp !== 'isolir' && bp !== tp) ||
+            (/^t\d+_/.test(bp) && !bp.startsWith(`t${tid}_`));
+        // Jangan re-assign RADIUS jika pelanggan/group sedang isolir
         const needsRadius =
-            !currentRadiusGroup ||
-            currentRadiusGroup.toLowerCase() === 'default' ||
-            currentRadiusGroup.toLowerCase() !== targetProfile.toLowerCase();
+            canAssignRadius &&
+            !isSuspended &&
+            !radiusIsIsolir && (
+                !currentRadiusGroup ||
+                currentRadiusGroup.toLowerCase() === 'default' ||
+                currentRadiusGroup.toLowerCase() !== tp ||
+                (/^t\d+_/.test(currentRadiusGroup.toLowerCase()) &&
+                    !currentRadiusGroup.toLowerCase().startsWith(`t${tid}_`))
+            );
 
         if (!needsPackageRemap && !needsBillingProfile && !needsRadius) {
             skipped++;
@@ -279,6 +305,8 @@ async function fixCustomerPppoeProfilesFromPackages(tenantId, options = {}) {
                         error: (assignRes && assignRes.message) || 'Gagal assign profil RADIUS'
                     });
                 }
+            } else if (!canAssignRadius && (needsPackageRemap || needsBillingProfile)) {
+                // Billing sudah diperbaiki; RADIUS dilewati karena belum ada sandi PPPoE
             }
         } catch (rowErr) {
             failed++;

@@ -75,6 +75,12 @@ tenants.forEach(function(t) {
         <% } %>
       </div>
       <div class="km-tenant-toolbar__actions">
+        <div class="km-tenant-toolbar__search">
+          <i class="bi bi-search" aria-hidden="true"></i>
+          <input type="search" id="tenantSearchInput" class="form-control form-control-sm"
+                 placeholder="Cari tenant…" autocomplete="off"
+                 aria-label="Cari tenant" title="Cari nama, subdomain, atau owner">
+        </div>
         <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#backupRestoreModal" title="Backup &amp; Restore">
           <i class="bi bi-cloud-arrow-up"></i><span class="km-tenant-toolbar__btn-text"> Backup</span>
         </button>
@@ -111,13 +117,15 @@ tenants.forEach(function(t) {
         </thead>
         <tbody>
           <% if (!tenants.length) { %>
-            <tr><td colspan="13" class="text-center py-4" style="color: var(--text-muted)">Belum ada tenant. Klik "Tambah Tenant" untuk memulai.</td></tr>
+            <tr id="tenantEmptyRow"><td colspan="13" class="text-center py-4" style="color: var(--text-muted)">Belum ada tenant. Klik "Tambah Tenant" untuk memulai.</td></tr>
           <% } %>
+          <tr id="tenantSearchEmptyRow" class="d-none"><td colspan="13" class="text-center py-4" style="color: var(--text-muted)">Tidak ada tenant yang cocok dengan pencarian.</td></tr>
           <% tenants.forEach(function(t) {
             const c = t.usage.customers || {};
             const inv = t.usage.invoices || {};
+            const searchBlob = [t.id, t.name, t.subdomain, t.owner_name, t.owner_email].filter(Boolean).join(' ').toLowerCase();
           %>
-            <tr>
+            <tr class="tenant-data-row" data-search="<%= searchBlob.replace(/"/g, '&quot;') %>">
               <td class="km-tenant-table__sticky-col">#<%= t.id %></td>
               <td class="fw-semibold"><%= t.name %></td>
               <td><code><%= t.subdomain %></code></td>
@@ -224,5 +232,36 @@ tenants.forEach(function(t) {
     </div>
   </div>
 <% }); %>
+
+<script>
+(function () {
+  var input = document.getElementById('tenantSearchInput');
+  if (!input) return;
+
+  var rows = Array.prototype.slice.call(document.querySelectorAll('.tenant-data-row'));
+  var emptySearch = document.getElementById('tenantSearchEmptyRow');
+  var totalCount = rows.length;
+
+  function applyFilter() {
+    var q = String(input.value || '').trim().toLowerCase();
+    var visible = 0;
+    rows.forEach(function (row) {
+      var hay = row.getAttribute('data-search') || '';
+      var match = !q || hay.indexOf(q) !== -1;
+      row.classList.toggle('d-none', !match);
+      if (match) visible += 1;
+    });
+    if (emptySearch) emptySearch.classList.toggle('d-none', !(q && visible === 0 && totalCount > 0));
+  }
+
+  input.addEventListener('input', applyFilter);
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      applyFilter();
+    }
+  });
+})();
+</script>
 
 <%- include('../partials/footer') %>

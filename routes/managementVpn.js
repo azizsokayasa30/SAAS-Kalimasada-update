@@ -27,11 +27,19 @@ function mikrotikScriptFilename(peer) {
 // ── VPN Server settings (WireGuard + L2TP/IPsec) ──
 router.get('/', async (req, res) => {
     try {
-        const [server, peers, vps, vpsL2tp] = await Promise.all([
+        const [server, peers, vps, vpsL2tp, runtime] = await Promise.all([
             vpnService.getServer(),
             vpnService.listPeers(),
             vpnService.getVpsSetupScript(),
             vpnService.getVpsL2tpSetupScript(),
+            vpnService.getServerRuntimeStatus().catch((err) => ({
+                running: false,
+                error: err.message,
+                peers: {},
+                transfer: {},
+                systemd: {},
+                l2tp: {},
+            })),
         ]);
         const wgPeers = (peers || []).filter((p) => vpnService.normalizeProtocol(p.protocol) === 'wireguard');
         const l2tpPeers = (peers || []).filter((p) => vpnService.normalizeProtocol(p.protocol) === 'l2tp');
@@ -45,6 +53,7 @@ router.get('/', async (req, res) => {
             l2tpPeers,
             vpsScript: vps.script,
             vpsL2tpScript: vpsL2tp.script,
+            runtime,
             wgReady: vpnService.isVpnServerReady(server),
             l2tpReady: vpnService.isL2tpServerReady(server),
             adminName: req.session.platformAdminName,
@@ -176,6 +185,47 @@ router.get('/api/status', async (req, res) => {
     } catch (err) {
         console.error('[management/vpn] api status:', err);
         res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+router.get('/api/server-status', async (req, res) => {
+    try {
+        const status = await vpnService.getServerRuntimeStatus();
+        res.json({ success: true, status });
+    } catch (err) {
+        console.error('[management/vpn] api server-status:', err);
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+router.post('/api/restart', async (req, res) => {
+    try {
+        const includeL2tp = !!(req.body && (req.body.includeL2tp === true || req.body.includeL2tp === '1' || req.body.includeL2tp === 'true'));
+        const applyConfig = !(req.body && (req.body.applyConfig === false || req.body.applyConfig === '0' || req.body.applyConfig === 'false'));
+        const result = await vpnService.restartVpnServer({ includeL2tp, applyConfig });
+        await safeAudit({
+            actorType: 'SuperAdmin',
+            actorId: req.session.platformAdminId,
+            action: 'vpn_server_restarted',
+            details: {
+                includeL2tp,
+                applyConfig,
+                running: result.status?.running,
+                interfaceName: result.status?.interfaceName,
+                peerOnline: result.status?.peers?.wireguardOnline,
+            },
+            ip: req.ip,
+        });
+        res.json({
+            success: true,
+            message: result.status?.running
+                ? 'VPN server berhasil direstart dan berjalan.'
+                : 'Restart dijalankan, tetapi interface belum terdeteksi UP. Cek log systemd.',
+            ...result,
+        });
+    } catch (err) {
+        console.error('[management/vpn] api restart:', err);
+        res.status(500).json({ success: false, message: err.message || 'Gagal restart VPN server' });
     }
 });
 

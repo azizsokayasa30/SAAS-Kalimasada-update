@@ -156,6 +156,8 @@ class ServiceSuspensionManager {
     constructor() {
         /** @type {Set<string>} lock per tenant agar job tenant A tidak skip job tenant B */
         this.runningKeys = new Set();
+        /** @type {Set<string>} lock khusus Sync Isolir (terpisah agar tidak mengganggu job overdue/restore) */
+        this.isolirSyncKeys = new Set();
     }
 
     _runKey() {
@@ -175,6 +177,17 @@ class ServiceSuspensionManager {
 
     _releaseRun(key) {
         if (key) this.runningKeys.delete(key);
+    }
+
+    _tryAcquireIsolirSync() {
+        const key = this._runKey();
+        if (this.isolirSyncKeys.has(key)) return null;
+        this.isolirSyncKeys.add(key);
+        return key;
+    }
+
+    _releaseIsolirSync(key) {
+        if (key) this.isolirSyncKeys.delete(key);
     }
 
     /**
@@ -1468,6 +1481,263 @@ class ServiceSuspensionManager {
             logger.error(`Error reactivating network for ${customer.username}:`, error.message);
             return { success: false, message: error.message };
         }
+    }
+
+    /**
+     * Sync ulang pelanggan isolir ke MikroTik/RADIUS.
+     * Hanya menyentuh jaringan — tidak ubah status billing, suspend_reason, GenieACS/OLT, atau WA.
+     * @param {object} [options]
+     * @param {boolean} [options.kickSessions=true] — putus sesi PPPoE agar reconnect ke profil/pool isolir
+     */
+    async syncIsolirCustomersToMikrotik(options = {}) {
+        const syncKey = this._tryAcquireIsolirSync();
+        if (!syncKey) {
+            return {
+                success: false,
+                busy: true,
+                message: 'Sync Isolir sedang berjalan. Tunggu hingga selesai.',
+                total: 0,
+                synced: 0,
+                alreadyOk: 0,
+                kicked: 0,
+                skipped: 0,
+                errors: 0
+            };
+        }
+
+        const kickSessions = options.kickSessions !== false;
+        const summary = {
+            success: true,
+            total: 0,
+            synced: 0,
+            alreadyOk: 0,
+            kicked: 0,
+            skipped: 0,
+            errors: 0,
+            pppoe: 0,
+            static_ip: 0
+        };
+
+        try {
+            logger.info(`[SYNC-ISOLIR] Mulai sync pelanggan isolir ke MikroTik (kickSessions=${kickSessions})...`);
+
+            const customers = await billingManager.getCustomers();
+            const suspendedCustomers = (customers || []).filter((c) => isSuspendedStatus(c.status));
+            summary.total = suspendedCustomers.length;
+
+            if (suspendedCustomers.length === 0) {
+                summary.message = 'Tidak ada pelanggan isolir yang perlu disinkronkan';
+                return summary;
+            }
+
+            const authMode = await getUserAuthMode();
+            let radiusConn = null;
+            if (authMode === 'radius') {
+                const { getRadiusConnection, ensureIsolirProfileRadius } = require('./mikrotik');
+                await ensureIsolirProfileRadius();
+                radiusConn = await getRadiusConnection();
+            }
+
+            const isolirProfile = getTenantSetting('isolir_profile', getSetting('isolir_profile', 'isolir'));
+            const staticMethod = getSetting('static_ip_suspension_method', 'address_list');
+
+            for (const customer of suspendedCustomers) {
+                try {
+                    const result = await this._syncOneIsolirCustomer(customer, {
+                        authMode,
+                        kickSessions,
+                        radiusConn,
+                        isolirProfile,
+                        staticMethod
+                    });
+
+                    if (result.skipped) {
+                        summary.skipped++;
+                    } else if (result.error) {
+                        summary.errors++;
+                    } else if (result.synced) {
+                        summary.synced++;
+                        if (result.type === 'pppoe') summary.pppoe++;
+                        if (result.type === 'static_ip') summary.static_ip++;
+                    } else {
+                        summary.alreadyOk++;
+                        if (result.type === 'pppoe') summary.pppoe++;
+                        if (result.type === 'static_ip') summary.static_ip++;
+                    }
+                    if (result.kicked > 0) summary.kicked += result.kicked;
+
+                    await new Promise((r) => setTimeout(r, 40));
+                } catch (err) {
+                    summary.errors++;
+                    logger.error(
+                        `[SYNC-ISOLIR] Error ${customer.username || customer.pppoe_username || customer.id}: ${err.message}`
+                    );
+                }
+            }
+
+            if (radiusConn) {
+                try {
+                    await radiusConn.end();
+                } catch (_) {}
+            }
+
+            summary.message =
+                `Sync Isolir selesai: ${summary.synced} disinkron, ${summary.alreadyOk} sudah OK` +
+                (kickSessions && summary.kicked ? `, ${summary.kicked} sesi diputus` : '') +
+                (summary.skipped ? `, ${summary.skipped} dilewati` : '') +
+                (summary.errors ? `, ${summary.errors} gagal` : '') +
+                ` (total ${summary.total})`;
+
+            logger.info(`[SYNC-ISOLIR] ${summary.message}`);
+            return summary;
+        } catch (error) {
+            logger.error(`[SYNC-ISOLIR] Fatal: ${error.message}`);
+            summary.success = false;
+            summary.errors = Math.max(summary.errors, 1);
+            summary.message = error.message;
+            return summary;
+        } finally {
+            this._releaseIsolirSync(syncKey);
+        }
+    }
+
+    /**
+     * Sync satu pelanggan isolir ke jaringan (tanpa ubah billing / WA).
+     * @private
+     */
+    async _syncOneIsolirCustomer(customer, ctx = {}) {
+        const {
+            authMode,
+            kickSessions = true,
+            radiusConn = null,
+            isolirProfile = 'isolir',
+            staticMethod = 'address_list'
+        } = ctx;
+
+        const explicitPppoe = customer.pppoe_username && String(customer.pppoe_username).trim();
+        const hasStaticIP = !!(customer.static_ip || customer.ip_address || customer.assigned_ip);
+        const hasMacAddress = !!customer.mac_address;
+        const pppUser = explicitPppoe
+            || (!hasStaticIP && !hasMacAddress && customer.username ? String(customer.username).trim() : '');
+
+        // PPPoE path
+        if (pppUser) {
+            if (authMode === 'radius') {
+                let alreadyIsolir = false;
+                try {
+                    if (radiusConn) {
+                        const [currentGroup] = await radiusConn.execute(
+                            'SELECT groupname FROM radusergroup WHERE username = ? LIMIT 1',
+                            [pppUser]
+                        );
+                        alreadyIsolir =
+                            !!(currentGroup && currentGroup.length > 0 && currentGroup[0].groupname === 'isolir');
+                    }
+                } catch (e) {
+                    logger.warn(`[SYNC-ISOLIR] Cek group RADIUS gagal untuk ${pppUser}: ${e.message}`);
+                }
+
+                let kicked = 0;
+                if (!alreadyIsolir) {
+                    const result = await suspendUserRadius(pppUser, { skipEnsureIsolir: true });
+                    kicked = (result && result.disconnected) || 0;
+                    if (result && result.success) {
+                        logger.info(`[SYNC-ISOLIR] ${pppUser} → group isolir (kicked ${kicked})`);
+                        return { type: 'pppoe', synced: true, kicked };
+                    }
+                    return { type: 'pppoe', error: true, message: result?.message || 'RADIUS suspend gagal' };
+                }
+
+                // Sudah di group isolir: pastikan sesi aktif reconnect ke pool isolir
+                if (kickSessions) {
+                    try {
+                        const { disconnectPPPoEUserAllRouters } = require('./mikrotik');
+                        const kick = await withTimeout(
+                            disconnectPPPoEUserAllRouters(pppUser),
+                            10000,
+                            `kick isolir ${pppUser}`
+                        );
+                        kicked = (kick && kick.disconnected) || 0;
+                    } catch (e) {
+                        logger.warn(`[SYNC-ISOLIR] Kick ${pppUser}: ${e.message}`);
+                    }
+                }
+                return { type: 'pppoe', synced: false, alreadyOk: true, kicked };
+            }
+
+            // Mode Mikrotik API
+            try {
+                const mikrotik = await getMikrotikConnectionForCustomer(customer);
+                await this.ensureIsolirProfile(customer);
+
+                let secretId = null;
+                let currentProfile = null;
+                try {
+                    const secrets = await mikrotik.write('/ppp/secret/print', [`?name=${pppUser}`]);
+                    if (secrets && secrets.length > 0) {
+                        secretId = secrets[0]['.id'];
+                        currentProfile = secrets[0].profile || null;
+                    }
+                } catch (lookupErr) {
+                    logger.warn(`[SYNC-ISOLIR] Lookup secret ${pppUser}: ${lookupErr.message}`);
+                }
+
+                const needsProfile = !currentProfile || String(currentProfile) !== String(isolirProfile);
+                if (needsProfile) {
+                    const setParams = secretId
+                        ? [`=.id=${secretId}`, `=profile=${isolirProfile}`, '=comment=SUSPENDED - Sync Isolir']
+                        : [`=name=${pppUser}`, `=profile=${isolirProfile}`, '=comment=SUSPENDED - Sync Isolir'];
+                    await mikrotik.write('/ppp/secret/set', setParams);
+                }
+
+                let kicked = 0;
+                if (kickSessions || needsProfile) {
+                    try {
+                        const disconnectResult = await withTimeout(
+                            disconnectPPPoEUser(pppUser, mikrotik),
+                            8000,
+                            `disconnect sync ${pppUser}`
+                        );
+                        kicked = (disconnectResult && disconnectResult.disconnected) || 0;
+                    } catch (e) {
+                        logger.warn(`[SYNC-ISOLIR] Disconnect ${pppUser}: ${e.message}`);
+                    }
+                }
+
+                if (needsProfile) {
+                    logger.info(`[SYNC-ISOLIR] ${pppUser} profile → ${isolirProfile} (kicked ${kicked})`);
+                    return { type: 'pppoe', synced: true, kicked };
+                }
+                return { type: 'pppoe', synced: false, alreadyOk: true, kicked };
+            } catch (e) {
+                return { type: 'pppoe', error: true, message: e.message };
+            }
+        }
+
+        // Static IP — hanya address-list (tanpa update billing / WA)
+        if (hasStaticIP || hasMacAddress) {
+            try {
+                if (staticMethod && staticMethod !== 'address_list') {
+                    logger.warn(
+                        `[SYNC-ISOLIR] Metode static "${staticMethod}" tidak didukung sync aman — pakai address_list untuk ${customer.username}`
+                    );
+                }
+                const result = await staticIPSuspension.suspendByAddressList(customer, 'Sync Isolir');
+                if (result && result.success) {
+                    const wasAlready = String(result.message || '').toLowerCase().includes('already');
+                    return {
+                        type: 'static_ip',
+                        synced: !wasAlready,
+                        alreadyOk: wasAlready
+                    };
+                }
+                return { type: 'static_ip', error: true, message: result?.error || 'Static isolir gagal' };
+            } catch (e) {
+                return { type: 'static_ip', error: true, message: e.message };
+            }
+        }
+
+        return { skipped: true, message: 'Tidak ada PPPoE / static IP' };
     }
 
     /** Pastikan semua pelanggan status inactive tertolak di RADIUS / secret disabled. */

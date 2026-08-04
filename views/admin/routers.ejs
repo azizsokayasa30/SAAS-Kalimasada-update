@@ -230,7 +230,7 @@ async function testRouter(id){
     if (res.success) {
       alert('Connected: '+(res.identity||'OK')+' @ '+(res.host||'')+(res.port? (':'+res.port):''));
     } else {
-      alert('Gagal konek API MikroTik:\n'+(res.message||'Unknown')+'\n\nCatatan: tes ini memakai TCP port API (8728), bukan ping ICMP. Pastikan Tunnel IP, service api, dan firewall dari VPS ke MikroTik.');
+      alert('Gagal konek API MikroTik:\n'+(res.message||'Unknown')+'\n\nCatatan: nc/ping sukses ≠ API RouterOS jalan. Pakai Tunnel IP VPN (10.10.0.x), pastikan peer WireGuard handshake, service api enabled, dan address/firewall mengizinkan VPS.');
     }
   } catch (e) {
     const msg = (e && e.name === 'AbortError')

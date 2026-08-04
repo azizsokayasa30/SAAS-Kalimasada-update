@@ -2417,6 +2417,81 @@
     }
 
     /**
+     * Isolasi paket + profil PPPoE per tenant.
+     * - Tolak/remap package_id milik tenant lain (cari by nama di tenant ini).
+     * - Kanonikalkan pppoe_profile ke t{tenantId}_…
+     * @param {{ strict?: boolean }} [options] strict=true (default) → throw jika paket asing tanpa padanan
+     */
+    async _enforceTenantPackageAndProfile(tenantId, packageId, pppoeProfile, options = {}) {
+        const strict = options.strict !== false;
+        const tid = parseInt(tenantId, 10);
+        let nextPackageId = packageId != null && packageId !== '' ? parseInt(packageId, 10) : null;
+        if (!Number.isFinite(nextPackageId)) nextPackageId = null;
+        let nextProfile = pppoeProfile != null ? String(pppoeProfile).trim() : null;
+        if (nextProfile === '') nextProfile = null;
+
+        if (!Number.isFinite(tid) || tid < 1) {
+            return { package_id: nextPackageId, pppoe_profile: nextProfile };
+        }
+
+        const dbGet = (sql, params = []) => new Promise((resolve, reject) => {
+            this.db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row || null)));
+        });
+
+        let pkgRow = null;
+        if (nextPackageId != null) {
+            pkgRow = await dbGet(`SELECT id, tenant_id, name, speed, pppoe_profile FROM packages WHERE id = ? LIMIT 1`, [nextPackageId]);
+            if (pkgRow && Number(pkgRow.tenant_id) !== tid) {
+                const local = await dbGet(
+                    `SELECT id, tenant_id, name, speed, pppoe_profile FROM packages
+                     WHERE tenant_id = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?))
+                     ORDER BY CASE WHEN COALESCE(is_active, 1) = 1 THEN 0 ELSE 1 END
+                     LIMIT 1`,
+                    [tid, pkgRow.name]
+                );
+                if (local) {
+                    console.warn(
+                        `[TENANT-ISOLATION] Remap package_id ${nextPackageId} (tenant ${pkgRow.tenant_id}) → ${local.id} (tenant ${tid}) name="${pkgRow.name}"`
+                    );
+                    pkgRow = local;
+                    nextPackageId = local.id;
+                } else if (strict) {
+                    const err = new Error(
+                        `Paket #${nextPackageId} milik tenant lain dan tidak ada padanan nama di tenant ${tid}`
+                    );
+                    err.code = 'FOREIGN_PACKAGE';
+                    throw err;
+                } else {
+                    console.warn(
+                        `[TENANT-ISOLATION] Paket asing #${nextPackageId} (tenant ${pkgRow.tenant_id}) tanpa padanan di tenant ${tid} — profil tetap dikanonikalkan`
+                    );
+                    // biarkan package_id sementara; tetap kanonikalkan profil dari paket asing
+                }
+            } else if (!pkgRow) {
+                nextPackageId = null;
+            }
+        }
+
+        if ((!nextProfile || nextProfile.toLowerCase() === 'default') && pkgRow && pkgRow.pppoe_profile) {
+            const fromPkg = String(pkgRow.pppoe_profile).trim();
+            if (fromPkg) nextProfile = fromPkg;
+        }
+
+        if (nextProfile && nextProfile.toLowerCase() !== 'isolir') {
+            try {
+                const { toCanonicalTenantPppoeProfile } = require('../utils/tenantPppoeProfileOwnership');
+                const speedHint = pkgRow ? (pkgRow.speed || pkgRow.pppoe_profile || pkgRow.name) : null;
+                const canonical = toCanonicalTenantPppoeProfile(tid, nextProfile, speedHint);
+                if (canonical) nextProfile = canonical;
+            } catch (canonErr) {
+                console.warn('[TENANT-ISOLATION] canonicalize profile:', canonErr.message);
+            }
+        }
+
+        return { package_id: nextPackageId, pppoe_profile: nextProfile };
+    }
+
+    /**
      * tenant_id untuk INSERT — tangkap SINKRON di awal handler HTTP sebelum await apa pun
      * (ALS sering hilang setelah Promise yang resolve dari callback sqlite).
      * Prefer `explicitTenantId` dari req.tenantId / req.tenant.id.
@@ -2470,6 +2545,20 @@
             const skipRadiusSync = skipExternalSync || Boolean(customerData && customerData.__skip_radius_sync);
             
             const { name, username, password, phone, pppoe_username, email, address, area, area_id, package_id, odp_id, pppoe_profile, status, auto_suspension, auto_suspension_day, billing_day, renewal_type, fix_date, static_ip, assigned_ip, mac_address, latitude, longitude, cable_type, cable_length, port_number, cable_status, cable_notes, ktp_photo_path, house_photo_path } = customerData;
+
+            let resolvedPackageId = package_id;
+            let resolvedPppoeProfile = pppoe_profile;
+            try {
+                const enforced = await this._enforceTenantPackageAndProfile(
+                    tenantIdForRow,
+                    resolvedPackageId,
+                    resolvedPppoeProfile
+                );
+                resolvedPackageId = enforced.package_id;
+                resolvedPppoeProfile = enforced.pppoe_profile;
+            } catch (isoErr) {
+                return reject(isoErr);
+            }
 
             // Antisipasi double-submit / simpan ganda: tolak nomor HP yang sudah ada di tenant yang sama
             if (!customerData.__allow_duplicate_phone) {
@@ -2571,9 +2660,9 @@
                 { name: 'address', value: () => address },
                 { name: 'area', value: () => area || null },
                 { name: 'area_id', value: () => (area_id ? parseInt(area_id) : null) },
-                { name: 'package_id', value: () => package_id },
+                { name: 'package_id', value: () => resolvedPackageId },
                 { name: 'odp_id', value: () => customerData.odp_id || null },
-                { name: 'pppoe_profile', value: () => pppoe_profile },
+                { name: 'pppoe_profile', value: () => resolvedPppoeProfile },
                 { name: 'status', value: () => finalStatus },
                 { name: 'auto_suspension', value: () => (auto_suspension !== undefined ? auto_suspension : 1) },
                 { name: 'auto_suspension_day', value: () => normAutoSuspensionDay },
@@ -4344,6 +4433,24 @@ ${lifetimePaymentStatusSql}
                     nextConnectionType = hasStatic && !hasPppoe ? 'static_ip' : 'pppoe';
                 }
 
+                const tenantIdForIso = oldCustomer.tenant_id != null
+                    ? parseInt(oldCustomer.tenant_id, 10)
+                    : this._resolveTenantIdForInsert(customerData && customerData.tenant_id);
+                let nextPackageId = package_id !== undefined ? package_id : oldCustomer.package_id;
+                let nextPppoeProfile = pppoe_profile !== undefined ? pppoe_profile : oldCustomer.pppoe_profile;
+                try {
+                    const enforced = await this._enforceTenantPackageAndProfile(
+                        tenantIdForIso,
+                        nextPackageId,
+                        nextPppoeProfile,
+                        { strict: false }
+                    );
+                    nextPackageId = enforced.package_id;
+                    nextPppoeProfile = enforced.pppoe_profile;
+                } catch (isoErr) {
+                    return reject(isoErr);
+                }
+
                 let sql = `UPDATE customers SET name = ?, username = ?, phone = ?, pppoe_username = ?, email = ?, address = ?, area = ?, area_id = ?, package_id = ?, odp_id = ?, pppoe_profile = ?, status = ?, auto_suspension = ?, billing_day = ?, renewal_type = ?, fix_date = ?, latitude = ?, longitude = ?, static_ip = ?, assigned_ip = ?, mac_address = ?, cable_type = ?, cable_length = ?, port_number = ?, cable_status = ?, cable_notes = ?, ktp_photo_path = ?, house_photo_path = ?, connection_type = ?`;
                 let params = [
                     name !== undefined ? name : oldCustomer.name, 
@@ -4354,9 +4461,9 @@ ${lifetimePaymentStatusSql}
                     address !== undefined ? address : oldCustomer.address, 
                     area !== undefined ? area : oldCustomer.area,
                     customerData.area_id !== undefined ? customerData.area_id : oldCustomer.area_id,
-                    package_id !== undefined ? package_id : oldCustomer.package_id, 
+                    nextPackageId, 
                     odp_id !== undefined ? odp_id : oldCustomer.odp_id,
-                    pppoe_profile !== undefined ? pppoe_profile : oldCustomer.pppoe_profile, 
+                    nextPppoeProfile, 
                     status !== undefined ? status : oldCustomer.status, 
                     auto_suspension !== undefined ? auto_suspension : oldCustomer.auto_suspension, 
                     normBillingDay,

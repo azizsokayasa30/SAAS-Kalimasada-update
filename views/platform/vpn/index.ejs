@@ -13,7 +13,98 @@
   <% if (flash && flash.success === 'saved') { %><div class="alert alert-success">Pengaturan VPN berhasil disimpan.</div><% } %>
   <% if (flash && flash.success === 'keys') { %><div class="alert alert-success">Keypair WireGuard berhasil digenerate.</div><% } %>
   <% if (flash && flash.success === 'psk') { %><div class="alert alert-success">IPsec PSK berhasil digenerate.</div><% } %>
+  <% if (flash && flash.success === 'restarted') { %><div class="alert alert-success">VPN server berhasil direstart.</div><% } %>
   <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+
+  <%
+    const rt = runtime || {};
+    const rp = rt.peers || {};
+    const rtx = rt.transfer || {};
+    const rsd = rt.systemd || {};
+    const rl2 = rt.l2tp || {};
+  %>
+  <div class="km-card mb-4" id="vpnMonitorCard">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+      <div>
+        <h5 class="mb-1">Monitoring Server VPN</h5>
+        <p class="text-muted small mb-0">Status live WireGuard &amp; L2TP di VPS ini. Auto-refresh tiap 10 detik.</p>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="btnRefreshVpnStatus">
+          <i class="bi bi-arrow-clockwise me-1"></i> Refresh
+        </button>
+        <button type="button" class="btn btn-warning btn-sm" id="btnRestartVpn" title="Tulis ulang config dari DB lalu restart WireGuard">
+          <i class="bi bi-arrow-repeat me-1"></i> Restart VPN Server
+        </button>
+      </div>
+    </div>
+
+    <div id="vpnRestartAlert" class="alert d-none mb-3" role="alert"></div>
+
+    <div class="row g-3 mb-3">
+      <div class="col-md-3 col-6">
+        <div class="border rounded p-3 h-100">
+          <div class="text-muted small">WireGuard</div>
+          <div class="fs-5 fw-semibold" id="monWgState">
+            <% if (rt.running) { %>
+              <span class="badge bg-success">Running</span>
+            <% } else { %>
+              <span class="badge bg-danger">Stopped</span>
+            <% } %>
+          </div>
+          <div class="small text-muted mt-1"><span id="monWgUnit"><%= (rsd.wireguard && rsd.wireguard.activeState) || '—' %></span> · <code id="monIface"><%= rt.interfaceName || server.interface_name || 'wg0' %></code></div>
+        </div>
+      </div>
+      <div class="col-md-3 col-6">
+        <div class="border rounded p-3 h-100">
+          <div class="text-muted small">Peer Online</div>
+          <div class="fs-5 fw-semibold" id="monPeerOnline"><%= rp.wireguardOnline != null ? rp.wireguardOnline : '—' %></div>
+          <div class="small text-muted mt-1" id="monPeerBreakdown">
+            stale <span id="monPeerStale"><%= rp.wireguardStale != null ? rp.wireguardStale : 0 %></span>
+            · offline <span id="monPeerOffline"><%= rp.wireguardOffline != null ? rp.wireguardOffline : 0 %></span>
+            · aktif <span id="monPeerActive"><%= rp.wireguardActive != null ? rp.wireguardActive : 0 %></span>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-3 col-6">
+        <div class="border rounded p-3 h-100">
+          <div class="text-muted small">Transfer</div>
+          <div class="fs-6 fw-semibold" id="monTransfer">↓ <%= rtx.rxLabel || '—' %> / ↑ <%= rtx.txLabel || '—' %></div>
+          <div class="small text-muted mt-1">Port <code id="monPort"><%= rt.listenPort || server.listen_port || 51820 %></code>
+            <span id="monPortBadge" class="badge <%= rt.portListening ? 'bg-success' : 'bg-secondary' %> ms-1"><%= rt.portListening ? 'listen' : 'n/a' %></span>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-3 col-6">
+        <div class="border rounded p-3 h-100">
+          <div class="text-muted small">L2TP/IPsec</div>
+          <div class="fs-6 fw-semibold" id="monL2tpState">
+            <% if (rl2.xl2tpdActive && rl2.strongswanActive) { %>
+              <span class="badge bg-success">Running</span>
+            <% } else if (rl2.enabled) { %>
+              <span class="badge bg-warning text-dark">Partial</span>
+            <% } else { %>
+              <span class="badge bg-secondary">Off</span>
+            <% } %>
+          </div>
+          <div class="small text-muted mt-1" id="monL2tpDetail">
+            xl2tpd <span id="monXl2tp"><%= rl2.xl2tpdActive ? 'up' : 'down' %></span>
+            · ipsec <span id="monIpsec"><%= rl2.strongswanActive ? 'up' : 'down' %></span>
+            · peer <span id="monL2tpPeers"><%= rp.l2tpActive != null ? rp.l2tpActive : 0 %></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 small text-muted">
+      <div>
+        Endpoint <code id="monEndpoint"><%= rt.publicEndpoint || server.public_endpoint || '—' %></code>
+        · Tunnel <code id="monTunnel"><%= rt.tunnelAddress || server.tunnel_address || '—' %></code>
+        · WAN <code id="monWan"><%= rt.wanInterface || server.wan_interface || '—' %></code>
+      </div>
+      <div id="monCheckedAt">Dicek: <%= rt.checkedAt ? new Date(rt.checkedAt).toLocaleString('id-ID') : '—' %></div>
+    </div>
+  </div>
 
   <form method="POST" action="/management/vpn" class="km-settings-form">
     <div class="km-card mb-4">
@@ -22,12 +113,12 @@
         <div class="col-md-6">
           <label class="form-label">Public Endpoint (IP / hostname VPS)</label>
           <input type="text" name="public_endpoint" class="form-control" required
-                 value="<%= server.public_endpoint || '' %>" placeholder="31.97.51.19">
+                 value="<%= server.public_endpoint || '' %>" placeholder="103.132.40.78">
         </div>
         <div class="col-md-3">
           <label class="form-label">WAN Interface (NAT)</label>
           <input type="text" name="wan_interface" class="form-control"
-                 value="<%= server.wan_interface || 'eth0' %>" placeholder="eth0">
+                 value="<%= server.wan_interface || 'ens18' %>" placeholder="ens18">
         </div>
         <div class="col-md-3">
           <label class="form-label">Tunnel Address Server</label>
@@ -172,6 +263,139 @@
   }
   bindToggle('togglePrivKey', 'serverPrivateKey');
   bindToggle('toggleIpsecPsk', 'ipsecPsk');
+
+  function setText(id, value) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = value == null ? '—' : String(value);
+  }
+
+  function badgeHtml(ok, okLabel, badLabel) {
+    return ok
+      ? '<span class="badge bg-success">' + okLabel + '</span>'
+      : '<span class="badge bg-danger">' + badLabel + '</span>';
+  }
+
+  function renderStatus(status) {
+    if (!status) return;
+    var peers = status.peers || {};
+    var transfer = status.transfer || {};
+    var l2tp = status.l2tp || {};
+    var systemd = status.systemd || {};
+    var wgUnit = systemd.wireguard || {};
+
+    var wgState = document.getElementById('monWgState');
+    if (wgState) wgState.innerHTML = badgeHtml(!!status.running, 'Running', 'Stopped');
+
+    setText('monWgUnit', wgUnit.activeState || '—');
+    setText('monIface', status.interfaceName || 'wg0');
+    setText('monPeerOnline', peers.wireguardOnline != null ? peers.wireguardOnline : '—');
+    setText('monPeerStale', peers.wireguardStale != null ? peers.wireguardStale : 0);
+    setText('monPeerOffline', peers.wireguardOffline != null ? peers.wireguardOffline : 0);
+    setText('monPeerActive', peers.wireguardActive != null ? peers.wireguardActive : 0);
+
+    var transferEl = document.getElementById('monTransfer');
+    if (transferEl) {
+      transferEl.textContent = '↓ ' + (transfer.rxLabel || '—') + ' / ↑ ' + (transfer.txLabel || '—');
+    }
+    setText('monPort', status.listenPort || '—');
+    var portBadge = document.getElementById('monPortBadge');
+    if (portBadge) {
+      portBadge.className = 'badge ms-1 ' + (status.portListening ? 'bg-success' : 'bg-secondary');
+      portBadge.textContent = status.portListening ? 'listen' : 'n/a';
+    }
+
+    var l2tpState = document.getElementById('monL2tpState');
+    if (l2tpState) {
+      if (l2tp.xl2tpdActive && l2tp.strongswanActive) {
+        l2tpState.innerHTML = '<span class="badge bg-success">Running</span>';
+      } else if (l2tp.enabled) {
+        l2tpState.innerHTML = '<span class="badge bg-warning text-dark">Partial</span>';
+      } else {
+        l2tpState.innerHTML = '<span class="badge bg-secondary">Off</span>';
+      }
+    }
+    setText('monXl2tp', l2tp.xl2tpdActive ? 'up' : 'down');
+    setText('monIpsec', l2tp.strongswanActive ? 'up' : 'down');
+    setText('monL2tpPeers', peers.l2tpActive != null ? peers.l2tpActive : 0);
+
+    setText('monEndpoint', status.publicEndpoint || '—');
+    setText('monTunnel', status.tunnelAddress || '—');
+    setText('monWan', status.wanInterface || '—');
+
+    var checked = document.getElementById('monCheckedAt');
+    if (checked) {
+      try {
+        checked.textContent = 'Dicek: ' + new Date(status.checkedAt).toLocaleString('id-ID');
+      } catch (_) {
+        checked.textContent = 'Dicek: ' + (status.checkedAt || '—');
+      }
+    }
+  }
+
+  function showRestartAlert(type, message) {
+    var el = document.getElementById('vpnRestartAlert');
+    if (!el) return;
+    el.className = 'alert mb-3 alert-' + (type === 'success' ? 'success' : 'danger');
+    el.textContent = message;
+    el.classList.remove('d-none');
+  }
+
+  async function fetchStatus() {
+    try {
+      var res = await fetch('/management/vpn/api/server-status', {
+        headers: { Accept: 'application/json' },
+        credentials: 'same-origin'
+      });
+      var data = await res.json();
+      if (data && data.success && data.status) renderStatus(data.status);
+    } catch (err) {
+      console.warn('vpn status refresh failed', err);
+    }
+  }
+
+  var refreshBtn = document.getElementById('btnRefreshVpnStatus');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', function () {
+      refreshBtn.disabled = true;
+      fetchStatus().finally(function () { refreshBtn.disabled = false; });
+    });
+  }
+
+  var restartBtn = document.getElementById('btnRestartVpn');
+  if (restartBtn) {
+    restartBtn.addEventListener('click', async function () {
+      if (!confirm('Restart VPN server?\n\nIni akan menulis ulang konfigurasi WireGuard dari database lalu me-restart layanan. Peer yang sedang online akan terputus sebentar.')) {
+        return;
+      }
+      restartBtn.disabled = true;
+      restartBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Restarting…';
+      try {
+        var res = await fetch('/management/vpn/api/restart', {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json'
+          },
+          credentials: 'same-origin',
+          body: JSON.stringify({ applyConfig: true, includeL2tp: false })
+        });
+        var data = await res.json();
+        if (data && data.status) renderStatus(data.status);
+        if (data && data.success) {
+          showRestartAlert('success', data.message || 'VPN server berhasil direstart.');
+        } else {
+          showRestartAlert('danger', (data && data.message) || 'Gagal restart VPN server.');
+        }
+      } catch (err) {
+        showRestartAlert('danger', err.message || 'Gagal restart VPN server.');
+      } finally {
+        restartBtn.disabled = false;
+        restartBtn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i> Restart VPN Server';
+      }
+    });
+  }
+
+  setInterval(fetchStatus, 10000);
 })();
 </script>
 
