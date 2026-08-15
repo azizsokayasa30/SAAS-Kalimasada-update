@@ -115,7 +115,8 @@
 <% 
   var currentMonth = new Date().getMonth() + 1;
   var currentYear = new Date().getFullYear();
-  var filters = (typeof filters !== 'undefined') ? filters : { month: String(currentMonth), year: String(currentYear), from: '', to: '', collector_id: '', status: '', q: '' };
+  var filters = (typeof filters !== 'undefined') ? filters : { month: String(currentMonth), year: String(currentYear), date: '', from: '', to: '', collector_id: '', status: '', q: '' };
+  var todayStr = (typeof today !== 'undefined' && today) ? String(today) : new Date().toISOString().slice(0, 10);
   var payments = (typeof payments !== 'undefined') ? payments : [];
   var collectors = (typeof collectors !== 'undefined') ? collectors : [];
   var paySummary = (typeof summary !== 'undefined' && summary) ? summary : { transaction_count: 0, total_amount: 0, total_tagihan: 0, total_commission: 0, total_net: 0, total_discount: 0 };
@@ -165,7 +166,7 @@
                             <div class="f-stat-icon-wrapper bg-primary-glow"><i class="bi bi-list-check"></i></div>
                         </div>
                         <div class="f-stat-value f-premium-text"><%= (paySummary.transaction_count || 0).toLocaleString('id-ID') %></div>
-                        <div class="f-stat-desc">Sesuai filter periode</div>
+                        <div class="f-stat-desc"><%= filters.date ? ('Tanggal ' + filters.date) : 'Sesuai filter periode' %></div>
                     </div>
                     <div class="f-stat-card animate-in" style="animation-delay: 0.2s;">
                         <div class="f-stat-header">
@@ -195,25 +196,32 @@
 
                 <div class="f-card all-payments-filter-card mb-2">
                     <div class="f-card-body">
-                        <form method="GET" action="/admin/billing/all-payments" class="row g-2 align-items-end">
-                            <div class="col-md-3">
+                        <form method="GET" action="/admin/billing/all-payments" id="allPaymentsFilterForm" class="row g-2 align-items-end" data-today="<%= todayStr %>">
+                            <div class="col-6 col-md-2">
                                 <label class="f-label">BULAN</label>
-                                <select class="f-select" name="month">
+                                <select class="f-select" name="month" id="filterMonth">
                                     <% const monthsAll = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember']; %>
                                     <% for (let m = 1; m <= 12; m++) { %>
                                         <option value="<%= m %>" <%= String(filters.month) === String(m) ? 'selected' : '' %>><%= monthsAll[m - 1] %></option>
                                     <% } %>
                                 </select>
                             </div>
-                            <div class="col-md-3">
+                            <div class="col-6 col-md-2">
                                 <label class="f-label">TAHUN</label>
-                                <select class="f-select" name="year">
+                                <select class="f-select" name="year" id="filterYear">
                                     <% for (let y = currentYear - 3; y <= currentYear + 1; y++) { %>
                                         <option value="<%= y %>" <%= String(filters.year) === String(y) ? 'selected' : '' %>><%= y %></option>
                                     <% } %>
                                 </select>
                             </div>
-                            <div class="col-md-3">
+                            <div class="col-12 col-md-3">
+                                <label class="f-label">TANGGAL (HARIAN)</label>
+                                <div class="d-flex gap-1">
+                                    <input type="date" class="f-input" name="date" id="filterDate" value="<%= filters.date || '' %>" title="Kosongkan untuk filter per bulan">
+                                    <button type="button" class="f-btn f-btn-outline" id="filterTodayBtn" title="Filter hari ini" style="white-space:nowrap; min-height:2.5rem;">Hari ini</button>
+                                </div>
+                            </div>
+                            <div class="col-12 col-md-3">
                                 <label class="f-label">KOLEKTOR</label>
                                 <select class="f-select" name="collector_id">
                                     <option value="">Semua kolektor</option>
@@ -222,9 +230,9 @@
                                     <% }); %>
                                 </select>
                             </div>
-                            <div class="col-md-3">
+                            <div class="col-12 col-md-2">
                                 <button type="submit" class="f-btn f-btn-primary w-100">
-                                    <i class="bi bi-filter"></i>Terapkan Filter
+                                    <i class="bi bi-filter"></i>Terapkan
                                 </button>
                             </div>
                             <div class="col-12 col-md-9">
@@ -297,7 +305,7 @@
                 <div class="all-payments-footer">
                     <small class="text-muted" style="font-size: 0.8rem;">
                         Menampilkan <%= payments.length %> pembayaran
-                        <% if (filters.month || filters.year || filters.collector_id || filters.q) { %>(difilter)<% } %>
+                        <% if (filters.date) { %>(tanggal <%= filters.date %>)<% } else if (filters.month || filters.year || filters.collector_id || filters.q) { %>(difilter)<% } %>
                     </small>
                 </div>
             </div>
@@ -310,18 +318,20 @@
                     <h5 class="modal-title text-danger" id="cancelPaymentModalLabel"><i class="bi bi-shield-lock me-1"></i>Batalkan pembayaran</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
                 </div>
+                <form id="cancelPaymentForm" autocomplete="off">
                 <div class="modal-body">
                     <p class="small text-muted mb-2" id="cancelPaymentSummary"></p>
                     <p class="small mb-3">Baris pembayaran akan dihapus. Jika tidak ada lagi pembayaran yang mencukupi tagihan, status invoice menjadi <strong>belum lunas</strong>.</p>
-                    <input type="hidden" id="cancelPaymentId" value="">
-                    <label for="cancelPaymentPassword" class="form-label">Konfirmasi password super admin</label>
-                    <input type="password" class="form-control" id="cancelPaymentPassword" autocomplete="current-password" placeholder="Password super admin">
-                    <p class="form-text small text-muted mt-2 mb-0">Gunakan password login panel admin. Jika Anda sudah mengatur password khusus super admin di pengaturan sistem, gunakan password itu.</p>
+                    <input type="hidden" id="cancelPaymentId" name="payment_id" value="">
+                    <label for="cancelPaymentPassword" class="form-label">Konfirmasi password admin</label>
+                    <input type="password" class="form-control" id="cancelPaymentPassword" name="confirm_password" autocomplete="new-password" placeholder="Password login admin" readonly>
+                    <p class="form-text small text-muted mt-2 mb-0">Gunakan password login panel admin tenant ini. Jika ada password khusus super admin di pengaturan, gunakan password itu.</p>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Tutup</button>
-                    <button type="button" class="btn btn-danger" id="cancelPaymentConfirmBtn">Batalkan pembayaran</button>
+                    <button type="submit" class="btn btn-danger" id="cancelPaymentConfirmBtn">Batalkan pembayaran</button>
                 </div>
+                </form>
             </div>
         </div>
     </div>
@@ -565,11 +575,81 @@
         if (isAllPaymentsPage) {
             let cancelPaymentModalInstance = null;
             let cancelPaymentTargetBtn = null;
+            let typedCancelPassword = '';
             const cancelModalEl = document.getElementById('cancelPaymentModal');
+            const cancelForm = document.getElementById('cancelPaymentForm');
             const cancelPwdInput = document.getElementById('cancelPaymentPassword');
             const cancelIdInput = document.getElementById('cancelPaymentId');
             const cancelSummaryEl = document.getElementById('cancelPaymentSummary');
             const cancelConfirmBtn = document.getElementById('cancelPaymentConfirmBtn');
+            const filterForm = document.getElementById('allPaymentsFilterForm');
+            const filterDate = document.getElementById('filterDate');
+            const filterMonth = document.getElementById('filterMonth');
+            const filterYear = document.getElementById('filterYear');
+            const filterTodayBtn = document.getElementById('filterTodayBtn');
+            let syncingDateToMonth = false;
+
+            if (filterDate && filterMonth && filterYear) {
+                filterDate.addEventListener('change', function () {
+                    if (!this.value) return;
+                    const parts = this.value.split('-');
+                    if (parts.length !== 3) return;
+                    syncingDateToMonth = true;
+                    filterYear.value = String(Number(parts[0]));
+                    filterMonth.value = String(Number(parts[1]));
+                    syncingDateToMonth = false;
+                });
+                filterMonth.addEventListener('change', function () {
+                    if (!syncingDateToMonth) filterDate.value = '';
+                });
+                filterYear.addEventListener('change', function () {
+                    if (!syncingDateToMonth) filterDate.value = '';
+                });
+            }
+            if (filterTodayBtn && filterForm) {
+                filterTodayBtn.addEventListener('click', function () {
+                    const todayVal = filterForm.getAttribute('data-today') || new Date().toISOString().slice(0, 10);
+                    if (filterDate) {
+                        filterDate.value = todayVal;
+                        filterDate.dispatchEvent(new Event('change'));
+                    }
+                    filterForm.submit();
+                });
+            }
+
+            function unlockCancelPasswordField() {
+                if (!cancelPwdInput) return;
+                cancelPwdInput.removeAttribute('readonly');
+            }
+
+            function readCancelPassword() {
+                unlockCancelPasswordField();
+                let fromInput = cancelPwdInput ? String(cancelPwdInput.value || '') : '';
+                if (!String(fromInput).trim() && cancelPwdInput) {
+                    cancelPwdInput.blur();
+                    fromInput = String(cancelPwdInput.value || '');
+                }
+                const fromForm = cancelForm ? String(new FormData(cancelForm).get('confirm_password') || '') : '';
+                return String(fromInput || fromForm || typedCancelPassword || '').trim();
+            }
+
+            if (cancelPwdInput) {
+                cancelPwdInput.addEventListener('focus', unlockCancelPasswordField);
+                cancelPwdInput.addEventListener('click', unlockCancelPasswordField);
+                cancelPwdInput.addEventListener('input', function () {
+                    typedCancelPassword = this.value;
+                });
+                cancelPwdInput.addEventListener('change', function () {
+                    typedCancelPassword = this.value;
+                });
+                cancelPwdInput.addEventListener('keydown', function (ev) {
+                    typedCancelPassword = this.value;
+                    if (ev.key === 'Enter') {
+                        ev.preventDefault();
+                        submitCancelPayment();
+                    }
+                });
+            }
 
             document.addEventListener('click', function (ev) {
                 const btn = ev.target.closest('.btn-cancel-payment');
@@ -580,25 +660,31 @@
                 const amt = Number(btn.getAttribute('data-amount') || 0);
                 const rp = 'Rp ' + Math.round(amt).toLocaleString('id-ID');
                 cancelPaymentTargetBtn = btn;
+                typedCancelPassword = '';
                 cancelIdInput.value = id || '';
                 cancelSummaryEl.innerHTML =
                     '<strong>Invoice:</strong> ' + inv + '<br>' +
                     '<strong>Pelanggan:</strong> ' + cust + '<br>' +
                     '<strong>Jumlah:</strong> ' + rp;
                 cancelPwdInput.value = '';
+                cancelPwdInput.setAttribute('readonly', 'readonly');
                 if (!cancelPaymentModalInstance) {
                     cancelPaymentModalInstance = new bootstrap.Modal(cancelModalEl);
                 }
                 cancelPaymentModalInstance.show();
-                setTimeout(function () { cancelPwdInput.focus(); }, 400);
+                setTimeout(function () {
+                    unlockCancelPasswordField();
+                    cancelPwdInput.focus();
+                }, 400);
             });
 
-            cancelConfirmBtn.addEventListener('click', async function () {
+            async function submitCancelPayment() {
                 const id = cancelIdInput.value;
-                const pwd = cancelPwdInput.value;
+                const pwd = readCancelPassword();
                 if (!id) return;
-                if (!String(pwd || '').trim()) {
-                    alert('Masukkan password super admin.');
+                if (!pwd) {
+                    alert('Masukkan password admin.');
+                    unlockCancelPasswordField();
                     cancelPwdInput.focus();
                     return;
                 }
@@ -606,14 +692,20 @@
                 try {
                     const resp = await fetch('/admin/billing/api/payments/' + encodeURIComponent(id) + '/cancel', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
                         credentials: 'same-origin',
-                        body: JSON.stringify({ confirm_password: pwd })
+                        body: JSON.stringify({
+                            confirm_password: pwd,
+                            super_admin_password: pwd,
+                            password: pwd
+                        })
                     });
                     const data = await resp.json().catch(function () { return {}; });
                     if (!resp.ok || !data.success) {
                         alert(data.message || 'Gagal membatalkan pembayaran');
                         cancelConfirmBtn.disabled = false;
+                        unlockCancelPasswordField();
+                        cancelPwdInput.focus();
                         return;
                     }
                     if (cancelPaymentModalInstance) cancelPaymentModalInstance.hide();
@@ -623,10 +715,20 @@
                     alert('Gagal membatalkan pembayaran (jaringan atau server).');
                     cancelConfirmBtn.disabled = false;
                 }
-            });
+            }
+
+            if (cancelForm) {
+                cancelForm.addEventListener('submit', function (ev) {
+                    ev.preventDefault();
+                    submitCancelPayment();
+                });
+            } else if (cancelConfirmBtn) {
+                cancelConfirmBtn.addEventListener('click', submitCancelPayment);
+            }
 
             cancelModalEl.addEventListener('hidden.bs.modal', function () {
                 cancelConfirmBtn.disabled = false;
+                typedCancelPassword = '';
                 cancelPwdInput.value = '';
                 if (cancelPaymentTargetBtn) cancelPaymentTargetBtn = null;
             });

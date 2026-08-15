@@ -60,12 +60,52 @@ function resolveImportTenantScope(req, meta = null) {
     };
 }
 
-/** Password konfirmasi aksi sensitif: `super_admin_password` di settings jika diisi, else `admin_password`. */
-function verifySuperAdminPassword(plain) {
-    const dedicated = String(getSetting('super_admin_password', '') || '').trim();
-    const expected =
-        dedicated.length > 0 ? dedicated : String(getSetting('admin_password', 'admin'));
-    const a = Buffer.from(String(plain ?? ''), 'utf8');
+function extractConfirmPassword(body) {
+    if (!body || typeof body !== 'object') return '';
+    const keys = ['confirm_password', 'super_admin_password', 'admin_password', 'password'];
+    for (const key of keys) {
+        if (body[key] == null) continue;
+        const value = String(body[key]);
+        if (value.trim() !== '') return value;
+    }
+    return '';
+}
+
+/**
+ * Password konfirmasi aksi sensitif.
+ * Tenant: password login admin tenant (settings tenant), bukan settings.json host.
+ * Jika `super_admin_password` diisi di pengaturan tenant/host, itu yang dipakai.
+ */
+function verifySuperAdminPassword(plain, req) {
+    const submitted = String(plain ?? '').trim();
+    if (!submitted) return false;
+
+    let expected = '';
+    let inTenant = false;
+    try {
+        const { getTenant, hasTenantContext } = require('../config/platform/tenantContext');
+        const tenant = req?.tenant || (hasTenantContext() ? getTenant() : null);
+        inTenant = Boolean(tenant);
+        const settings = tenant?.settings && typeof tenant.settings === 'object' ? tenant.settings : null;
+        if (settings) {
+            const dedicated = String(settings.super_admin_password || '').trim();
+            expected = dedicated || String(settings.admin_password || '').trim();
+        }
+        if (!expected && tenant) {
+            expected = String(tenant.admin_password || '').trim();
+        }
+    } catch (_) {
+        expected = '';
+    }
+
+    if (inTenant && !expected) return false;
+
+    if (!expected) {
+        const dedicated = String(getSetting('super_admin_password', '') || '').trim();
+        expected = dedicated || String(getSetting('admin_password', 'admin') || 'admin').trim();
+    }
+
+    const a = Buffer.from(submitted, 'utf8');
     const b = Buffer.from(expected, 'utf8');
     if (a.length !== b.length) return false;
     try {
@@ -391,6 +431,29 @@ const resolveMonthYearRange = (query = {}) => {
     const endDate = new Date(year, month, 0).toISOString().split('T')[0];
     return { month, year, startDate, endDate };
 };
+
+function parseIsoDateOnly(value) {
+    const s = String(value || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return '';
+    const [y, m, d] = s.split('-').map((n) => parseInt(n, 10));
+    const dt = new Date(y, m - 1, d);
+    if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return '';
+    return s;
+}
+
+function todayInJakarta() {
+    try {
+        return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
+    } catch (_) {
+        const now = new Date();
+        const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+        const jkt = new Date(utc + 7 * 3600000);
+        const y = jkt.getFullYear();
+        const m = String(jkt.getMonth() + 1).padStart(2, '0');
+        const d = String(jkt.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    }
+}
 
 // Middleware untuk mendapatkan pengaturan aplikasi (per-tenant)
 const { attachTenantAppSettings } = require('../config/platform/tenantAppSettings');
@@ -10408,11 +10471,29 @@ router.get('/payments', getAppSettings, async (req, res) => {
 router.get('/all-payments', getAppSettings, async (req, res) => {
     try {
         const period = resolveMonthYearRange(req.query);
+        const day = parseIsoDateOnly(req.query.date || req.query.day || '');
+        let from = period.startDate;
+        let to = period.endDate;
+        let month = String(period.month);
+        let year = String(period.year);
+        if (day) {
+            from = day;
+            to = day;
+            const [y, m] = day.split('-');
+            month = String(parseInt(m, 10));
+            year = String(parseInt(y, 10));
+        } else {
+            const fromQ = parseIsoDateOnly(req.query.from);
+            const toQ = parseIsoDateOnly(req.query.to);
+            if (fromQ) from = fromQ;
+            if (toQ) to = toQ;
+        }
         const filters = {
-            month: String(period.month),
-            year: String(period.year),
-            from: req.query.from || period.startDate,
-            to: req.query.to || period.endDate,
+            month,
+            year,
+            date: day,
+            from,
+            to,
             collector_id: req.query.collector_id || '',
             q: req.query.q || ''
         };
@@ -10430,6 +10511,7 @@ router.get('/all-payments', getAppSettings, async (req, res) => {
             collectors,
             filters,
             summary,
+            today: todayInJakarta(),
             appSettings: req.appSettings,
             settings: settings,
             page: 'all-payments'
@@ -10452,16 +10534,17 @@ router.post('/api/payments/:id/cancel', async (req, res) => {
             return res.status(400).json({ success: false, message: 'ID pembayaran tidak valid' });
         }
         const rawBody = req.body && typeof req.body === 'object' ? req.body : {};
-        const confirmPassword =
-            rawBody.confirm_password != null
-                ? String(rawBody.confirm_password)
-                : rawBody.super_admin_password != null
-                  ? String(rawBody.super_admin_password)
-                  : '';
-        if (!verifySuperAdminPassword(confirmPassword)) {
+        const confirmPassword = extractConfirmPassword(rawBody);
+        if (!String(confirmPassword).trim()) {
             return res.status(403).json({
                 success: false,
-                message: 'Password super admin salah atau kosong.'
+                message: 'Password konfirmasi wajib diisi.'
+            });
+        }
+        if (!verifySuperAdminPassword(confirmPassword, req)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Password admin salah. Gunakan password login panel admin tenant ini.'
             });
         }
         const result = await billingManager.cancelPaymentById(id);

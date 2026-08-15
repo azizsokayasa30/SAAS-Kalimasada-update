@@ -264,18 +264,12 @@
                                 <option value="member">Member (Hotspot)</option>
                             </select>
                         </div>
-                        <div class="mb-3" id="customer_select_group">
-                            <label for="customer_id" class="form-label">Pelanggan</label>
-                            <select class="form-control" id="customer_id" name="customer_id">
-                                <option value="">Pilih Pelanggan</option>
-                                <% if (customers && customers.length > 0) { %>
-                                    <% customers.forEach(function(customer) { %>
-                                        <option value="<%= customer.id %>">
-                                            <%= customer.name %> (<%= customer.phone %>)
-                                        </option>
-                                    <% }); %>
-                                <% } %>
-                            </select>
+                        <div class="mb-3 position-relative" id="customer_select_group">
+                            <label for="customerSearchInput" class="form-label">Pelanggan</label>
+                            <input type="text" class="form-control" id="customerSearchInput" placeholder="Ketik min. 3 huruf nama/telepon/username…" autocomplete="off">
+                            <input type="hidden" id="customer_id" name="customer_id" value="">
+                            <div id="customerSuggestions" class="list-group position-absolute w-100" style="z-index:1060; max-height:220px; overflow:auto; display:none;"></div>
+                            <div class="form-text">Dropdown rekomendasi muncul setelah mengetik minimal 3 huruf.</div>
                         </div>
                         <div class="mb-3" id="member_select_group" style="display: none;">
                             <label for="member_id" class="form-label">Member</label>
@@ -617,6 +611,93 @@
                 $('#invoicesTable').DataTable().draw();
             });
 
+            // Data pelanggan untuk autocomplete (ringan: id/nama/telepon/username)
+            const invoiceCustomerOptions = <%- JSON.stringify((customers || []).map(function(c) {
+                return {
+                    id: c.id,
+                    name: c.name || '',
+                    phone: c.phone || '',
+                    username: c.username || '',
+                    package_id: c.package_id || null
+                };
+            })) %>;
+
+            function clearInvoiceCustomerSelection() {
+                $('#customer_id').val('');
+                $('#customerSearchInput').val('');
+                $('#customerSuggestions').hide().empty();
+            }
+
+            function renderInvoiceCustomerSuggestions(keyword) {
+                const box = document.getElementById('customerSuggestions');
+                if (!box) return;
+                const q = String(keyword || '').toLowerCase().trim();
+                if (q.length < 3) {
+                    box.style.display = 'none';
+                    box.innerHTML = '';
+                    return;
+                }
+                const matches = invoiceCustomerOptions.filter(function(c) {
+                    return String(c.name || '').toLowerCase().includes(q)
+                        || String(c.phone || '').toLowerCase().includes(q)
+                        || String(c.username || '').toLowerCase().includes(q);
+                }).slice(0, 12);
+
+                if (!matches.length) {
+                    box.innerHTML = '<div class="list-group-item text-muted">Pelanggan tidak ditemukan</div>';
+                    box.style.display = 'block';
+                    return;
+                }
+
+                box.innerHTML = matches.map(function(c) {
+                    const labelName = String(c.name || '-').replace(/"/g, '&quot;');
+                    const labelPhone = String(c.phone || '-').replace(/"/g, '&quot;');
+                    const pkgId = c.package_id != null ? String(c.package_id) : '';
+                    return '<button type="button" class="list-group-item list-group-item-action invoice-customer-suggestion"'
+                        + ' data-id="' + c.id + '"'
+                        + ' data-name="' + labelName + '"'
+                        + ' data-phone="' + labelPhone + '"'
+                        + ' data-package-id="' + pkgId + '">'
+                        + '<strong>' + (c.name || '-') + '</strong><br>'
+                        + '<small>' + (c.phone || '-') + ' | ' + (c.username || '-') + '</small>'
+                        + '</button>';
+                }).join('');
+                box.style.display = 'block';
+            }
+
+            $('#customerSearchInput').on('input', function() {
+                $('#customer_id').val('');
+                renderInvoiceCustomerSuggestions(this.value);
+            });
+
+            function applyCustomerPackage(packageId) {
+                if (!packageId) return;
+                const $opt = $('#package_id option[data-package-type="customer"][value="' + packageId + '"]');
+                if (!$opt.length) return;
+                $('#package_id').val(String(packageId)).trigger('change');
+            }
+
+            $(document).on('click', '.invoice-customer-suggestion', function() {
+                const id = $(this).data('id');
+                const name = $(this).data('name') || '';
+                const phone = $(this).data('phone') || '';
+                const packageId = $(this).data('package-id') || '';
+                $('#customer_id').val(id);
+                $('#customerSearchInput').val(name + (phone ? ' (' + phone + ')' : ''));
+                $('#customerSuggestions').hide().empty();
+                applyCustomerPackage(packageId);
+            });
+
+            $(document).on('click', function(e) {
+                if (!$(e.target).closest('#customer_select_group').length) {
+                    $('#customerSuggestions').hide();
+                }
+            });
+
+            $('#addInvoiceModal').on('hidden.bs.modal', function() {
+                clearInvoiceCustomerSelection();
+            });
+
             // Toggle between customer and member
             $('#invoice_type_select').on('change', function() {
                 const invoiceType = $(this).val();
@@ -636,7 +717,7 @@
                     $('#member_select_group').show();
                     $('#customer_id').prop('required', false);
                     $('#member_id').prop('required', true);
-                    $('#customer_id').val('');
+                    clearInvoiceCustomerSelection();
                     
                     // Show member packages, hide customer packages
                     $('#package_id option[data-package-type="member"]').show();
@@ -698,7 +779,8 @@
             // Validate required fields based on invoice type
             const invoiceType = $('#invoice_type_select').val();
             if (invoiceType === 'customer' && !$('#customer_id').val()) {
-                alert('Pilih pelanggan terlebih dahulu');
+                alert('Pilih pelanggan dari rekomendasi (ketik min. 3 huruf lalu klik hasilnya).');
+                $('#customerSearchInput').focus();
                 return;
             }
             if (invoiceType === 'member' && !$('#member_id').val()) {
