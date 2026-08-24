@@ -3,7 +3,7 @@ const billingManager = require('./billing');
 const logger = require('./logger');
 const fs = require('fs');
 const path = require('path');
-const { getCompanyHeader } = require('./message-templates');
+const { pickCompanyHeaderFromSettings, DEFAULT_COMPANY_HEADER } = require('./companyBranding');
 const { getProviderManager } = require('./whatsapp-provider-manager');
 const { getBuiltInWhatsAppTemplates, mergeWhatsAppTemplatesFromFile } = require('./whatsapp-template-registry');
 
@@ -486,21 +486,25 @@ class WhatsAppNotificationManager {
     }
 
     /**
-     * Lengkapi data template: portal URL per tenant + rekening pembayaran + default paket kosong
-     * agar {package_name}/{package_speed}/{customer_portal_url}/{Rekening_Pembayaran} aman dipakai.
+     * Lengkapi data template: portal URL, rekening, dan branding company per tenant.
      */
     async buildTemplateData(tenantId, data = {}) {
         const portalUrl = (data && data.customer_portal_url)
             || await this.getCustomerPortalLoginUrlForTenant(tenantId);
         const rekeningPembayaran = (data && data.Rekening_Pembayaran)
             || await this.getRekeningPembayaranForTenant(tenantId);
+        const branding = await this._getCompanyHeaderFooter(tenantId);
         return {
             package_name: '',
             package_speed: '',
             Rekening_Pembayaran: '',
             ...data,
             customer_portal_url: portalUrl,
-            Rekening_Pembayaran: rekeningPembayaran
+            Rekening_Pembayaran: rekeningPembayaran,
+            company_header: branding.companyHeader,
+            footer_info: branding.footerInfo,
+            support_phone: (data && data.support_phone && String(data.support_phone).trim())
+                || branding.supportPhone
         };
     }
 
@@ -1011,24 +1015,34 @@ class WhatsAppNotificationManager {
     }
 
     async _getCompanyHeaderFooter(tenantId = null) {
-        let companyHeader = getSetting('company_header', '📱 SISTEM BILLING 📱\n\n');
-        let footerInfo = getSetting('footer_info', 'Powered by Alijaya Digital Network');
-        const tid = this._normalizeTenantId(tenantId);
+        let companyHeader = pickCompanyHeaderFromSettings({
+            company_header: getSetting('company_header', DEFAULT_COMPANY_HEADER),
+            company_name: getSetting('company_name', ''),
+            app_name: getSetting('app_name', '')
+        });
+        let footerInfo = getSetting('footer_info', '');
+        let supportPhone = getSetting('support_phone', '') || getSetting('contact_whatsapp', '');
+        const tid = this._normalizeTenantId(tenantId) ?? this.resolveTenantId();
         if (tid) {
             try {
                 const { getFullSettingsForTenantId } = require('./platform/tenantSettingsManager');
                 const ts = await getFullSettingsForTenantId(tid);
-                if (ts?.company_header != null && String(ts.company_header).length) {
-                    companyHeader = ts.company_header;
+                companyHeader = pickCompanyHeaderFromSettings(ts);
+                if (ts?.footer_info != null && String(ts.footer_info).trim()) {
+                    footerInfo = String(ts.footer_info).trim();
                 }
-                if (ts?.footer_info != null && String(ts.footer_info).length) {
-                    footerInfo = ts.footer_info;
+                if (ts?.support_phone || ts?.contact_whatsapp) {
+                    supportPhone = ts.support_phone || ts.contact_whatsapp || supportPhone;
                 }
             } catch (err) {
                 logger.warn('⚠️ Gagal load header/footer tenant:', err.message);
             }
         }
-        return { companyHeader, footerInfo };
+        return {
+            companyHeader: companyHeader || DEFAULT_COMPANY_HEADER,
+            footerInfo: footerInfo || '',
+            supportPhone: supportPhone || ''
+        };
     }
 
     async wrapMessageWithHeaderFooter(message, tenantId = null) {
@@ -1888,9 +1902,11 @@ Internet Tanpa Batas`;
                 if (!allowed.has(key)) return;
                 const src = incoming[key] || {};
                 if (!next[key]) next[key] = { ...getBuiltInWhatsAppTemplates()[key] };
+                const { sanitizeWhatsAppTemplateCompanyHeader } = require('./companyBranding');
+                const templateRaw = src.template !== undefined ? src.template : next[key].template;
                 next[key] = {
                     title: src.title != null ? src.title : next[key].title,
-                    template: src.template !== undefined ? src.template : next[key].template,
+                    template: sanitizeWhatsAppTemplateCompanyHeader(templateRaw),
                     enabled: src.enabled !== undefined ? !!src.enabled : next[key].enabled
                 };
                 updated++;
@@ -2112,7 +2128,7 @@ Internet Tanpa Batas`;
             }
 
             const tid = tenantId || customer.tenant_id || null;
-            let companyHeader = getSetting('company_header', 'CV Lintas Multimedia');
+            let companyHeader = getSetting('company_header', DEFAULT_COMPANY_HEADER);
             let footerInfo = getSetting('footer_info', 'Internet Tanpa Batas');
             let supportPhone = getSetting('support_phone', '') || getSetting('contact_whatsapp', '0813-6888-8498');
             try {
@@ -2178,7 +2194,7 @@ Internet Tanpa Batas`;
                 return { success: false, error: 'Template welcome_message tidak ditemukan' };
             }
             const tid = tenantId || customer?.tenant_id || options.tenantId || null;
-            let companyHeader = getSetting('company_header', 'CV Lintas Multimedia');
+            let companyHeader = getSetting('company_header', DEFAULT_COMPANY_HEADER);
             let footerInfo = getSetting('footer_info', 'Internet Tanpa Batas');
             let supportPhone = getSetting('support_phone', '') || getSetting('contact_whatsapp', '0813-6888-8498');
             try {

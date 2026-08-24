@@ -1,6 +1,7 @@
 const billingManager = require('./billing');
 const logger = require('./logger');
 const { getSetting } = require('./settingsManager');
+const { getCompanyHeader, getFooterInfo } = require('./message-templates');
 const serviceSuspension = require('./serviceSuspension');
 
 class BillingCommands {
@@ -164,8 +165,8 @@ class BillingCommands {
     }
 
     formatWithHeaderFooter(message) {
-        const header = getSetting('company_header', 'CV Lintas Multimedia');
-        const footer = getSetting('footer_info', 'Internet Tanpa Batas');
+        const header = getCompanyHeader();
+        const footer = getFooterInfo();
         
         return `🏢 *${header}*\n\n${message}\n\n${footer}`;
     }

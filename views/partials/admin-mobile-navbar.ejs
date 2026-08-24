@@ -14,8 +14,8 @@
         <span class="nav-label">Pelanggan</span>
     </div>
     
-    <div class="nav-item" onclick="navigateTo('/admin/billing/invoices')">
-        <div class="nav-icon <%= currentPage === 'invoices' ? 'active' : '' %>">
+    <div class="nav-item" onclick="navigateTo('/admin/billing/invoice-list')">
+        <div class="nav-icon <%= currentPage === 'invoices' || currentPage === 'invoice-list' ? 'active' : '' %>">
             <i class="bi bi-receipt"></i>
         </div>
         <span class="nav-label">Tagihan</span>

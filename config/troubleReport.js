@@ -181,6 +181,9 @@ async function createTroubleReport(reportData) {
         logger.warn('Failed to send technician notification:', notificationError.message);
       }
       
+      try {
+        require('./adminNotificationBus').pingAdminNotifications('TROUBLE');
+      } catch (_) {}
       resolve(newReport);
     });
   });
@@ -390,11 +393,10 @@ async function sendNotificationToTechnicians(report) {
     }
 
     const technicianGroupId = getSetting('technician_group_id', '');
-    const companyHeader = getSetting('company_header', 'CV Lintas Multimedia');
+    const tenantId = whatsappNotifications.resolveTenantId(report.tenant_id);
 
     const tpl = templates.trouble_report_new_technician.template;
-    const message = whatsappNotifications.replaceTemplateVariables(tpl, {
-      company_header: companyHeader,
+    const message = await whatsappNotifications.renderTemplate(tpl, {
       report_id: String(report.id),
       customer_name: report.name || 'N/A',
       phone: report.phone || 'N/A',
@@ -403,7 +405,7 @@ async function sendNotificationToTechnicians(report) {
       created_at: formatIndonesianDateTime(new Date(report.created_at || report.createdAt)),
       description: report.description || 'Tidak ada deskripsi',
       status: (report.status || '').toString().toUpperCase()
-    });
+    }, tenantId);
 
     let sentSuccessfully = false;
     
@@ -454,7 +456,7 @@ async function sendStatusUpdateToCustomer(report) {
     }
 
     const waJid = report.phone.replace(/^0/, '62') + '@s.whatsapp.net';
-    const companyHeader = getSetting('company_header', 'ISP Monitor');
+    const tenantId = whatsappNotifications.resolveTenantId(report.tenant_id);
 
     const statusMap = {
       'open': 'Dibuka',
@@ -483,14 +485,13 @@ async function sendStatusUpdateToCustomer(report) {
       : '';
 
     const tpl = templates.trouble_report_customer_update.template;
-    const message = whatsappNotifications.replaceTemplateVariables(tpl, {
-      company_header: companyHeader,
+    const message = await whatsappNotifications.renderTemplate(tpl, {
       report_id: String(report.id),
       updated_at: formatIndonesianDateTime(new Date(report.updated_at || report.updatedAt)),
       status_label: statusMap[report.status] || (report.status || '').toString().toUpperCase(),
       technician_note_section,
       status_message
-    });
+    }, tenantId);
 
     await sendMessage(waJid, message);
     return true;

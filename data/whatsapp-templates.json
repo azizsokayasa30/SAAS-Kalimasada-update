@@ -1,12 +1,12 @@
 {
   "invoice_created": {
     "title": "Tagihan Baru",
-    "template": "\n📋 *TAGIHAN BARU*\n\nHalo {customer_name},\nSemoga Sehat selalu , ijin menyampaikan tagihan baru :\n\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n📅 *Jatuh Tempo:* {due_date}\n📝 *Catatan:* {notes}\n\n*Cek Status Dan Lakukan Pembayaran Anda Di*\n{customer_portal_url}\n*_Login Dengan No Hp Terdaftar_*\n\nUntuk konfirmasi pembayaran hubungi nomer 082265247377 atau teknisi \nSilakan lakukan pembayaran sebelum tanggal jatuh tempo untuk menghindari denda keterlambatan.\nTerima kasih atas kepercayaan Anda.\n\n\nKALIMASADA INTI SARANA",
+    "template": "\n📋 *TAGIHAN BARU*\n\nHalo {customer_name},\nSemoga Sehat selalu , ijin menyampaikan tagihan baru :\n\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n📅 *Jatuh Tempo:* {due_date}\n📝 *Catatan:* {notes}\n\n*Cek Status Dan Lakukan Pembayaran Anda Di*\n{customer_portal_url}\n*_Login Dengan No Hp Terdaftar_*\n\nUntuk konfirmasi pembayaran hubungi nomer 082265247377 atau teknisi \nSilakan lakukan pembayaran sebelum tanggal jatuh tempo untuk menghindari denda keterlambatan.\nTerima kasih atas kepercayaan Anda.\n\n\n{company_header}",
     "enabled": false
   },
   "due_date_reminder": {
     "title": "Peringatan Sebelum Jatuh Tempo",
-    "template": "\n*Pengingat Tagihan*\n\nHalo {customer_name},\n\nIjin Mengingatkan Tagihan Anda akan jatuh tempo dalam *{days_remaining} hari*:\n\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n📅 *Jatuh Tempo:* {due_date}\n\nBRI Puji Rahayu 661901012335535\nUntuk konfirmasi pembayaran hubungi nomer teknisi  atau kirim ke 082265247377\nMohon persiapkan pembayaran sebelum tanggal jatuh tempo agar layanan tetap lancar dan terhindar dari isolir\n+.\n\nTerima kasih.",
+    "template": "\n*Pengingat Tagihan*\n\nHalo {customer_name},\n\nIjin Mengingatkan Tagihan Anda akan jatuh tempo dalam *{days_remaining} hari*:\n\n📄 *No. Invoice:* {invoice_number}\n💰 *Jumlah:* Rp {amount}\n📅 *Jatuh Tempo:* {due_date}\n\nBRI Puji Rahayu 661901012335535\nUntuk konfirmasi pembayaran hubungi nomer teknisi  atau kirim ke 082265247377\nMohon persiapkan pembayaran sebelum tanggal jatuh tempo agar layanan tetap lancar dan terhindar dari isolir\n+.\n\nTerima kasih.\n\n{company_header}",
     "enabled": true
   },
   "due_date_reminder_today": {
@@ -21,7 +21,7 @@
   },
   "service_disruption": {
     "title": "Gangguan Layanan",
-    "template": "\n🚨 *GANGGUAN LAYANAN*\n\nHalo Pelanggan Setia,\n\nMohon maaf atas ketindaknyamannya, Kami informasikan bahwa sedang terjadi gangguan pada jaringan internet:\n\n📡 *Jenis Gangguan:* {disruption_type}\n📍 *Area Terdampak:* {affected_area}\n⏰ *Perkiraan Selesai:* {estimated_resolution}\n📞 *Hotline:* {support_phone}\n\nTerimakasih atas kesabaran dan pengertian anda\nUntuk update informasi bisa hubungi nomor  0816411615\n\n*Cek Status Di*\n{customer_portal_url}\n*_Login Dengan No Hp Terdaftar_*\n\n\nKALIMASADA INTI SARANA ",
+    "template": "\n🚨 *GANGGUAN LAYANAN*\n\nHalo Pelanggan Setia,\n\nMohon maaf atas ketindaknyamannya, Kami informasikan bahwa sedang terjadi gangguan pada jaringan internet:\n\n📡 *Jenis Gangguan:* {disruption_type}\n📍 *Area Terdampak:* {affected_area}\n⏰ *Perkiraan Selesai:* {estimated_resolution}\n📞 *Hotline:* {support_phone}\n\nTerimakasih atas kesabaran dan pengertian anda\nUntuk update informasi bisa hubungi nomor  0816411615\n\n*Cek Status Di*\n{customer_portal_url}\n*_Login Dengan No Hp Terdaftar_*\n\n\n{company_header} ",
     "enabled": false
   },
   "service_announcement": {
@@ -31,12 +31,12 @@
   },
   "service_suspension": {
     "title": "Service Suspension",
-    "template": "\n *LAYANAN INTERNET DINONAKTIFKAN* ⚠️\n\nHalo {customer_name},\n\nLayanan internet Anda telah dinonaktifkan karena:\n📋 *Alasan:* {reason}\n\n💡 *Cara Mengaktifkan Kembali:*\n1. Lakukan pembayaran tagihan yang tertunggak\n2. Layanan akan aktif otomatis setelah pembayaran dikonfirmasi\n\n*Cek Status Dan Pembayaran Anda Di*\n{customer_portal_url}\n*_Login Dengan No Hp Terdaftar_*\n\n📞 Butuh Bantuan?\nHubungi kami di: 0816411615\n\nKALIMASADA INTI SARANA \nTerima kasih atas perhatian Anda.",
+    "template": "\n *LAYANAN INTERNET DINONAKTIFKAN* ⚠️\n\nHalo {customer_name},\n\nLayanan internet Anda telah dinonaktifkan karena:\n📋 *Alasan:* {reason}\n\n💡 *Cara Mengaktifkan Kembali:*\n1. Lakukan pembayaran tagihan yang tertunggak\n2. Layanan akan aktif otomatis setelah pembayaran dikonfirmasi\n\n*Cek Status Dan Pembayaran Anda Di*\n{customer_portal_url}\n*_Login Dengan No Hp Terdaftar_*\n\n📞 Butuh Bantuan?\nHubungi kami di: 0816411615\n\n{company_header} \nTerima kasih atas perhatian Anda.",
     "enabled": true
   },
   "service_restoration": {
     "title": "Service Restoration",
-    "template": "\n *LAYANAN INTERNET DIAKTIFKAN* ✅\n\nHalo {customer_name},\n\nSelamat! Layanan internet Anda telah diaktifkan kembali.\n\n📋 *Informasi:*\n• Status: AKTIF ✅\n• Paket: {package_name}\n• Kecepatan: {package_speed}\n\nTerima kasih telah melakukan pembayaran tepat waktu.\n\nKalimasada Inti Sarana\nInfo: 0816411615",
+    "template": "\n *LAYANAN INTERNET DIAKTIFKAN* ✅\n\nHalo {customer_name},\n\nSelamat! Layanan internet Anda telah diaktifkan kembali.\n\n📋 *Informasi:*\n• Status: AKTIF ✅\n• Paket: {package_name}\n• Kecepatan: {package_speed}\n\nTerima kasih telah melakukan pembayaran tepat waktu.\n\n{company_header}\nInfo: 0816411615",
     "enabled": true
   },
   "welcome_message": {
@@ -51,7 +51,7 @@
   },
   "installation_status_update": {
     "title": "Update Status Instalasi",
-    "template": "🔄 *UPDATE STATUS INSTALASI*\n\nHalo {technician_name},\n\nStatus instalasi telah diperbarui:\n\n📋 *Detail Job:*\n• No. Job: {job_number}\n• Pelanggan: {customer_name}\n• Status Baru: {new_status}\n• Waktu Update: {update_time}\n\n📝 *Catatan:* {notes}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n📱 *MENU KONFIRMASI:*\n\n1️⃣ *KONFIRMASI UPDATE*\nBalas dengan: *KONFIRM* atau *OK*\n\n2️⃣ *BUTUH BANTUAN*\nBalas dengan: *BANTU* atau *HELP*\n\n3️⃣ *LAPOR MASALAH*\nBalas dengan: *MASALAH* atau *ISSUE*\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n*JINOM-HOMENET*",
+    "template": "🔄 *UPDATE STATUS INSTALASI*\n\nHalo {technician_name},\n\nStatus instalasi telah diperbarui:\n\n📋 *Detail Job:*\n• No. Job: {job_number}\n• Pelanggan: {customer_name}\n• Status Baru: {new_status}\n• Waktu Update: {update_time}\n\n📝 *Catatan:* {notes}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n📱 *MENU KONFIRMASI:*\n\n1️⃣ *KONFIRMASI UPDATE*\nBalas dengan: *KONFIRM* atau *OK*\n\n2️⃣ *BUTUH BANTUAN*\nBalas dengan: *BANTU* atau *HELP*\n\n3️⃣ *LAPOR MASALAH*\nBalas dengan: *MASALAH* atau *ISSUE*\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n*{company_header}*",
     "enabled": false
   },
   "installation_completed": {

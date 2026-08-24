@@ -116,7 +116,7 @@ function verifySuperAdminPassword(plain, req) {
 }
 
 function resolveBillingTenantId(req) {
-    const raw = req?.session?.tenantId ?? req?.tenantId ?? req?.tenant?.id ?? null;
+    const raw = req?.tenantId ?? req?.tenant?.id ?? req?.session?.tenantId ?? null;
     const id = parseInt(raw, 10);
     return Number.isFinite(id) && id > 0 ? id : null;
 }
@@ -498,7 +498,7 @@ router.get('/mobile/customers', getAppSettings, async (req, res) => {
 router.get('/mobile/invoices', getAppSettings, async (req, res) => {
     try {
         // Redirect to responsive desktop version
-        res.redirect('/admin/billing/invoices');
+        res.redirect('/admin/billing/invoice-list');
     } catch (error) {
         logger.error('Error loading mobile invoices:', error);
         res.status(500).render('error', { 
@@ -672,30 +672,15 @@ router.get('/mobile/collector', getAppSettings, async (req, res) => {
 // API: Get customer invoices for collector payment
 router.get('/api/customer-invoices/:customerId', adminAuth, async (req, res) => {
     try {
-        const { customerId } = req.params;
-        const dbPath = path.join(__dirname, '../data/billing.db');
-        const db = new sqlite3.Database(dbPath);
-        
-        const invoices = await new Promise((resolve, reject) => {
-            db.all(`
-                SELECT i.*, p.name as package_name
-                FROM invoices i
-                LEFT JOIN packages p ON i.package_id = p.id
-                WHERE i.customer_id = ? AND i.status = 'unpaid' AND CAST(i.amount AS REAL) > 0${tAnd('i')}
-                ORDER BY i.created_at DESC
-            `, [customerId], (err, rows) => {
-                if (err) reject(err);
-                else resolve(rows || []);
-            });
-        });
-        
-        db.close();
-        
+        const tenantId = resolveBillingTenantId(req);
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant tidak dikenali', data: [] });
+        }
+        const invoices = await billingManager.getUnpaidInvoicesForCustomer(req.params.customerId, tenantId);
         res.json({
             success: true,
             data: invoices
         });
-        
     } catch (error) {
         console.error('Error getting customer invoices:', error);
         res.status(500).json({
@@ -2277,7 +2262,9 @@ router.get('/api/revenue/summary', adminAuth, async (req, res) => {
 // Halaman Semua Invoice (Invoice List)
 router.get('/invoice-list', getAppSettings, async (req, res) => {
     try {
-        const { page = 1, limit = 50, status, customer_username, search, type, month, year } = req.query;
+        const { status, customer_username, search, type, month, year } = req.query;
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const limit = Math.min(100, Math.max(10, parseInt(req.query.limit, 10) || 50));
         const offset = (page - 1) * limit;
         const searchTerm = String(search || customer_username || '').trim();
 
@@ -2294,12 +2281,13 @@ router.get('/invoice-list', getAppSettings, async (req, res) => {
         
         filters.listMode = true;
 
-        const [invoices, totalCount, summary] = await Promise.all([
+        const [invoices, summary] = await Promise.all([
             billingManager.getInvoicesWithFilters(filters, limit, offset),
-            billingManager.getInvoicesCountWithFilters(filters),
             billingManager.getInvoiceListSummaryWithFilters(filters)
         ]);
+        const totalCount = Number(summary && summary.total) || 0;
         
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
         res.render('admin/billing/invoice-list', {
             title: 'Semua Invoice',
             invoices,
@@ -2308,10 +2296,10 @@ router.get('/invoice-list', getAppSettings, async (req, res) => {
                 total_amount: 0, paid_amount: 0, unpaid_amount: 0, overdue_amount: 0
             },
             pagination: {
-                currentPage: parseInt(page),
+                currentPage: page,
                 totalPages: Math.ceil(totalCount / limit) || 1,
                 totalCount,
-                limit: parseInt(limit)
+                limit
             },
             filters: {
                 status: status || '',
@@ -2323,7 +2311,8 @@ router.get('/invoice-list', getAppSettings, async (req, res) => {
             selectedMonth,
             selectedYear,
             appSettings: req.appSettings,
-            page: 'invoices'
+            page: 'invoice-list',
+            notice: String(req.query.notice || '').trim()
         });
     } catch (error) {
         logger.error('Error loading invoice list:', error);
@@ -2745,7 +2734,21 @@ router.get('/export/financial-report.xlsx', async (req, res) => {
 // Customers list for live table updates
 router.get('/customers/list', async (req, res) => {
     try {
-        const customers = await billingManager.getCustomers();
+        const tenantId = resolveBillingTenantId(req);
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant tidak dikenali', customers: [] });
+        }
+        const q = String(req.query.q || req.query.search || '').trim();
+        if (q.length < 2) {
+            return res.json({ success: true, customers: [] });
+        }
+        const rows = await billingManager.listCustomersForPaymentPicker(tenantId, q);
+        const customers = (rows || []).map((c) => ({
+            id: c.id,
+            name: c.name,
+            phone: c.phone,
+            username: c.username || c.pppoe_username || ''
+        }));
         return res.json({ success: true, customers });
     } catch (error) {
         logger.error('Error loading customers list:', error);
@@ -6630,7 +6633,7 @@ router.post('/whatsapp-settings/test', async (req, res) => {
                 pppoe_username: 'user@test',
                 pppoe_password: 'pass123',
                 support_phone: getSetting('contact_whatsapp', '0813-6888-8498'),
-                company_header: 'CV Lintas Multimedia',
+                company_header: 'PT. KALIMASADA INTI SARANA',
                 footer_info: 'Internet Tanpa Batas',
                 customer_portal_url: 'https://contoh.kalimasada-app.com/customer-app/login'
             },
@@ -6678,7 +6681,7 @@ router.post('/whatsapp-settings/test', async (req, res) => {
                 pppoe_profile: 'default'
             },
             trouble_report_new_technician: {
-                company_header: getSetting('company_header', 'ISP Test'),
+                company_header: getSetting('company_header', 'PT. KALIMASADA INTI SARANA'),
                 report_id: '99',
                 customer_name: 'Budi',
                 phone: '081211112222',
@@ -6689,7 +6692,7 @@ router.post('/whatsapp-settings/test', async (req, res) => {
                 status: 'OPEN'
             },
             trouble_report_customer_update: {
-                company_header: getSetting('company_header', 'ISP Test'),
+                company_header: getSetting('company_header', 'PT. KALIMASADA INTI SARANA'),
                 report_id: '99',
                 updated_at: '05/05/2026 09:00:00',
                 status_label: 'Sedang Ditangani',
@@ -7827,7 +7830,7 @@ router.get('/areas', getAppSettings, async (req, res) => {
                 SELECT a.*,
                        COUNT(c.id) as total_customers
                 FROM areas a
-                LEFT JOIN customers c ON c.area_id = a.id
+                LEFT JOIN customers c ON c.area_id = a.id AND c.tenant_id = a.tenant_id
                 ${where}
                 GROUP BY a.id
                 ORDER BY a.nama_area ASC
@@ -8404,11 +8407,7 @@ router.get('/customers', getAppSettings, async (req, res) => {
             });
         });
 
-        const uniqueAreas = await new Promise((resolve) => {
-            db.all('SELECT DISTINCT area FROM customers WHERE area IS NOT NULL AND area != ""' + tAnd() + ' ORDER BY area', (err, rows) => {
-                resolve(rows ? rows.map(r => r.area) : []);
-            });
-        });
+        const uniqueAreas = await billingManager.getCustomerAreaFilterOptions({ tenantId });
 
         const customerStats = await billingManager.getCustomerStatsByMonth(month, year, filters, { tenantId });
         
@@ -10005,7 +10004,16 @@ router.delete('/customers/id/:id', async (req, res) => {
 // Invoice Management
 router.get('/invoices', getAppSettings, async (req, res) => {
     try {
-        const invoices = await billingManager.getInvoices();
+        const listParams = new URLSearchParams();
+        if (req.query.status) listParams.set('status', String(req.query.status));
+        if (String(req.query.quickAction || '') === 'input-pembayaran') {
+            if (!listParams.get('status')) listParams.set('status', 'unpaid');
+        }
+        if (req.query.status || String(req.query.quickAction || '') === 'input-pembayaran') {
+            const qs = listParams.toString();
+            return res.redirect('/admin/billing/invoice-list' + (qs ? '?' + qs : ''));
+        }
+
         const customers = await billingManager.getCustomers();
         const packages = await billingManager.getPackages();
         
@@ -10025,15 +10033,15 @@ router.get('/invoices', getAppSettings, async (req, res) => {
         const settings = getSettingsWithCache();
         
         res.render('admin/billing/invoices', {
-            title: 'Kelola Tagihan',
-            invoices,
+            title: 'Buat Invoice',
             customers,
             members,
             packages,
             memberPackages,
             appSettings: req.appSettings,
             settings: settings,
-            versionInfo: getVersionInfo()
+            versionInfo: getVersionInfo(),
+            page: 'invoices'
         });
     } catch (error) {
         logger.error('Error loading invoices:', error);
@@ -10176,6 +10184,220 @@ router.put('/invoices/:id/status', async (req, res) => {
             message: 'Error updating invoice status',
             error: error.message
         });
+    }
+});
+
+function safeInvoiceListNext(req) {
+    const raw = String((req.query && req.query.next) || (req.body && req.body.next) || '').trim();
+    if (raw.startsWith('/admin/billing/invoice-list')) return raw;
+    return '/admin/billing/invoice-list';
+}
+
+function localPayDate() {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
+
+async function renderInvoiceQuickAction(req, res, mode, extra = {}) {
+    const invoice = await billingManager.getInvoiceById(req.params.id);
+    if (!invoice) {
+        return res.status(404).render('error', {
+            message: 'Invoice tidak ditemukan',
+            error: 'Invoice with ID ' + req.params.id + ' not found',
+            appSettings: req.appSettings
+        });
+    }
+    const titles = {
+        pay: 'Pelunasan Invoice',
+        whatsapp: 'Kirim WhatsApp Invoice',
+        delete: 'Hapus Invoice'
+    };
+    return res.render('admin/billing/invoice-quick-action', {
+        title: titles[mode] || 'Aksi Invoice',
+        mode,
+        invoice,
+        nextUrl: safeInvoiceListNext(req),
+        payDate: localPayDate(),
+        page: 'invoices',
+        appSettings: req.appSettings,
+        ...extra
+    });
+}
+
+router.get('/invoices/:id/pay', getAppSettings, async (req, res) => {
+    try {
+        await renderInvoiceQuickAction(req, res, 'pay');
+    } catch (error) {
+        logger.error('Error loading invoice pay page:', error);
+        res.status(500).render('error', {
+            message: 'Gagal membuka halaman pelunasan',
+            error: error.message,
+            appSettings: req.appSettings
+        });
+    }
+});
+
+router.post('/invoices/:id/pay', getAppSettings, async (req, res) => {
+    const nextUrl = safeInvoiceListNext(req);
+    try {
+        const invoice = await billingManager.getInvoiceById(req.params.id);
+        if (!invoice) {
+            return res.status(404).render('error', {
+                message: 'Invoice tidak ditemukan',
+                error: 'Invoice with ID ' + req.params.id + ' not found',
+                appSettings: req.appSettings
+            });
+        }
+        if (invoice.status === 'paid') {
+            return res.redirect(nextUrl + (nextUrl.includes('?') ? '&' : '?') + 'notice=' + encodeURIComponent('Invoice sudah lunas'));
+        }
+
+        const paymentMethod = String(req.body.payment_method || 'manual_admin').trim();
+        const discount = Math.max(0, parseFloat(req.body.discount_amount) || 0);
+        const invoiceAmount = parseFloat(invoice.amount) || 0;
+        const finalAmount = Math.max(invoiceAmount - discount, 0);
+        const paymentDate = String(req.body.payment_date || localPayDate()).trim();
+        const notes = `Pelunasan oleh Admin Kantor | Diskon: Rp ${Math.round(discount).toLocaleString('id-ID')} | Tanggal Bayar: ${paymentDate}`;
+
+        await billingManager.recordPayment({
+            invoice_id: parseInt(invoice.id, 10),
+            amount: finalAmount,
+            payment_method: paymentMethod,
+            reference_number: '',
+            notes,
+            payment_date: paymentDate,
+            discount_amount: Math.round(discount)
+        });
+        await billingManager.updateInvoiceStatus(invoice.id, 'paid', paymentMethod);
+
+        try {
+            const paidInvoice = await billingManager.getInvoiceById(invoice.id);
+            if (paidInvoice && paidInvoice.customer_id) {
+                const customer = await billingManager.getCustomerById(paidInvoice.customer_id);
+                const { shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
+                if (shouldAutoRestoreCustomer(customer)) {
+                    const invoices = await billingManager.getInvoicesByCustomer(customer.id);
+                    const unpaid = invoices.filter(i => i.status === 'unpaid');
+                    if (unpaid.length === 0) {
+                        await serviceSuspension.restoreCustomerService(customer);
+                    }
+                }
+            }
+        } catch (restoreErr) {
+            logger.error('Immediate restore check failed:', restoreErr);
+        }
+
+        return res.redirect(nextUrl + (nextUrl.includes('?') ? '&' : '?') + 'notice=' + encodeURIComponent('Pelunasan berhasil disimpan'));
+    } catch (error) {
+        logger.error('Error paying invoice from list:', error);
+        try {
+            await renderInvoiceQuickAction(req, res, 'pay', { errorMessage: error.message || 'Gagal menyimpan pelunasan' });
+        } catch (renderErr) {
+            res.status(500).render('error', {
+                message: 'Gagal menyimpan pelunasan',
+                error: error.message,
+                appSettings: req.appSettings
+            });
+        }
+    }
+});
+
+router.get('/invoices/:id/notify-whatsapp', getAppSettings, async (req, res) => {
+    try {
+        const invoice = await billingManager.getInvoiceById(req.params.id);
+        if (!invoice) {
+            return res.status(404).render('error', {
+                message: 'Invoice tidak ditemukan',
+                error: 'Invoice with ID ' + req.params.id + ' not found',
+                appSettings: req.appSettings
+            });
+        }
+        const whatsappNotifications = require('../config/whatsapp-notifications');
+        const tenantId = req.session?.tenantId || req.tenantId || invoice.tenant_id || null;
+        const payload = await whatsappNotifications.buildManualInvoiceWhatsAppPayload(req.params.id, { tenantId });
+        await renderInvoiceQuickAction(req, res, 'whatsapp', {
+            waPhone: payload.phone || invoice.customer_phone || '',
+            waPreview: payload.success ? payload.fullMessage : '',
+            waTemplateKey: payload.templateKey || '',
+            waTemplateTitle: payload.templateTitle || '',
+            waError: payload.success ? '' : (payload.error || 'Gagal memuat preview WhatsApp')
+        });
+    } catch (error) {
+        logger.error('Error loading invoice WhatsApp page:', error);
+        res.status(500).render('error', {
+            message: 'Gagal membuka halaman WhatsApp',
+            error: error.message,
+            appSettings: req.appSettings
+        });
+    }
+});
+
+router.post('/invoices/:id/notify-whatsapp', getAppSettings, async (req, res) => {
+    const nextUrl = safeInvoiceListNext(req);
+    try {
+        const invoice = await billingManager.getInvoiceById(req.params.id);
+        if (!invoice) {
+            return res.status(404).render('error', {
+                message: 'Invoice tidak ditemukan',
+                error: 'Invoice with ID ' + req.params.id + ' not found',
+                appSettings: req.appSettings
+            });
+        }
+        const whatsappNotifications = require('../config/whatsapp-notifications');
+        const tenantId = req.session?.tenantId || req.tenantId || invoice.tenant_id || null;
+        const result = await whatsappNotifications.sendManualInvoiceWhatsApp(req.params.id, { tenantId });
+        if (result.success) {
+            return res.redirect(nextUrl + (nextUrl.includes('?') ? '&' : '?') + 'notice=' + encodeURIComponent('Notifikasi WhatsApp berhasil dikirim'));
+        }
+        await renderInvoiceQuickAction(req, res, 'whatsapp', {
+            waError: result.error || 'Gagal mengirim notifikasi WhatsApp',
+            waPhone: invoice.customer_phone || '',
+            waPreview: '',
+            waTemplateKey: '',
+            waTemplateTitle: ''
+        });
+    } catch (error) {
+        logger.error('Error sending invoice WhatsApp from list:', error);
+        res.status(500).render('error', {
+            message: 'Gagal mengirim WhatsApp',
+            error: error.message,
+            appSettings: req.appSettings
+        });
+    }
+});
+
+router.get('/invoices/:id/hapus', getAppSettings, async (req, res) => {
+    try {
+        await renderInvoiceQuickAction(req, res, 'delete');
+    } catch (error) {
+        logger.error('Error loading invoice delete page:', error);
+        res.status(500).render('error', {
+            message: 'Gagal membuka halaman hapus invoice',
+            error: error.message,
+            appSettings: req.appSettings
+        });
+    }
+});
+
+router.post('/invoices/:id/hapus', getAppSettings, async (req, res) => {
+    const nextUrl = safeInvoiceListNext(req);
+    try {
+        await billingManager.deleteInvoice(req.params.id);
+        return res.redirect(nextUrl + (nextUrl.includes('?') ? '&' : '?') + 'notice=' + encodeURIComponent('Invoice berhasil dihapus'));
+    } catch (error) {
+        logger.error('Error deleting invoice from list:', error);
+        try {
+            await renderInvoiceQuickAction(req, res, 'delete', { errorMessage: error.message || 'Gagal menghapus invoice' });
+        } catch (renderErr) {
+            res.status(500).render('error', {
+                message: 'Gagal menghapus invoice',
+                error: error.message,
+                appSettings: req.appSettings
+            });
+        }
     }
 });
 
@@ -10429,6 +10651,7 @@ router.post('/invoices/bulk-delete', adminAuth, async (req, res) => {
 // Payment Management - Collector Transactions Only
 router.get('/payments', getAppSettings, async (req, res) => {
     try {
+        const tenantId = resolveBillingTenantId(req);
         const period = resolveMonthYearRange(req.query);
         // Get filter parameters
         const filters = {
@@ -10438,14 +10661,17 @@ router.get('/payments', getAppSettings, async (req, res) => {
             to: req.query.to || period.endDate,
             collector_id: req.query.collector_id || '',
             status: req.query.status || '',
-            q: req.query.q || ''
+            q: req.query.q || '',
+            tenantId
         };
         
         // Get payments with filters
-        const payments = await billingManager.getCollectorPaymentsWithFilters(filters);
+        const payments = tenantId
+            ? await billingManager.getCollectorPaymentsWithFilters(filters)
+            : [];
         
         // Get collectors list for dropdown
-        const collectors = await billingManager.getAllCollectors();
+        const collectors = tenantId ? await billingManager.getAllCollectors({ tenantId }) : [];
         
         const settings = getSettingsWithCache();
         res.render('admin/billing/payments', {
@@ -10470,6 +10696,7 @@ router.get('/payments', getAppSettings, async (req, res) => {
 // All Payments - Admin and Collector
 router.get('/all-payments', getAppSettings, async (req, res) => {
     try {
+        const tenantId = resolveBillingTenantId(req);
         const period = resolveMonthYearRange(req.query);
         const day = parseIsoDateOnly(req.query.date || req.query.day || '');
         let from = period.startDate;
@@ -10495,14 +10722,17 @@ router.get('/all-payments', getAppSettings, async (req, res) => {
             from,
             to,
             collector_id: req.query.collector_id || '',
-            q: req.query.q || ''
+            q: req.query.q || '',
+            tenantId
         };
 
-        const [payments, collectors, summary] = await Promise.all([
-            billingManager.getAllPaymentsHistory(filters),
-            billingManager.getAllCollectors(),
-            billingManager.getAllPaymentsHistorySummary(filters)
-        ]);
+        const [payments, collectors, summary] = tenantId
+            ? await Promise.all([
+                billingManager.getAllPaymentsHistory(filters),
+                billingManager.getAllCollectors({ tenantId }),
+                billingManager.getAllPaymentsHistorySummary(filters)
+            ])
+            : [[], [], { transaction_count: 0, total_amount: 0, total_tagihan: 0, total_commission: 0, total_net: 0, total_discount: 0 }];
 
         const settings = getSettingsWithCache();
         res.render('admin/billing/payments', {
@@ -10547,6 +10777,23 @@ router.post('/api/payments/:id/cancel', async (req, res) => {
                 message: 'Password admin salah. Gunakan password login panel admin tenant ini.'
             });
         }
+        const tenantId = resolveBillingTenantId(req);
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant tidak dikenali' });
+        }
+        const owned = await new Promise((resolve, reject) => {
+            billingManager.db.get(
+                'SELECT id FROM payments WHERE id = ? AND tenant_id = ?',
+                [id, tenantId],
+                (err, row) => (err ? reject(err) : resolve(row || null))
+            );
+        });
+        if (!owned) {
+            return res.status(403).json({
+                success: false,
+                message: 'Pembayaran tidak ditemukan di tenant ini'
+            });
+        }
         const result = await billingManager.cancelPaymentById(id);
         let message = result.invoice_reverted_unpaid
             ? 'Pembayaran dibatalkan. Tagihan kembali belum lunas.'
@@ -10570,6 +10817,14 @@ router.post('/api/payments/:id/cancel', async (req, res) => {
 
 router.post('/payments', async (req, res) => {
     try {
+        const tenantId = resolveBillingTenantId(req);
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant tidak dikenali'
+            });
+        }
+
         const { invoice_id, amount, payment_method, reference_number, notes, payment_date, discount_amount } = req.body;
         
         // Validate required fields first
@@ -10577,6 +10832,26 @@ router.post('/payments', async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: 'Invoice ID, jumlah, dan metode pembayaran harus diisi'
+            });
+        }
+
+        const invoice = await new Promise((resolve, reject) => {
+            billingManager.db.get(
+                `SELECT i.id, i.tenant_id, i.customer_id, i.amount, i.status
+                 FROM invoices i
+                 WHERE i.id = ? AND i.tenant_id = ?
+                   AND EXISTS (
+                        SELECT 1 FROM customers c
+                        WHERE c.id = i.customer_id AND c.tenant_id = i.tenant_id
+                   )`,
+                [parseInt(invoice_id, 10), tenantId],
+                (err, row) => (err ? reject(err) : resolve(row || null))
+            );
+        });
+        if (!invoice) {
+            return res.status(403).json({
+                success: false,
+                message: 'Invoice tidak ditemukan di tenant ini'
             });
         }
         
@@ -10592,7 +10867,8 @@ router.post('/payments', async (req, res) => {
             reference_number: reference_number ? reference_number.trim() : '',
             notes: normalizedNotes,
             payment_date: payment_date ? String(payment_date).trim() : '',
-            discount_amount: discNum
+            discount_amount: discNum,
+            tenant_id: tenantId
         };
 
         const newPayment = await billingManager.recordPayment(paymentData);

@@ -174,7 +174,7 @@
                             <div class="f-stat-icon-wrapper bg-success-glow"><i class="bi bi-receipt"></i></div>
                         </div>
                         <div class="f-stat-value f-premium-text text-success">Rp <%= Number(paySummary.total_tagihan != null ? paySummary.total_tagihan : paySummary.total_amount || 0).toLocaleString('id-ID') %></div>
-                        <div class="f-stat-desc">Jumlah tagihan per baris</div>
+                        <div class="f-stat-desc">Jumlah tagihan</div>
                     </div>
                     <div class="f-stat-card animate-in" style="animation-delay: 0.3s;">
                         <div class="f-stat-header">
@@ -182,7 +182,7 @@
                             <div class="f-stat-icon-wrapper bg-warning-glow"><i class="bi bi-tag"></i></div>
                         </div>
                         <div class="f-stat-value f-premium-text text-warning">Rp <%= Number(paySummary.total_discount || 0).toLocaleString('id-ID') %></div>
-                        <div class="f-stat-desc">Potongan saat pelunasan (input pembayaran)</div>
+                        <div class="f-stat-desc">Diskon saat pembayaran</div>
                     </div>
                     <div class="f-stat-card animate-in" style="animation-delay: 0.4s;">
                         <div class="f-stat-header">
@@ -225,6 +225,7 @@
                                 <label class="f-label">KOLEKTOR</label>
                                 <select class="f-select" name="collector_id">
                                     <option value="">Semua kolektor</option>
+                                    <option value="admin" <%= String(filters.collector_id) === 'admin' ? 'selected' : '' %>>Admin Kantor</option>
                                     <% (collectors || []).forEach(function (col) { %>
                                         <option value="<%= col.id %>" <%= String(filters.collector_id) === String(col.id) ? 'selected' : '' %>><%= col.name %></option>
                                     <% }); %>
@@ -737,6 +738,8 @@
         let paymentModal;
         let customersCache = [];
         let currentInvoices = [];
+        let customerSearchTimer = null;
+        let customerSearchSeq = 0;
 
         function openPaymentInputModal() {
             if (!paymentModal) {
@@ -748,6 +751,10 @@
             document.getElementById('invoiceSelect').innerHTML = '<option value="">Pilih invoice</option>';
             document.getElementById('invoiceAmount').value = '';
             document.getElementById('discountAmount').value = 0;
+            document.getElementById('customerSuggestions').style.display = 'none';
+            document.getElementById('customerSuggestions').innerHTML = '';
+            customersCache = [];
+            currentInvoices = [];
             updateFinalPayment();
             paymentModal.show();
         }
@@ -760,11 +767,22 @@
             return { invoiceAmount, discount, finalAmount };
         }
 
-        async function ensureCustomersLoaded() {
-            if (customersCache.length > 0) return;
-            const resp = await fetch('/admin/billing/customers/list');
-            const data = await resp.json();
-            customersCache = Array.isArray(data?.customers) ? data.customers : [];
+        async function searchCustomersForPayment(keyword) {
+            const q = String(keyword || '').trim();
+            const seq = ++customerSearchSeq;
+            if (q.length < 2) {
+                customersCache = [];
+                renderCustomerSuggestions('');
+                return;
+            }
+            const resp = await fetch('/admin/billing/customers/list?q=' + encodeURIComponent(q), {
+                credentials: 'same-origin',
+                headers: { 'Accept': 'application/json' }
+            });
+            const data = await resp.json().catch(function () { return {}; });
+            if (seq !== customerSearchSeq) return;
+            customersCache = Array.isArray(data && data.customers) ? data.customers : [];
+            renderCustomerSuggestions(q);
         }
 
         function renderCustomerSuggestions(keyword) {
@@ -775,11 +793,7 @@
                 box.innerHTML = '';
                 return;
             }
-            const matches = customersCache.filter(c =>
-                String(c.name || '').toLowerCase().includes(q) ||
-                String(c.phone || '').toLowerCase().includes(q) ||
-                String(c.username || '').toLowerCase().includes(q)
-            ).slice(0, 8);
+            const matches = customersCache.slice(0, 8);
 
             if (!matches.length) {
                 box.innerHTML = '<div class="list-group-item text-muted">Pelanggan tidak ditemukan</div>';
@@ -798,9 +812,12 @@
         async function loadUnpaidInvoices(customerId) {
             const select = document.getElementById('invoiceSelect');
             select.innerHTML = '<option value="">Memuat invoice...</option>';
-            const resp = await fetch(`/admin/billing/api/customer-invoices/${customerId}`);
-            const data = await resp.json();
-            currentInvoices = Array.isArray(data?.data) ? data.data : [];
+            const resp = await fetch('/admin/billing/api/customer-invoices/' + encodeURIComponent(customerId), {
+                credentials: 'same-origin',
+                headers: { 'Accept': 'application/json' }
+            });
+            const data = await resp.json().catch(function () { return {}; });
+            currentInvoices = Array.isArray(data && data.data) ? data.data : [];
             if (!currentInvoices.length) {
                 select.innerHTML = '<option value="">Tidak ada invoice belum lunas</option>';
                 document.getElementById('invoiceAmount').value = '';
@@ -812,18 +829,23 @@
             ).join('');
         }
 
-        document.getElementById('openPaymentModalBtn').addEventListener('click', async function() {
-            await ensureCustomersLoaded();
+        document.getElementById('openPaymentModalBtn').addEventListener('click', function() {
             openPaymentInputModal();
         });
 
-        document.getElementById('customerSearchInput').addEventListener('input', async function() {
-            await ensureCustomersLoaded();
+        document.getElementById('customerSearchInput').addEventListener('input', function() {
             document.getElementById('selectedCustomerId').value = '';
             document.getElementById('invoiceSelect').innerHTML = '<option value="">Pilih invoice</option>';
             document.getElementById('invoiceAmount').value = '';
-            renderCustomerSuggestions(this.value);
             updateFinalPayment();
+            const value = this.value;
+            if (customerSearchTimer) clearTimeout(customerSearchTimer);
+            customerSearchTimer = setTimeout(function () {
+                searchCustomersForPayment(value).catch(function () {
+                    customersCache = [];
+                    renderCustomerSuggestions(value);
+                });
+            }, 250);
         });
 
         document.addEventListener('click', async function(e) {
@@ -870,7 +892,8 @@
 
             const resp = await fetch('/admin/billing/payments', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                credentials: 'same-origin',
                 body: JSON.stringify({
                     invoice_id: invoiceId,
                     amount: finalAmount,
@@ -892,12 +915,10 @@
 
         const quickAction = new URLSearchParams(window.location.search).get('quickAction');
         if (quickAction === 'input-pembayaran') {
-            ensureCustomersLoaded().then(() => {
-                openPaymentInputModal();
-                const url = new URL(window.location.href);
-                url.searchParams.delete('quickAction');
-                window.history.replaceState({}, '', url.toString());
-            });
+            openPaymentInputModal();
+            const url = new URL(window.location.href);
+            url.searchParams.delete('quickAction');
+            window.history.replaceState({}, '', url.toString());
         }
     </script>
 

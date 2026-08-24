@@ -33,7 +33,7 @@
                         <a href="/admin/billing/invoices/<%= invoice.id %>/edit" class="btn btn-primary" title="Ubah data tagihan" aria-label="Ubah tagihan">
                             <i class="bi bi-pencil-fill"></i> Edit
                         </a>
-                        <a href="/admin/billing/invoices" class="btn btn-secondary" title="Kembali ke daftar tagihan" aria-label="Kembali ke daftar tagihan">
+                        <a href="/admin/billing/invoice-list" class="btn btn-secondary" title="Kembali ke daftar tagihan" aria-label="Kembali ke daftar tagihan">
                             <i class="bi bi-circle"></i> Kembali
                         </a>
                     </div>
@@ -199,24 +199,6 @@
                     </div>
                 </div>
 
-                <!-- Manual Payment Section -->
-                <% if (invoice.status === 'unpaid') { %>
-                <div class="row mt-4">
-                    <div class="col-12">
-                        <div class="card">
-                            <div class="card-header">
-                                <h5 class="card-title mb-0">Aksi Manual</h5>
-                            </div>
-                            <div class="card-body">
-                                <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#markAsPaidModal">
-                                    <i class="bi bi-circle"></i> Tandai Sebagai Lunas
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <% } %>
-
                 <!-- Service Control Section -->
                 <div class="row mt-4">
                     <div class="col-12">
@@ -246,42 +228,6 @@
         </div>
     </div>
 
-    <!-- Modal Mark as Paid -->
-    <div class="modal fade" id="markAsPaidModal" tabindex="-1" aria-labelledby="markAsPaidModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="markAsPaidModalLabel">Tandai Sebagai Lunas</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <form id="markAsPaidForm">
-                    <div class="modal-body">
-                        <input type="hidden" id="paidInvoiceId" name="invoice_id" value="<%= invoice.id %>">
-                        <div class="mb-3">
-                            <label for="paymentMethod" class="form-label">Metode Pembayaran *</label>
-                            <select class="form-select" id="paymentMethod" name="payment_method" required>
-                                <option value="">Pilih Metode Pembayaran</option>
-                                <option value="cash">Tunai</option>
-                                <option value="transfer">Transfer Bank</option>
-                                <option value="qris">QRIS</option>
-                                <option value="ewallet">E-Wallet</option>
-                                <option value="other">Lainnya</option>
-                            </select>
-                        </div>
-                        <div class="mb-3">
-                            <label for="paymentNotes" class="form-label">Catatan Pembayaran</label>
-                            <textarea class="form-control" id="paymentNotes" name="notes" rows="3" placeholder="Catatan pembayaran (opsional)"></textarea>
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
-                        <button type="submit" class="btn btn-success">Tandai Lunas</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
     <style>
     .avatar-sm {
         width: 40px;
@@ -290,13 +236,12 @@
     </style>
 
     <!-- Embed invoice data as attributes to keep JS linter happy -->
-    <div id="invoiceMeta" data-invoice-id="<%= invoice.id %>" data-invoice-amount="<%= parseFloat(invoice.amount) %>" style="display:none;"></div>
+    <div id="invoiceMeta" data-invoice-id="<%= invoice.id %>" style="display:none;"></div>
 
     <script>
     // Read server values from data attributes (no EJS inside JS)
     const _metaEl = document.getElementById('invoiceMeta');
     const INVOICE_ID = parseInt(_metaEl.getAttribute('data-invoice-id'), 10);
-    const INVOICE_AMOUNT = parseFloat(_metaEl.getAttribute('data-invoice-amount'));
 
     // Payment Gateway Functions
     async function loadGatewayStatus() {
@@ -433,71 +378,6 @@
     document.addEventListener('DOMContentLoaded', function() {
         loadGatewayStatus();
         loadPaymentTransactions();
-    });
-
-    // Manual payment form
-    document.getElementById('markAsPaidForm').addEventListener('submit', function(e) {
-        e.preventDefault();
-        
-        const formData = new FormData(this);
-        const data = Object.fromEntries(formData);
-        const invoiceId = data.invoice_id;
-        const paymentMethod = data.payment_method;
-        const notes = data.notes;
-        
-        // Validate required fields
-        if (!paymentMethod) {
-            showAlert('danger', 'Mohon pilih metode pembayaran');
-            return;
-        }
-        
-        // Disable submit button to prevent double submission
-        const submitBtn = this.querySelector('button[type="submit"]');
-        const originalText = submitBtn.innerHTML;
-        submitBtn.disabled = true;
-        submitBtn.innerHTML = '<i class="bi bi-circle bx-spin"></i> Memproses...';
-        
-        // First record the payment
-        fetch('/admin/billing/payments', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                invoice_id: invoiceId,
-                amount: INVOICE_AMOUNT, // Use actual invoice amount
-                payment_method: paymentMethod,
-                notes: notes || '' // Ensure notes is not undefined
-            })
-        })
-        .then(response => response.json())
-        .then(result => {
-            if (!result.success) {
-                throw new Error(result.message || 'Gagal mencatat pembayaran');
-            }
-            // Close modal and reset form (Bootstrap 5 Modal API, no jQuery)
-            const modalEl = document.getElementById('markAsPaidModal');
-            if (modalEl) {
-                const modalInstance = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
-                modalInstance.hide();
-            }
-            document.getElementById('markAsPaidForm').reset();
-            
-            // Show success notification
-            showAlert('success', '? Tagihan berhasil ditandai sebagai lunas!');
-            
-            // Reload page after a short delay
-            setTimeout(() => location.reload(), 1500);
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            showAlert('danger', '? Terjadi kesalahan saat menandai tagihan sebagai lunas');
-        })
-        .finally(() => {
-            // Re-enable submit button
-            submitBtn.disabled = false;
-            submitBtn.innerHTML = originalText;
-        });
     });
 
     // Alert function

@@ -5,6 +5,7 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const logger = require('./logger');
+const { pingAdminNotifications } = require('./adminNotificationBus');
 
 const dbPath = path.join(__dirname, '../data/billing.db');
 const db = new sqlite3.Database(dbPath);
@@ -49,6 +50,10 @@ function upsertCollectorNotification(collectorId, kind, refId, title, body) {
                     logger.error('[collector-field-notifications] upsert:', e.message);
                     return reject(e);
                 }
+                const k = String(kind || '').toUpperCase();
+                if (k === 'INVOICE_PAID' || k === 'ISOLIR') {
+                    pingAdminNotifications(k);
+                }
                 resolve(this);
             }
         );
@@ -87,7 +92,9 @@ function notifyInvoicePaid(customerId, invoiceId, invoiceNumber, amountRp) {
     const ref = `PAID-${invoiceId}`;
     const title = 'Tagihan lunas';
     const body = `${invoiceNumber || 'Invoice'} · Rp ${Number(amountRp || 0).toLocaleString('id-ID')}`;
-    return notifyCollectorsForCustomerIds(Number(customerId), 'INVOICE_PAID', ref, title, body);
+    return notifyCollectorsForCustomerIds(Number(customerId), 'INVOICE_PAID', ref, title, body).finally(() => {
+        pingAdminNotifications('INVOICE_PAID');
+    });
 }
 
 function notifyCustomerIsolir(customerId, customerName) {

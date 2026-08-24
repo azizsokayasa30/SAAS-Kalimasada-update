@@ -112,7 +112,7 @@
                     <div class="qa-icon"><i class="bi bi-exclamation-triangle-fill"></i></div>
                     <div class="qa-label">Tambah Tiket Gangguan</div>
                 </a>
-                <a href="/admin/billing/payments?quickAction=input-pembayaran" class="qa-card qa-blue" id="qa-payment">
+                <a href="/admin/billing/all-payments?quickAction=input-pembayaran" class="qa-card qa-blue" id="qa-payment">
                     <div class="qa-icon"><i class="bi bi-cash-coin"></i></div>
                     <div class="qa-label">Input Pembayaran</div>
                 </a>
@@ -230,7 +230,7 @@
                   var piutangAll = bs.outstanding_unpaid_total != null ? bs.outstanding_unpaid_total : 0;
                   var piutangCnt = bs.outstanding_unpaid_count != null ? bs.outstanding_unpaid_count : 0;
                 %>
-                <a href="/admin/billing/invoices" class="stat-card-big stat-blue" id="sc-total-invoice">
+                <a href="/admin/billing/invoice-list" class="stat-card-big stat-blue" id="sc-total-invoice">
                     <div class="sc-header">
                         <span class="sc-label">Total Tagihan</span>
                         <span class="sc-badge"><i class="bi bi-receipt me-1"></i> <%= invBln %> Inv</span>
@@ -238,7 +238,7 @@
                     <div class="sc-value dash-amount" data-amount="Rp <%= tagihanBln.toLocaleString('id-ID') %>"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : ('Rp ' + tagihanBln.toLocaleString('id-ID')) %></div>
                     <div class="sc-sub"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? 'Memuat…' : ('Lunas Rp ' + lunasBln.toLocaleString('id-ID') + ' · Blm Rp ' + blmBln.toLocaleString('id-ID')) %></div>
                 </a>
-                <a href="/admin/billing/invoices?status=unpaid" class="stat-card-big stat-amber" id="sc-unpaid">
+                <a href="/admin/billing/invoice-list?status=unpaid" class="stat-card-big stat-amber" id="sc-unpaid">
                     <div class="sc-header">
                         <span class="sc-label">Belum Lunas</span>
                         <span class="sc-badge"><%= invBlmBln %> Inv · Bln Ini</span>
@@ -246,7 +246,7 @@
                     <div class="sc-value dash-amount" data-amount="Rp <%= blmBln.toLocaleString('id-ID') %>"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : ('Rp ' + blmBln.toLocaleString('id-ID')) %></div>
                     <div class="sc-sub">Dari tagihan terbit bulan ini</div>
                 </a>
-                <a href="/admin/billing/invoices?status=unpaid" class="stat-card-big stat-rose" id="sc-piutang-all" title="Semua invoice belum lunas (termasuk bulan lalu)">
+                <a href="/admin/billing/invoice-list?status=unpaid" class="stat-card-big stat-rose" id="sc-piutang-all" title="Semua invoice belum lunas (termasuk bulan lalu)">
                     <div class="sc-header">
                         <span class="sc-label">Piutang Aktif</span>
                         <span class="sc-badge"><%= piutangCnt %> Inv</span>
@@ -378,7 +378,7 @@
                     <div class="card recent-card h-100">
                         <div class="card-header recent-card-header d-flex justify-content-between align-items-center">
                             <span><i class="bi bi-receipt-check me-2"></i>Tagihan Lunas Terbaru</span>
-                            <a href="/admin/billing/invoices?status=paid" class="btn btn-xs btn-outline-success">Lihat Semua</a>
+                            <a href="/admin/billing/invoice-list?status=paid" class="btn btn-xs btn-outline-success">Lihat Semua</a>
                         </div>
                         <div class="card-body p-0" id="dashRecentInvoices">
                             <% if (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) { %>
@@ -578,6 +578,12 @@ $(function() {
     const badgeEl = document.getElementById('adminNotifBadge');
     if (!bellBtn || !listEl) return;
 
+    var lastStamp = null;
+    var lastBadge = parseInt((badgeEl && badgeEl.textContent) || '0', 10) || 0;
+    var audioUnlocked = false;
+    var audioCtx = null;
+    var dropdownOpen = false;
+
     function escapeHtml(s) {
       const d = document.createElement('div');
       d.textContent = (s == null || s === undefined) ? '' : String(s);
@@ -589,6 +595,57 @@ $(function() {
       if (source === 'portal_report') return 'Portal · laporan';
       if (source === 'collector') return 'Billing';
       return 'Teknisi';
+    }
+
+    function unlockNotifAudio() {
+      if (audioUnlocked) return;
+      audioUnlocked = true;
+      try {
+        var Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        audioCtx = audioCtx || new Ctx();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+      } catch (e) {}
+    }
+
+    function playNotifSound() {
+      try {
+        var Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        audioCtx = audioCtx || new Ctx();
+        var play = function () {
+          var now = audioCtx.currentTime;
+          var osc = audioCtx.createOscillator();
+          var gain = audioCtx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(880, now);
+          osc.frequency.setValueAtTime(1174, now + 0.09);
+          gain.gain.setValueAtTime(0.0001, now);
+          gain.gain.exponentialRampToValueAtTime(0.18, now + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start(now);
+          osc.stop(now + 0.3);
+        };
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume().then(play).catch(function () {});
+        } else {
+          play();
+        }
+      } catch (e) {}
+    }
+
+    document.addEventListener('click', unlockNotifAudio, { once: false, capture: true });
+    document.addEventListener('keydown', unlockNotifAudio, { once: true });
+    document.addEventListener('touchstart', unlockNotifAudio, { once: true });
+
+    function applyBadge(n) {
+      n = parseInt(n, 10) || 0;
+      lastBadge = n;
+      if (!badgeEl) return;
+      badgeEl.textContent = n > 99 ? '99+' : String(n);
+      badgeEl.classList.toggle('d-none', n === 0);
     }
 
     function renderList(items) {
@@ -624,24 +681,67 @@ $(function() {
           var blk = document.getElementById('adminPortalPackageRequestsBlock');
           if (blk) blk.remove();
         }
-        if (badgeEl) {
-          badgeEl.textContent = n > 99 ? '99+' : String(n);
-          badgeEl.classList.toggle('d-none', n === 0);
-        }
+        applyBadge(n);
         renderList(data.items || []);
       } catch (e) {
         console.warn('[Admin notif]', e);
       }
     }
 
+    async function refreshPulse(opts) {
+      opts = opts || {};
+      try {
+        var res = await fetch('/admin/dashboard/api/notifications/pulse', { credentials: 'same-origin' });
+        var data = await res.json();
+        if (!data.success) return;
+        var n = parseInt(data.badge, 10) || 0;
+        var stamp = data.stamp != null ? String(data.stamp) : '';
+        var isFirst = lastStamp === null;
+        var changed = !isFirst && stamp !== lastStamp;
+        var prevBadge = lastBadge;
+        lastStamp = stamp;
+        applyBadge(n);
+        if (changed && n >= prevBadge) {
+          playNotifSound();
+          if (dropdownOpen || opts.forceList) refreshAdminNotifications();
+        }
+      } catch (e) {
+        console.warn('[Admin notif pulse]', e);
+      }
+    }
+
+    function connectNotifStream() {
+      if (typeof EventSource === 'undefined') return;
+      var es;
+      try {
+        es = new EventSource('/admin/dashboard/api/notifications/stream');
+      } catch (e) {
+        return;
+      }
+      es.addEventListener('notif', function () {
+        refreshPulse({ forceList: dropdownOpen });
+      });
+      es.onerror = function () {
+        try { es.close(); } catch (e) {}
+        setTimeout(connectNotifStream, 4000);
+      };
+    }
+
     var ddRoot = bellBtn.closest('.dropdown');
     if (ddRoot) {
-      ddRoot.addEventListener('shown.bs.dropdown', function () { refreshAdminNotifications(); });
+      ddRoot.addEventListener('shown.bs.dropdown', function () {
+        dropdownOpen = true;
+        unlockNotifAudio();
+        refreshAdminNotifications();
+      });
+      ddRoot.addEventListener('hidden.bs.dropdown', function () { dropdownOpen = false; });
     } else {
       bellBtn.addEventListener('click', function () { setTimeout(refreshAdminNotifications, 200); });
     }
-    setInterval(refreshAdminNotifications, 120000);
-    setTimeout(refreshAdminNotifications, 5000);
+
+    refreshPulse();
+    connectNotifStream();
+    setInterval(function () { refreshPulse(); }, 2500);
   })();
   <% } %>
 });

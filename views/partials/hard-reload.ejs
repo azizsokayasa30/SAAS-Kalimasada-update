@@ -4,7 +4,7 @@
     // Unregister ALL old service workers and clear stale caches
     // This runs once per session to clean up any cached redirects
     if ('serviceWorker' in navigator) {
-        var swCleanupKey = 'sw_cleanup_v3';
+        var swCleanupKey = 'sw_cleanup_v6';
         if (!sessionStorage.getItem(swCleanupKey)) {
             sessionStorage.setItem(swCleanupKey, 'true');
             // Unregister all service workers to force fresh SW install

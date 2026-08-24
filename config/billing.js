@@ -2072,6 +2072,8 @@
             'CREATE INDEX IF NOT EXISTS idx_invoices_created_status ON invoices(created_at, status)',
             'CREATE INDEX IF NOT EXISTS idx_invoices_invoice_type ON invoices(invoice_type)',
             'CREATE INDEX IF NOT EXISTS idx_invoices_invoice_type_status ON invoices(invoice_type, status)',
+            'CREATE INDEX IF NOT EXISTS idx_invoices_tenant_created ON invoices(tenant_id, created_at)',
+            'CREATE INDEX IF NOT EXISTS idx_invoices_tenant_created_status ON invoices(tenant_id, created_at, status)',
             // Index untuk customers
             'CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone)',
             // Cegah pelanggan ganda: nomor HP sama persis dalam 1 tenant (08… vs 62… tetap boleh beda langganan)
@@ -3011,6 +3013,33 @@
     }
 
     /**
+     * Isolasi tenant dari ID eksplisit (req.tenantId). Tidak bergantung ALS.
+     * ID tidak valid → kosong (pemanggil HTTP harus fail-closed sendiri).
+     */
+    _tenantWhereExplicit(tenantId, alias = '') {
+        const id = parseInt(tenantId, 10);
+        if (!Number.isFinite(id) || id <= 0) return { sql: '', params: [] };
+        const col = alias ? `${alias}.tenant_id` : 'tenant_id';
+        return { sql: ` AND ${col} = ?`, params: [id] };
+    }
+
+    /**
+     * Prefer tenantId opsi/argumen, fallback ALS. Untuk query HTTP jangan biarkan
+     * kosong — caller harus menolak request jika hasilnya null.
+     */
+    _resolveTenantIdForRead(explicitTenantId = null) {
+        if (explicitTenantId != null && Number.isFinite(Number(explicitTenantId))) {
+            const id = parseInt(explicitTenantId, 10);
+            if (id > 0) return id;
+        }
+        if (hasTenantContext()) {
+            const id = parseInt(getTenantId(), 10);
+            if (Number.isFinite(id) && id > 0) return id;
+        }
+        return null;
+    }
+
+    /**
      * Sama seperti _tenantWhere tapi mengembalikan bentuk `WHERE ...` untuk query
      * yang belum punya klausa WHERE. Tanpa konteks tenant → kosong.
      */
@@ -3018,6 +3047,29 @@
         if (!hasTenantContext()) return { sql: '', params: [] };
         const col = alias ? `${alias}.tenant_id` : 'tenant_id';
         return { sql: ` WHERE ${col} = ?`, params: [getTenantId()] };
+    }
+
+    /** Batas bulan YYYY-MM → [start, nextMonthStart) agar index created_at bisa dipakai. */
+    _monthBounds(monthKey) {
+        const match = String(monthKey || '').trim().match(/^(\d{4})-(\d{2})$/);
+        if (!match) return null;
+        const year = parseInt(match[1], 10);
+        const month = parseInt(match[2], 10);
+        if (!Number.isFinite(year) || month < 1 || month > 12) return null;
+        const start = `${year}-${String(month).padStart(2, '0')}-01`;
+        const nextMonth = month === 12 ? 1 : month + 1;
+        const nextYear = month === 12 ? year + 1 : year;
+        const end = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
+        return { start, end };
+    }
+
+    _invoiceListNeedsCustomerJoin(filters = {}) {
+        if (String(filters.search || filters.customer_username || '').trim()) return true;
+        return filters.type === 'monthly' || filters.type === 'fix_date';
+    }
+
+    _invoiceListNeedsMemberJoin(filters = {}) {
+        return Boolean(String(filters.search || filters.customer_username || '').trim());
     }
 
     _buildInvoiceListFilterSql(filters = {}, flags = {}) {
@@ -3034,7 +3086,11 @@
         const _t = this._tenantWhere('i');
         if (_t.sql) { sql += _t.sql; params.push(..._t.params); }
 
-        if (filters.month) {
+        const monthBounds = this._monthBounds(filters.month);
+        if (monthBounds) {
+            sql += ` AND i.created_at >= ? AND i.created_at < ?`;
+            params.push(monthBounds.start, monthBounds.end);
+        } else if (filters.month) {
             sql += ` AND strftime('%Y-%m', i.created_at) = ?`;
             params.push(filters.month);
         }
@@ -3050,7 +3106,7 @@
 
         if (filters.status) {
             if (filters.status === 'overdue') {
-                sql += ` AND i.status = 'unpaid' AND DATE(i.due_date) < DATE('now','localtime')`;
+                sql += ` AND i.status = 'unpaid' AND i.due_date < date('now','localtime')`;
             } else if (filters.status === 'unpaid') {
                 sql += ` AND i.status = 'unpaid'`;
             } else {
@@ -3076,19 +3132,27 @@
     async getInvoiceListSummaryWithFilters(filters = {}) {
         const flags = await this._ensureBillingSchemaFlags();
         const { sql: filterSql, params: filterParams } = this._buildInvoiceListFilterSql(filters, flags);
+        const needCustomers = this._invoiceListNeedsCustomerJoin(filters);
+        const needMembers = this._invoiceListNeedsMemberJoin(filters);
+        const customerJoin = needCustomers
+            ? `LEFT JOIN customers c ON i.customer_id = c.id AND c.tenant_id = i.tenant_id`
+            : '';
+        const memberJoin = needMembers
+            ? `LEFT JOIN members m ON i.member_id = m.id AND m.tenant_id = i.tenant_id`
+            : '';
         const sql = `
             SELECT
                 COUNT(*) AS total,
                 SUM(CASE WHEN i.status = 'paid' THEN 1 ELSE 0 END) AS paid,
                 SUM(CASE WHEN i.status = 'unpaid' THEN 1 ELSE 0 END) AS unpaid,
-                SUM(CASE WHEN i.status = 'unpaid' AND DATE(i.due_date) < DATE('now','localtime') THEN 1 ELSE 0 END) AS overdue,
+                SUM(CASE WHEN i.status = 'unpaid' AND i.due_date < date('now','localtime') THEN 1 ELSE 0 END) AS overdue,
                 COALESCE(SUM(i.amount), 0) AS total_amount,
                 COALESCE(SUM(CASE WHEN i.status = 'paid' THEN i.amount ELSE 0 END), 0) AS paid_amount,
                 COALESCE(SUM(CASE WHEN i.status = 'unpaid' THEN i.amount ELSE 0 END), 0) AS unpaid_amount,
-                COALESCE(SUM(CASE WHEN i.status = 'unpaid' AND DATE(i.due_date) < DATE('now','localtime') THEN i.amount ELSE 0 END), 0) AS overdue_amount
+                COALESCE(SUM(CASE WHEN i.status = 'unpaid' AND i.due_date < date('now','localtime') THEN i.amount ELSE 0 END), 0) AS overdue_amount
             FROM invoices i
-            LEFT JOIN customers c ON i.customer_id = c.id AND c.tenant_id = i.tenant_id
-            LEFT JOIN members m ON i.member_id = m.id AND m.tenant_id = i.tenant_id
+            ${customerJoin}
+            ${memberJoin}
             WHERE 1=1 ${filterSql}
         `;
         return new Promise((resolve, reject) => {
@@ -3441,7 +3505,10 @@ ${lifetimePaymentStatusSql}
     }
 
     async getCustomers(options = {}) {
-        const _t = this._tenantWhere('c');
+        const tenantId = this._resolveTenantIdForRead(options.tenantId);
+        const _t = tenantId != null
+            ? this._tenantWhereExplicit(tenantId, 'c')
+            : this._tenantWhere('c');
         return new Promise(async (resolve, reject) => {
             let whereClause = '';
             const params = [];
@@ -3589,8 +3656,9 @@ ${lifetimePaymentStatusSql}
             filterParams.push(filters.package_id);
         }
         if (filters.area) {
-            baseWhere += ' AND c.area = ?';
-            filterParams.push(filters.area);
+            const areaFilter = this._sqlCustomerMatchesAreaFilter('c', filters.area);
+            baseWhere += ` AND ${areaFilter.clause}`;
+            filterParams.push(...areaFilter.params);
         }
 
         // Filter kolektor dibangun per-alias (bukan regex rename) supaya JOIN & WHERE-nya
@@ -3807,8 +3875,9 @@ ${lifetimePaymentStatusSql}
         }
 
         if (filters.area) {
-            whereClause += ' AND c.area = ?';
-            params.push(filters.area);
+            const areaFilter = this._sqlCustomerMatchesAreaFilter('c', filters.area);
+            whereClause += ` AND ${areaFilter.clause}`;
+            params.push(...areaFilter.params);
         }
 
         if (filters.collector_id) {
@@ -4109,18 +4178,21 @@ ${lifetimePaymentStatusSql}
     }
 
     // Search customers by name, phone, username, PPPoE, atau ID pelanggan (6 digit)
-    async searchCustomers(searchTerm) {
-        const _t = this._tenantWhere('c');
+    async searchCustomers(searchTerm, options = {}) {
+        const tenantId = this._resolveTenantIdForRead(options.tenantId);
+        const _t = tenantId != null
+            ? this._tenantWhereExplicit(tenantId, 'c')
+            : this._tenantWhere('c');
         return new Promise((resolve, reject) => {
             const searchPattern = `%${searchTerm}%`;
 
             // Skema customers memakai join_date (bukan created_at/updated_at)
             const sql = `
-                SELECT c.id, c.customer_id, c.username, c.password, c.name, c.phone, c.email, c.address,
+                SELECT c.id, c.customer_id, c.username, c.name, c.phone, c.email, c.address,
                        c.pppoe_username, c.package_id, c.status, c.join_date,
                        p.name AS package_name
                 FROM customers c
-                LEFT JOIN packages p ON c.package_id = p.id
+                LEFT JOIN packages p ON c.package_id = p.id AND p.tenant_id = c.tenant_id
                 WHERE (c.name LIKE ? OR c.phone LIKE ? OR c.username LIKE ? OR c.pppoe_username LIKE ?
                    OR (c.customer_id IS NOT NULL AND TRIM(CAST(c.customer_id AS TEXT)) != '' AND CAST(c.customer_id AS TEXT) LIKE ?))${_t.sql}
                 ORDER BY c.name ASC
@@ -4136,6 +4208,66 @@ ${lifetimePaymentStatusSql}
                     } else {
                         resolve(rows || []);
                     }
+                }
+            );
+        });
+    }
+
+    /**
+     * Autocomplete input pembayaran — wajib tenant_id eksplisit, tanpa password.
+     * Fail-closed: tanpa tenant atau query < 2 karakter → [].
+     */
+    async listCustomersForPaymentPicker(tenantId, searchTerm) {
+        const tid = parseInt(tenantId, 10);
+        const q = String(searchTerm || '').trim();
+        if (!Number.isFinite(tid) || tid <= 0 || q.length < 2) return [];
+        const pattern = `%${q}%`;
+        return new Promise((resolve, reject) => {
+            this.db.all(
+                `SELECT c.id, c.name, c.phone, c.username, c.pppoe_username
+                 FROM customers c
+                 WHERE c.tenant_id = ?
+                   AND (
+                        c.name LIKE ?
+                        OR c.phone LIKE ?
+                        OR IFNULL(c.username, '') LIKE ?
+                        OR IFNULL(c.pppoe_username, '') LIKE ?
+                        OR CAST(c.customer_id AS TEXT) LIKE ?
+                   )
+                 ORDER BY c.name ASC
+                 LIMIT 20`,
+                [tid, pattern, pattern, pattern, pattern, pattern],
+                (err, rows) => {
+                    if (err) reject(err);
+                    else resolve(rows || []);
+                }
+            );
+        });
+    }
+
+    async getUnpaidInvoicesForCustomer(customerId, tenantId) {
+        const cid = parseInt(customerId, 10);
+        const tid = parseInt(tenantId, 10);
+        if (!Number.isFinite(cid) || cid <= 0 || !Number.isFinite(tid) || tid <= 0) return [];
+        return new Promise((resolve, reject) => {
+            this.db.all(
+                `SELECT i.id, i.invoice_number, i.amount, i.status, i.due_date, i.created_at,
+                        p.name as package_name
+                 FROM invoices i
+                 LEFT JOIN packages p ON i.package_id = p.id AND p.tenant_id = i.tenant_id
+                 WHERE i.customer_id = ?
+                   AND i.tenant_id = ?
+                   AND i.status = 'unpaid'
+                   AND CAST(i.amount AS REAL) > 0
+                   AND EXISTS (
+                        SELECT 1 FROM customers c
+                        WHERE c.id = i.customer_id AND c.tenant_id = i.tenant_id
+                   )
+                 ORDER BY i.created_at DESC`,
+                [cid, tid],
+                (err, rows) => {
+                    if (err) reject(err);
+                    else resolve(rows || []);
                 }
             );
         });
@@ -5089,11 +5221,19 @@ ${lifetimePaymentStatusSql}
     async getInvoicesCountWithFilters(filters = {}) {
         const flags = await this._ensureBillingSchemaFlags();
         const { sql: filterSql, params: filterParams } = this._buildInvoiceListFilterSql(filters, flags);
+        const needCustomers = this._invoiceListNeedsCustomerJoin(filters);
+        const needMembers = this._invoiceListNeedsMemberJoin(filters);
+        const customerJoin = needCustomers
+            ? `LEFT JOIN customers c ON i.customer_id = c.id AND c.tenant_id = i.tenant_id`
+            : '';
+        const memberJoin = needMembers
+            ? `LEFT JOIN members m ON i.member_id = m.id AND m.tenant_id = i.tenant_id`
+            : '';
         const sql = `
             SELECT COUNT(*) as count
             FROM invoices i
-            LEFT JOIN customers c ON i.customer_id = c.id AND c.tenant_id = i.tenant_id
-            LEFT JOIN members m ON i.member_id = m.id AND m.tenant_id = i.tenant_id
+            ${customerJoin}
+            ${memberJoin}
             WHERE 1=1 ${filterSql}
         `;
         return new Promise((resolve, reject) => {
@@ -7093,7 +7233,8 @@ ${lifetimePaymentStatusSql}
         });
     }
 
-    async getCollectorPaymentsWithFilters(filters) {
+    async getCollectorPaymentsWithFilters(filters = {}) {
+        const tenantId = this._resolveTenantIdForRead(filters.tenantId);
         return new Promise((resolve, reject) => {
             let sql = `
                 SELECT 
@@ -7105,13 +7246,19 @@ ${lifetimePaymentStatusSql}
                     col.name as collector_name,
                     col.phone as collector_phone
                 FROM payments p
-                JOIN invoices i ON p.invoice_id = i.id
-                JOIN customers c ON i.customer_id = c.id
-                LEFT JOIN collectors col ON p.collector_id = col.id
+                JOIN invoices i ON p.invoice_id = i.id AND i.tenant_id = p.tenant_id
+                JOIN customers c ON i.customer_id = c.id AND c.tenant_id = p.tenant_id
+                LEFT JOIN collectors col ON p.collector_id = col.id AND col.tenant_id = p.tenant_id
                 WHERE 1=1
             `;
             
             const params = [];
+            if (tenantId != null) {
+                sql += ` AND p.tenant_id = ? AND c.tenant_id = ?`;
+                params.push(tenantId, tenantId);
+            } else {
+                sql += ` AND 1=0`;
+            }
             
             // Date range filter
             if (filters.from) {
@@ -7166,18 +7313,24 @@ ${lifetimePaymentStatusSql}
      * Riwayat pembayaran (admin + kolektor + tipe lain): pelanggan atau member.
      * Tanpa kolom remittance di UI — gunakan untuk halaman all-payments.
      */
-    _allPaymentsHistoryWhere(filters) {
+    _allPaymentsHistoryWhere(filters = {}) {
         let sql = `
             FROM payments p
-            JOIN invoices i ON p.invoice_id = i.id
-            LEFT JOIN customers c ON i.customer_id = c.id
-            LEFT JOIN members m ON i.member_id = m.id
-            LEFT JOIN collectors col ON p.collector_id = col.id
+            JOIN invoices i ON p.invoice_id = i.id AND i.tenant_id = p.tenant_id
+            LEFT JOIN customers c ON i.customer_id = c.id AND c.tenant_id = p.tenant_id
+            LEFT JOIN members m ON i.member_id = m.id AND m.tenant_id = p.tenant_id
+            LEFT JOIN collectors col ON p.collector_id = col.id AND col.tenant_id = p.tenant_id
             WHERE 1=1
         `;
         const params = [];
-        const _t = this._tenantWhere('p');
-        if (_t.sql) { sql += _t.sql; params.push(..._t.params); }
+        const tenantId = this._resolveTenantIdForRead(filters.tenantId);
+        if (tenantId != null) {
+            sql += ` AND p.tenant_id = ?`;
+            params.push(tenantId);
+        } else {
+            // HTTP/admin tidak boleh lolos tanpa tenant (cegah dump lintas-tenant).
+            sql += ` AND 1=0`;
+        }
         if (filters.from) {
             sql += ` AND date(p.payment_date) >= date(?)`;
             params.push(filters.from);
@@ -7187,8 +7340,13 @@ ${lifetimePaymentStatusSql}
             params.push(filters.to);
         }
         if (filters.collector_id) {
-            sql += ` AND p.collector_id = ?`;
-            params.push(filters.collector_id);
+            const cid = String(filters.collector_id).trim();
+            if (cid === 'admin' || cid === 'office' || cid === 'admin_kantor') {
+                sql += ` AND (p.collector_id IS NULL OR col.id IS NULL)`;
+            } else {
+                sql += ` AND p.collector_id = ?`;
+                params.push(cid);
+            }
         }
         if (filters.q) {
             const term = `%${String(filters.q).trim()}%`;
@@ -8443,8 +8601,11 @@ ${lifetimePaymentStatusSql}
     }
 
     // Get all collectors
-    async getAllCollectors() {
-        const _t = this._tenantWhere();
+    async getAllCollectors(options = {}) {
+        const tenantId = this._resolveTenantIdForRead(options && options.tenantId);
+        const _t = tenantId != null
+            ? this._tenantWhereExplicit(tenantId)
+            : this._tenantWhere();
         return new Promise((resolve, reject) => {
             this.db.all('SELECT * FROM collectors WHERE status = "active"' + _t.sql, _t.params, (err, rows) => {
                 if (err) reject(err);
@@ -8719,6 +8880,89 @@ ${lifetimePaymentStatusSql}
     _normalizeAreaIds(area_ids) {
         const raw = Array.isArray(area_ids) ? area_ids : (area_ids != null ? [area_ids] : []);
         return [...new Set(raw.map((id) => parseInt(id, 10)).filter((id) => Number.isFinite(id) && id > 0))];
+    }
+
+    /**
+     * Filter daftar pelanggan by nama area (query ?area=).
+     * Jika nama ada di tabel master `areas`, cocokkan `area_id` — sama dengan
+     * hitungan di Manajemen Area. Teks `customers.area` hanya dipakai untuk
+     * pelanggan tanpa area_id, atau nilai lama yang tidak ada di master.
+     * Semua kolom pelanggan memakai alias + '.' agar aman di-rename c.→c_sub.
+     */
+    _sqlCustomerMatchesAreaFilter(alias, areaValue) {
+        const col = alias ? `${alias}.` : '';
+        const name = String(areaValue ?? '').trim();
+        return {
+            clause: `(
+                ${col}area_id IN (
+                    SELECT ar.id FROM areas ar
+                    WHERE ar.tenant_id = ${col}tenant_id
+                      AND LOWER(TRIM(ar.nama_area)) = LOWER(TRIM(?))
+                )
+                OR (
+                    LOWER(TRIM(IFNULL(${col}area, ''))) = LOWER(TRIM(?))
+                    AND (
+                        ${col}area_id IS NULL
+                        OR ${col}area_id = 0
+                        OR NOT EXISTS (
+                            SELECT 1 FROM areas ar
+                            WHERE ar.tenant_id = ${col}tenant_id
+                              AND LOWER(TRIM(ar.nama_area)) = LOWER(TRIM(?))
+                        )
+                    )
+                )
+            )`,
+            params: [name, name, name]
+        };
+    }
+
+    /**
+     * Opsi filter Area / Desa: semua nama di Manajemen Area, plus teks pelanggan
+     * yang tidak cocok nama/kode area master (data lama).
+     */
+    async getCustomerAreaFilterOptions(options = {}) {
+        const tenantId = this._resolveTenantIdForRead(options.tenantId);
+        const tLit = tenantId != null ? parseInt(tenantId, 10) : null;
+        const tenantAreas = Number.isFinite(tLit) && tLit > 0 ? ` AND tenant_id = ${tLit}` : '';
+        const tenantCust = Number.isFinite(tLit) && tLit > 0 ? ` AND c.tenant_id = ${tLit}` : '';
+        const tenantAr = Number.isFinite(tLit) && tLit > 0 ? ` AND a.tenant_id = ${tLit}` : '';
+        const sql = `
+            SELECT nama_area FROM (
+                SELECT TRIM(nama_area) AS nama_area
+                FROM areas
+                WHERE nama_area IS NOT NULL AND TRIM(nama_area) != ''
+                  ${tenantAreas}
+                UNION
+                SELECT TRIM(c.area) AS nama_area
+                FROM customers c
+                WHERE c.area IS NOT NULL AND TRIM(c.area) != ''
+                  ${tenantCust}
+                  AND NOT EXISTS (
+                      SELECT 1 FROM areas a
+                      WHERE a.tenant_id = c.tenant_id
+                        ${tenantAr}
+                        AND (
+                            LOWER(TRIM(a.nama_area)) = LOWER(TRIM(c.area))
+                            OR (
+                                TRIM(IFNULL(a.kode_area, '')) != ''
+                                AND LOWER(TRIM(a.kode_area)) = LOWER(TRIM(c.area))
+                            )
+                        )
+                  )
+            )
+            WHERE nama_area IS NOT NULL AND TRIM(nama_area) != ''
+            ORDER BY nama_area COLLATE NOCASE
+        `;
+        return new Promise((resolve) => {
+            this.db.all(sql, [], (err, rows) => {
+                if (err) {
+                    try { logger.warn('[billing] getCustomerAreaFilterOptions:', err.message); } catch (_) {}
+                    resolve([]);
+                    return;
+                }
+                resolve((rows || []).map((r) => r.nama_area).filter(Boolean));
+            });
+        });
     }
 
     _buildCustomersInAreasWhere(areaIds, alias = '') {
@@ -12822,6 +13066,9 @@ billingManager.insertPortalPackageRequest = function (row) {
     return new Promise((resolve, reject) => {
         this.db.run(sql, params, function (err) {
             if (err) return reject(err);
+            try {
+                require('./adminNotificationBus').pingAdminNotifications('PKGREQ');
+            } catch (_) {}
             resolve({ id: this.lastID });
         });
     });
@@ -12979,10 +13226,14 @@ billingManager.getAdminNotificationBadgeCount = function (tenantId = null) {
             p
         ),
         countOne(
-            `SELECT COUNT(*) AS n FROM collector_field_notifications n
-             INNER JOIN collectors col ON col.id = n.collector_id
-             WHERE n.read_at IS NULL
-               AND UPPER(TRIM(COALESCE(n.kind,''))) IN ('ISOLIR','INVOICE_PAID')${tColl}`,
+            `SELECT COUNT(*) AS n FROM (
+                SELECT n.kind, n.ref_id
+                FROM collector_field_notifications n
+                INNER JOIN collectors col ON col.id = n.collector_id
+                WHERE n.read_at IS NULL
+                  AND UPPER(TRIM(COALESCE(n.kind,''))) IN ('ISOLIR','INVOICE_PAID')${tColl}
+                GROUP BY UPPER(TRIM(n.kind)), n.ref_id
+             )`,
             p
         ),
         countOne(
@@ -13001,6 +13252,74 @@ billingManager.getAdminNotificationBadgeCount = function (tenantId = null) {
 };
 
 /**
+ * Pulse ringan untuk badge realtime (tanpa reconcile / tanpa feed).
+ * `stamp` berubah setiap ada notifikasi baru — dipakai klien untuk bunyi + update count.
+ */
+billingManager.getAdminNotificationPulse = function (tenantId = null) {
+    const _tId = tenantId != null ? tenantId : (hasTenantContext() ? getTenantId() : null);
+    const one = (sql, params = []) =>
+        new Promise((resolve) => {
+            this.db.get(sql, params, (err, row) => {
+                if (err || !row) return resolve({ n: 0, mx: '', mid: 0 });
+                resolve({
+                    n: Number(row.n) || 0,
+                    mx: row.mx ? String(row.mx) : '',
+                    mid: Number(row.mid) || 0
+                });
+            });
+        });
+    const troubleJoinPhoneMatch =
+        `REPLACE(REPLACE(REPLACE(TRIM(COALESCE(c.phone,'')),' ',''),'-',''),'+','') = REPLACE(REPLACE(REPLACE(TRIM(COALESCE(tr.phone,'')),' ',''),'-',''),'+','')`;
+    const troubleCustomerJoin = `(
+               (LENGTH(TRIM(COALESCE(c.phone,''))) > 5 AND ${troubleJoinPhoneMatch})
+               OR (COALESCE(tr.customer_id, 0) > 0 AND CAST(tr.customer_id AS INTEGER) = CAST(c.id AS INTEGER))
+             )`;
+    const tTech = _tId != null ? ' AND t.tenant_id = ?' : '';
+    const tColl = _tId != null ? ' AND col.tenant_id = ?' : '';
+    const tPortal = _tId != null ? ' AND c.tenant_id = ?' : '';
+    const tTrouble = _tId != null ? ' AND c.tenant_id = ?' : '';
+    const p = _tId != null ? [_tId] : [];
+    return Promise.all([
+        one(
+            `SELECT COUNT(*) AS n, MAX(n.created_at) AS mx, MAX(n.id) AS mid
+             FROM technician_field_notifications n
+             INNER JOIN technicians t ON t.id = n.technician_id
+             WHERE n.read_at IS NULL${tTech}`,
+            p
+        ),
+        one(
+            `SELECT COUNT(*) AS n, MAX(created_at) AS mx, MAX(id) AS mid FROM (
+                SELECT n.id, n.created_at
+                FROM collector_field_notifications n
+                INNER JOIN collectors col ON col.id = n.collector_id
+                WHERE n.read_at IS NULL
+                  AND UPPER(TRIM(COALESCE(n.kind,''))) IN ('ISOLIR','INVOICE_PAID')${tColl}
+                GROUP BY UPPER(TRIM(n.kind)), n.ref_id
+             )`,
+            p
+        ),
+        one(
+            `SELECT COUNT(*) AS n, MAX(r.created_at) AS mx, MAX(r.id) AS mid
+             FROM customer_portal_package_requests r
+             INNER JOIN customers c ON c.id = r.customer_id
+             WHERE COALESCE(r.status, 'pending') = 'pending'${tPortal}`,
+            p
+        ),
+        one(
+            `SELECT COUNT(*) AS n, MAX(COALESCE(tr.updated_at, tr.created_at)) AS mx, MAX(tr.rowid) AS mid
+             FROM trouble_reports tr
+             INNER JOIN customers c ON ${troubleCustomerJoin}
+             WHERE LOWER(COALESCE(tr.status,'')) IN ('open','in_progress')${tTrouble}`,
+            p
+        ),
+    ]).then((parts) => {
+        const badge = parts.reduce((a, b) => a + (Number(b.n) || 0), 0);
+        const stamp = parts.map((x) => `${x.n}:${x.mx}:${x.mid}`).join('|');
+        return { badge, stamp };
+    });
+};
+
+/**
  * Feed notifikasi terpusat admin (disaring): pekerjaan teknisi; pelanggan lunas & isolir (kolektor);
  * permintaan paket + laporan gangguan (nomor telepon cocok **atau** `trouble_reports.customer_id` = pelanggan).
  */
@@ -13016,7 +13335,7 @@ billingManager.getAdminUnifiedNotificationFeed = function (limit = 40, tenantId 
                OR (COALESCE(tr.customer_id, 0) > 0 AND CAST(tr.customer_id AS INTEGER) = CAST(c.id AS INTEGER))
              )`;
     const tTech = _tId != null ? ' AND t.tenant_id = ?' : '';
-    const tColl = _tId != null ? ' AND c.tenant_id = ?' : '';
+    const tCollUniq = _tId != null ? ' AND col2.tenant_id = ?' : '';
     const tPortal = _tId != null ? ' AND cust.tenant_id = ?' : '';
     const tTrouble = _tId != null ? ' AND c.tenant_id = ?' : '';
     const pTech = _tId != null ? [_tId, chunk] : [chunk];
@@ -13055,14 +13374,45 @@ billingManager.getAdminUnifiedNotificationFeed = function (limit = 40, tenantId 
             `
             SELECT 'collector' AS source, n.id AS item_id, n.title, n.body, n.created_at, n.read_at,
                    n.kind, n.ref_id, n.collector_id AS actor_id,
-                   COALESCE(c.name, '') AS actor_name, '' AS customer_phone,
+                   CASE
+                     WHEN UPPER(TRIM(COALESCE(n.kind,''))) = 'INVOICE_PAID' THEN
+                       CASE
+                         WHEN pay.collector_id IS NOT NULL AND TRIM(COALESCE(pay_col.name, '')) != '' THEN pay_col.name
+                         WHEN LOWER(TRIM(COALESCE(pay.payment_method, inv.payment_method, ''))) LIKE '%online%'
+                           OR LOWER(TRIM(COALESCE(pay.payment_method, inv.payment_method, ''))) IN ('duitku','tripay','qris','manual_admin','midtrans','xendit','gateway')
+                           OR (pay.id IS NOT NULL AND pay.collector_id IS NULL)
+                           THEN 'Admin kantor'
+                         ELSE COALESCE(c.name, '')
+                       END
+                     ELSE COALESCE(c.name, '')
+                   END AS actor_name,
+                   '' AS customer_phone,
                    NULL AS portal_username, NULL AS cur_pkg, NULL AS cur_spd, NULL AS tgt_pkg, NULL AS tgt_spd,
                    NULL AS tgt_price, NULL AS portal_note, NULL AS tr_location, NULL AS tr_desc_full, NULL AS tr_status,
                    NULL AS tr_category, NULL AS tr_created
             FROM collector_field_notifications n
+            INNER JOIN (
+                SELECT MIN(n2.id) AS id
+                FROM collector_field_notifications n2
+                INNER JOIN collectors col2 ON col2.id = n2.collector_id
+                WHERE n2.read_at IS NULL
+                  AND UPPER(TRIM(COALESCE(n2.kind,''))) IN ('ISOLIR','INVOICE_PAID')
+                  ${tCollUniq}
+                GROUP BY UPPER(TRIM(n2.kind)), n2.ref_id
+            ) uniq ON uniq.id = n.id
             LEFT JOIN collectors c ON c.id = n.collector_id
+            LEFT JOIN invoices inv
+              ON UPPER(TRIM(COALESCE(n.kind,''))) = 'INVOICE_PAID'
+             AND n.ref_id = ('PAID-' || CAST(inv.id AS TEXT))
+            LEFT JOIN payments pay ON pay.id = (
+                SELECT p2.id FROM payments p2
+                WHERE p2.invoice_id = inv.id
+                ORDER BY datetime(p2.payment_date) DESC, p2.id DESC
+                LIMIT 1
+            )
+            LEFT JOIN collectors pay_col ON pay_col.id = pay.collector_id
             WHERE n.read_at IS NULL
-              AND UPPER(TRIM(COALESCE(n.kind,''))) IN ('ISOLIR','INVOICE_PAID')${tColl}
+              AND UPPER(TRIM(COALESCE(n.kind,''))) IN ('ISOLIR','INVOICE_PAID')
             ORDER BY datetime(n.created_at) DESC
             LIMIT ?`,
             pColl
@@ -13124,7 +13474,7 @@ billingManager.getAdminUnifiedNotificationFeed = function (limit = 40, tenantId 
                 }
                 if (row.source === 'collector') {
                     const k = String(row.kind || '').toUpperCase();
-                    if (k === 'INVOICE_PAID') return '/admin/billing/invoices';
+                    if (k === 'INVOICE_PAID') return '/admin/billing/invoice-list';
                     if (k === 'ISOLIR') return '/admin/billing/service-suspension';
                     return '/admin/billing/collector-remittance';
                 }

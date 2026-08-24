@@ -41,37 +41,35 @@ function formatPhoneNumber(number) {
 // Helper function untuk mendapatkan header dan footer dari settings
 function getHeaderFooter() {
     try {
-        const { getSettingsWithCache } = require('./settingsManager');
-        const settings = getSettingsWithCache();
-        
+        const { getCompanyHeader, getFooterInfo } = require('./message-templates');
         return {
-            header: settings.company_header || 'CV Lintas Multimedia',
-            footer: settings.footer_info || 'Internet Tanpa Batas'
+            header: getCompanyHeader(),
+            footer: getFooterInfo()
         };
     } catch (error) {
         return {
-            header: 'CV Lintas Multimedia',
+            header: 'PT. KALIMASADA INTI SARANA',
             footer: 'Internet Tanpa Batas'
         };
     }
 }
 
-// Helper function untuk memformat pesan dengan header dan footer
 function formatMessageWithHeaderFooter(message, includeHeader = true, includeFooter = true) {
     const { header, footer } = getHeaderFooter();
-    
+    const text = String(message || '');
+    const alreadyHasHeader = header && text.includes(header);
+
     let formattedMessage = '';
-    
-    if (includeHeader) {
+    if (includeHeader && !alreadyHasHeader) {
         formattedMessage += `🏢 *${header}*\n\n`;
     }
-    
-    formattedMessage += message;
-    
-    if (includeFooter) {
+
+    formattedMessage += text;
+
+    if (includeFooter && footer && !text.includes(footer)) {
         formattedMessage += `\n\n${footer}`;
     }
-    
+
     return formattedMessage;
 }
 

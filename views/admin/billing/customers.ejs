@@ -854,7 +854,7 @@
                                     <option value="">Semua Area</option>
                                     <% if (typeof uniqueAreas !== 'undefined' && uniqueAreas.length > 0) { %>
                                         <% uniqueAreas.forEach(function(areaName) { %>
-                                            <option value="<%= areaName %>" <%= (typeof filters !== 'undefined' && filters.area === areaName) ? 'selected' : '' %>><%= areaName %></option>
+                                            <option value="<%= areaName %>" <%= (typeof filters !== 'undefined' && filters.area && String(filters.area).trim().toLowerCase() === String(areaName).trim().toLowerCase()) ? 'selected' : '' %>><%= areaName %></option>
                                         <% }); %>
                                     <% } %>
                                 </select>

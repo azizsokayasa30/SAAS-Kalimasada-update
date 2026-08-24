@@ -104,9 +104,9 @@ function defaultTenantSettings(tenant) {
     } catch (_) {
         return {
             ...creds,
-            company_header: tenant.name,
-            company_name: tenant.name,
-            footer_info: `© ${new Date().getFullYear()} ${tenant.name}`,
+            company_header: require('../companyBranding').DEFAULT_COMPANY_HEADER,
+            company_name: require('../companyBranding').DEFAULT_COMPANY_HEADER,
+            footer_info: `© ${new Date().getFullYear()} ${require('../companyBranding').DEFAULT_COMPANY_HEADER}`,
             contact_phone: tenant.owner_phone,
             server_port: process.env.PORT || '4555',
             timezone: 'Asia/Jakarta',
@@ -299,9 +299,10 @@ async function ensureMasterTenant(data) {
         throw new Error('Master tenant sudah ada.');
     }
 
+    const { DEFAULT_COMPANY_HEADER } = require('../companyBranding');
     const settings = {
-        company_header: data.name,
-        company_name: data.name,
+        company_header: DEFAULT_COMPANY_HEADER,
+        company_name: DEFAULT_COMPANY_HEADER,
         is_master_parent: true,
     };
 
@@ -756,9 +757,16 @@ async function updateTenant(id, data) {
     let settingsChanged = false;
 
     if (newName !== tenant.name || subdomain !== tenant.subdomain) {
-        settings.company_header = newName;
-        settings.company_name = newName;
-        settings.app_name = newName;
+        const { DEFAULT_COMPANY_HEADER, isTenantLabel } = require('../companyBranding');
+        if (!settings.company_header || isTenantLabel(settings.company_header, { name: tenant.name, subdomain: tenant.subdomain })) {
+            settings.company_header = DEFAULT_COMPANY_HEADER;
+        }
+        if (!settings.company_name || isTenantLabel(settings.company_name, { name: tenant.name, subdomain: tenant.subdomain })) {
+            settings.company_name = settings.company_header || DEFAULT_COMPANY_HEADER;
+        }
+        if (!settings.app_name || isTenantLabel(settings.app_name, { name: tenant.name, subdomain: tenant.subdomain })) {
+            settings.app_name = settings.company_header || DEFAULT_COMPANY_HEADER;
+        }
         settingsChanged = true;
     }
     if (data.owner_phone) {

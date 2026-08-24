@@ -3,15 +3,12 @@
 const { getSettingsWithCache } = require('../settingsManager');
 
 function pickSidebarSettings(settings = {}, tenant = null) {
-    const name = settings.company_header
-        || settings.company_name
-        || settings.app_name
-        || tenant?.name
-        || 'KALIMASADA';
+    const { pickCompanyHeaderFromSettings, DEFAULT_COMPANY_HEADER } = require('../companyBranding');
+    const name = pickCompanyHeaderFromSettings(settings, tenant) || DEFAULT_COMPANY_HEADER;
     return {
         logo_filename: settings.logo_filename || 'logo.png',
         company_header: name,
-        company_name: settings.company_name || settings.company_header || tenant?.name || name,
+        company_name: name,
         footer_info: settings.footer_info || '',
     };
 }

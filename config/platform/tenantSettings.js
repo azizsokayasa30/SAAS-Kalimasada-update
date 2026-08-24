@@ -17,9 +17,17 @@ function getTenantSetting(key, defaultValue = null) {
 }
 
 function getTenantBranding() {
+    const { pickCompanyHeaderFromSettings, DEFAULT_COMPANY_HEADER } = require('../companyBranding');
+    const tenant = hasTenantContext() ? getTenant() : null;
+    const header = pickCompanyHeaderFromSettings({
+        company_header: getTenantSetting('company_header', ''),
+        company_name: getTenantSetting('company_name', ''),
+        app_name: getTenantSetting('app_name', ''),
+        footer_info: getTenantSetting('footer_info', '')
+    }, tenant);
     return {
-        company_header: getTenantSetting('company_header', 'Kalimasada Billing'),
-        company_name: getTenantSetting('company_name', 'Kalimasada Billing'),
+        company_header: header || DEFAULT_COMPANY_HEADER,
+        company_name: header || DEFAULT_COMPANY_HEADER,
         logo_filename: getTenantSetting('logo_filename', 'logo.png'),
         footer_info: getTenantSetting('footer_info', ''),
         contact_phone: getTenantSetting('contact_phone', ''),

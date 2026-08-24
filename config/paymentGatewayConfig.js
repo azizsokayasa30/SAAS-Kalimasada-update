@@ -39,7 +39,7 @@ const DEFAULT_CONFIG = {
         base_url: '',
         expiry_period: 60,
         invoice_endpoint: '/webapi/api/merchant/v2/inquiry',
-        default_method: 'VA'
+        default_method: ''
     }
 };
 

@@ -48,8 +48,9 @@ function getDeveloperSupportMessage() {
  * @param {string} defaultHeader - Default header if not set in settings
  * @returns {string} Company header
  */
-function getCompanyHeader(defaultHeader = 'SISTEM BILLING') {
-    return getSetting('company_header', defaultHeader);
+function getCompanyHeader(defaultHeader = 'PT. KALIMASADA INTI SARANA') {
+    const { getCompanyHeaderSync } = require('./companyBranding');
+    return getCompanyHeaderSync(defaultHeader);
 }
 
 /**
@@ -58,7 +59,8 @@ function getCompanyHeader(defaultHeader = 'SISTEM BILLING') {
  * @returns {string} Footer info
  */
 function getFooterInfo(defaultFooter = 'Terima kasih') {
-    return getSetting('footer_info', defaultFooter);
+    const { getFooterInfoSync } = require('./companyBranding');
+    return getFooterInfoSync(defaultFooter);
 }
 
 /**

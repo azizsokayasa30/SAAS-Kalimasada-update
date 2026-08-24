@@ -714,6 +714,74 @@ router.post('/update-odp', adminAuth, async (req, res) => {
     }
 });
 
+// API: hapus tag lokasi pelanggan (latitude/longitude saja — data pelanggan tidak dihapus)
+router.post('/clear-customer-location', adminAuth, async (req, res) => {
+    try {
+        const { id } = req.body;
+
+        if (!id) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required field: id'
+            });
+        }
+
+        const dbPath = path.join(__dirname, '../data/billing.db');
+        const db = new sqlite3.Database(dbPath);
+
+        const existingCustomer = await new Promise((resolve, reject) => {
+            db.get('SELECT id, name, latitude, longitude FROM customers WHERE id = ?', [id], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+
+        if (!existingCustomer) {
+            db.close();
+            return res.status(404).json({
+                success: false,
+                message: `Customer with id ${id} not found`
+            });
+        }
+
+        await new Promise((resolve, reject) => {
+            db.run(
+                `UPDATE customers SET latitude = NULL, longitude = NULL WHERE id = ?`,
+                [id],
+                function (err) {
+                    if (err) reject(err);
+                    else resolve(this.changes);
+                }
+            );
+        });
+
+        db.close();
+
+        try {
+            invalidateMappingCache();
+        } catch (cacheError) {
+            console.warn('⚠️ Failed to invalidate mapping cache after clear location:', cacheError.message);
+        }
+
+        res.json({
+            success: true,
+            message: 'Tag lokasi pelanggan berhasil dihapus (data pelanggan tetap utuh)',
+            data: {
+                id,
+                name: existingCustomer.name,
+                latitude: null,
+                longitude: null
+            }
+        });
+    } catch (error) {
+        console.error('❌ Error clearing customer location tag:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error clearing customer location: ' + error.message
+        });
+    }
+});
+
 // API endpoint untuk update Customer
 router.post('/update-customer', adminAuth, async (req, res) => {
     try {

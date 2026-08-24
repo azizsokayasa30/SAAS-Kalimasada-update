@@ -16,9 +16,9 @@
   "manual_subdomains": [],
   "custom_proxies": [],
   "tenant_subdomains": [
+    "nurman",
     "nusanet",
     "arif",
-    "tester",
     "akamila",
     "baktinet",
     "alfan",
@@ -39,7 +39,6 @@
     "mumun",
     "ratno",
     "slamet",
-    "syamsudin",
     "tekad",
     "aan",
     "yachya",
@@ -51,9 +50,9 @@
     "skynet"
   ],
   "auto_sync_on_tenant_change": true,
-  "last_synced_at": "2026-07-27T02:38:37.993Z",
-  "last_applied_at": "2026-07-27T02:38:54.117Z",
-  "last_apply_message": "OK: Konfigurasi Nginx diterapkan dan di-reload\n ==> Perluas SSL: kalimasada-app.com + 34 subdomain\nRenewing an existing certificate for kalimasada-app.com and 35 more domains\n\nSuccessfully received certificate.\nCertificate is saved at: /etc/letsencrypt/live/kalimasada-app.com/fullchain.pem\nKey is saved at:         /etc/letsencrypt/live/kalimasada-app.com/privkey.pem\nThis certificate expires on 2026-10-25.\nThese files will be updated when the certificate renews.\nCertbot has set up a scheduled task to automatically renew this certificate in the background.\n\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\nIf you like Certbot, please consider supporting our work by:\n * Donating to ISRG / Let's Encrypt:   https://letsencrypt.org/donate\n * Donating to EFF:                    https://eff.org/donate-le\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\nOK: Sertifikat diperluas",
+  "last_synced_at": "2026-08-22T02:57:45.072Z",
+  "last_applied_at": "2026-08-22T02:57:49.434Z",
+  "last_apply_message": "OK: Konfigurasi Nginx diterapkan dan di-reload\n ==> Perluas SSL: kalimasada-app.com + 33 subdomain\nCertificate not yet due for renewal\n\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\nCertificate not yet due for renewal; no action taken.\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\nOK: Sertifikat diperluas",
   "last_apply_ok": true,
   "apex_reserved_for_web": true,
   "apex_web_root": "/var/www/kalimasada-web"

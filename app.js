@@ -814,7 +814,13 @@ const tenantStore = require('./config/platform/tenantStore');
 const { blockTechnicianAccess } = require('./middleware/technicianAccessControl');
 
 // Middleware dasar - Optimized
-app.use(compression()); // Tambahkan kompresi gzip/brotli untuk mempercepat loading di web & mobile
+app.use(compression({
+  filter: (req, res) => {
+    const p = String((req && req.originalUrl) || (req && req.path) || '');
+    if (p.indexOf('/notifications/stream') !== -1) return false;
+    return compression.filter(req, res);
+  }
+})); // Tambahkan kompresi gzip/brotli untuk mempercepat loading di web & mobile
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 

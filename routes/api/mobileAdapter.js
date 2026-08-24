@@ -2651,7 +2651,8 @@ router.get('/admin/finance/overview', verifyToken, requireAdmin, async (req, res
             to: period.endDate,
             collector_id: req.query.collector_id || '',
             q: req.query.q || '',
-            limit: req.query.limit || 80
+            limit: req.query.limit || 80,
+            tenantId: resolveReqTenantId(req)
         };
 
         const [

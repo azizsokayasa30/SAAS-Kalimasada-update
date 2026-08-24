@@ -421,6 +421,53 @@ router.get('/dashboard/api/notifications', adminAuth, async (req, res) => {
   }
 });
 
+/** Badge + stamp tanpa reconcile — untuk update realtime. */
+router.get('/dashboard/api/notifications/pulse', adminAuth, async (req, res) => {
+  try {
+    const tenantId = resolveRequestTenantId(req);
+    const pulse = await billingManager.getAdminNotificationPulse(tenantId);
+    return res.json({
+      success: true,
+      badge: pulse.badge || 0,
+      stamp: pulse.stamp || ''
+    });
+  } catch (err) {
+    console.error('[DASHBOARD API] notifications pulse', err);
+    return res.status(500).json({ success: false, message: 'Gagal memuat badge notifikasi' });
+  }
+});
+
+/** SSE: dorong klien segera setelah notifikasi baru masuk. */
+router.get('/dashboard/api/notifications/stream', adminAuth, (req, res) => {
+  try {
+    if (req.socket) {
+      req.socket.setTimeout(0);
+      req.socket.setNoDelay(true);
+    }
+  } catch (_) {}
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof res.flushHeaders === 'function') res.flushHeaders();
+  res.write(': connected\n\n');
+
+  const { subscribeAdminNotifications } = require('../config/adminNotificationBus');
+  const send = (event, payload) => {
+    try {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(payload || {})}\n\n`);
+      if (typeof res.flush === 'function') res.flush();
+    } catch (_) {}
+  };
+  const unsub = subscribeAdminNotifications(() => send('notif', { ok: true, at: Date.now() }));
+  const heartbeat = setInterval(() => send('ping', { t: Date.now() }), 15000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    try { unsub(); } catch (_) {}
+  });
+});
+
 /** Hapus/bersihkan notifikasi admin (baca + permintaan paket pending → dismissed). */
 router.post('/dashboard/api/notifications/clear', adminAuth, async (req, res) => {
   try {

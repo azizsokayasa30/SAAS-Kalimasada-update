@@ -255,7 +255,7 @@ class PaymentGatewayManager {
         return status;
     }
 
-    async getAvailablePaymentMethods() {
+    async getAvailablePaymentMethods(amount = 10000) {
         await this.ensureInitialized();
         const methods = [];
         
@@ -268,7 +268,8 @@ class PaymentGatewayManager {
                     method: 'all',
                     name: 'Kartu Kredit/Debit & E-Wallet',
                     icon: 'bi-credit-card',
-                    color: 'primary'
+                    color: 'primary',
+                    type: 'other'
                 });
             }
             
@@ -279,7 +280,8 @@ class PaymentGatewayManager {
                     method: 'all',
                     name: 'Xendit Payment',
                     icon: 'bi-credit-card-2-front',
-                    color: 'info'
+                    color: 'info',
+                    type: 'other'
                 });
             }
             
@@ -290,33 +292,16 @@ class PaymentGatewayManager {
                     methods.push(...tripayMethods);
                 } catch (error) {
                     console.error('Error getting Tripay payment methods:', error);
-                    // Fallback to default methods if API call fails
-                    const defaultTripayMethods = [
-                        { gateway: 'tripay', method: 'QRIS', name: 'QRIS', icon: 'bi-qr-code', color: 'info' },
-                        { gateway: 'tripay', method: 'DANA', name: 'DANA', icon: 'bi-wallet2', color: 'success' },
-                        { gateway: 'tripay', method: 'GOPAY', name: 'GoPay', icon: 'bi-wallet', color: 'warning' },
-                        { gateway: 'tripay', method: 'OVO', name: 'OVO', icon: 'bi-phone', color: 'danger' },
-                        { gateway: 'tripay', method: 'BRIVA', name: 'Bank BRI', icon: 'bi-bank', color: 'dark' },
-                        { gateway: 'tripay', method: 'SHOPEEPAY', name: 'ShopeePay', icon: 'bi-bag', color: 'secondary' }
-                    ];
-                    methods.push(...defaultTripayMethods);
                 }
             }
             
             // Duitku methods (if enabled)
             if (this.settings.payment_gateway.duitku && this.settings.payment_gateway.duitku.enabled && this.gateways.duitku) {
                 try {
-                    const duitkuMethods = await this.gateways.duitku.getAvailablePaymentMethods();
+                    const duitkuMethods = await this.gateways.duitku.getAvailablePaymentMethods(amount, { fallback: false });
                     methods.push(...duitkuMethods);
                 } catch (error) {
                     console.error('Error getting Duitku payment methods:', error);
-                    // Fallback to default methods if API call fails
-                    const defaultDuitkuMethods = [
-                        { gateway: 'duitku', method: 'VC', name: 'Kartu Kredit/Debit', icon: 'bi-credit-card', color: 'primary', type: 'card', fee_customer: 'Gratis' },
-                        { gateway: 'duitku', method: 'BT', name: 'Virtual Account Bank', icon: 'bi-bank', color: 'dark', type: 'bank', fee_customer: 'Gratis' },
-                        { gateway: 'duitku', method: 'QRIS', name: 'QRIS', icon: 'bi-qr-code', color: 'info', type: 'ewallet', fee_customer: 'Gratis' }
-                    ];
-                    methods.push(...defaultDuitkuMethods);
                 }
             }
         }
@@ -818,6 +803,22 @@ class TripayGateway {
 }
 
 class DuitkuGateway {
+    // Kode channel resmi Duitku (2 karakter). VA = Maybank VA, BUKAN virtual account generik.
+    // QRIS di Duitku adalah NQ/SP/SQ/GQ, bukan string "QRIS".
+    static CHANNEL_CODES = new Set([
+        'VC', 'BC', 'M2', 'VA', 'I1', 'B1', 'BT', 'A1', 'AG', 'NC', 'BR', 'S1', 'DM', 'BV',
+        'FT', 'IR', 'OV', 'SA', 'LF', 'LA', 'DA', 'SL', 'OL', 'SP', 'NQ', 'GQ', 'SQ',
+        'DN', 'AT', 'JP', 'T1', 'T2', 'T3'
+    ]);
+    static QRIS_CODES = new Set(['SP', 'NQ', 'GQ', 'SQ']);
+    static EWALLET_CODES = new Set(['OV', 'SA', 'LF', 'LA', 'DA', 'SL', 'OL']);
+    static VA_CODES = new Set(['BC', 'M2', 'VA', 'I1', 'B1', 'BT', 'A1', 'AG', 'NC', 'BR', 'S1', 'DM', 'BV']);
+    static RETAIL_CODES = new Set(['FT', 'IR']);
+
+    static GENERIC_METHOD_ALIASES = new Set(['', 'ALL', 'QRIS', 'PAGE', 'POP', 'AUTO']);
+
+    static CHANNEL_UNAVAILABLE_MSG =
+        'Channel pembayaran Duitku belum aktif untuk metode yang diminta. Buka dashboard Duitku → Project → Payment Method, aktifkan VA/QRIS/e-wallet, lalu coba lagi.';
 
     constructor(config) {
         if (!config || !config.merchant_code || !config.api_key) {
@@ -835,10 +836,120 @@ class DuitkuGateway {
         this.baseUrl = rawApiBase.replace(/\/+$/, ''); // hilangkan trailing slash
     }
 
-    // Create payment default (invoice) – gunakan metode default jika tidak ada pilihan spesifik
+    normalizeMethodCode(method) {
+        return String(method || '').trim().toUpperCase();
+    }
+
+    jakartaDateTime() {
+        return new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Jakarta' }).replace('T', ' ').substring(0, 19);
+    }
+
+    hmacSha256(stringToSign) {
+        return crypto.createHmac('sha256', this.config.api_key).update(String(stringToSign)).digest('hex');
+    }
+
+    classifyMethod(code, name = '') {
+        const c = this.normalizeMethodCode(code);
+        if (DuitkuGateway.QRIS_CODES.has(c) || /QRIS/i.test(name)) {
+            return { type: 'qris', icon: 'bi-qr-code', color: 'info' };
+        }
+        if (DuitkuGateway.VA_CODES.has(c)) {
+            return { type: 'bank', icon: 'bi-bank', color: 'dark' };
+        }
+        if (c === 'VC' || /KARTU|CREDIT|DEBIT/i.test(name)) {
+            return { type: 'card', icon: 'bi-credit-card', color: 'primary' };
+        }
+        if (DuitkuGateway.EWALLET_CODES.has(c) || /OVO|DANA|SHOPEE|LINKAJA|WALLET/i.test(name)) {
+            return { type: 'ewallet', icon: 'bi-wallet', color: 'success' };
+        }
+        if (DuitkuGateway.RETAIL_CODES.has(c) || /RETAIL|ALFAMART|INDOMARET|PEGADAIAN/i.test(name)) {
+            return { type: 'retail', icon: 'bi-shop', color: 'warning' };
+        }
+        return { type: 'other', icon: 'bi-credit-card', color: 'primary' };
+    }
+
+    expiryForMethod(method) {
+        const configured = parseInt(this.config.expiry_period, 10);
+        const defaults = {
+            VC: 30, OV: 10, SA: 10, LF: 24, LA: 24, DA: 60,
+            SL: 30, OL: 15, SP: 10, NQ: 24, GQ: 10, SQ: 10, JP: 10
+        };
+        const maxes = { SP: 60, SA: 60, GQ: 60, SQ: 60, JP: 10, AT: 720 };
+        const code = this.normalizeMethodCode(method);
+        const fallback = defaults[code] || 60;
+        const value = Number.isFinite(configured) && configured > 0 ? configured : fallback;
+        const max = maxes[code] || 1440;
+        return Math.min(value, max);
+    }
+
+    normalizeQrisPayload(raw) {
+        const s = String(raw || '').trim().replace(/\s+/g, '');
+        return s.startsWith('000201') ? s : '';
+    }
+
+    async renderQrisImage(qrString) {
+        const QRCode = require('qrcode');
+        return QRCode.toDataURL(qrString, {
+            errorCorrectionLevel: 'M',
+            margin: 4,
+            width: 480,
+            type: 'image/png',
+            color: { dark: '#000000', light: '#FFFFFF' }
+        });
+    }
+
+    mapDuitkuError(message, status) {
+        const raw = String(message || '').trim();
+        if (/payment channel not available/i.test(raw)) {
+            return DuitkuGateway.CHANNEL_UNAVAILABLE_MSG;
+        }
+        return raw || `Duitku API error ${status || ''}`.trim();
+    }
+
+    /**
+     * Pilih kode channel yang benar-benar aktif di merchant.
+     * - "VA" di setting lama artinya "virtual account" (salah kaprah); VA Duitku = Maybank.
+     * - "QRIS" bukan kode Duitku; dipetakan ke NQ/SP/SQ/GQ jika ada.
+     */
+    pickAvailableChannel(methods, preferred) {
+        const codes = (methods || [])
+            .map((m) => this.normalizeMethodCode(m.method || m.paymentMethod))
+            .filter((c) => DuitkuGateway.CHANNEL_CODES.has(c));
+        if (!codes.length) return null;
+
+        const pref = this.normalizeMethodCode(preferred);
+        if (pref === 'QRIS') {
+            const qris = ['NQ', 'SP', 'SQ', 'GQ'].find((c) => codes.includes(c));
+            if (qris) return qris;
+        }
+        if (DuitkuGateway.CHANNEL_CODES.has(pref) && codes.includes(pref)) {
+            return pref;
+        }
+
+        const order = ['NQ', 'SP', 'SQ', 'GQ', 'BR', 'I1', 'M2', 'BT', 'B1', 'BC', 'VA', 'BV', 'DM', 'DA', 'OV', 'SA', 'LA'];
+        return order.find((c) => codes.includes(c)) || codes[0];
+    }
+
+    async resolvePaymentMethod(requestedMethod, amount) {
+        const requested = this.normalizeMethodCode(requestedMethod);
+        // Jika pelanggan sudah pilih kode channel resmi (NQ, BR, I1, VA=Maybank, dll), jangan diganti otomatis.
+        if (DuitkuGateway.CHANNEL_CODES.has(requested) && !DuitkuGateway.GENERIC_METHOD_ALIASES.has(requested)) {
+            return requested;
+        }
+        const preferred = requested || this.normalizeMethodCode(this.config.default_method);
+
+        const methods = await this.getAvailablePaymentMethods(amount, { fallback: false });
+        const selected = this.pickAvailableChannel(methods, preferred || requested);
+        if (!selected) {
+            throw new Error(DuitkuGateway.CHANNEL_UNAVAILABLE_MSG);
+        }
+        console.log(`[DUITKU] Resolved payment method "${requested || preferred || 'auto'}" -> "${selected}"`);
+        return selected;
+    }
+
+    // Create payment default (invoice) – pilih channel aktif, jangan paksa Maybank VA
     async createPayment(invoice, paymentType = 'invoice') {
-        const defaultMethod = this.config.default_method || 'VA'; // VA = Virtual Account generic
-        return this.createPaymentWithMethod(invoice, defaultMethod, paymentType);
+        return this.createPaymentWithMethod(invoice, this.config.default_method || null, paymentType);
     }
 
     // Create payment dengan pilihan channel (VA, QRIS, e-wallet, dsb)
@@ -855,72 +966,144 @@ class DuitkuGateway {
         }
         const appBaseUrl = baseNoSlash;
 
-        const orderId = `INV-${invoice.invoice_number}`;
-        const amount = parseInt(invoice.amount);
+        const orderId = `INV-${invoice.invoice_number}-${Date.now().toString().slice(-8)}`;
+        const amount = parseInt(invoice.amount, 10);
 
         const customerName = (invoice.customer_name || 'Customer').toString().trim();
         const customerEmail = (invoice.customer_email || 'customer@example.com').toString().trim();
         const customerPhone = (invoice.customer_phone || '').toString().trim();
+        const nameParts = customerName.split(/\s+/).filter(Boolean);
+        const firstName = (nameParts[0] || 'Customer').slice(0, 50);
+        const lastName = nameParts.slice(1).join(' ').slice(0, 50);
+        const productName = String(invoice.package_name || 'Internet Package').slice(0, 50);
 
-        // Tentukan paymentMethod yang akan dikirim (wajib menurut API Duitku)
-        const selectedMethod = method || this.config.default_method || 'VA';
-        
-        // Body umum Payment Page Duitku
+        const selectedMethod = await this.resolvePaymentMethod(method, amount);
+        const expiryPeriod = this.expiryForMethod(selectedMethod);
+
+        // Request transaksi Duitku v2/inquiry — paymentMethod wajib 2 karakter
         const payload = {
             merchantCode: this.config.merchant_code,
             paymentAmount: amount,
             merchantOrderId: orderId,
-            productDetails: invoice.package_name || 'Internet Package',
+            productDetails: productName,
             email: customerEmail,
-            customerVaName: customerName,
+            customerVaName: customerName.slice(0, 20),
             phoneNumber: customerPhone,
             callbackUrl: paymentType === 'voucher' ? `${appBaseUrl}/voucher/payment-webhook` : `${appBaseUrl}/payment/webhook/duitku`,
             returnUrl: paymentType === 'voucher' ? `${appBaseUrl}/voucher/finish` : `${appBaseUrl}/payment/finish`,
             paymentMethod: selectedMethod,
-            expiryPeriod: this.config.expiry_period || 60
+            expiryPeriod,
+            itemDetails: [{ name: productName, price: amount, quantity: 1 }],
+            customerDetail: {
+                firstName,
+                lastName,
+                email: customerEmail,
+                phoneNumber: customerPhone
+            }
         };
 
-        // Bersihkan field undefined
         Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
 
-        // Signature: md5(merchantCode + merchantOrderId + paymentAmount + apiKey)
-        // Sesuai dokumentasi Duitku untuk endpoint merchant/v2/inquiry
-        const signatureRaw = `${payload.merchantCode}${payload.merchantOrderId}${payload.paymentAmount}${this.config.api_key}`;
-        const signature = crypto.createHash('md5').update(signatureRaw).digest('hex');
-        payload.signature = signature;
+        // Signature resmi: HMAC-SHA256(merchantCode + merchantOrderId + paymentAmount, apiKey)
+        // MD5 lama dipertahankan sebagai fallback jika merchant belum migrasi HMAC.
+        const hmacBase = `${payload.merchantCode}${payload.merchantOrderId}${payload.paymentAmount}`;
+        const signatures = [
+            this.hmacSha256(hmacBase),
+            crypto.createHash('md5').update(`${hmacBase}${this.config.api_key}`).digest('hex')
+        ];
 
         const fetchFn = typeof fetch === 'function' ? fetch : (await import('node-fetch')).default;
-
         const endpoint = this.config.invoice_endpoint || '/webapi/api/merchant/v2/inquiry';
         const url = `${this.baseUrl}${endpoint}`;
 
-        const response = await fetchFn(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
-        const contentType = (response.headers && response.headers.get && response.headers.get('content-type')) || '';
-        if (!contentType.includes('application/json')) {
-            const text = await response.text();
-            throw new Error(`Duitku API returned non-JSON (status ${response.status}): ${text.slice(0, 200)}`);
+        let result = null;
+        let lastError = null;
+        for (const signature of signatures) {
+            payload.signature = signature;
+            const response = await fetchFn(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const contentType = (response.headers && response.headers.get && response.headers.get('content-type')) || '';
+            if (!contentType.includes('application/json')) {
+                const text = await response.text();
+                lastError = new Error(`Duitku API returned non-JSON (status ${response.status}): ${text.slice(0, 200)}`);
+                continue;
+            }
+            const parsed = await response.json();
+            if (response.ok && (!parsed.statusCode || `${parsed.statusCode}` === '00')) {
+                result = parsed;
+                break;
+            }
+            lastError = new Error(this.mapDuitkuError(parsed.statusMessage || parsed.Message, response.status));
+            if (!/signature|401/i.test(String(parsed.statusMessage || parsed.Message || response.status))) {
+                break;
+            }
+        }
+        if (!result) {
+            throw lastError || new Error('Duitku inquiry failed');
         }
 
-        const result = await response.json();
-        if (!response.ok || (result.statusCode && `${result.statusCode}` !== '00')) {
-            throw new Error(result.statusMessage || result.Message || `Duitku API error ${response.status}`);
+        const qrString = this.normalizeQrisPayload(result.qrString || result.qr_string || '');
+        const vaNumber = String(result.vaNumber || result.va_number || '').trim();
+        const appUrl = String(result.AppUrl || result.appUrl || '').trim();
+        const paymentUrl = String(result.paymentUrl || '').trim();
+        const methodType = this.classifyMethod(selectedMethod).type;
+        let displayMode = 'redirect';
+        if (qrString) displayMode = 'qr';
+        else if (vaNumber || methodType === 'bank' || methodType === 'retail') displayMode = 'va';
+        else if (appUrl || paymentUrl || methodType === 'ewallet' || methodType === 'qris') displayMode = 'app';
+
+        let qrImage = null;
+        if (qrString) {
+            try {
+                qrImage = await this.renderQrisImage(qrString);
+            } catch (qrErr) {
+                console.warn('[DUITKU] Failed to render QR image:', qrErr.message);
+            }
         }
 
-        const paymentUrl = result.paymentUrl || result.deeplinkUrl || result.qrString;
-        if (!paymentUrl) {
-            throw new Error('Duitku response does not contain paymentUrl/deeplinkUrl/qrString');
+        const openUrl = appUrl || paymentUrl;
+        if (!qrString && !vaNumber && !openUrl) {
+            throw new Error('Duitku response does not contain paymentUrl/qrString/vaNumber');
         }
+
+        console.log(`[DUITKU] Inquiry ${orderId} method=${selectedMethod} mode=${displayMode} sandbox=${!this.config.production} qris=${Boolean(qrString)} prefix=${qrString.slice(0, 12)}`);
 
         return {
-            payment_url: paymentUrl,
-            token: result.reference || result.paymentUrl || orderId,
-            order_id: orderId
+            payment_url: paymentUrl || appUrl || null,
+            token: result.reference || paymentUrl || orderId,
+            order_id: orderId,
+            qr_string: qrString || null,
+            qr_image: qrImage,
+            va_number: vaNumber || null,
+            app_url: openUrl || null,
+            amount: parseInt(result.amount || amount, 10),
+            expiry_minutes: expiryPeriod,
+            payment_method: selectedMethod,
+            display_mode: displayMode,
+            sandbox: !this.config.production
         };
+    }
+
+    async checkTransaction(merchantOrderId) {
+        const fetchFn = typeof fetch === 'function' ? fetch : (await import('node-fetch')).default;
+        const signature = this.hmacSha256(`${this.config.merchant_code}${merchantOrderId}`);
+        const response = await fetchFn(`${this.baseUrl}/webapi/api/merchant/transactionStatus`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                merchantCode: this.config.merchant_code,
+                merchantOrderId,
+                signature
+            })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(result.statusMessage || result.Message || `Duitku transactionStatus ${response.status}`);
+        }
+        return result;
     }
 
     // Handle webhook/callback dari Duitku
@@ -931,27 +1114,29 @@ class DuitkuGateway {
             const merchantCode = payload.merchantCode || this.config.merchant_code;
             const signature = payload.signature || payload.signatureRequest || payload.signatureCallback;
 
-            if (!merchantOrderId || !amount || !merchantCode || !signature) {
+            if (!merchantOrderId || amount === undefined || amount === null || amount === '' || !merchantCode || !signature) {
                 throw new Error('Invalid Duitku webhook payload (missing fields)');
             }
 
-            const rawSign = `${merchantCode}${merchantOrderId}${amount}${this.config.api_key}`;
-            const expectedSignature = crypto.createHash('sha256').update(rawSign).digest('hex');
-
-            if (signature.toLowerCase() !== expectedSignature.toLowerCase()) {
+            const hmacExpected = this.hmacSha256(`${merchantCode}${amount}${merchantOrderId}`);
+            const md5Expected = crypto.createHash('md5').update(`${merchantCode}${amount}${merchantOrderId}${this.config.api_key}`).digest('hex');
+            const legacySha = crypto.createHash('sha256').update(`${merchantCode}${merchantOrderId}${amount}${this.config.api_key}`).digest('hex');
+            const incoming = String(signature).toLowerCase();
+            const valid = [hmacExpected, md5Expected, legacySha].some((s) => s.toLowerCase() === incoming);
+            if (!valid) {
                 throw new Error('Invalid Duitku signature');
             }
 
             const statusCode = `${payload.statusCode || payload.resultCode || ''}`;
             let status = 'pending';
             if (statusCode === '00') status = 'success';
-            else if (['01', '02', '03', '04', '05', '06', '07', '08', '99'].includes(statusCode)) status = 'failed';
+            else if (statusCode === '01' || statusCode === '02') status = 'failed';
 
             const result = {
                 order_id: merchantOrderId,
                 status,
-                amount: parseInt(amount),
-                payment_type: payload.paymentMethod || payload.channel || 'duitku',
+                amount: parseInt(amount, 10),
+                payment_type: payload.paymentCode || payload.paymentMethod || payload.channel || 'duitku',
                 reference: payload.reference || payload.transactionId || null
             };
 
@@ -964,7 +1149,8 @@ class DuitkuGateway {
     }
 
     // Dapatkan daftar channel dari Duitku menggunakan API getpaymentmethod
-    async getAvailablePaymentMethods() {
+    async getAvailablePaymentMethods(amount = 10000, options = {}) {
+        const allowFallback = options.fallback !== false;
         try {
             const fetchFn = typeof fetch === 'function' ? fetch : (await import('node-fetch')).default;
             
@@ -973,30 +1159,38 @@ class DuitkuGateway {
             const endpoint = '/webapi/api/merchant/paymentmethod/getpaymentmethod';
             const url = `${this.baseUrl}${endpoint}`;
 
-            // Signature untuk getpaymentmethod: sha256(merchantCode + paymentAmount + datetime + apiKey)
-            // Kita gunakan amount 10000 sebagai contoh untuk mendapatkan semua metode
-            const paymentAmount = 10000;
-            const datetime = new Date().toISOString().replace('T', ' ').substring(0, 19); // Format: yyyy-MM-dd HH:mm:ss
-            const signatureRaw = `${this.config.merchant_code}${paymentAmount}${datetime}${this.config.api_key}`;
-            const signature = crypto.createHash('sha256').update(signatureRaw).digest('hex');
+            // Signature resmi: HMAC-SHA256(merchantCode + amount + datetime, apiKey).
+            // Fallback: SHA256(merchantCode + amount + datetime + apiKey) untuk akun lama.
+            const paymentAmount = parseInt(amount, 10) > 0 ? parseInt(amount, 10) : 10000;
+            const datetime = this.jakartaDateTime();
+            const stringToSign = `${this.config.merchant_code}${paymentAmount}${datetime}`;
+            const signatures = [
+                crypto.createHmac('sha256', this.config.api_key).update(stringToSign).digest('hex'),
+                crypto.createHash('sha256').update(`${stringToSign}${this.config.api_key}`).digest('hex')
+            ];
 
-            const payload = {
-                merchantcode: this.config.merchant_code,
-                amount: paymentAmount,
-                datetime: datetime,
-                signature: signature
-            };
-
-            const response = await fetchFn(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-
-            const result = await response.json();
-            
-            if (!response.ok || result.responseCode !== '00') {
-                throw new Error(result.responseMessage || `Duitku API error ${response.status}`);
+            let result = null;
+            let lastError = null;
+            for (const signature of signatures) {
+                const response = await fetchFn(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        merchantcode: this.config.merchant_code,
+                        amount: paymentAmount,
+                        datetime,
+                        signature
+                    })
+                });
+                const parsed = await response.json().catch(() => ({}));
+                if (response.ok && parsed.responseCode === '00') {
+                    result = parsed;
+                    break;
+                }
+                lastError = new Error(parsed.responseMessage || parsed.Message || `Duitku API error ${response.status}`);
+            }
+            if (!result) {
+                throw lastError || new Error('Duitku getpaymentmethod failed');
             }
 
             const methods = [];
@@ -1004,41 +1198,9 @@ class DuitkuGateway {
                 result.paymentFee.forEach((ch) => {
                     const code = ch.paymentMethod || '';
                     const name = ch.paymentName || `Duitku - ${code}`;
-                    
-                    // Skip jika tidak ada code
                     if (!code) return;
 
-                    // Tentukan icon dan color berdasarkan jenis payment
-                    let icon = 'bi-credit-card';
-                    let color = 'primary';
-                    let type = 'other';
-
-                    // Mapping untuk Virtual Account - semua kode VA
-                    // BC=BCA, M2=Mandiri, I1=BNI, B1=CIMB, BT=Permata, BR=BRI, VA=Maybank, 
-                    // A1=ATM Bersama, AG=Artha Graha, NC=BNC, S1=Sampoerna, DM=Danamon, BV=BSI
-                    if (/^BC$|^M2$|^I1$|^B1$|^BT$|^BR$|^VA$|^A1$|^AG$|^NC$|^S1$|^DM$|^BV$/i.test(code)) {
-                        icon = 'bi-bank';
-                        color = 'dark';
-                        type = 'bank';
-                    } else if (code.toUpperCase() === 'QRIS' || /QRIS/i.test(name)) {
-                        icon = 'bi-qr-code';
-                        color = 'info';
-                        type = 'ewallet';
-                    } else if (/^VC$/i.test(code) || /KARTU|CREDIT|DEBIT/i.test(name)) {
-                        icon = 'bi-credit-card';
-                        color = 'primary';
-                        type = 'card';
-                    } else if (/OVO|DANA|GOPAY|SHOPEE|LINK|SP|WALLET|EWALLET/i.test(code) || /OVO|DANA|GOPAY|SHOPEE|LINK|WALLET/i.test(name)) {
-                        icon = 'bi-wallet';
-                        color = 'success';
-                        type = 'ewallet';
-                    } else if (/RETAIL|ALFAMART|INDOMARET/i.test(name)) {
-                        icon = 'bi-shop';
-                        color = 'warning';
-                        type = 'retail';
-                    }
-
-                    // Format fee untuk display
+                    const classified = this.classifyMethod(code, name);
                     let feeDisplay = 'Gratis';
                     if (ch.totalFee) {
                         const fee = parseFloat(ch.totalFee);
@@ -1051,9 +1213,9 @@ class DuitkuGateway {
                         gateway: 'duitku',
                         method: code,
                         name: name,
-                        icon: icon,
-                        color: color,
-                        type: type,
+                        icon: classified.icon,
+                        color: classified.color,
+                        type: classified.type,
                         fee_customer: feeDisplay,
                         totalFee: ch.totalFee,
                         image_url: ch.paymentImage || ch.imageUrl || null
@@ -1061,26 +1223,17 @@ class DuitkuGateway {
                 });
             }
 
-            // Jika tidak ada methods dari API, return default minimal
             if (!methods.length) {
-                console.warn('[DUITKU] No payment methods returned from API, using fallback');
-                return [
-                    { gateway: 'duitku', method: 'VC', name: 'Kartu Kredit/Debit', icon: 'bi-credit-card', color: 'primary', type: 'card', fee_customer: 'Gratis' },
-                    { gateway: 'duitku', method: 'BT', name: 'Virtual Account Bank', icon: 'bi-bank', color: 'dark', type: 'bank', fee_customer: 'Gratis' },
-                    { gateway: 'duitku', method: 'QRIS', name: 'QRIS', icon: 'bi-qr-code', color: 'info', type: 'ewallet', fee_customer: 'Gratis' }
-                ];
+                console.warn('[DUITKU] No payment methods returned from API');
+                return [];
             }
 
             console.log(`[DUITKU] Found ${methods.length} payment methods from API`);
             return methods;
         } catch (error) {
             console.error('[DUITKU] Error getting payment methods:', error);
-            // Fallback ke default methods jika API error
-            return [
-                { gateway: 'duitku', method: 'VC', name: 'Kartu Kredit/Debit', icon: 'bi-credit-card', color: 'primary', type: 'card', fee_customer: 'Gratis' },
-                { gateway: 'duitku', method: 'BT', name: 'Virtual Account Bank', icon: 'bi-bank', color: 'dark', type: 'bank', fee_customer: 'Gratis' },
-                { gateway: 'duitku', method: 'QRIS', name: 'QRIS', icon: 'bi-qr-code', color: 'info', type: 'ewallet', fee_customer: 'Gratis' }
-            ];
+            if (!allowFallback) throw error;
+            return [];
         }
     }
 }

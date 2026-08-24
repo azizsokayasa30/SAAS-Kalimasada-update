@@ -39,13 +39,14 @@ function mergeSettings(defaults, overrides) {
 }
 
 function buildTenantOverrides(tenant) {
+    const { DEFAULT_COMPANY_HEADER } = require('../companyBranding');
     return {
-        company_header: tenant.name,
-        company_name: tenant.name,
-        app_name: tenant.name,
+        company_header: DEFAULT_COMPANY_HEADER,
+        company_name: DEFAULT_COMPANY_HEADER,
+        app_name: DEFAULT_COMPANY_HEADER,
         contact_phone: tenant.owner_phone,
         contact_whatsapp: tenant.owner_phone,
-        footer_info: `© ${new Date().getFullYear()} ${tenant.name}`,
+        footer_info: `© ${new Date().getFullYear()} ${DEFAULT_COMPANY_HEADER}`,
         admin_username: tenant.settings?.admin_username || 'admin',
         admin_password: tenant.settings?.admin_password,
     };
@@ -54,10 +55,16 @@ function buildTenantOverrides(tenant) {
 async function getFullSettingsForTenantId(tenantId) {
     const tenant = await tenantStore.getTenantById(tenantId);
     if (!tenant) return loadMinimalTenantDefaults();
-    return mergeSettings(loadMinimalTenantDefaults(), {
+    const merged = mergeSettings(loadMinimalTenantDefaults(), {
         ...buildTenantOverrides(tenant),
         ...(tenant.settings || {}),
     });
+    try {
+        const { pickCompanyHeaderFromSettings } = require('../companyBranding');
+        merged.company_header = pickCompanyHeaderFromSettings(merged, tenant);
+        if (!merged.company_name) merged.company_name = merged.company_header;
+    } catch (_) { /* keep merged as-is */ }
+    return merged;
 }
 
 async function saveFullSettingsForTenantId(tenantId, updates) {
@@ -93,13 +100,14 @@ function seedSettingsForNewTenant(tenant) {
         || 'admin';
     const adminPassword = tenant.settings?.admin_password
         || tenant.admin_password;
+    const { DEFAULT_COMPANY_HEADER } = require('../companyBranding');
     return {
-        company_header: tenant.name,
-        company_name: tenant.name,
-        app_name: tenant.name,
+        company_header: DEFAULT_COMPANY_HEADER,
+        company_name: DEFAULT_COMPANY_HEADER,
+        app_name: DEFAULT_COMPANY_HEADER,
         contact_phone: tenant.owner_phone || '',
         contact_whatsapp: tenant.owner_phone || '',
-        footer_info: `© ${new Date().getFullYear()} ${tenant.name}`,
+        footer_info: `© ${new Date().getFullYear()} ${DEFAULT_COMPANY_HEADER}`,
         admin_username: adminUsername,
         admin_password: adminPassword,
         timezone: 'Asia/Jakarta',

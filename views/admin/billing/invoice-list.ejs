@@ -6,8 +6,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><%= title %> - <%= appSettings.companyHeader %></title>
     <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.min.css" rel="stylesheet">
+    <link href="/vendor/bootstrap-icons/bootstrap-icons.min.css" rel="stylesheet">
     <link href="/vendor/boxicons/boxicons.min.css" rel="stylesheet">
+    <link href="/css/theme.css" rel="stylesheet">
     <!-- Admin Mobile Optimizations -->
     <link href="/css/admin-mobile.css" rel="stylesheet">
     <style>
@@ -121,13 +122,45 @@
             visibility: visible !important;
         }
         
-        /* Ensure icons in cards are visible */
-        .card i,
-        .card .bx,
-        .card .bi {
-            display: inline-block !important;
-            opacity: 1 !important;
-            visibility: visible !important;
+        .btn-whatsapp {
+            background: #25D366 !important;
+            color: #fff !important;
+            border: none;
+        }
+        .btn-whatsapp:hover { background: #1ebe57 !important; color: #fff !important; }
+        .invoice-list-table-card,
+        .invoice-list-table-card:hover {
+            overflow: visible !important;
+            transform: none !important;
+        }
+        .invoice-list-table-card .table {
+            overflow: visible !important;
+        }
+        .invoice-list-table-card .admin-action-btns {
+            position: relative;
+            z-index: 5;
+            flex-wrap: wrap;
+            white-space: nowrap;
+            pointer-events: auto;
+            gap: 0.35rem !important;
+        }
+        .invoice-list-table-card .admin-action-btns .btn,
+        .invoice-list-table-card .admin-action-btns a.btn {
+            pointer-events: auto !important;
+            cursor: pointer !important;
+            position: relative;
+            z-index: 6;
+            display: inline-flex !important;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.72rem !important;
+            font-weight: 600 !important;
+            line-height: 1.25 !important;
+            padding: 0.38rem 0.58rem !important;
+            min-height: 1.85rem !important;
+            min-width: 2.65rem !important;
+            border-radius: 6px !important;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12) !important;
         }
     </style>
 
@@ -153,6 +186,13 @@
                         </div>
                     </div>
                 </div>
+
+                <% if (typeof notice !== 'undefined' && notice) { %>
+                    <div class="alert alert-success alert-dismissible fade show" role="alert">
+                        <%= notice %>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                <% } %>
 
                 <!-- Month/Year Filter -->
                 <form method="GET" action="/admin/billing/invoice-list" class="mb-3 d-flex align-items-end gap-2 flex-wrap" id="timeFilterForm">
@@ -224,7 +264,15 @@
                         { title: 'Terlambat', value: sum.overdue || 0, nominal: sum.overdue_amount || 0, hint: 'belum bayar & lewat jatuh tempo', icon: 'bi-exclamation-circle-fill' }
                     ];
                 %>
-                <div class="row mb-4 g-3 summary-cards-solid">
+                <div class="row mb-4 g-3 summary-cards-solid" id="invoiceSummaryCards"
+                     data-total="<%= Number(sum.total || 0) %>"
+                     data-paid="<%= Number(sum.paid || 0) %>"
+                     data-unpaid="<%= Number(sum.unpaid || 0) %>"
+                     data-overdue="<%= Number(sum.overdue || 0) %>"
+                     data-total-amount="<%= Number(sum.total_amount || 0) %>"
+                     data-paid-amount="<%= Number(sum.paid_amount || 0) %>"
+                     data-unpaid-amount="<%= Number(sum.unpaid_amount || 0) %>"
+                     data-overdue-amount="<%= Number(sum.overdue_amount || 0) %>">
                     <% invoiceSummaryCards.forEach(function(card) { %>
                         <div class="col-md-3 col-12">
                             <div class="card border-0 shadow-sm h-100 summary-card" style="border:0 !important; border-radius: 12px;">
@@ -232,7 +280,7 @@
                                     <div class="d-flex justify-content-between align-items-center">
                                         <div>
                                             <p class="text-muted fw-semibold mb-1" style="font-size:0.75rem;"><%= card.title %></p>
-                                            <h3 class="mb-0 fw-bold mt-2" style="color:#fff !important;"><%= card.value %></h3>
+                                            <h3 class="mb-0 fw-bold mt-2 summary-card-count" style="color:#fff !important;"><%= card.value %></h3>
                                             <div class="summary-card-nominal mt-1">Rp <%= Number(card.nominal || 0).toLocaleString('id-ID') %></div>
                                             <div class="summary-card-nominal-hint"><%= card.hint %></div>
                                         </div>
@@ -299,7 +347,7 @@
                 </div>
 
                 <!-- Invoice Table -->
-                <div class="card">
+                <div class="card invoice-list-table-card">
                     <div class="card-header">
                         <h5 class="mb-0">
                             <i class="bi bi-list-ul"></i> Daftar Invoice
@@ -309,6 +357,10 @@
                         </h5>
                     </div>
                     <div class="card-body">
+                        <%
+                            const invoiceListNext = `/admin/billing/invoice-list?month=${selectedMonth}&year=${selectedYear}&status=${encodeURIComponent(filters.status || '')}&type=${encodeURIComponent(filters.type || '')}&customer_username=${encodeURIComponent(filters.customer_username || '')}&page=${pagination.currentPage}`;
+                            const invoiceListNextEnc = encodeURIComponent(invoiceListNext);
+                        %>
                         <% if (invoices && invoices.length > 0) { %>
                             <div class="table-responsive">
                                 <table class="table table-hover">
@@ -327,7 +379,18 @@
                                     </thead>
                                     <tbody>
                                         <% invoices.forEach(invoice => { %>
-                                            <tr>
+                                            <%
+                                                const invoiceAmount = Number(invoice.amount) || 0;
+                                                const isUnpaid = invoice.status === 'unpaid';
+                                                const isOverdue = isUnpaid && invoice.due_date && new Date(invoice.due_date) < new Date();
+                                            %>
+                                            <tr data-invoice-id="<%= invoice.id %>"
+                                                data-invoice-number="<%= invoice.invoice_number || '' %>"
+                                                data-customer-name="<%= invoice.customer_name || '' %>"
+                                                data-phone="<%= invoice.customer_phone || '' %>"
+                                                data-amount="<%= invoiceAmount %>"
+                                                data-status="<%= invoice.status || '' %>"
+                                                data-overdue="<%= isOverdue ? '1' : '0' %>">
                                                 <td>
                                                     <strong>#<%= invoice.invoice_number %></strong>
                                                 </td>
@@ -343,13 +406,13 @@
                                                     </span>
                                                 </td>
                                                 <td>
-                                                    <strong>Rp <%= invoice.amount.toLocaleString('id-ID') %></strong>
+                                                    <strong>Rp <%= invoiceAmount.toLocaleString('id-ID') %></strong>
                                                 </td>
-                                                <td>
+                                                <td class="invoice-status-cell">
                                                     <% if (invoice.status === 'paid') { %>
                                                         <span class="badge bg-success">Lunas</span>
                                                     <% } else if (invoice.status === 'unpaid') { %>
-                                                        <% if (new Date(invoice.due_date) < new Date()) { %>
+                                                        <% if (isOverdue) { %>
                                                             <span class="badge bg-warning text-dark">Terlambat</span>
                                                         <% } else { %>
                                                             <span class="badge bg-warning">Belum Bayar</span>
@@ -379,18 +442,23 @@
                                                 </td>
                                                 <td>
                                                     <div class="admin-action-btns">
-                                                        <a href="/admin/billing/invoices/<%= invoice.id %>" 
-                                                           class="btn btn-sm btn-info" title="Lihat detail tagihan" aria-label="Lihat tagihan">
-                                                            <i class="bi bi-eye-fill"></i>
-                                                        </a>
-                                                        <a href="/admin/billing/invoices/<%= invoice.id %>/edit" 
-                                                           class="btn btn-sm btn-primary" title="Ubah data tagihan" aria-label="Ubah tagihan">
-                                                            <i class="bi bi-pencil-fill"></i>
-                                                        </a>
-                                                        <a href="/admin/billing/invoices/<%= invoice.id %>/print" 
-                                                           class="btn btn-sm btn-secondary" title="Buka halaman cetak tagihan" aria-label="Cetak tagihan" target="_blank" rel="noopener noreferrer">
-                                                            <i class="bi bi-printer-fill"></i>
-                                                        </a>
+                                                        <% if (isUnpaid) { %>
+                                                            <a href="/admin/billing/invoices/<%= invoice.id %>/pay?next=<%= invoiceListNextEnc %>"
+                                                               class="btn btn-sm btn-success"
+                                                               title="Tandai tagihan sebagai lunas" aria-label="Tandai lunas">Lunas</a>
+                                                        <% } %>
+                                                        <a href="/admin/billing/invoices/<%= invoice.id %>/hapus?next=<%= invoiceListNextEnc %>"
+                                                           class="btn btn-sm btn-danger"
+                                                           title="Hapus tagihan dari sistem" aria-label="Hapus tagihan">Hapus</a>
+                                                        <a href="/admin/billing/invoices/<%= invoice.id %>/notify-whatsapp?next=<%= invoiceListNextEnc %>"
+                                                           class="btn btn-sm btn-whatsapp"
+                                                           title="Kirim pemberitahuan WhatsApp ke pelanggan" aria-label="Kirim WhatsApp">WA</a>
+                                                        <a href="/admin/billing/invoices/<%= invoice.id %>"
+                                                           class="btn btn-sm btn-info" title="Lihat detail tagihan" aria-label="Lihat tagihan">Lihat</a>
+                                                        <a href="/admin/billing/invoices/<%= invoice.id %>/edit"
+                                                           class="btn btn-sm btn-primary" title="Ubah data tagihan" aria-label="Ubah tagihan">Edit</a>
+                                                        <a href="/admin/billing/invoices/<%= invoice.id %>/print"
+                                                           class="btn btn-sm btn-secondary" title="Buka halaman cetak tagihan" aria-label="Cetak tagihan" target="_blank" rel="noopener noreferrer">Cetak</a>
                                                     </div>
                                                 </td>
                                             </tr>
@@ -448,43 +516,477 @@
         </div>
     </div>
 
+    <!-- Payment Confirmation Modal -->
+    <div class="modal fade" id="paymentConfirmModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-cash-coin text-success"></i> Konfirmasi Pelunasan Invoice
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <form id="paymentConfirmForm">
+                    <div class="modal-body">
+                        <input type="hidden" id="pay_invoice_id" name="invoice_id">
+                        <div class="mb-3">
+                            <label class="form-label">Nama Pelanggan</label>
+                            <input type="text" class="form-control" id="pay_customer_name" readonly required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Jumlah Invoice</label>
+                            <input type="number" class="form-control" id="pay_invoice_amount" readonly required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Metode Pembayaran</label>
+                            <select class="form-select" id="pay_payment_method" name="payment_method" required>
+                                <option value="">Pilih metode pembayaran</option>
+                                <option value="manual_admin" selected>Admin Kantor (Manual)</option>
+                                <option value="cash">Tunai</option>
+                                <option value="transfer_bank">Transfer Bank</option>
+                                <option value="qris">QRIS</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Diskon (Rp)</label>
+                            <input type="number" min="0" step="1" class="form-control" id="pay_discount" name="discount" value="0" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Tanggal Pembayaran</label>
+                            <input type="date" class="form-control" id="pay_payment_date" name="payment_date" required>
+                        </div>
+                        <div class="alert alert-info mb-0">
+                            Total dibayar: <strong id="pay_final_amount_text">Rp 0</strong>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+                        <button type="submit" class="btn btn-success">Submit Pelunasan</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- WhatsApp Notification Modal -->
+    <div class="modal fade" id="whatsappModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-whatsapp text-success"></i> Kirim Notifikasi WhatsApp
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle-fill"></i>
+                        <strong>Informasi:</strong> Notifikasi akan dikirim ke nomor WhatsApp pelanggan.
+                    </div>
+                    <div id="notificationPreview">
+                        <!-- Preview pesan akan ditampilkan di sini -->
+                    </div>
+                    <div class="mt-3">
+                        <label class="form-label">Nomor WhatsApp:</label>
+                        <input type="text" class="form-control" id="waPhoneNumber" readonly>
+                    </div>
+                    <div class="mt-3">
+                        <label class="form-label">Nama Pelanggan:</label>
+                        <input type="text" class="form-control" id="waCustomerName" readonly>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+                    <button type="button" class="btn btn-success" id="confirmSendWA">
+                        <i class="bi bi-whatsapp"></i> Kirim Notifikasi
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast-container" class="toast-container position-fixed top-0 end-0 p-3" style="z-index: 9999;"></div>
+
     <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
     <script>
-        // Auto-submit form on filter change
-        document.querySelectorAll('select[name="status"], select[name="type"]').forEach(select => {
-            select.addEventListener('change', function() {
-                this.form.submit();
-            });
-        });
-        
-        // Reset filters function (kembali ke bulan berjalan)
+        var invoiceListFilterStatus = <%= JSON.stringify(filters.status || '') %>;
+        var currentPaymentRow = null;
+        var currentNotificationData = null;
+
         function resetFilters() {
             window.location.href = '/admin/billing/invoice-list';
         }
 
+        function formatRp(value) {
+            return 'Rp ' + Math.round(Number(value) || 0).toLocaleString('id-ID');
+        }
+
+        function escapeHtml(text) {
+            return String(text == null ? '' : text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function showInvoiceModal(id) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            if (window.bootstrap && bootstrap.Modal) {
+                bootstrap.Modal.getOrCreateInstance(el).show();
+                return;
+            }
+            el.classList.add('show');
+            el.style.display = 'block';
+        }
+
+        function hideInvoiceModal(id) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            if (window.bootstrap && bootstrap.Modal) {
+                var inst = bootstrap.Modal.getInstance(el);
+                if (inst) inst.hide();
+                return;
+            }
+            el.classList.remove('show');
+            el.style.display = 'none';
+        }
+
+        function showToast(type, title, message, duration) {
+            duration = duration || 4000;
+            var toastId = 'toast-' + Date.now();
+            var iconClass = type === 'success' ? 'bi-check-circle' : type === 'error' ? 'bi-x-circle' : 'bi-info-circle';
+            var bgClass = type === 'success' ? 'bg-success' : type === 'error' ? 'bg-danger' : 'bg-primary';
+            var container = document.getElementById('toast-container');
+            if (!container) {
+                alert(title + ': ' + message);
+                return;
+            }
+            container.insertAdjacentHTML('beforeend',
+                '<div id="' + toastId + '" class="toast align-items-center text-white ' + bgClass + ' border-0" role="alert">' +
+                    '<div class="d-flex"><div class="toast-body">' +
+                    '<i class="bi ' + iconClass + ' me-2"></i><strong>' + escapeHtml(title) + '</strong><br><small>' + escapeHtml(message) + '</small>' +
+                    '</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button></div></div>'
+            );
+            var toastElement = document.getElementById(toastId);
+            if (window.bootstrap && bootstrap.Toast) {
+                var toast = new bootstrap.Toast(toastElement, { delay: duration });
+                toast.show();
+                toastElement.addEventListener('hidden.bs.toast', function() { toastElement.remove(); });
+            } else {
+                setTimeout(function() { if (toastElement && toastElement.parentNode) toastElement.remove(); }, duration);
+            }
+        }
+
+        function rowFromBtn(btn) {
+            if (!btn) return null;
+            return btn.closest ? btn.closest('tr') : (btn.parentElement && btn.parentElement.closest ? btn.parentElement.closest('tr') : null);
+        }
+
+        function readSummary() {
+            var el = document.getElementById('invoiceSummaryCards');
+            if (!el) return null;
+            return {
+                total: Number(el.dataset.total) || 0,
+                paid: Number(el.dataset.paid) || 0,
+                unpaid: Number(el.dataset.unpaid) || 0,
+                overdue: Number(el.dataset.overdue) || 0,
+                total_amount: Number(el.dataset.totalAmount) || 0,
+                paid_amount: Number(el.dataset.paidAmount) || 0,
+                unpaid_amount: Number(el.dataset.unpaidAmount) || 0,
+                overdue_amount: Number(el.dataset.overdueAmount) || 0
+            };
+        }
+
+        function writeSummary(data) {
+            var el = document.getElementById('invoiceSummaryCards');
+            if (!el || !data) return;
+            el.dataset.total = data.total;
+            el.dataset.paid = data.paid;
+            el.dataset.unpaid = data.unpaid;
+            el.dataset.overdue = data.overdue;
+            el.dataset.totalAmount = data.total_amount;
+            el.dataset.paidAmount = data.paid_amount;
+            el.dataset.unpaidAmount = data.unpaid_amount;
+            el.dataset.overdueAmount = data.overdue_amount;
+            var values = [data.total, data.paid, data.unpaid, data.overdue];
+            var amounts = [data.total_amount, data.paid_amount, data.unpaid_amount, data.overdue_amount];
+            var cards = el.querySelectorAll('.summary-card');
+            for (var i = 0; i < cards.length; i++) {
+                var countEl = cards[i].querySelector('.summary-card-count');
+                var amountEl = cards[i].querySelector('.summary-card-nominal');
+                if (countEl) countEl.textContent = values[i];
+                if (amountEl) amountEl.textContent = formatRp(amounts[i]);
+            }
+        }
+
+        function applyPaidToSummary(row) {
+            var amount = Number(row.dataset.amount) || 0;
+            var overdue = row.dataset.overdue === '1';
+            var data = readSummary();
+            if (!data) return;
+            data.paid += 1;
+            data.unpaid = Math.max(0, data.unpaid - 1);
+            data.paid_amount += amount;
+            data.unpaid_amount = Math.max(0, data.unpaid_amount - amount);
+            if (overdue) {
+                data.overdue = Math.max(0, data.overdue - 1);
+                data.overdue_amount = Math.max(0, data.overdue_amount - amount);
+            }
+            writeSummary(data);
+        }
+
+        function applyDeleteToSummary(row) {
+            var amount = Number(row.dataset.amount) || 0;
+            var status = row.dataset.status;
+            var overdue = row.dataset.overdue === '1';
+            var data = readSummary();
+            if (!data) return;
+            data.total = Math.max(0, data.total - 1);
+            data.total_amount = Math.max(0, data.total_amount - amount);
+            if (status === 'paid') {
+                data.paid = Math.max(0, data.paid - 1);
+                data.paid_amount = Math.max(0, data.paid_amount - amount);
+            } else if (status === 'unpaid') {
+                data.unpaid = Math.max(0, data.unpaid - 1);
+                data.unpaid_amount = Math.max(0, data.unpaid_amount - amount);
+                if (overdue) {
+                    data.overdue = Math.max(0, data.overdue - 1);
+                    data.overdue_amount = Math.max(0, data.overdue_amount - amount);
+                }
+            }
+            writeSummary(data);
+        }
+
+        function markRowPaid(row) {
+            applyPaidToSummary(row);
+            row.dataset.status = 'paid';
+            row.dataset.overdue = '0';
+            var statusCell = row.querySelector('.invoice-status-cell');
+            if (statusCell) statusCell.innerHTML = '<span class="badge bg-success">Lunas</span>';
+            var paidBtn = row.querySelector('.js-mark-paid');
+            if (paidBtn) paidBtn.remove();
+            if (invoiceListFilterStatus === 'unpaid' || invoiceListFilterStatus === 'overdue') {
+                row.remove();
+            }
+        }
+
+        function updateFinalPaymentAmount() {
+            var amountEl = document.getElementById('pay_invoice_amount');
+            var discountEl = document.getElementById('pay_discount');
+            var invoiceAmount = parseFloat((amountEl && amountEl.value) || '0');
+            var discount = parseFloat((discountEl && discountEl.value) || '0');
+            var finalAmount = Math.max(invoiceAmount - discount, 0);
+            var finalTextEl = document.getElementById('pay_final_amount_text');
+            if (finalTextEl) finalTextEl.textContent = formatRp(finalAmount);
+            return { invoiceAmount: invoiceAmount, discount: discount, finalAmount: finalAmount };
+        }
+
+        function markInvoicePaid(btn) {
+            var row = rowFromBtn(btn);
+            if (!row) return false;
+            currentPaymentRow = row;
+            document.getElementById('pay_invoice_id').value = row.getAttribute('data-invoice-id') || btn.getAttribute('data-invoice-id') || '';
+            document.getElementById('pay_customer_name').value = row.getAttribute('data-customer-name') || '-';
+            document.getElementById('pay_invoice_amount').value = Number(row.getAttribute('data-amount')) || 0;
+            document.getElementById('pay_discount').value = 0;
+            document.getElementById('pay_payment_method').value = 'manual_admin';
+            document.getElementById('pay_payment_date').value = new Date().toISOString().slice(0, 10);
+            updateFinalPaymentAmount();
+            showInvoiceModal('paymentConfirmModal');
+            return false;
+        }
+
+        function deleteInvoiceRow(btn) {
+            var row = rowFromBtn(btn);
+            if (!row) return false;
+            var invoiceId = row.getAttribute('data-invoice-id') || btn.getAttribute('data-invoice-id');
+            var number = row.getAttribute('data-invoice-number') || invoiceId;
+            if (!confirm('Hapus invoice #' + number + '? Tindakan ini tidak dapat dibatalkan.')) return false;
+            showToast('info', 'Memproses...', 'Menghapus tagihan');
+            fetch('/admin/billing/invoices/' + invoiceId, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' }
+            })
+            .then(function(response) {
+                return response.json().then(function(data) {
+                    return { response: response, data: data || {} };
+                }).catch(function() {
+                    return { response: response, data: {} };
+                });
+            })
+            .then(function(result) {
+                if (!result.response.ok || !result.data.success) {
+                    throw new Error(result.data.message || result.data.error || 'Gagal menghapus tagihan');
+                }
+                applyDeleteToSummary(row);
+                row.remove();
+                showToast('success', 'Tagihan Dihapus', result.data.message || 'Tagihan berhasil dihapus');
+            })
+            .catch(function(error) {
+                showToast('error', 'Gagal Menghapus', error.message || 'Terjadi kesalahan saat menghapus tagihan');
+            });
+            return false;
+        }
+
+        function sendInvoiceWhatsApp(btn) {
+            var row = rowFromBtn(btn);
+            if (!row) return false;
+            var invoiceId = row.getAttribute('data-invoice-id') || btn.getAttribute('data-invoice-id');
+            currentNotificationData = { invoiceId: invoiceId };
+            document.getElementById('waPhoneNumber').value = row.getAttribute('data-phone') || '';
+            document.getElementById('waCustomerName').value = row.getAttribute('data-customer-name') || '';
+            document.getElementById('notificationPreview').innerHTML =
+                '<div class="card"><div class="card-body text-muted"><i class="bi bi-hourglass-split"></i> Memuat preview dari template WhatsApp tenant...</div></div>';
+            showInvoiceModal('whatsappModal');
+            fetch('/admin/billing/invoices/' + invoiceId + '/whatsapp-preview')
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        if (data.phone) document.getElementById('waPhoneNumber').value = data.phone;
+                        if (data.customerName) document.getElementById('waCustomerName').value = data.customerName;
+                        var title = data.templateTitle
+                            ? '<div class="small text-muted mb-2">Template: <strong>' + escapeHtml(data.templateTitle) + '</strong> <code>' + escapeHtml(data.templateKey || '') + '</code></div>'
+                            : '';
+                        document.getElementById('notificationPreview').innerHTML =
+                            '<div class="card"><div class="card-header"><h6 class="mb-0">Preview Pesan:</h6></div><div class="card-body">' +
+                            title + '<pre style="white-space: pre-wrap; font-size: 14px;">' + escapeHtml(data.preview || '') + '</pre></div></div>';
+                    } else {
+                        document.getElementById('notificationPreview').innerHTML =
+                            '<div class="alert alert-warning mb-0">' + escapeHtml(data.message || 'Gagal memuat preview template') + '</div>';
+                    }
+                })
+                .catch(function() {
+                    document.getElementById('notificationPreview').innerHTML =
+                        '<div class="alert alert-danger mb-0">Gagal memuat preview WhatsApp</div>';
+                });
+            return false;
+        }
+
+        window.markInvoicePaid = markInvoicePaid;
+        window.deleteInvoiceRow = deleteInvoiceRow;
+        window.sendInvoiceWhatsApp = sendInvoiceWhatsApp;
+        window.resetFilters = resetFilters;
+
+        document.querySelectorAll('select[name="status"], select[name="type"]').forEach(function(select) {
+            select.addEventListener('change', function() { this.form.submit(); });
+        });
+
+        var payDiscount = document.getElementById('pay_discount');
+        if (payDiscount) payDiscount.addEventListener('input', updateFinalPaymentAmount);
+
+        var paymentForm = document.getElementById('paymentConfirmForm');
+        if (paymentForm) {
+            paymentForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                if (!paymentForm.checkValidity()) {
+                    paymentForm.reportValidity();
+                    return;
+                }
+                var invoiceId = document.getElementById('pay_invoice_id').value;
+                var paymentMethod = document.getElementById('pay_payment_method').value;
+                var paymentDate = document.getElementById('pay_payment_date').value;
+                var calc = updateFinalPaymentAmount();
+                if (calc.discount > calc.invoiceAmount) {
+                    showToast('error', 'Diskon Tidak Valid', 'Diskon tidak boleh melebihi jumlah invoice');
+                    return;
+                }
+                var notes = 'Pelunasan oleh Admin Kantor | Diskon: Rp ' + Math.round(calc.discount).toLocaleString('id-ID') + ' | Tanggal Bayar: ' + paymentDate;
+                var submitBtn = paymentForm.querySelector('button[type="submit"]');
+                var originalText = submitBtn.innerHTML;
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Menyimpan...';
+                showToast('info', 'Memproses...', 'Menyimpan pelunasan invoice');
+                fetch('/admin/billing/payments', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        invoice_id: invoiceId,
+                        amount: calc.finalAmount,
+                        payment_method: paymentMethod,
+                        payment_date: paymentDate,
+                        reference_number: '',
+                        notes: notes,
+                        discount_amount: Math.round(Number(calc.discount) || 0)
+                    })
+                })
+                .then(function(resp) { return resp.json(); })
+                .then(function(result) {
+                    if (!result || !result.success) {
+                        throw new Error((result && result.message) || 'Gagal menyimpan pelunasan');
+                    }
+                    hideInvoiceModal('paymentConfirmModal');
+                    if (currentPaymentRow) markRowPaid(currentPaymentRow);
+                    showToast('success', 'Tagihan Lunas', 'Pelunasan berhasil disimpan');
+                })
+                .catch(function(error) {
+                    showToast('error', 'Gagal', error.message || 'Terjadi kesalahan saat menyimpan pelunasan');
+                })
+                .then(function() {
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = originalText;
+                });
+            });
+        }
+
+        var confirmSendWA = document.getElementById('confirmSendWA');
+        if (confirmSendWA) {
+            confirmSendWA.addEventListener('click', function() {
+                if (!currentNotificationData) return;
+                var btn = this;
+                var originalText = btn.innerHTML;
+                btn.disabled = true;
+                btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Mengirim...';
+                fetch('/admin/billing/invoices/send-whatsapp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(currentNotificationData)
+                })
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        showToast('success', 'Notifikasi Terkirim', data.message || 'Notifikasi WhatsApp berhasil dikirim');
+                        hideInvoiceModal('whatsappModal');
+                    } else {
+                        showToast('error', 'Gagal Mengirim', data.message || 'Gagal mengirim notifikasi WhatsApp');
+                    }
+                })
+                .catch(function() {
+                    showToast('error', 'Error', 'Terjadi kesalahan saat mengirim notifikasi');
+                })
+                .then(function() {
+                    btn.disabled = false;
+                    btn.innerHTML = originalText;
+                });
+            });
+        }
+
         (function forceSolidSummaryCards() {
-            const gradients = [
+            var gradients = [
                 'linear-gradient(135deg, #6366f1, #4f46e5)',
                 'linear-gradient(135deg, #22c55e, #16a34a)',
                 'linear-gradient(135deg, #f59e0b, #d97706)',
                 'linear-gradient(135deg, #ef4444, #dc2626)'
             ];
-            document.querySelectorAll('.summary-cards-solid .summary-card').forEach((card, idx) => {
-                const gradient = gradients[idx % gradients.length];
+            var cards = document.querySelectorAll('.summary-cards-solid .summary-card');
+            for (var idx = 0; idx < cards.length; idx++) {
+                var card = cards[idx];
+                var gradient = gradients[idx % gradients.length];
                 card.style.setProperty('background', gradient, 'important');
                 card.style.setProperty('background-image', gradient, 'important');
                 card.style.setProperty('border', '0', 'important');
-                const body = card.querySelector('.card-body');
+                var body = card.querySelector('.card-body');
                 if (body) {
                     body.style.setProperty('background', 'transparent', 'important');
                     body.style.setProperty('color', '#fff', 'important');
                 }
-                card.querySelectorAll('h3, p, i').forEach((el) => {
-                    el.style.setProperty('color', '#fff', 'important');
-                });
-            });
+                var els = card.querySelectorAll('h3, p, i');
+                for (var j = 0; j < els.length; j++) {
+                    els[j].style.setProperty('color', '#fff', 'important');
+                }
+            }
         })();
     </script>
 </body>
 </html>
-

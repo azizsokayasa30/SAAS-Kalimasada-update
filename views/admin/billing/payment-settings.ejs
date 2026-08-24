@@ -382,15 +382,21 @@
                                     <div class="mb-3">
                                         <label class="form-label">Default Method:</label>
                                         <select class="form-select" id="duitkuDefaultMethod">
-                                            <option value="VA" <%= (settings.payment_gateway.duitku && settings.payment_gateway.duitku.default_method === 'VA') ? 'selected' : '' %>>Virtual Account</option>
-                                            <option value="QRIS" <%= (settings.payment_gateway.duitku && settings.payment_gateway.duitku.default_method === 'QRIS') ? 'selected' : '' %>>QRIS</option>
-                                            <option value="VC" <%= (settings.payment_gateway.duitku && settings.payment_gateway.duitku.default_method === 'VC') ? 'selected' : '' %>>Kartu Kredit/Debit</option>
+                                            <% const duitkuMethod = (settings.payment_gateway.duitku && settings.payment_gateway.duitku.default_method) ? String(settings.payment_gateway.duitku.default_method) : ''; %>
+                                            <option value="" <%= duitkuMethod === '' ? 'selected' : '' %>>Otomatis (channel yang aktif di Duitku)</option>
+                                            <option value="NQ" <%= duitkuMethod === 'NQ' || duitkuMethod === 'QRIS' ? 'selected' : '' %>>QRIS</option>
+                                            <option value="BR" <%= duitkuMethod === 'BR' ? 'selected' : '' %>>BRI Virtual Account</option>
+                                            <option value="I1" <%= duitkuMethod === 'I1' ? 'selected' : '' %>>BNI Virtual Account</option>
+                                            <option value="M2" <%= duitkuMethod === 'M2' ? 'selected' : '' %>>Mandiri Virtual Account</option>
+                                            <option value="VA" <%= duitkuMethod === 'VA' ? 'selected' : '' %>>Maybank Virtual Account</option>
+                                            <option value="VC" <%= duitkuMethod === 'VC' ? 'selected' : '' %>>Kartu Kredit/Debit</option>
                                         </select>
                                     </div>
                                     <div class="mb-3">
                                         <div class="alert alert-info">
                                             <i class="bi bi-info-circle-fill"></i>
-                                            <strong>Info:</strong> Metode pembayaran Duitku (VA, QRIS, e-wallet, dll) dipilih langsung oleh pelanggan saat melakukan pembayaran.
+                                            <strong>Info:</strong> Kode <code>VA</code> di Duitku adalah Maybank VA, bukan semua virtual account.
+                                            Jika channel default belum aktif di dashboard Duitku, sistem otomatis memakai channel lain yang sudah aktif.
                                         </div>
                                     </div>
                                     <button type="submit" class="btn btn-primary w-100">
@@ -595,8 +601,7 @@
                 if (baseUrl) formData.base_url = baseUrl;
                 const expiryPeriod = document.getElementById('duitkuExpiryPeriod').value;
                 if (expiryPeriod) formData.expiry_period = parseInt(expiryPeriod);
-                const defaultMethod = document.getElementById('duitkuDefaultMethod').value;
-                if (defaultMethod) formData.default_method = defaultMethod;
+                formData.default_method = document.getElementById('duitkuDefaultMethod').value || '';
             }
 
             try {

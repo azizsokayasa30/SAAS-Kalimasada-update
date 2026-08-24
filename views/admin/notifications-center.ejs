@@ -150,29 +150,98 @@
 <script>
 (function () {
   var btn = document.getElementById('btnClearAllNotif');
-  if (!btn) return;
-  btn.addEventListener('click', async function () {
-    if (!confirm('Tandai semua notifikasi teknisi & kolektor sudah dibaca, dan tiadakan permintaan ubah paket portal yang masih pending? Tiket laporan gangguan tidak diubah.')) return;
-    btn.disabled = true;
-    try {
-      var res = await fetch('/admin/dashboard/api/notifications/clear', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({ dismissPortal: true })
-      });
-      var data = await res.json();
-      if (!data.success) {
-        alert(data.message || 'Gagal membersihkan notifikasi');
+  if (btn) {
+    btn.addEventListener('click', async function () {
+      if (!confirm('Tandai semua notifikasi teknisi & kolektor sudah dibaca, dan tiadakan permintaan ubah paket portal yang masih pending? Tiket laporan gangguan tidak diubah.')) return;
+      btn.disabled = true;
+      try {
+        var res = await fetch('/admin/dashboard/api/notifications/clear', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ dismissPortal: true })
+        });
+        var data = await res.json();
+        if (!data.success) {
+          alert(data.message || 'Gagal membersihkan notifikasi');
+          btn.disabled = false;
+          return;
+        }
+        window.location.reload();
+      } catch (e) {
+        alert('Gagal: ' + (e && e.message ? e.message : e));
         btn.disabled = false;
-        return;
       }
-      window.location.reload();
-    } catch (e) {
-      alert('Gagal: ' + (e && e.message ? e.message : e));
-      btn.disabled = false;
-    }
-  });
+    });
+  }
+
+  var lastStamp = null;
+  var lastBadge = 0;
+  var audioCtx = null;
+  function playNotifSound() {
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      audioCtx = audioCtx || new Ctx();
+      var play = function () {
+        var now = audioCtx.currentTime;
+        var osc = audioCtx.createOscillator();
+        var gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, now);
+        osc.frequency.setValueAtTime(1174, now + 0.09);
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(0.18, now + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(now);
+        osc.stop(now + 0.3);
+      };
+      if (audioCtx.state === 'suspended') audioCtx.resume().then(play).catch(function () {});
+      else play();
+    } catch (e) {}
+  }
+  document.addEventListener('click', function () {
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      audioCtx = audioCtx || new Ctx();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    } catch (e) {}
+  }, { capture: true });
+
+  async function pulse() {
+    try {
+      var res = await fetch('/admin/dashboard/api/notifications/pulse', { credentials: 'same-origin' });
+      var data = await res.json();
+      if (!data.success) return;
+      var n = parseInt(data.badge, 10) || 0;
+      var stamp = data.stamp != null ? String(data.stamp) : '';
+      var isFirst = lastStamp === null;
+      var changed = !isFirst && stamp !== lastStamp;
+      var prev = lastBadge;
+      lastStamp = stamp;
+      lastBadge = n;
+      var badgeEl = document.getElementById('notifPageBadge');
+      if (badgeEl) {
+        badgeEl.textContent = (n > 99 ? '99+' : String(n)) + ' perlu perhatian';
+        badgeEl.classList.toggle('d-none', n === 0);
+      }
+      if (changed && n > prev) {
+        playNotifSound();
+        window.location.reload();
+      }
+    } catch (e) {}
+  }
+  pulse();
+  setInterval(pulse, 2500);
+  if (typeof EventSource !== 'undefined') {
+    try {
+      var es = new EventSource('/admin/dashboard/api/notifications/stream');
+      es.addEventListener('notif', function () { pulse(); });
+    } catch (e) {}
+  }
 })();
 </script>
 </body>

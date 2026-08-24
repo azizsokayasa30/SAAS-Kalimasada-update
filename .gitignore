@@ -53,6 +53,7 @@ Thumbs.db
 
 # IDE files
 .vscode/
+.cursor-ssh/
 .idea/
 *.swp
 *.swo

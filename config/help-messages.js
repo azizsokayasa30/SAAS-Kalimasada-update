@@ -306,7 +306,7 @@ function getVersionInfo() {
         versionDate: settings.version_date || 'Unknown Date',
         versionNotes: settings.version_notes || 'No release notes',
         buildNumber: settings.build_number || 'Unknown Build',
-        companyHeader: settings.company_header || 'CV Lintas Multimedia',
+        companyHeader: settings.company_header || 'PT. KALIMASADA INTI SARANA',
         footerInfo: settings.footer_info || 'Info Hubungi : 0813-6888-8498'
     };
 }

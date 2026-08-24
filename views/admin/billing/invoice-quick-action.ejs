@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <%- include('../../partials/hard-reload') %>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><%= title %> - <%= appSettings.companyHeader %></title>
+    <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+    <link href="/vendor/boxicons/boxicons.min.css" rel="stylesheet">
+    <link href="/css/admin-mobile.css" rel="stylesheet">
+    <%- include('../../partials/theme-head') %>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <%- include('../../partials/billing-sidebar') %>
+            <main class="col-md-10 ms-sm-auto col-lg-10 px-md-4 main-content">
+                <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+                    <h1 class="h2"><%= title %></h1>
+                    <a href="<%= nextUrl %>" class="btn btn-secondary">Kembali ke daftar</a>
+                </div>
+
+                <% if (typeof errorMessage !== 'undefined' && errorMessage) { %>
+                    <div class="alert alert-danger"><%= errorMessage %></div>
+                <% } %>
+
+                <div class="card" style="max-width: 640px;">
+                    <div class="card-header">
+                        <strong>Invoice #<%= invoice.invoice_number %></strong>
+                    </div>
+                    <div class="card-body">
+                        <p class="mb-1"><strong>Pelanggan:</strong> <%= invoice.customer_name || '-' %></p>
+                        <p class="mb-1"><strong>HP:</strong> <%= invoice.customer_phone || '-' %></p>
+                        <p class="mb-3"><strong>Jumlah:</strong> Rp <%= Number(invoice.amount || 0).toLocaleString('id-ID') %></p>
+
+                        <% if (mode === 'pay') { %>
+                            <% if (invoice.status === 'paid') { %>
+                                <div class="alert alert-success">Invoice ini sudah lunas.</div>
+                                <a href="<%= nextUrl %>" class="btn btn-primary">Kembali</a>
+                            <% } else { %>
+                                <form method="POST" action="/admin/billing/invoices/<%= invoice.id %>/pay">
+                                    <input type="hidden" name="next" value="<%= nextUrl %>">
+                                    <div class="mb-3">
+                                        <label class="form-label">Metode Pembayaran</label>
+                                        <select class="form-select" name="payment_method" required>
+                                            <option value="manual_admin" selected>Admin Kantor (Manual)</option>
+                                            <option value="cash">Tunai</option>
+                                            <option value="transfer_bank">Transfer Bank</option>
+                                            <option value="qris">QRIS</option>
+                                        </select>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Diskon (Rp)</label>
+                                        <input type="number" min="0" step="1" class="form-control" name="discount_amount" value="0">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label class="form-label">Tanggal Pembayaran</label>
+                                        <input type="date" class="form-control" name="payment_date" value="<%= payDate %>" required>
+                                    </div>
+                                    <input type="submit" class="btn btn-success" value="Simpan Pelunasan">
+                                    <a href="<%= nextUrl %>" class="btn btn-outline-secondary">Batal</a>
+                                </form>
+                            <% } %>
+                        <% } else if (mode === 'whatsapp') { %>
+                            <% if (typeof waError !== 'undefined' && waError) { %>
+                                <div class="alert alert-warning"><%= waError %></div>
+                                <a href="<%= nextUrl %>" class="btn btn-primary">Kembali</a>
+                            <% } else { %>
+                                <p class="mb-1"><strong>Nomor WhatsApp:</strong> <%= waPhone || invoice.customer_phone || '-' %></p>
+                                <% if (waTemplateTitle) { %>
+                                    <p class="small text-muted">Template: <%= waTemplateTitle %> <code><%= waTemplateKey %></code></p>
+                                <% } %>
+                                <pre class="bg-light p-3 rounded" style="white-space: pre-wrap;"><%= waPreview || '' %></pre>
+                                <form method="POST" action="/admin/billing/invoices/<%= invoice.id %>/notify-whatsapp">
+                                    <input type="hidden" name="next" value="<%= nextUrl %>">
+                                    <input type="submit" class="btn btn-success" value="Kirim WhatsApp">
+                                    <a href="<%= nextUrl %>" class="btn btn-outline-secondary">Batal</a>
+                                </form>
+                            <% } %>
+                        <% } else if (mode === 'delete') { %>
+                            <div class="alert alert-danger">
+                                Hapus invoice #<%= invoice.invoice_number %>? Tindakan ini tidak dapat dibatalkan.
+                            </div>
+                            <form method="POST" action="/admin/billing/invoices/<%= invoice.id %>/hapus">
+                                <input type="hidden" name="next" value="<%= nextUrl %>">
+                                <input type="submit" class="btn btn-danger" value="Ya, hapus invoice">
+                                <a href="<%= nextUrl %>" class="btn btn-outline-secondary">Batal</a>
+                            </form>
+                        <% } %>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+    <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

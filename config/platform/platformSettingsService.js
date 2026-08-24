@@ -7,7 +7,7 @@ const { DEFAULT_CONFIG, applyDefaults } = require('../paymentGatewayConfig');
 
 const DEFAULT_COMPANY = {
     company_name: 'PT. KALIMASADA INTI SARANA',
-    company_header: 'KALIMASADA INTI SARANA',
+    company_header: 'PT. KALIMASADA INTI SARANA',
     company_slogan: 'Solusi Internet Terdepan',
     company_website: 'kalimasada.id',
     company_address: 'Banjarnegara',

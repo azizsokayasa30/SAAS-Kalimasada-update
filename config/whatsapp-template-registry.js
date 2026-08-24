@@ -2,9 +2,9 @@
  * Built-in WhatsApp notification templates (billing / teknisi / gangguan).
  * Digabung dengan override per-tenant (tenant.settings.whatsapp_templates)
  * atau data/whatsapp-templates.json untuk mode legacy non-tenant.
+ * Nama company memakai {company_header} — diisi dari settings tenant saat kirim.
  */
-const { getSetting } = require('./settingsManager');
-const { getCompanyHeader } = require('./message-templates');
+const { sanitizeWhatsAppTemplateCompanyHeader } = require('./companyBranding');
 
 function getBuiltInWhatsAppTemplates() {
     return {
@@ -31,7 +31,9 @@ Tagihan bulanan Anda telah dibuat:
 
 Silakan lakukan pembayaran sebelum tanggal jatuh tempo untuk menghindari denda keterlambatan.
 
-Terima kasih atas kepercayaan Anda.`,
+Terima kasih atas kepercayaan Anda.
+
+*{company_header}*`,
             enabled: true
         },
         due_date_reminder: {
@@ -56,7 +58,9 @@ Tagihan Anda akan jatuh tempo dalam *{days_remaining} hari*:
 
 Mohon persiapkan pembayaran sebelum tanggal jatuh tempo agar layanan tetap lancar.
 
-Terima kasih.`,
+Terima kasih.
+
+*{company_header}*`,
             enabled: true
         },
         due_date_reminder_today: {
@@ -80,7 +84,9 @@ Hari ini (*{due_date}*) adalah tanggal jatuh tempo tagihan Anda:
 
 Apabila belum melakukan pembayaran, mohon kiranya dapat diselesaikan hari ini. Jika sudah bayar, abaikan pesan ini.
 
-Terima kasih atas kerja samanya.`,
+Terima kasih atas kerja samanya.
+
+*{company_header}*`,
             enabled: true
         },
         payment_received: {
@@ -98,7 +104,9 @@ Terima kasih! Pembayaran Anda telah kami terima:
 🔢 *No. Referensi:* {reference_number}
 📦 *Paket / Rincian:* {package_name} {package_speed}
 
-Layanan internet Anda akan tetap aktif. Terima kasih atas kepercayaan Anda.`,
+Layanan internet Anda akan tetap aktif. Terima kasih atas kepercayaan Anda.
+
+*{company_header}*`,
             enabled: true
         },
         service_disruption: {
@@ -120,7 +128,9 @@ Kami informasikan bahwa sedang terjadi gangguan pada jaringan internet:
 
 Kami sedang bekerja untuk mengatasi masalah ini secepat mungkin. Mohon maaf atas ketidaknyamanannya.
 
-Terima kasih atas pengertian Anda.`,
+Terima kasih atas pengertian Anda.
+
+*{company_header}*`,
             enabled: true
         },
         service_announcement: {
@@ -131,7 +141,9 @@ Halo Pelanggan Setia,
 
 {announcement_content}
 
-Terima kasih atas perhatian Anda.`,
+Terima kasih atas perhatian Anda.
+
+*{company_header}*`,
             enabled: true
         },
         service_suspension: {
@@ -153,9 +165,9 @@ Layanan internet Anda telah dinonaktifkan karena:
 *_Login Dengan No Hp Terdaftar_*
 
 📞 *Butuh Bantuan?*
-Hubungi kami di: ${getSetting('contact_whatsapp', '0813-6888-8498')}
+Hubungi kami di: {support_phone}
 
-*${getCompanyHeader()}*
+*{company_header}*
 Terima kasih atas perhatian Anda.`,
             enabled: true
         },
@@ -178,8 +190,8 @@ Selamat! Layanan internet Anda telah diaktifkan kembali.
 
 Terima kasih telah melakukan pembayaran tepat waktu.
 
-*${getCompanyHeader()}*
-Info: ${getSetting('contact_whatsapp', '0813-6888-8498')}`,
+*{company_header}*
+Info: {support_phone}`,
             enabled: true
         },
         welcome_message: {
@@ -258,11 +270,11 @@ Balas dengan: *MASALAH* atau *ISSUE*
 • *BANTU* - Minta bantuan teknis
 • *MASALAH* - Laporkan kendala
 
-📞 *Support:* ${getSetting('contact_whatsapp', '0813-6888-8498')}
+📞 *Support:* {support_phone}
 
 Silakan konfirmasi penerimaan tugas ini dengan balasan *TERIMA*.
 
-*${getCompanyHeader()}*`,
+*{company_header}*`,
             enabled: true
         },
         installation_status_update: {
@@ -296,7 +308,7 @@ Balas dengan: *MASALAH* atau *ISSUE*
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-*${getCompanyHeader()}*`,
+*{company_header}*`,
             enabled: true
         },
         installation_completed: {
@@ -335,7 +347,7 @@ Balas dengan: *BANTU* atau *HELP*
 • *LAPOR* - Laporkan detail tambahan
 • *BANTU* - Minta bantuan teknis
 
-*${getCompanyHeader()}*`,
+*{company_header}*`,
             enabled: true
         },
         sales_order_new_customer: {
@@ -354,7 +366,9 @@ Balas dengan: *BANTU* atau *HELP*
 
 ✅ *Status:* Pelanggan telah di-accept dan siap untuk setting.
 
-Silakan lakukan instalasi sesuai dengan data di atas.`,
+Silakan lakukan instalasi sesuai dengan data di atas.
+
+*{company_header}*`,
             enabled: true
         },
         trouble_report_new_technician: {
@@ -404,7 +418,9 @@ function mergeWhatsAppTemplatesFromFile(builtIn, fileData) {
         const f = file[key];
         if (f && typeof f === 'object') {
             if (f.title != null) merged[key].title = String(f.title);
-            if (f.template != null) merged[key].template = String(f.template);
+            if (f.template != null) {
+                merged[key].template = sanitizeWhatsAppTemplateCompanyHeader(String(f.template));
+            }
             if (typeof f.enabled === 'boolean') merged[key].enabled = f.enabled;
         }
     }

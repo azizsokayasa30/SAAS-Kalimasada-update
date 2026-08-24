@@ -29,7 +29,7 @@
                         <a href="/admin/billing/invoices/<%= invoice.id %>" class="btn btn-info" title="Lihat halaman detail tagihan (baca saja)" aria-label="Lihat detail tagihan">
                             <i class="bi bi-file-earmark-fill-doc"></i> Lihat Detail
                         </a>
-                        <a href="/admin/billing/invoices" class="btn btn-secondary" title="Kembali ke daftar tagihan" aria-label="Kembali ke daftar tagihan">
+                        <a href="/admin/billing/invoice-list" class="btn btn-secondary" title="Kembali ke daftar tagihan" aria-label="Kembali ke daftar tagihan">
                             <i class="bi bi-circle"></i> Kembali
                         </a>
                     </div>
@@ -244,7 +244,7 @@ function deleteInvoice() {
             if (result.success) {
                 showAlert('success', '? Invoice berhasil dihapus!');
                 setTimeout(() => {
-                    window.location.href = '/admin/billing/invoices';
+                    window.location.href = '/admin/billing/invoice-list';
                 }, 1500);
             } else {
                 showAlert('danger', '? ' + result.message);

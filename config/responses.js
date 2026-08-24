@@ -1,14 +1,13 @@
 // Kumpulan respons bot untuk berbagai pertanyaan dan perintah
 
-const { getSetting } = require('./settingsManager');
+const { getCompanyHeader, getFooterInfo } = require('./message-templates');
 
-// Format pesan dengan header dan footer
 function formatWithHeaderFooter(message) {
-    const COMPANY_HEADER = getSetting('company_header', "📱 CV Lintas Multimedia 📱\n\n");
+    const COMPANY_HEADER = getCompanyHeader();
     const FOOTER_SEPARATOR = "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n";
-    const FOOTER_INFO = FOOTER_SEPARATOR + getSetting('footer_info', "Powered by Alijaya Digital Network");
+    const FOOTER_INFO = FOOTER_SEPARATOR + getFooterInfo();
     
-    return `${COMPANY_HEADER}${message}${FOOTER_INFO}`;
+    return `${COMPANY_HEADER}\n\n${message}${FOOTER_INFO}`;
 }
 
 // Respons untuk perintah bantuan/menu

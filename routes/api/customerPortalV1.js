@@ -851,6 +851,27 @@ router.get('/invoices/:id/payment-options', verifyCustomerToken, async (req, res
             }
         }
         const defGw = pg.active && pgm.gateways[pg.active] ? pg.active : gateways[0]?.id || null;
+
+        let methods = [];
+        try {
+            methods = await pgm.getAvailablePaymentMethods(invoice.amount);
+        } catch (methodErr) {
+            logger.warn('[customer-portal-v1] payment methods lookup', methodErr.message);
+        }
+        const portalMethods = (methods || []).map((m) => ({
+            gateway: m.gateway,
+            method: m.method,
+            name: m.name,
+            type: m.type || 'other',
+            fee_customer: m.fee_customer || null,
+            image_url: m.image_url || null,
+        }));
+        const methodsByGateway = {};
+        portalMethods.forEach((m) => {
+            if (!methodsByGateway[m.gateway]) methodsByGateway[m.gateway] = [];
+            methodsByGateway[m.gateway].push(m);
+        });
+
         return res.json({
             success: true,
             already_paid: false,
@@ -858,6 +879,8 @@ router.get('/invoices/:id/payment-options', verifyCustomerToken, async (req, res
             invoice_number: invoice.invoice_number,
             gateways,
             default_gateway: defGw,
+            methods: portalMethods,
+            methods_by_gateway: methodsByGateway,
         });
     } catch (err) {
         logger.error('[customer-portal-v1] payment-options', err);
@@ -883,13 +906,31 @@ router.post('/invoices/:id/checkout', verifyCustomerToken, async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invoice sudah lunas' });
         }
         const bodyGw = req.body && req.body.gateway != null ? String(req.body.gateway).toLowerCase().trim() : '';
-        const result = await billingManager.createOnlinePayment(id, bodyGw || null);
+        const bodyMethod = req.body && req.body.method != null ? String(req.body.method).trim() : '';
+        if ((bodyGw === 'duitku' || bodyGw === 'tripay') && !bodyMethod) {
+            return res.status(400).json({ success: false, message: 'Pilih metode pembayaran' });
+        }
+        const result = bodyMethod
+            ? await billingManager.createOnlinePaymentWithMethod(id, bodyGw || null, bodyMethod)
+            : await billingManager.createOnlinePayment(id, bodyGw || null);
+        const displayMode = result.display_mode || (result.qr_string ? 'qr' : (result.va_number ? 'va' : (result.app_url || result.payment_url ? 'app' : 'redirect')));
+        const inline = displayMode === 'qr' || displayMode === 'va' || displayMode === 'app';
         return res.json({
             success: true,
+            inline,
+            display_mode: displayMode,
             payment_url: result.payment_url,
+            app_url: result.app_url || result.payment_url || null,
+            qr_string: result.qr_string || null,
+            qr_image: result.qr_image || null,
+            va_number: result.va_number || null,
+            amount: result.amount || invoice.amount,
+            expiry_minutes: result.expiry_minutes || 60,
+            payment_method: result.payment_method || bodyMethod || null,
             order_id: result.order_id,
             gateway: result.gateway,
             token: result.token,
+            sandbox: !!result.sandbox,
         });
     } catch (err) {
         logger.error('[customer-portal-v1] checkout', err);
@@ -897,6 +938,63 @@ router.post('/invoices/:id/checkout', verifyCustomerToken, async (req, res) => {
             success: false,
             message: err && err.message ? err.message : 'Gagal membuat pembayaran',
         });
+    }
+});
+
+router.get('/invoices/:id/payment-status', verifyCustomerToken, async (req, res) => {
+    try {
+        const customer = await loadCustomerForRequest(req);
+        if (!customer) {
+            return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+        }
+        const id = parseInt(req.params.id, 10);
+        if (!Number.isFinite(id) || id <= 0) {
+            return res.status(400).json({ success: false, message: 'ID invoice tidak valid' });
+        }
+        const invoice = await billingManager.getInvoiceById(id);
+        if (!invoice || Number(invoice.customer_id) !== Number(customer.id)) {
+            return res.status(404).json({ success: false, message: 'Invoice tidak ditemukan' });
+        }
+        if (portalInvoiceIsPaidForFilter(invoice)) {
+            return res.json({ success: true, paid: true, status: 'paid' });
+        }
+        const orderId = req.query.order_id != null ? String(req.query.order_id).trim() : '';
+        if (!orderId) {
+            return res.json({ success: true, paid: false, status: 'pending' });
+        }
+        await billingManager.paymentGateway.ensureInitialized();
+        const duitku = billingManager.paymentGateway.gateways && billingManager.paymentGateway.gateways.duitku;
+        if (!duitku || typeof duitku.checkTransaction !== 'function') {
+            return res.json({ success: true, paid: false, status: 'pending' });
+        }
+        const st = await duitku.checkTransaction(orderId);
+        const code = `${st.statusCode || ''}`;
+        if (code === '00') {
+            const merchantCode = duitku.config.merchant_code;
+            const amount = String(parseInt(st.amount || invoice.amount, 10));
+            const signature = duitku.hmacSha256(`${merchantCode}${amount}${orderId}`);
+            await billingManager.handlePaymentWebhook({
+                body: {
+                    merchantCode,
+                    amount,
+                    merchantOrderId: orderId,
+                    signature,
+                    resultCode: '00',
+                    paymentCode: st.paymentMethod || 'duitku',
+                    reference: st.reference,
+                },
+            }, 'duitku');
+            return res.json({ success: true, paid: true, status: 'paid' });
+        }
+        return res.json({
+            success: true,
+            paid: false,
+            status: code === '02' ? 'failed' : 'pending',
+            message: st.statusMessage || null,
+        });
+    } catch (err) {
+        logger.warn('[customer-portal-v1] payment-status', err.message);
+        return res.json({ success: true, paid: false, status: 'pending' });
     }
 });
 

@@ -3158,6 +3158,16 @@
             // Set data attributes for buttons
             document.getElementById('edit-customer-btn').setAttribute('data-customer-id', customerId);
             document.getElementById('pick-customer-odp-btn').setAttribute('data-customer-id', customerId);
+            const clearTagBtn = document.getElementById('clear-customer-tag-btn');
+            if (clearTagBtn) {
+                clearTagBtn.setAttribute('data-customer-id', customerId);
+                const hasCoords = customer.latitude != null && customer.latitude !== ''
+                    && customer.longitude != null && customer.longitude !== '';
+                clearTagBtn.disabled = !hasCoords;
+                clearTagBtn.title = hasCoords
+                    ? 'Hapus koordinat lokasi saja, data pelanggan tetap aman'
+                    : 'Pelanggan belum memiliki tag lokasi';
+            }
             
             // Show modal
             const modal = new bootstrap.Modal(document.getElementById('customerDetailsModal'));
@@ -3716,6 +3726,99 @@
                 }
             });
         }
+
+        // Hapus marker pelanggan dari peta (setelah tag lokasi dihapus)
+        function removeCustomerMarkerFromMap(customerId) {
+            if (!customerLayer) return;
+            const layersToRemove = [];
+            customerLayer.eachLayer(function(layer) {
+                if (String(layer.options.customerId) === String(customerId)) {
+                    layersToRemove.push(layer);
+                }
+            });
+            layersToRemove.forEach((layer) => customerLayer.removeLayer(layer));
+        }
+
+        // Hapus tag lokasi (latitude/longitude) tanpa menghapus data pelanggan
+        function clearCustomerLocationTag(customerId) {
+            const customer = networkData.customers?.find((c) => String(c.id) === String(customerId));
+            if (!customer) {
+                alert('Data pelanggan tidak ditemukan');
+                return;
+            }
+
+            const hasCoords = customer.latitude != null && customer.latitude !== ''
+                && customer.longitude != null && customer.longitude !== '';
+            if (!hasCoords) {
+                alert('Pelanggan ini belum memiliki tag lokasi.');
+                return;
+            }
+
+            const ok = confirm(
+                `Hapus tag lokasi pelanggan "${customer.name}"?\n\n` +
+                'Hanya koordinat (latitude/longitude) yang dihapus.\n' +
+                'Data pelanggan lainnya tetap aman dan tidak dihapus.'
+            );
+            if (!ok) return;
+
+            const btn = document.getElementById('clear-customer-tag-btn');
+            const originalText = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menghapus...';
+            }
+
+            const headers = { 'Content-Type': 'application/json' };
+            const csrfTokenMeta = document.querySelector('meta[name="csrf-token"]');
+            if (csrfTokenMeta) {
+                headers['X-CSRF-TOKEN'] = csrfTokenMeta.getAttribute('content');
+            }
+
+            fetch('/admin/clear-customer-location', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ id: customerId })
+            })
+            .then((response) => response.json())
+            .then((data) => {
+                if (!data.success) {
+                    alert('Gagal menghapus tag lokasi: ' + (data.message || 'Unknown error'));
+                    return;
+                }
+
+                customer.latitude = null;
+                customer.longitude = null;
+
+                removeCustomerMarkerFromMap(customerId);
+
+                document.getElementById('customer-latitude').textContent = 'N/A';
+                document.getElementById('customer-longitude').textContent = 'N/A';
+                if (btn) {
+                    btn.disabled = true;
+                    btn.title = 'Pelanggan belum memiliki tag lokasi';
+                }
+
+                alert('Tag lokasi berhasil dihapus. Data pelanggan tetap utuh.');
+
+                const detailsModal = bootstrap.Modal.getInstance(document.getElementById('customerDetailsModal'));
+                if (detailsModal) detailsModal.hide();
+
+                if (typeof loadNetworkData === 'function') {
+                    loadNetworkData();
+                }
+            })
+            .catch((error) => {
+                console.error('Error clearing customer location tag:', error);
+                alert('Terjadi kesalahan saat menghapus tag lokasi.');
+            })
+            .finally(() => {
+                if (btn && !btn.disabled) {
+                    btn.innerHTML = originalText;
+                } else if (btn) {
+                    btn.innerHTML = '<i class="fas fa-map-marker-alt"></i> Hapus Tag';
+                }
+            });
+        }
         
         function editONU(deviceId) {
             console.log('Edit ONU:', deviceId);
@@ -4190,15 +4293,25 @@ Please wait a few minutes for the device to come back online.`);
                     } else {
                         alert('ODP ID not found');
                     }
-                } else if (e.target.id === 'edit-customer-btn') {
-                    const customerId = e.target.getAttribute('data-customer-id');
+                } else if (e.target.id === 'edit-customer-btn' || e.target.closest('#edit-customer-btn')) {
+                    const btn = e.target.closest('#edit-customer-btn') || e.target;
+                    const customerId = btn.getAttribute('data-customer-id');
                     if (customerId) {
                         editCustomer(customerId);
                     } else {
                         alert('Customer ID not found');
                     }
-                } else if (e.target.id === 'pick-customer-odp-btn') {
-                    const customerId = e.target.getAttribute('data-customer-id');
+                } else if (e.target.id === 'clear-customer-tag-btn' || e.target.closest('#clear-customer-tag-btn')) {
+                    const btn = e.target.closest('#clear-customer-tag-btn') || e.target;
+                    const customerId = btn.getAttribute('data-customer-id');
+                    if (customerId) {
+                        clearCustomerLocationTag(customerId);
+                    } else {
+                        alert('Customer ID not found');
+                    }
+                } else if (e.target.id === 'pick-customer-odp-btn' || e.target.closest('#pick-customer-odp-btn')) {
+                    const btn = e.target.closest('#pick-customer-odp-btn') || e.target;
+                    const customerId = btn.getAttribute('data-customer-id');
                     if (customerId) {
                         const detailsModal = bootstrap.Modal.getInstance(document.getElementById('customerDetailsModal'));
                         if (detailsModal) detailsModal.hide();

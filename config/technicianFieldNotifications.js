@@ -5,6 +5,7 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const logger = require('./logger');
+const { pingAdminNotifications } = require('./adminNotificationBus');
 
 const dbPath = path.join(__dirname, '../data/billing.db');
 const db = new sqlite3.Database(dbPath);
@@ -49,6 +50,7 @@ function upsertTaskNotification(technicianId, kind, refId, title, body) {
                     logger.error('[technician-field-notifications] upsert:', e.message);
                     return reject(e);
                 }
+                pingAdminNotifications(String(kind || 'TECH').toUpperCase());
                 resolve(this);
             }
         );
