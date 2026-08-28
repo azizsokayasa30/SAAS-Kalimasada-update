@@ -3,6 +3,7 @@ const router = express.Router();
 const billingManager = require('../config/billing');
 const logger = require('../config/logger');
 const { getSetting } = require('../config/settingsManager');
+const { attachTenantAppSettings } = require('../config/platform/tenantAppSettings');
 
 // Middleware untuk memastikan session consistency
 const ensureCustomerSession = async (req, res, next) => {
@@ -133,26 +134,30 @@ const ensureCustomerSession = async (req, res, next) => {
     }
 };
 
-// Middleware untuk mendapatkan pengaturan aplikasi
+// Middleware untuk mendapatkan pengaturan aplikasi dari tenant aktif.
+// Bila request tidak memiliki tenant, detail rekening sengaja dikosongkan
+// agar tidak membocorkan atau memakai rekening global host.
 const getAppSettings = (req, res, next) => {
-    const adminNumber = getSetting('admins.0', '6281368888498');
-    const displayNumber = adminNumber.startsWith('62') ? '0' + adminNumber.slice(2) : adminNumber;
-    
-    req.appSettings = {
-        companyHeader: getSetting('company_header', 'ISP Monitor'),
-        footerInfo: getSetting('footer_info', ''),
-        logoFilename: getSetting('logo_filename', 'logo.png'),
-        payment_bank_name: getSetting('payment_bank_name', 'BCA'),
-        payment_account_number: getSetting('payment_account_number', '1234567890'),
-        payment_account_holder: getSetting('payment_account_holder', 'CV Lintas Multimedia'),
-        payment_cash_address: getSetting('payment_cash_address', 'Jl. Contoh No. 123'),
-        payment_cash_hours: getSetting('payment_cash_hours', '08:00 - 17:00'),
-        contact_whatsapp: getSetting('contact_whatsapp', '0813-6888-8498'),
-        contact_phone: getSetting('contact_phone', '0812-3456-7890'),
-        adminNumber: displayNumber,
-        adminNumberWA: adminNumber
-    };
-    next();
+    const hasTenant = Boolean(req.tenantId || req.tenant?.id || req.session?.tenantId);
+
+    attachTenantAppSettings(req, res, (err) => {
+        if (err) return next(err);
+
+        if (!hasTenant) {
+            req.appSettings.payment_bank_name = '';
+            req.appSettings.payment_account_number = '';
+            req.appSettings.payment_account_holder = '';
+            res.locals.appSettings = req.appSettings;
+        }
+
+        // Nomor admin tetap dipertahankan untuk kompatibilitas dashboard lama.
+        const adminNumber = getSetting('admins.0', '6281368888498');
+        const displayNumber = adminNumber.startsWith('62') ? '0' + adminNumber.slice(2) : adminNumber;
+        req.appSettings.adminNumber = displayNumber;
+        req.appSettings.adminNumberWA = adminNumber;
+        res.locals.appSettings = req.appSettings;
+        next();
+    });
 };
 
 // Dashboard Billing Customer
