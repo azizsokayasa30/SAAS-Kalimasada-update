@@ -204,6 +204,7 @@ const BILLING_ACTIVITY_RULES = [
     { methods: ['PUT'], pattern: /^\/invoices\//, action: 'invoice_update', describe: (req, body) => `Mengedit invoice #${req.params?.id || body.invoice?.id || ''}`.trim() },
     { methods: ['DELETE'], pattern: /^\/invoices\//, action: 'invoice_delete', describe: (req, body) => `Menghapus invoice #${req.params?.id || ''}`.trim() },
     { methods: ['POST'], pattern: /^\/invoices\/bulk-delete$/, action: 'invoice_bulk_delete', describe: (req, body) => `Hapus massal invoice (${body.deletedCount ?? body.deleted ?? '?'})` },
+    { methods: ['POST'], pattern: /^\/invoices\/bulk-pay$/, action: 'invoice_bulk_pay', describe: (req, body) => `Pelunasan massal invoice (${body.summary?.paid ?? '?'})` },
     { methods: ['POST'], pattern: /^\/payments$/, action: 'payment_create', describe: (req, body) => `Catat pembayaran ${body.payment?.amount ?? req.body?.amount ?? ''}`.trim() },
     { methods: ['POST'], pattern: /^\/api\/payments\/[^/]+\/cancel$/, action: 'payment_cancel', describe: (req, body) => `Batalkan pembayaran #${req.params?.id || ''}`.trim() },
     { methods: ['POST'], pattern: /^\/service-suspension\/suspend\//, action: 'customer_suspend', describe: (req) => `Isolir pelanggan ${req.params?.username || ''}`.trim() },
