@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <%- include('../../partials/hard-reload') %>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><%= title %> - <%= appSettings.companyHeader %></title>
+    <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+    <link href="/vendor/boxicons/boxicons.min.css" rel="stylesheet">
+    <link href="/css/admin-mobile.css" rel="stylesheet">
+    <%- include('../../partials/theme-head') %>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <%- include('../../partials/billing-sidebar') %>
+            <main class="col-md-10 ms-sm-auto col-lg-10 px-md-4 main-content">
+                <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+                    <h1 class="h2"><%= title %></h1>
+                    <a href="<%= nextUrl %>" class="btn btn-secondary">Kembali ke daftar</a>
+                </div>
+
+                <div class="card" style="max-width: 820px;">
+                    <div class="card-header">
+                        <strong><%= invoices.length %> invoice ditandai akan dilunasi</strong>
+                    </div>
+                    <div class="card-body">
+                        <% if (typeof skipped !== 'undefined' && skipped && skipped.length) { %>
+                            <div class="alert alert-warning">
+                                <%= skipped.length %> invoice dilewati karena sudah lunas atau tidak bisa dilunasi.
+                            </div>
+                        <% } %>
+
+                        <div class="table-responsive mb-3">
+                            <table class="table table-sm table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Invoice #</th>
+                                        <th>Pelanggan</th>
+                                        <th class="text-end">Jumlah</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <% invoices.forEach(function(invoice) { %>
+                                        <tr>
+                                            <td><strong>#<%= invoice.invoice_number %></strong></td>
+                                            <td><%= invoice.customer_name || '-' %></td>
+                                            <td class="text-end">Rp <%= Number(invoice.amount || 0).toLocaleString('id-ID') %></td>
+                                        </tr>
+                                    <% }); %>
+                                </tbody>
+                                <tfoot>
+                                    <tr>
+                                        <th colspan="2">Total</th>
+                                        <th class="text-end">Rp <%= Number(totalAmount || 0).toLocaleString('id-ID') %></th>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+
+                        <form method="POST" action="/admin/billing/invoices/bulk-pay">
+                            <input type="hidden" name="next" value="<%= nextUrl %>">
+                            <input type="hidden" name="confirm" value="1">
+                            <% invoices.forEach(function(invoice) { %>
+                                <input type="hidden" name="ids" value="<%= invoice.id %>">
+                            <% }); %>
+                            <div class="mb-3">
+                                <label class="form-label">Metode Pembayaran</label>
+                                <select class="form-select" name="payment_method" required>
+                                    <option value="manual_admin" selected>Admin Kantor (Manual)</option>
+                                    <option value="cash">Tunai</option>
+                                    <option value="transfer_bank">Transfer Bank</option>
+                                    <option value="qris">QRIS</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Tanggal Pembayaran</label>
+                                <input type="date" class="form-control" name="payment_date" value="<%= payDate %>" required>
+                            </div>
+                            <input type="submit" class="btn btn-success" value="Tandai Lunas">
+                            <a href="<%= nextUrl %>" class="btn btn-outline-secondary">Batal</a>
+                        </form>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+    <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

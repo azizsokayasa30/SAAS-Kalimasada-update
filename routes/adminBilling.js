@@ -15,7 +15,14 @@ const multer = require('multer');
 const upload = multer();
 const ExcelJS = require('exceljs');
 const { adminAuth } = require('./adminAuth');
-const { adminBillingActivityMiddleware } = require('../config/activityLogger');
+const { adminBillingActivityMiddleware, logAdminActivity } = require('../config/activityLogger');
+const {
+    parseInvoiceIdList,
+    computeAdminPayAmounts,
+    isInvoicePayable,
+    buildAdminPayNotes,
+    wantsJsonResponse
+} = require('../utils/adminInvoicePay');
 
 router.use(adminBillingActivityMiddleware);
 
@@ -10201,6 +10208,56 @@ function localPayDate() {
     return `${y}-${m}-${d}`;
 }
 
+async function maybeRestoreCustomerAfterPay(customerId) {
+    if (!customerId) return;
+    try {
+        const customer = await billingManager.getCustomerById(customerId);
+        const { shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
+        if (shouldAutoRestoreCustomer(customer)) {
+            const invoices = await billingManager.getInvoicesByCustomer(customer.id);
+            const unpaid = invoices.filter((i) => i.status === 'unpaid');
+            if (unpaid.length === 0) {
+                await serviceSuspension.restoreCustomerService(customer);
+            }
+        }
+    } catch (restoreErr) {
+        logger.error('Immediate restore check failed:', restoreErr);
+    }
+}
+
+async function paySingleInvoiceAsAdmin(invoice, {
+    paymentMethod = 'manual_admin',
+    discountAmount = 0,
+    paymentDate = localPayDate(),
+    tenantId = null
+} = {}) {
+    const payable = isInvoicePayable(invoice);
+    if (!payable.ok) {
+        const err = new Error(payable.message);
+        err.code = payable.code;
+        throw err;
+    }
+
+    const paymentMethodNorm = String(paymentMethod || 'manual_admin').trim() || 'manual_admin';
+    const paymentDateStr = String(paymentDate || localPayDate()).trim() || localPayDate();
+    const calc = computeAdminPayAmounts(invoice.amount, discountAmount);
+    const paymentData = {
+        invoice_id: parseInt(invoice.id, 10),
+        amount: calc.finalAmount,
+        payment_method: paymentMethodNorm,
+        reference_number: '',
+        notes: buildAdminPayNotes(calc.discount, paymentDateStr),
+        payment_date: paymentDateStr,
+        discount_amount: Math.round(calc.discount)
+    };
+    if (tenantId) paymentData.tenant_id = tenantId;
+
+    const payment = await billingManager.recordPayment(paymentData);
+    await billingManager.updateInvoiceStatus(invoice.id, 'paid', paymentMethodNorm);
+    await maybeRestoreCustomerAfterPay(invoice.customer_id);
+    return { invoice, payment, amount: calc.finalAmount };
+}
+
 async function renderInvoiceQuickAction(req, res, mode, extra = {}) {
     const invoice = await billingManager.getInvoiceById(req.params.id);
     if (!invoice) {
@@ -10226,6 +10283,154 @@ async function renderInvoiceQuickAction(req, res, mode, extra = {}) {
         ...extra
     });
 }
+
+router.get('/invoices/bulk-pay', (req, res) => {
+    res.redirect(safeInvoiceListNext(req));
+});
+
+router.post('/invoices/bulk-pay', getAppSettings, async (req, res) => {
+    const nextUrl = safeInvoiceListNext(req);
+    const json = wantsJsonResponse(req);
+    const ids = parseInvoiceIdList(req.body && (req.body.ids || req.body.invoice_ids));
+    const confirm = String((req.body && (req.body.confirm || req.body.confirmed)) || '') === '1'
+        || req.body?.confirm === true
+        || req.body?.confirmed === true;
+
+    const redirectNotice = (message) => {
+        const sep = nextUrl.includes('?') ? '&' : '?';
+        return res.redirect(nextUrl + sep + 'notice=' + encodeURIComponent(message));
+    };
+
+    try {
+        if (!ids.length) {
+            const message = 'Pilih minimal satu invoice yang ingin dilunasi';
+            if (json) return res.status(400).json({ success: false, message });
+            return redirectNotice(message);
+        }
+
+        const loaded = [];
+        for (const id of ids) {
+            const invoice = await billingManager.getInvoiceById(id);
+            if (invoice) loaded.push(invoice);
+        }
+
+        if (!loaded.length) {
+            const message = 'Invoice terpilih tidak ditemukan';
+            if (json) return res.status(404).json({ success: false, message });
+            return redirectNotice(message);
+        }
+
+        const payable = loaded.filter((inv) => isInvoicePayable(inv).ok);
+        const skipped = loaded
+            .filter((inv) => !isInvoicePayable(inv).ok)
+            .map((inv) => ({
+                id: inv.id,
+                invoice_number: inv.invoice_number,
+                reason: isInvoicePayable(inv).message
+            }));
+
+        if (!confirm) {
+            if (!payable.length) {
+                const message = 'Tidak ada invoice belum lunas pada pilihan Anda';
+                if (json) return res.status(400).json({ success: false, message, skipped });
+                return redirectNotice(message);
+            }
+            const totalAmount = payable.reduce((sum, inv) => sum + (Number(inv.amount) || 0), 0);
+            if (json) {
+                return res.json({
+                    success: true,
+                    preview: true,
+                    invoices: payable.map((inv) => ({
+                        id: inv.id,
+                        invoice_number: inv.invoice_number,
+                        customer_name: inv.customer_name,
+                        amount: Number(inv.amount) || 0,
+                        status: inv.status
+                    })),
+                    skipped,
+                    totalAmount,
+                    count: payable.length
+                });
+            }
+            return res.render('admin/billing/invoice-bulk-pay', {
+                title: 'Pelunasan Invoice Terpilih',
+                invoices: payable,
+                skipped,
+                totalAmount,
+                nextUrl,
+                payDate: localPayDate(),
+                page: 'invoices',
+                appSettings: req.appSettings
+            });
+        }
+
+        if (!payable.length) {
+            const message = 'Tidak ada invoice belum lunas pada pilihan Anda';
+            if (json) return res.status(400).json({ success: false, message, skipped });
+            return redirectNotice(message);
+        }
+
+        const paymentMethod = String((req.body && req.body.payment_method) || 'manual_admin').trim() || 'manual_admin';
+        const paymentDate = String((req.body && req.body.payment_date) || localPayDate()).trim() || localPayDate();
+        const tenantId = resolveBillingTenantId(req);
+        const results = [];
+        let success = 0;
+        let failed = 0;
+
+        for (const invoice of payable) {
+            try {
+                await paySingleInvoiceAsAdmin(invoice, {
+                    paymentMethod,
+                    discountAmount: 0,
+                    paymentDate,
+                    tenantId
+                });
+                results.push({ id: invoice.id, invoice_number: invoice.invoice_number, success: true });
+                success++;
+            } catch (e) {
+                results.push({
+                    id: invoice.id,
+                    invoice_number: invoice.invoice_number,
+                    success: false,
+                    message: e.message
+                });
+                failed++;
+                logger.error(`Bulk pay failed for invoice ${invoice.id}:`, e);
+            }
+        }
+
+        const notice = failed
+            ? `${success} invoice dilunasi, ${failed} gagal`
+            : `${success} invoice berhasil ditandai lunas`;
+
+        if (!json) {
+            try {
+                await logAdminActivity(req, 'invoice_bulk_pay', `Pelunasan massal invoice (${success})`);
+            } catch (_) { /* activity log is best-effort */ }
+        }
+
+        if (json) {
+            return res.json({
+                success: failed === 0,
+                message: notice,
+                summary: { success, failed, skipped: skipped.length, total: ids.length },
+                results,
+                skipped
+            });
+        }
+        return redirectNotice(notice);
+    } catch (error) {
+        logger.error('Error bulk paying invoices:', error);
+        if (json) {
+            return res.status(500).json({
+                success: false,
+                message: 'Gagal melakukan pelunasan massal invoice',
+                error: error.message
+            });
+        }
+        return redirectNotice(error.message || 'Gagal melakukan pelunasan massal invoice');
+    }
+});
 
 router.get('/invoices/:id/pay', getAppSettings, async (req, res) => {
     try {
@@ -10256,39 +10461,13 @@ router.post('/invoices/:id/pay', getAppSettings, async (req, res) => {
         }
 
         const paymentMethod = String(req.body.payment_method || 'manual_admin').trim();
-        const discount = Math.max(0, parseFloat(req.body.discount_amount) || 0);
-        const invoiceAmount = parseFloat(invoice.amount) || 0;
-        const finalAmount = Math.max(invoiceAmount - discount, 0);
         const paymentDate = String(req.body.payment_date || localPayDate()).trim();
-        const notes = `Pelunasan oleh Admin Kantor | Diskon: Rp ${Math.round(discount).toLocaleString('id-ID')} | Tanggal Bayar: ${paymentDate}`;
-
-        await billingManager.recordPayment({
-            invoice_id: parseInt(invoice.id, 10),
-            amount: finalAmount,
-            payment_method: paymentMethod,
-            reference_number: '',
-            notes,
-            payment_date: paymentDate,
-            discount_amount: Math.round(discount)
+        await paySingleInvoiceAsAdmin(invoice, {
+            paymentMethod,
+            discountAmount: req.body.discount_amount,
+            paymentDate,
+            tenantId: resolveBillingTenantId(req)
         });
-        await billingManager.updateInvoiceStatus(invoice.id, 'paid', paymentMethod);
-
-        try {
-            const paidInvoice = await billingManager.getInvoiceById(invoice.id);
-            if (paidInvoice && paidInvoice.customer_id) {
-                const customer = await billingManager.getCustomerById(paidInvoice.customer_id);
-                const { shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
-                if (shouldAutoRestoreCustomer(customer)) {
-                    const invoices = await billingManager.getInvoicesByCustomer(customer.id);
-                    const unpaid = invoices.filter(i => i.status === 'unpaid');
-                    if (unpaid.length === 0) {
-                        await serviceSuspension.restoreCustomerService(customer);
-                    }
-                }
-            }
-        } catch (restoreErr) {
-            logger.error('Immediate restore check failed:', restoreErr);
-        }
 
         return res.redirect(nextUrl + (nextUrl.includes('?') ? '&' : '?') + 'notice=' + encodeURIComponent('Pelunasan berhasil disimpan'));
     } catch (error) {

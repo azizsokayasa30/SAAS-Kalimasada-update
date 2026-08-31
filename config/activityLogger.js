@@ -203,7 +203,8 @@ const BILLING_ACTIVITY_RULES = [
     { methods: ['PUT'], pattern: /^\/invoices\/[^/]+\/status$/, action: 'invoice_status', describe: (req, body) => `Ubah status invoice #${req.params?.id || ''} → ${body.status || req.body?.status || ''}`.trim() },
     { methods: ['PUT'], pattern: /^\/invoices\//, action: 'invoice_update', describe: (req, body) => `Mengedit invoice #${req.params?.id || body.invoice?.id || ''}`.trim() },
     { methods: ['DELETE'], pattern: /^\/invoices\//, action: 'invoice_delete', describe: (req, body) => `Menghapus invoice #${req.params?.id || ''}`.trim() },
-    { methods: ['POST'], pattern: /^\/invoices\/bulk-delete$/, action: 'invoice_bulk_delete', describe: (req, body) => `Hapus massal invoice (${body.deletedCount ?? body.deleted ?? '?'})` },
+    { methods: ['POST'], pattern: /^\/invoices\/bulk-delete$/, action: 'invoice_bulk_delete', describe: (req, body) => `Hapus massal invoice (${body.deletedCount ?? body.deleted ?? body.summary?.success ?? '?'})` },
+    { methods: ['POST'], pattern: /^\/invoices\/bulk-pay$/, action: 'invoice_bulk_pay', describe: (req, body) => `Pelunasan massal invoice (${body.summary?.success ?? body.paidCount ?? '?'})` },
     { methods: ['POST'], pattern: /^\/payments$/, action: 'payment_create', describe: (req, body) => `Catat pembayaran ${body.payment?.amount ?? req.body?.amount ?? ''}`.trim() },
     { methods: ['POST'], pattern: /^\/api\/payments\/[^/]+\/cancel$/, action: 'payment_cancel', describe: (req, body) => `Batalkan pembayaran #${req.params?.id || ''}`.trim() },
     { methods: ['POST'], pattern: /^\/service-suspension\/suspend\//, action: 'customer_suspend', describe: (req) => `Isolir pelanggan ${req.params?.username || ''}`.trim() },
@@ -243,7 +244,7 @@ function adminBillingActivityMiddleware(req, res, next) {
 
     const originalJson = res.json.bind(res);
     res.json = function patchedJson(body) {
-        if (body && body.success !== false && body.success !== 0) {
+        if (body && body.success !== false && body.success !== 0 && !body.preview) {
             const rule = matchBillingActivityRule(req);
             if (rule) {
                 const description = rule.describe(req, body) || rule.action;
