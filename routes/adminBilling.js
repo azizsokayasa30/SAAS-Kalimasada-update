@@ -10648,6 +10648,105 @@ router.post('/invoices/bulk-delete', adminAuth, async (req, res) => {
     }
 });
 
+// Bulk mark invoices as paid (Lunas)
+router.post('/invoices/bulk-pay', adminAuth, async (req, res) => {
+    try {
+        const tenantId = resolveBillingTenantId(req);
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant tidak dikenali' });
+        }
+
+        const { ids, payment_method, payment_date } = req.body || {};
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ success: false, message: 'Daftar ID tagihan kosong atau tidak valid' });
+        }
+
+        const paymentMethod = String(payment_method || 'manual_admin').trim() || 'manual_admin';
+        const paymentDate = String(payment_date || localPayDate()).trim();
+        const results = [];
+        let success = 0;
+        let failed = 0;
+        let skipped = 0;
+
+        for (const rawId of ids) {
+            try {
+                const id = parseInt(rawId, 10);
+                if (!Number.isFinite(id) || id <= 0) throw new Error('ID tidak valid');
+
+                const invoice = await new Promise((resolve, reject) => {
+                    billingManager.db.get(
+                        `SELECT i.id, i.tenant_id, i.customer_id, i.amount, i.status, i.invoice_number
+                         FROM invoices i
+                         WHERE i.id = ? AND i.tenant_id = ?
+                           AND EXISTS (
+                                SELECT 1 FROM customers c
+                                WHERE c.id = i.customer_id AND c.tenant_id = i.tenant_id
+                           )`,
+                        [id, tenantId],
+                        (err, row) => (err ? reject(err) : resolve(row || null))
+                    );
+                });
+
+                if (!invoice) throw new Error('Invoice tidak ditemukan di tenant ini');
+                if (invoice.status === 'paid') {
+                    results.push({ id, success: true, skipped: true, invoice_number: invoice.invoice_number, message: 'Sudah lunas' });
+                    skipped++;
+                    continue;
+                }
+                if (invoice.status === 'cancelled') {
+                    throw new Error('Invoice dibatalkan, tidak bisa dilunasi');
+                }
+
+                const invoiceAmount = parseFloat(invoice.amount) || 0;
+                const notes = `Pelunasan massal oleh Admin Kantor | Tanggal Bayar: ${paymentDate}`;
+
+                await billingManager.recordPayment({
+                    invoice_id: id,
+                    amount: invoiceAmount,
+                    payment_method: paymentMethod,
+                    reference_number: '',
+                    notes,
+                    payment_date: paymentDate,
+                    discount_amount: 0,
+                    tenant_id: tenantId
+                });
+                await billingManager.updateInvoiceStatus(id, 'paid', paymentMethod);
+
+                try {
+                    if (invoice.customer_id) {
+                        const customer = await billingManager.getCustomerById(invoice.customer_id);
+                        const { shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
+                        if (shouldAutoRestoreCustomer(customer)) {
+                            const customerInvoices = await billingManager.getInvoicesByCustomer(customer.id);
+                            const unpaid = customerInvoices.filter(i => i.status === 'unpaid');
+                            if (unpaid.length === 0) {
+                                await serviceSuspension.restoreCustomerService(customer);
+                            }
+                        }
+                    }
+                } catch (restoreErr) {
+                    logger.error('Bulk-pay immediate restore check failed:', restoreErr);
+                }
+
+                results.push({ id, success: true, invoice_number: invoice.invoice_number });
+                success++;
+            } catch (e) {
+                results.push({ id: rawId, success: false, message: e.message || 'Gagal melunasi' });
+                failed++;
+            }
+        }
+
+        return res.json({
+            success: true,
+            summary: { success, failed, skipped, total: ids.length },
+            results
+        });
+    } catch (error) {
+        logger.error('Error bulk paying invoices:', error);
+        return res.status(500).json({ success: false, message: 'Gagal melakukan pelunasan massal tagihan', error: error.message });
+    }
+});
+
 // Payment Management - Collector Transactions Only
 router.get('/payments', getAppSettings, async (req, res) => {
     try {

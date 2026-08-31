@@ -362,10 +362,23 @@
                             const invoiceListNextEnc = encodeURIComponent(invoiceListNext);
                         %>
                         <% if (invoices && invoices.length > 0) { %>
+                            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+                                <div class="form-check mb-0">
+                                    <input class="form-check-input" type="checkbox" id="selectAllInvoices">
+                                    <label class="form-check-label" for="selectAllInvoices">Pilih beberapa (belum lunas)</label>
+                                </div>
+                                <div class="d-flex flex-wrap align-items-center gap-2">
+                                    <span id="bulkSelectedInfo" class="text-muted small">0 dipilih</span>
+                                    <button type="button" id="bulkPayBtn" class="btn btn-success btn-sm" disabled>
+                                        <i class="bi bi-check2-circle"></i> Lunas Terpilih
+                                    </button>
+                                </div>
+                            </div>
                             <div class="table-responsive">
-                                <table class="table table-hover">
+                                <table class="table table-hover" id="invoiceListTable">
                                     <thead>
                                         <tr>
+                                            <th style="width:36px"></th>
                                             <th>Invoice #</th>
                                             <th>Pelanggan</th>
                                             <th>Paket</th>
@@ -391,6 +404,13 @@
                                                 data-amount="<%= invoiceAmount %>"
                                                 data-status="<%= invoice.status || '' %>"
                                                 data-overdue="<%= isOverdue ? '1' : '0' %>">
+                                                <td>
+                                                    <% if (isUnpaid) { %>
+                                                        <input type="checkbox" class="form-check-input invoice-checkbox" value="<%= invoice.id %>" aria-label="Pilih invoice #<%= invoice.invoice_number %>">
+                                                    <% } else { %>
+                                                        <input type="checkbox" class="form-check-input" disabled aria-hidden="true">
+                                                    <% } %>
+                                                </td>
                                                 <td>
                                                     <strong>#<%= invoice.invoice_number %></strong>
                                                 </td>
@@ -444,7 +464,7 @@
                                                     <div class="admin-action-btns">
                                                         <% if (isUnpaid) { %>
                                                             <a href="/admin/billing/invoices/<%= invoice.id %>/pay?next=<%= invoiceListNextEnc %>"
-                                                               class="btn btn-sm btn-success"
+                                                               class="btn btn-sm btn-success js-mark-paid"
                                                                title="Tandai tagihan sebagai lunas" aria-label="Tandai lunas">Lunas</a>
                                                         <% } %>
                                                         <a href="/admin/billing/invoices/<%= invoice.id %>/hapus?next=<%= invoiceListNextEnc %>"
@@ -767,9 +787,116 @@
             if (statusCell) statusCell.innerHTML = '<span class="badge bg-success">Lunas</span>';
             var paidBtn = row.querySelector('.js-mark-paid');
             if (paidBtn) paidBtn.remove();
+            var checkbox = row.querySelector('.invoice-checkbox');
+            if (checkbox) {
+                checkbox.checked = false;
+                checkbox.disabled = true;
+                checkbox.classList.remove('invoice-checkbox');
+            }
             if (invoiceListFilterStatus === 'unpaid' || invoiceListFilterStatus === 'overdue') {
                 row.remove();
             }
+            updateBulkInvoiceState();
+        }
+
+        function getSelectedInvoiceRows() {
+            return Array.prototype.slice.call(document.querySelectorAll('.invoice-checkbox:checked'))
+                .map(function(cb) { return cb.closest('tr'); })
+                .filter(Boolean);
+        }
+
+        function updateBulkInvoiceState() {
+            var checkboxes = document.querySelectorAll('.invoice-checkbox');
+            var checked = document.querySelectorAll('.invoice-checkbox:checked');
+            var total = checkboxes.length;
+            var selected = checked.length;
+            var selectAll = document.getElementById('selectAllInvoices');
+            var bulkPayBtn = document.getElementById('bulkPayBtn');
+            var info = document.getElementById('bulkSelectedInfo');
+            var totalAmount = 0;
+            for (var i = 0; i < checked.length; i++) {
+                var row = checked[i].closest('tr');
+                if (row) totalAmount += Number(row.dataset.amount) || 0;
+            }
+            if (selectAll) {
+                selectAll.indeterminate = selected > 0 && selected < total;
+                selectAll.checked = total > 0 && selected === total;
+                selectAll.disabled = total === 0;
+            }
+            if (bulkPayBtn) bulkPayBtn.disabled = selected === 0;
+            if (info) {
+                info.textContent = selected === 0
+                    ? '0 dipilih'
+                    : selected + ' dipilih · ' + formatRp(totalAmount);
+            }
+        }
+
+        function bulkMarkSelectedPaid() {
+            var rows = getSelectedInvoiceRows();
+            if (!rows.length) return;
+            var ids = rows.map(function(row) { return row.dataset.invoiceId; });
+            var totalAmount = rows.reduce(function(sum, row) {
+                return sum + (Number(row.dataset.amount) || 0);
+            }, 0);
+            var confirmMsg = 'Tandai ' + ids.length + ' invoice terpilih sebagai LUNAS?\n\nTotal: ' + formatRp(totalAmount) + '\nMetode: Admin Kantor (Manual)';
+            if (!confirm(confirmMsg)) return;
+
+            var btn = document.getElementById('bulkPayBtn');
+            var original = btn ? btn.innerHTML : '';
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Memproses...';
+            }
+            showToast('info', 'Memproses...', 'Melunasi ' + ids.length + ' tagihan terpilih');
+
+            fetch('/admin/billing/invoices/bulk-pay', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ids: ids,
+                    payment_method: 'manual_admin',
+                    payment_date: new Date().toISOString().slice(0, 10)
+                })
+            })
+            .then(function(response) {
+                return response.json().then(function(data) {
+                    return { response: response, data: data || {} };
+                }).catch(function() {
+                    return { response: response, data: {} };
+                });
+            })
+            .then(function(result) {
+                if (!result.response.ok || !result.data.success) {
+                    throw new Error(result.data.message || result.data.error || 'Gagal melunasi tagihan terpilih');
+                }
+                var summary = result.data.summary || {};
+                var okIds = {};
+                (result.data.results || []).forEach(function(item) {
+                    if (item && item.success && !item.skipped) okIds[String(item.id)] = true;
+                });
+                rows.forEach(function(row) {
+                    if (okIds[String(row.dataset.invoiceId)]) markRowPaid(row);
+                });
+                updateBulkInvoiceState();
+                if (summary.failed > 0) {
+                    var failMsgs = (result.data.results || [])
+                        .filter(function(r) { return r && !r.success; })
+                        .map(function(r) { return '#' + (r.invoice_number || r.id) + ': ' + (r.message || 'gagal'); })
+                        .join('; ');
+                    showToast('error', 'Sebagian gagal', 'Berhasil: ' + (summary.success || 0) + ', Gagal: ' + (summary.failed || 0) + (failMsgs ? ' — ' + failMsgs : ''), 8000);
+                } else {
+                    showToast('success', 'Pelunasan Massal', 'Berhasil melunasi ' + (summary.success || ids.length) + ' tagihan' + (summary.skipped ? ' (dilewati: ' + summary.skipped + ')' : ''));
+                }
+            })
+            .catch(function(error) {
+                showToast('error', 'Gagal', error.message || 'Terjadi kesalahan saat pelunasan massal');
+            })
+            .then(function() {
+                if (btn) {
+                    btn.innerHTML = original;
+                    updateBulkInvoiceState();
+                }
+            });
         }
 
         function updateFinalPaymentAmount() {
@@ -872,6 +999,27 @@
         document.querySelectorAll('select[name="status"], select[name="type"]').forEach(function(select) {
             select.addEventListener('change', function() { this.form.submit(); });
         });
+
+        var selectAllInvoices = document.getElementById('selectAllInvoices');
+        if (selectAllInvoices) {
+            selectAllInvoices.addEventListener('change', function() {
+                var checked = this.checked;
+                document.querySelectorAll('.invoice-checkbox').forEach(function(cb) {
+                    cb.checked = checked;
+                });
+                updateBulkInvoiceState();
+            });
+        }
+        document.addEventListener('change', function(e) {
+            if (e.target && e.target.classList && e.target.classList.contains('invoice-checkbox')) {
+                updateBulkInvoiceState();
+            }
+        });
+        var bulkPayBtn = document.getElementById('bulkPayBtn');
+        if (bulkPayBtn) {
+            bulkPayBtn.addEventListener('click', bulkMarkSelectedPaid);
+        }
+        updateBulkInvoiceState();
 
         var payDiscount = document.getElementById('pay_discount');
         if (payDiscount) payDiscount.addEventListener('input', updateFinalPaymentAmount);
