@@ -810,6 +810,13 @@
             return Array.prototype.slice.call(document.querySelectorAll('.invoice-select-checkbox:checked'));
         }
 
+        function getLocalPaymentDate() {
+            var date = new Date();
+            return date.getFullYear() + '-' +
+                String(date.getMonth() + 1).padStart(2, '0') + '-' +
+                String(date.getDate()).padStart(2, '0');
+        }
+
         function updateBulkInvoiceSelection() {
             var checkboxes = Array.prototype.slice.call(document.querySelectorAll('.invoice-select-checkbox'));
             var selected = getSelectedInvoiceCheckboxes();
@@ -865,7 +872,7 @@
                 body: JSON.stringify({
                     ids: selected.map(function(checkbox) { return checkbox.value; }),
                     payment_method: 'manual_admin',
-                    payment_date: new Date().toISOString().slice(0, 10)
+                    payment_date: getLocalPaymentDate()
                 })
             })
             .then(function(response) {
