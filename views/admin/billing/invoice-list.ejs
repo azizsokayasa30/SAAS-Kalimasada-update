@@ -362,10 +362,22 @@
                             const invoiceListNextEnc = encodeURIComponent(invoiceListNext);
                         %>
                         <% if (invoices && invoices.length > 0) { %>
+                            <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="selectAllInvoices">
+                                    <label class="form-check-label" for="selectAllInvoices">
+                                        Pilih Semua
+                                    </label>
+                                </div>
+                                <button id="bulkPayInvoicesBtn" type="button" class="btn btn-success btn-sm" disabled>
+                                    <i class="bi bi-cash-coin"></i> Tandai Lunas (<span id="bulkPayCount">0</span>)
+                                </button>
+                            </div>
                             <div class="table-responsive">
                                 <table class="table table-hover">
                                     <thead>
                                         <tr>
+                                            <th style="width:32px"><!-- header checkbox above --></th>
                                             <th>Invoice #</th>
                                             <th>Pelanggan</th>
                                             <th>Paket</th>
@@ -391,6 +403,13 @@
                                                 data-amount="<%= invoiceAmount %>"
                                                 data-status="<%= invoice.status || '' %>"
                                                 data-overdue="<%= isOverdue ? '1' : '0' %>">
+                                                <td>
+                                                    <% if (isUnpaid) { %>
+                                                        <input type="checkbox" class="form-check-input invoice-checkbox" value="<%= invoice.id %>">
+                                                    <% } else { %>
+                                                        <input type="checkbox" class="form-check-input" disabled title="Invoice sudah lunas">
+                                                    <% } %>
+                                                </td>
                                                 <td>
                                                     <strong>#<%= invoice.invoice_number %></strong>
                                                 </td>
@@ -444,7 +463,7 @@
                                                     <div class="admin-action-btns">
                                                         <% if (isUnpaid) { %>
                                                             <a href="/admin/billing/invoices/<%= invoice.id %>/pay?next=<%= invoiceListNextEnc %>"
-                                                               class="btn btn-sm btn-success"
+                                                               class="btn btn-sm btn-success js-mark-paid"
                                                                title="Tandai tagihan sebagai lunas" aria-label="Tandai lunas">Lunas</a>
                                                         <% } %>
                                                         <a href="/admin/billing/invoices/<%= invoice.id %>/hapus?next=<%= invoiceListNextEnc %>"
@@ -767,6 +786,13 @@
             if (statusCell) statusCell.innerHTML = '<span class="badge bg-success">Lunas</span>';
             var paidBtn = row.querySelector('.js-mark-paid');
             if (paidBtn) paidBtn.remove();
+            var checkbox = row.querySelector('.invoice-checkbox');
+            if (checkbox) {
+                checkbox.checked = false;
+                checkbox.disabled = true;
+                checkbox.title = 'Invoice sudah lunas';
+                checkbox.classList.remove('invoice-checkbox');
+            }
             if (invoiceListFilterStatus === 'unpaid' || invoiceListFilterStatus === 'overdue') {
                 row.remove();
             }
@@ -872,6 +898,92 @@
         document.querySelectorAll('select[name="status"], select[name="type"]').forEach(function(select) {
             select.addEventListener('change', function() { this.form.submit(); });
         });
+
+        // Bulk selection & bulk "Tandai Lunas" for checked invoices
+        (function setupBulkPayInvoices() {
+            var selectAllEl = document.getElementById('selectAllInvoices');
+            var bulkBtn = document.getElementById('bulkPayInvoicesBtn');
+            var bulkCountEl = document.getElementById('bulkPayCount');
+            if (!bulkBtn) return;
+
+            function checkboxes() {
+                return document.querySelectorAll('.invoice-checkbox');
+            }
+
+            function updateBulkState() {
+                var boxes = checkboxes();
+                var checked = document.querySelectorAll('.invoice-checkbox:checked');
+                if (bulkCountEl) bulkCountEl.textContent = checked.length;
+                if (bulkBtn) bulkBtn.disabled = checked.length === 0;
+                if (selectAllEl) {
+                    selectAllEl.indeterminate = checked.length > 0 && checked.length < boxes.length;
+                    selectAllEl.checked = boxes.length > 0 && checked.length === boxes.length;
+                }
+            }
+
+            if (selectAllEl) {
+                selectAllEl.addEventListener('change', function() {
+                    var checked = this.checked;
+                    checkboxes().forEach(function(cb) { cb.checked = checked; });
+                    updateBulkState();
+                });
+            }
+
+            document.addEventListener('change', function(e) {
+                if (e.target && e.target.classList && e.target.classList.contains('invoice-checkbox')) {
+                    updateBulkState();
+                }
+            });
+
+            bulkBtn.addEventListener('click', function() {
+                var checked = document.querySelectorAll('.invoice-checkbox:checked');
+                var ids = Array.prototype.map.call(checked, function(cb) { return cb.value; });
+                if (ids.length === 0) return;
+                if (!confirm('Tandai ' + ids.length + ' invoice terpilih sebagai lunas?')) return;
+
+                var originalHtml = bulkBtn.innerHTML;
+                bulkBtn.disabled = true;
+                bulkBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Memproses...';
+                showToast('info', 'Memproses...', 'Menandai ' + ids.length + ' invoice sebagai lunas');
+
+                fetch('/admin/billing/invoices/bulk-pay', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids: ids })
+                })
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (!data || !data.success) {
+                        throw new Error((data && data.message) || 'Gagal menandai lunas invoice terpilih');
+                    }
+                    var results = data.results || [];
+                    results.forEach(function(result) {
+                        if (!result.success) return;
+                        var row = document.querySelector('tr[data-invoice-id="' + result.id + '"]');
+                        if (row && row.dataset.status !== 'paid') {
+                            markRowPaid(row);
+                        }
+                    });
+                    var s = data.summary || {};
+                    if (s.failed > 0) {
+                        showToast('warning', 'Selesai dengan Sebagian Gagal', 'Berhasil: ' + (s.success || 0) + ', Dilewati (sudah lunas): ' + (s.skipped || 0) + ', Gagal: ' + s.failed);
+                    } else {
+                        showToast('success', 'Tagihan Lunas', 'Berhasil menandai ' + (s.success || 0) + ' invoice sebagai lunas' + (s.skipped ? (', ' + s.skipped + ' sudah lunas sebelumnya') : ''));
+                    }
+                    updateBulkState();
+                })
+                .catch(function(error) {
+                    showToast('error', 'Gagal', error.message || 'Terjadi kesalahan saat menandai lunas invoice terpilih');
+                })
+                .then(function() {
+                    bulkBtn.disabled = false;
+                    bulkBtn.innerHTML = originalHtml;
+                    updateBulkState();
+                });
+            });
+
+            updateBulkState();
+        })();
 
         var payDiscount = document.getElementById('pay_discount');
         if (payDiscount) payDiscount.addEventListener('input', updateFinalPaymentAmount);

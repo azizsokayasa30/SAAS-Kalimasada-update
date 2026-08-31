@@ -10240,6 +10240,54 @@ router.get('/invoices/:id/pay', getAppSettings, async (req, res) => {
     }
 });
 
+async function markInvoiceAsPaid(invoiceId, options = {}) {
+    const invoice = await billingManager.getInvoiceById(invoiceId);
+    if (!invoice) {
+        throw new Error('Invoice tidak ditemukan');
+    }
+    if (invoice.status === 'paid') {
+        return { alreadyPaid: true, invoice };
+    }
+
+    const paymentMethod = String(options.paymentMethod || 'manual_admin').trim();
+    const discount = Math.max(0, parseFloat(options.discount) || 0);
+    const invoiceAmount = parseFloat(invoice.amount) || 0;
+    const finalAmount = Math.max(invoiceAmount - discount, 0);
+    const paymentDate = String(options.paymentDate || localPayDate()).trim();
+    const notes = `Pelunasan oleh Admin Kantor | Diskon: Rp ${Math.round(discount).toLocaleString('id-ID')} | Tanggal Bayar: ${paymentDate}`;
+
+    await billingManager.recordPayment({
+        invoice_id: parseInt(invoice.id, 10),
+        amount: finalAmount,
+        payment_method: paymentMethod,
+        reference_number: '',
+        notes,
+        payment_date: paymentDate,
+        discount_amount: Math.round(discount)
+    });
+    await billingManager.updateInvoiceStatus(invoice.id, 'paid', paymentMethod);
+
+    let paidInvoice = invoice;
+    try {
+        paidInvoice = await billingManager.getInvoiceById(invoice.id);
+        if (paidInvoice && paidInvoice.customer_id) {
+            const customer = await billingManager.getCustomerById(paidInvoice.customer_id);
+            const { shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
+            if (shouldAutoRestoreCustomer(customer)) {
+                const invoices = await billingManager.getInvoicesByCustomer(customer.id);
+                const unpaid = invoices.filter(i => i.status === 'unpaid');
+                if (unpaid.length === 0) {
+                    await serviceSuspension.restoreCustomerService(customer);
+                }
+            }
+        }
+    } catch (restoreErr) {
+        logger.error('Immediate restore check failed:', restoreErr);
+    }
+
+    return { alreadyPaid: false, invoice: paidInvoice };
+}
+
 router.post('/invoices/:id/pay', getAppSettings, async (req, res) => {
     const nextUrl = safeInvoiceListNext(req);
     try {
@@ -10255,40 +10303,11 @@ router.post('/invoices/:id/pay', getAppSettings, async (req, res) => {
             return res.redirect(nextUrl + (nextUrl.includes('?') ? '&' : '?') + 'notice=' + encodeURIComponent('Invoice sudah lunas'));
         }
 
-        const paymentMethod = String(req.body.payment_method || 'manual_admin').trim();
-        const discount = Math.max(0, parseFloat(req.body.discount_amount) || 0);
-        const invoiceAmount = parseFloat(invoice.amount) || 0;
-        const finalAmount = Math.max(invoiceAmount - discount, 0);
-        const paymentDate = String(req.body.payment_date || localPayDate()).trim();
-        const notes = `Pelunasan oleh Admin Kantor | Diskon: Rp ${Math.round(discount).toLocaleString('id-ID')} | Tanggal Bayar: ${paymentDate}`;
-
-        await billingManager.recordPayment({
-            invoice_id: parseInt(invoice.id, 10),
-            amount: finalAmount,
-            payment_method: paymentMethod,
-            reference_number: '',
-            notes,
-            payment_date: paymentDate,
-            discount_amount: Math.round(discount)
+        await markInvoiceAsPaid(invoice.id, {
+            paymentMethod: req.body.payment_method,
+            discount: req.body.discount_amount,
+            paymentDate: req.body.payment_date
         });
-        await billingManager.updateInvoiceStatus(invoice.id, 'paid', paymentMethod);
-
-        try {
-            const paidInvoice = await billingManager.getInvoiceById(invoice.id);
-            if (paidInvoice && paidInvoice.customer_id) {
-                const customer = await billingManager.getCustomerById(paidInvoice.customer_id);
-                const { shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
-                if (shouldAutoRestoreCustomer(customer)) {
-                    const invoices = await billingManager.getInvoicesByCustomer(customer.id);
-                    const unpaid = invoices.filter(i => i.status === 'unpaid');
-                    if (unpaid.length === 0) {
-                        await serviceSuspension.restoreCustomerService(customer);
-                    }
-                }
-            }
-        } catch (restoreErr) {
-            logger.error('Immediate restore check failed:', restoreErr);
-        }
 
         return res.redirect(nextUrl + (nextUrl.includes('?') ? '&' : '?') + 'notice=' + encodeURIComponent('Pelunasan berhasil disimpan'));
     } catch (error) {
@@ -10302,6 +10321,44 @@ router.post('/invoices/:id/pay', getAppSettings, async (req, res) => {
                 appSettings: req.appSettings
             });
         }
+    }
+});
+
+// Bulk mark invoices as paid ("Lunas") for invoices selected/checked in the list
+router.post('/invoices/bulk-pay', adminAuth, async (req, res) => {
+    try {
+        const { ids } = req.body || {};
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ success: false, message: 'Daftar ID tagihan kosong atau tidak valid' });
+        }
+
+        const results = [];
+        let success = 0;
+        let failed = 0;
+        let skipped = 0;
+
+        for (const rawId of ids) {
+            try {
+                const id = parseInt(rawId, 10);
+                if (!Number.isFinite(id)) throw new Error('ID tidak valid');
+                const result = await markInvoiceAsPaid(id);
+                if (result.alreadyPaid) {
+                    skipped++;
+                    results.push({ id, success: true, skipped: true, message: 'Sudah lunas', invoice_number: result.invoice?.invoice_number });
+                } else {
+                    success++;
+                    results.push({ id, success: true, invoice_number: result.invoice?.invoice_number });
+                }
+            } catch (e) {
+                failed++;
+                results.push({ id: rawId, success: false, message: e.message });
+            }
+        }
+
+        return res.json({ success: true, summary: { success, failed, skipped, total: ids.length }, results });
+    } catch (error) {
+        logger.error('Error bulk paying invoices:', error);
+        return res.status(500).json({ success: false, message: 'Gagal melakukan pelunasan massal tagihan', error: error.message });
     }
 });
 
