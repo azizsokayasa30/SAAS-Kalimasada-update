@@ -5889,7 +5889,7 @@ ${lifetimePaymentStatusSql}
         });
     }
 
-    async updateInvoiceStatus(id, status, paymentMethod = null) {
+    async updateInvoiceStatus(id, status, paymentMethod = null, options = {}) {
         return new Promise(async (resolve, reject) => {
             try {
                 let prevInv = null;
@@ -5900,11 +5900,42 @@ ${lifetimePaymentStatusSql}
                 }
                 const wasUnpaid = prevInv && String(prevInv.status || '').toLowerCase() !== 'paid';
                 const paymentDate = status === 'paid' ? new Date().toISOString() : null;
-                const sql = `UPDATE invoices SET status = ?, payment_date = ?, payment_method = ? WHERE id = ?`;
+                const expectedStatus = options && options.expectedStatus != null
+                    ? String(options.expectedStatus)
+                    : null;
+                const tenantId = options && options.tenantId != null
+                    ? parseInt(options.tenantId, 10)
+                    : null;
+                if (options && options.tenantId != null && (!Number.isFinite(tenantId) || tenantId <= 0)) {
+                    throw new Error('Tenant invoice tidak valid');
+                }
+
+                let sql = `UPDATE invoices SET status = ?, payment_date = ?, payment_method = ? WHERE id = ?`;
+                const params = [status, paymentDate, paymentMethod, id];
+                if (expectedStatus !== null) {
+                    sql += ' AND status = ?';
+                    params.push(expectedStatus);
+                }
+                if (tenantId !== null) {
+                    sql += ' AND tenant_id = ?';
+                    params.push(tenantId);
+                }
+                const manager = this;
                 
-                this.db.run(sql, [status, paymentDate, paymentMethod, id], async (err) => {
+                this.db.run(sql, params, async function updateInvoiceStatusCallback(err) {
                     if (err) {
                         reject(err);
+                        return;
+                    }
+                    const updated = this.changes > 0;
+                    if (!updated) {
+                        resolve({
+                            id,
+                            status,
+                            payment_date: paymentDate,
+                            payment_method: paymentMethod,
+                            updated: false
+                        });
                         return;
                     }
 
@@ -5926,21 +5957,21 @@ ${lifetimePaymentStatusSql}
                     if (status === 'paid' && paymentDate) {
                         try {
                             // Get invoice and customer data
-                            const invoiceData = await this.getInvoiceById(id);
+                            const invoiceData = await manager.getInvoiceById(id);
                             if (invoiceData) {
-                                const customer = await this.getCustomerById(invoiceData.customer_id);
+                                const customer = await manager.getCustomerById(invoiceData.customer_id);
                                 if (customer) {
                                     // Sync billing date for renewal customers
                                     if (customer.renewal_type === 'renewal') {
                                         // Calculate next due date
-                                        const nextDueDate = this.calculateNextDueDate(
+                                        const nextDueDate = manager.calculateNextDueDate(
                                             customer, 
                                             invoiceData.due_date, 
                                             paymentDate
                                         );
                                         
                                         // Sync billing date
-                                        const syncResult = await this.syncBillingDateForRenewal(
+                                        const syncResult = await manager.syncBillingDateForRenewal(
                                             customer.id, 
                                             nextDueDate
                                         );
@@ -5952,7 +5983,7 @@ ${lifetimePaymentStatusSql}
                                     const { shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
                                     if (shouldAutoRestoreCustomer(customer)) {
                                         try {
-                                            const customerInvoices = await this.getInvoicesByCustomer(customer.id);
+                                            const customerInvoices = await manager.getInvoicesByCustomer(customer.id);
                                             const unpaidInvoices = customerInvoices.filter(i => i.status === 'unpaid');
                                             
                                             if (unpaidInvoices.length === 0) {
@@ -5983,7 +6014,7 @@ ${lifetimePaymentStatusSql}
                         }
                     }
                     
-                    resolve({ id, status, payment_date: paymentDate, payment_method: paymentMethod });
+                    resolve({ id, status, payment_date: paymentDate, payment_method: paymentMethod, updated: true });
                 });
             } catch (error) {
                 reject(error);

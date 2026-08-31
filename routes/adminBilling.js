@@ -10242,6 +10242,7 @@ router.get('/invoices/:id/pay', getAppSettings, async (req, res) => {
 
 router.post('/invoices/:id/pay', getAppSettings, async (req, res) => {
     const nextUrl = safeInvoiceListNext(req);
+    let newPayment = null;
     try {
         const invoice = await billingManager.getInvoiceById(req.params.id);
         if (!invoice) {
@@ -10262,7 +10263,7 @@ router.post('/invoices/:id/pay', getAppSettings, async (req, res) => {
         const paymentDate = String(req.body.payment_date || localPayDate()).trim();
         const notes = `Pelunasan oleh Admin Kantor | Diskon: Rp ${Math.round(discount).toLocaleString('id-ID')} | Tanggal Bayar: ${paymentDate}`;
 
-        await billingManager.recordPayment({
+        newPayment = await billingManager.recordPayment({
             invoice_id: parseInt(invoice.id, 10),
             amount: finalAmount,
             payment_method: paymentMethod,
@@ -10271,7 +10272,16 @@ router.post('/invoices/:id/pay', getAppSettings, async (req, res) => {
             payment_date: paymentDate,
             discount_amount: Math.round(discount)
         });
-        await billingManager.updateInvoiceStatus(invoice.id, 'paid', paymentMethod);
+        const tenantId = resolveBillingTenantId(req);
+        const statusResult = await billingManager.updateInvoiceStatus(invoice.id, 'paid', paymentMethod, {
+            expectedStatus: 'unpaid',
+            ...(tenantId ? { tenantId } : {})
+        });
+        if (!statusResult || statusResult.updated === false) {
+            await billingManager.cancelPaymentById(newPayment.id);
+            newPayment = null;
+            return res.redirect(nextUrl + (nextUrl.includes('?') ? '&' : '?') + 'notice=' + encodeURIComponent('Invoice sudah lunas atau sedang diproses'));
+        }
 
         try {
             const paidInvoice = await billingManager.getInvoiceById(invoice.id);
@@ -10292,6 +10302,13 @@ router.post('/invoices/:id/pay', getAppSettings, async (req, res) => {
 
         return res.redirect(nextUrl + (nextUrl.includes('?') ? '&' : '?') + 'notice=' + encodeURIComponent('Pelunasan berhasil disimpan'));
     } catch (error) {
+        if (newPayment && newPayment.id) {
+            try {
+                await billingManager.cancelPaymentById(newPayment.id);
+            } catch (rollbackError) {
+                logger.error(`Failed to roll back invoice payment ${newPayment.id}:`, rollbackError);
+            }
+        }
         logger.error('Error paying invoice from list:', error);
         try {
             await renderInvoiceQuickAction(req, res, 'pay', { errorMessage: error.message || 'Gagal menyimpan pelunasan' });
@@ -10680,6 +10697,12 @@ router.post('/invoices/bulk-pay', adminAuth, async (req, res) => {
 
         const ids = [...new Set(parsedIds)];
         const tenantId = resolveBillingTenantId(req);
+        if (!tenantId) {
+            return res.status(403).json({
+                success: false,
+                message: 'Tenant tidak dikenali'
+            });
+        }
         const paymentDate = localPayDate();
         const paymentMethod = 'manual_admin';
         const results = [];
@@ -10727,9 +10750,15 @@ router.post('/invoices/bulk-pay', adminAuth, async (req, res) => {
                     notes: `Pelunasan massal oleh Admin Kantor | Tanggal Bayar: ${paymentDate}`,
                     payment_date: paymentDate,
                     discount_amount: 0,
-                    ...(tenantId ? { tenant_id: tenantId } : {})
+                    tenant_id: tenantId
                 });
-                await billingManager.updateInvoiceStatus(id, 'paid', paymentMethod);
+                const statusResult = await billingManager.updateInvoiceStatus(id, 'paid', paymentMethod, {
+                    expectedStatus: 'unpaid',
+                    tenantId
+                });
+                if (!statusResult || statusResult.updated === false) {
+                    throw new Error('Invoice sudah lunas atau sedang diproses');
+                }
 
                 results.push({
                     id,
@@ -10943,6 +10972,7 @@ router.post('/api/payments/:id/cancel', async (req, res) => {
 });
 
 router.post('/payments', async (req, res) => {
+    let pendingPayment = null;
     try {
         const tenantId = resolveBillingTenantId(req);
         if (!tenantId) {
@@ -10981,6 +11011,14 @@ router.post('/payments', async (req, res) => {
                 message: 'Invoice tidak ditemukan di tenant ini'
             });
         }
+        if (String(invoice.status || '').toLowerCase() !== 'unpaid') {
+            return res.status(409).json({
+                success: false,
+                message: invoice.status === 'paid'
+                    ? 'Invoice sudah lunas'
+                    : 'Status invoice tidak dapat dilunasi'
+            });
+        }
         
         const normalizedPaymentMethod = payment_method.trim();
         const normalizedNotes = (notes ? notes.trim() : '') ||
@@ -10998,10 +11036,25 @@ router.post('/payments', async (req, res) => {
             tenant_id: tenantId
         };
 
-        const newPayment = await billingManager.recordPayment(paymentData);
+        pendingPayment = await billingManager.recordPayment(paymentData);
         
         // Update invoice status to paid
-        await billingManager.updateInvoiceStatus(paymentData.invoice_id, 'paid', paymentData.payment_method);
+        const statusResult = await billingManager.updateInvoiceStatus(
+            paymentData.invoice_id,
+            'paid',
+            paymentData.payment_method,
+            { expectedStatus: 'unpaid', tenantId }
+        );
+        if (!statusResult || statusResult.updated === false) {
+            await billingManager.cancelPaymentById(pendingPayment.id);
+            pendingPayment = null;
+            return res.status(409).json({
+                success: false,
+                message: 'Invoice sudah lunas atau sedang diproses'
+            });
+        }
+        const newPayment = pendingPayment;
+        pendingPayment = null;
         
         logger.info(`Payment recorded: ${newPayment.id}`);
         
@@ -11047,6 +11100,13 @@ router.post('/payments', async (req, res) => {
             payment: newPayment
         });
     } catch (error) {
+        if (pendingPayment && pendingPayment.id) {
+            try {
+                await billingManager.cancelPaymentById(pendingPayment.id);
+            } catch (rollbackError) {
+                logger.error(`Failed to roll back invoice payment ${pendingPayment.id}:`, rollbackError);
+            }
+        }
         logger.error('Error recording payment:', error);
         res.status(500).json({
             success: false,
