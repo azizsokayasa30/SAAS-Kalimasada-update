@@ -253,6 +253,40 @@ async function sanitizeUsersListProfiles(users) {
   return users.map((u) => sanitizeUserProfileForTenant(u, tid, billingMap));
 }
 
+/**
+ * Setelah ganti profil PPPoE manual pada user yang terikat pelanggan (bukan isolir):
+ * samakan customers.pppoe_profile. Status isolir pelanggan tidak diubah dari sini.
+ */
+async function syncBillingAfterManualPppoeProfileChange(username, newProfile, options = {}) {
+  if (options.isolirLocked) return;
+
+  const uname = String(username || '').trim();
+  const profile = String(newProfile || '').trim();
+  if (!uname || !profile) return;
+
+  const _t = billingManager._tenantWhere();
+  const customer = await new Promise((resolve) => {
+    billingManager.db.get(
+      `SELECT id, status, pppoe_profile FROM customers
+       WHERE LOWER(TRIM(pppoe_username)) = LOWER(?)${_t.sql} LIMIT 1`,
+      [uname, ..._t.params],
+      (err, row) => resolve(err ? null : row || null)
+    );
+  });
+  if (!customer) return;
+
+  const isIsolirProfile = profile.toLowerCase().replace(/\s+/g, '_') === 'isolir';
+  if (!isIsolirProfile && String(customer.pppoe_profile || '').trim() !== profile) {
+    await new Promise((resolve, reject) => {
+      billingManager.db.run(
+        'UPDATE customers SET pppoe_profile = ? WHERE id = ?',
+        [profile, customer.id],
+        (err) => (err ? reject(err) : resolve())
+      );
+    });
+  }
+}
+
 function clearPppoeAdminPageCache() {
   _pppoeAdminPageCacheByKey.clear();
   _pppoeProfilesApiCacheByKey.clear();
@@ -616,6 +650,13 @@ router.post('/mikrotik/edit-user', adminAuth, async (req, res) => {
       const result = await editPPPoEUser({ id, username, password, profile });
       if (result.success) {
         clearPppoeAdminPageCache();
+        try {
+          await syncBillingAfterManualPppoeProfileChange(username || id, result.profile || profile, {
+            isolirLocked: Boolean(result.isolirLocked)
+          });
+        } catch (syncErr) {
+          logger.warn(`[PPPoE] Billing sync after profile edit: ${syncErr.message}`);
+        }
         return res.json({ success: true, message: result.message });
       } else {
         return res.json({ success: false, message: result.message });
@@ -627,6 +668,11 @@ router.post('/mikrotik/edit-user', adminAuth, async (req, res) => {
     const result = await editPPPoEUser({ id, username, password, profile });
     if (result.success) {
       clearPppoeAdminPageCache();
+      try {
+        await syncBillingAfterManualPppoeProfileChange(username || id, profile);
+      } catch (syncErr) {
+        logger.warn(`[PPPoE] Billing sync after profile edit: ${syncErr.message}`);
+      }
       return res.json({ success: true, message: result.message || 'User berhasil di-update' });
     } else {
       return res.json({ success: false, message: result.message || 'Gagal mengupdate user' });

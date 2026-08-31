@@ -351,6 +351,34 @@ async function assertTenantOwnsPppoeUsername(username) {
     }
 }
 
+/**
+ * true jika username terikat pelanggan billing (customers.pppoe_username).
+ * User PPPoE tes/gratis di tenant_pppoe_users saja → false.
+ */
+async function isBillingBoundPppoeUsername(username) {
+    const key = normalizeKey(username);
+    if (!key) return false;
+    const db = getBillingDb();
+    const tid = hasTenantContext() ? getTenantId() : null;
+    if (tid) {
+        const row = await dbGet(
+            db,
+            `SELECT id FROM customers
+             WHERE tenant_id = ?
+               AND LOWER(TRIM(pppoe_username)) = ?
+             LIMIT 1`,
+            [tid, key]
+        );
+        return Boolean(row);
+    }
+    const row = await dbGet(
+        db,
+        `SELECT id FROM customers WHERE LOWER(TRIM(pppoe_username)) = ? LIMIT 1`,
+        [key]
+    );
+    return Boolean(row);
+}
+
 module.exports = {
     ensureTenantPppoeUsersTable,
     migrateOrphanRadiusUsersOnce,
@@ -361,6 +389,7 @@ module.exports = {
     renameTenantPppoeUsername,
     tenantOwnsPppoeUsername,
     assertTenantOwnsPppoeUsername,
+    isBillingBoundPppoeUsername,
     normalizeUsername,
     normalizeKey
 };

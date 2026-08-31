@@ -1977,6 +1977,25 @@ async function ensureIsolirProfileRadius() {
                 logger.info(`Profile isolir sekarang menggunakan Framed-Pool: ${isolirPool}`);
             }
             
+            try {
+                const { resolveBillingServerIp } = require('./mikrotikIsolirWalledGarden');
+                const ip = await resolveBillingServerIp();
+                const pagePort = String(process.env.ISOLIR_PORT || getSetting('isolir_page_port', 8899));
+                if (ip) {
+                    const portalUrl = `http://${ip}:${pagePort}/isolir`;
+                    await conn.execute(
+                        "INSERT INTO radgroupreply (groupname, attribute, op, value) VALUES ('isolir', 'WISPr-Redirection-URL', ':=', ?) ON CONFLICT(groupname, attribute) DO UPDATE SET value = excluded.value",
+                        [portalUrl]
+                    );
+                    await conn.execute(
+                        "INSERT INTO radgroupreply (groupname, attribute, op, value) VALUES ('isolir', 'Mikrotik-Advertise-URL', ':=', ?) ON CONFLICT(groupname, attribute) DO UPDATE SET value = excluded.value",
+                        [portalUrl]
+                    );
+                }
+            } catch (redirErr) {
+                logger.warn(`[RADIUS] WISPr isolir URL: ${redirErr.message}`);
+            }
+
             await conn.end();
             return { success: true, message: 'Profile isolir sudah ada dan konfigurasinya benar' };
         }
@@ -2018,6 +2037,25 @@ async function ensureIsolirProfileRadius() {
             logger.info(`Profile isolir menggunakan Framed-IP-Address: ${isolirIpRange}`);
         }
         
+        try {
+            const { resolveBillingServerIp } = require('./mikrotikIsolirWalledGarden');
+            const ip = await resolveBillingServerIp();
+            const pagePort = String(process.env.ISOLIR_PORT || getSetting('isolir_page_port', 8899));
+            if (ip) {
+                const portalUrl = `http://${ip}:${pagePort}/isolir`;
+                await conn.execute(
+                    "INSERT INTO radgroupreply (groupname, attribute, op, value) VALUES ('isolir', 'WISPr-Redirection-URL', ':=', ?) ON CONFLICT(groupname, attribute) DO UPDATE SET value = excluded.value",
+                    [portalUrl]
+                );
+                await conn.execute(
+                    "INSERT INTO radgroupreply (groupname, attribute, op, value) VALUES ('isolir', 'Mikrotik-Advertise-URL', ':=', ?) ON CONFLICT(groupname, attribute) DO UPDATE SET value = excluded.value",
+                    [portalUrl]
+                );
+            }
+        } catch (redirErr) {
+            logger.warn(`[RADIUS] WISPr isolir URL: ${redirErr.message}`);
+        }
+
         await conn.end();
         logger.info('✅ Profile isolir berhasil dibuat di RADIUS dengan konfigurasi yang benar');
         return { success: true, message: 'Profile isolir berhasil dibuat di RADIUS' };
@@ -2724,6 +2762,51 @@ async function deletePPPoEUserRadius(username) {
 }
 
 // Fungsi untuk edit user PPPoE di RADIUS (update password dan/atau package)
+/**
+ * Kuncian isolir hanya untuk username yang terikat pelanggan billing.
+ * User tes/gratis (tidak ada di customers.pppoe_username) boleh ganti profil.
+ */
+async function shouldHoldIsolirForBillingCustomer(conn, username, resolvedProfile) {
+    if (!resolvedProfile) return { hold: false, resolvedProfile: null };
+    const [curRows] = await conn.execute(
+        'SELECT groupname FROM radusergroup WHERE username = ? LIMIT 1',
+        [username]
+    );
+    const curGroup = curRows && curRows[0] && curRows[0].groupname
+        ? String(curRows[0].groupname).trim().toLowerCase()
+        : '';
+    const targetNorm = String(resolvedProfile).trim().toLowerCase();
+    if (curGroup !== 'isolir' || targetNorm === 'isolir') {
+        return { hold: false, resolvedProfile };
+    }
+
+    const { isBillingBoundPppoeUsername } = require('../utils/tenantPppoeOwnership');
+    const bound = await isBillingBoundPppoeUsername(username);
+    if (!bound) {
+        logger.info(
+            `[RADIUS] ${username} di grup isolir tapi bukan pelanggan billing — izinkan ganti profil ke ${resolvedProfile}`
+        );
+        return { hold: false, resolvedProfile };
+    }
+
+    logger.info(
+        `[RADIUS] Pelanggan ${username} sedang isolir — keep group isolir, simpan PREVGROUP → ${resolvedProfile}`
+    );
+    return { hold: true, resolvedProfile: null, previousGroup: resolvedProfile };
+}
+
+async function writeIsolirPreviousGroup(db, username, previousGroup) {
+    if (!username || !previousGroup) return;
+    await db.execute(
+        "DELETE FROM radcheck WHERE username = ? AND attribute = 'NT-Password' AND value LIKE 'PREVGROUP:%'",
+        [username]
+    );
+    await db.execute(
+        "INSERT INTO radcheck (username, attribute, op, value) VALUES (?, 'NT-Password', ':=', ?)",
+        [username, `PREVGROUP:${previousGroup}`]
+    );
+}
+
 async function editPPPoEUserRadius({ oldUsername, username, password, profile = null }) {
     try {
         const { assertTenantOwnsPppoeUsername } = require('../utils/tenantPppoeOwnership');
@@ -2763,6 +2846,9 @@ async function editPPPoEUserRadius({ oldUsername, username, password, profile = 
                 }
             }
 
+            const renameHold = await shouldHoldIsolirForBillingCustomer(conn, oldUsername, resolvedGroup);
+            const groupForRename = renameHold.hold ? 'isolir' : renameHold.resolvedProfile;
+
             return await conn.runInTransaction(async (db) => {
                 if (passwordToUse) {
                     await db.execute(
@@ -2770,22 +2856,37 @@ async function editPPPoEUserRadius({ oldUsername, username, password, profile = 
                         [username, passwordToUse]
                     );
                 }
-                if (resolvedGroup) {
+                if (groupForRename) {
                     await db.execute('DELETE FROM radusergroup WHERE username = ?', [username]);
                     await db.execute(
                         'INSERT INTO radusergroup (username, groupname, priority) VALUES (?, ?, 1)',
-                        [username, resolvedGroup]
+                        [username, groupForRename]
                     );
+                    if (renameHold.hold) {
+                        await writeIsolirPreviousGroup(db, username, renameHold.previousGroup);
+                    } else if (String(groupForRename).trim().toLowerCase() !== 'isolir') {
+                        await db.execute(
+                            "DELETE FROM radcheck WHERE username = ? AND attribute = 'NT-Password' AND value LIKE 'PREVGROUP:%'",
+                            [username]
+                        );
+                    }
                 }
                 await db.execute('DELETE FROM radcheck WHERE username = ?', [oldUsername]);
                 await db.execute('DELETE FROM radusergroup WHERE username = ?', [oldUsername]);
                 await db.execute('DELETE FROM radreply WHERE username = ?', [oldUsername]);
                 _radiusProfileGroupCache.clear();
-                return { success: true, message: `User berhasil di-rename dari ${oldUsername} ke ${username}` };
+                return {
+                    success: true,
+                    message: renameHold.hold
+                        ? `User berhasil di-rename; pelanggan isolir tetap di grup isolir`
+                        : `User berhasil di-rename dari ${oldUsername} ke ${username}`,
+                    profile: groupForRename || null,
+                    isolirLocked: renameHold.hold
+                };
             }).then(async (r) => {
                 if (r && r.success) {
                     await syncRadiusToFreeRadiusMysql({ force: true });
-                    if (resolvedGroup) {
+                    if (groupForRename) {
                         await disconnectPPPoEUserAllRouters(username);
                     }
                 }
@@ -2810,44 +2911,28 @@ async function editPPPoEUserRadius({ oldUsername, username, password, profile = 
             }
         }
 
-        // Jika user sedang di grup isolir, JANGAN timpa ke profil paket.
-        // Simpan profil paket sebagai PREVGROUP agar restore tetap benar.
-        if (resolvedProfile) {
-            const [curRows] = await conn.execute(
-                "SELECT groupname FROM radusergroup WHERE username = ? LIMIT 1",
-                [usernameToUpdate]
-            );
-            const curGroup = curRows && curRows[0] && curRows[0].groupname
-                ? String(curRows[0].groupname).trim().toLowerCase()
-                : '';
-            const targetNorm = String(resolvedProfile).trim().toLowerCase();
-            if (curGroup === 'isolir' && targetNorm !== 'isolir') {
-                logger.info(
-                    `[RADIUS] User ${usernameToUpdate} sedang isolir — keep group isolir, update PREVGROUP → ${resolvedProfile}`
-                );
-                try {
-                    await conn.execute(
-                        "DELETE FROM radcheck WHERE username = ? AND attribute = 'NT-Password' AND value LIKE 'PREVGROUP:%'",
-                        [usernameToUpdate]
-                    );
-                    await conn.execute(
-                        "INSERT INTO radcheck (username, attribute, op, value) VALUES (?, 'NT-Password', ':=', ?)",
-                        [usernameToUpdate, `PREVGROUP:${resolvedProfile}`]
-                    );
-                } catch (prevErr) {
-                    logger.warn(`[RADIUS] Gagal update PREVGROUP untuk ${usernameToUpdate}: ${prevErr.message}`);
-                }
-                resolvedProfile = null; // jangan ganti radusergroup
-                if (!password) {
-                    return { success: true, message: 'User isolir: profil paket disimpan untuk restore, grup tetap isolir' };
-                }
-            }
-        }
+        const hold = await shouldHoldIsolirForBillingCustomer(conn, usernameToUpdate, resolvedProfile);
+        resolvedProfile = hold.resolvedProfile;
+        const isolirLocked = hold.hold;
 
-        const needsWrite = Boolean(password) || Boolean(resolvedProfile);
+        const needsWrite = Boolean(password) || Boolean(resolvedProfile) || isolirLocked;
         if (!needsWrite) {
             return { success: true, message: 'Tidak ada perubahan data user' };
         }
+
+        if (isolirLocked && !password) {
+            await writeIsolirPreviousGroup(conn, usernameToUpdate, hold.previousGroup);
+            await syncRadiusToFreeRadiusMysql({ force: true });
+            return {
+                success: true,
+                message: 'Pelanggan sedang isolir: grup tetap isolir, profil paket disimpan untuk restore',
+                isolirLocked: true,
+                profile: null
+            };
+        }
+
+        const leavingIsolir = resolvedProfile
+            && String(resolvedProfile).trim().toLowerCase() !== 'isolir';
 
         return await conn.runInTransaction(async (db) => {
             if (password) {
@@ -2856,15 +2941,30 @@ async function editPPPoEUserRadius({ oldUsername, username, password, profile = 
                     [usernameToUpdate, password]
                 );
             }
-            if (resolvedProfile) {
+            if (isolirLocked) {
+                await writeIsolirPreviousGroup(db, usernameToUpdate, hold.previousGroup);
+            } else if (resolvedProfile) {
                 await db.execute('DELETE FROM radusergroup WHERE username = ?', [usernameToUpdate]);
                 await db.execute(
                     'INSERT INTO radusergroup (username, groupname, priority) VALUES (?, ?, 1)',
                     [usernameToUpdate, resolvedProfile]
                 );
+                if (leavingIsolir) {
+                    await db.execute(
+                        "DELETE FROM radcheck WHERE username = ? AND attribute = 'NT-Password' AND value LIKE 'PREVGROUP:%'",
+                        [usernameToUpdate]
+                    );
+                }
             }
             _radiusProfileGroupCache.clear();
-            return { success: true, message: 'User berhasil di-update di RADIUS' };
+            return {
+                success: true,
+                message: isolirLocked
+                    ? 'Pelanggan sedang isolir: password diubah, grup tetap isolir (profil paket disimpan untuk restore)'
+                    : 'User berhasil di-update di RADIUS',
+                profile: resolvedProfile || null,
+                isolirLocked
+            };
         }).then(async (r) => {
             if (r && r.success) {
                 await syncRadiusToFreeRadiusMysql({ force: true });
@@ -11727,6 +11827,7 @@ module.exports = {
     collectMikrotikPppActiveSessionsByLoginMap,
     getPppoeLoginOnlineStatus,
     updatePPPoEUserRadiusPassword,
+    editPPPoEUserRadius,
     assignPackageRadius,
     ensureIsolirProfileRadius,
     suspendUserRadius,

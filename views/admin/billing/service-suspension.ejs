@@ -294,7 +294,8 @@
                                     <small class="text-muted d-block mt-2">Profil PPP dipakai saat suspend otomatis / manual.</small>
                                 <% } %>
                                 <small class="text-muted d-block mt-2">
-                                    <strong>Sync ke Mikrotik</strong> memasang pool isolir, firewall &amp; NAT redirect halaman isolir di semua router tenant.
+                                    <strong>Sync ke Mikrotik</strong> memasang ulang pool, firewall, NAT HTTP, dan DNS sinkhole agar HP memunculkan notifikasi "Sign in to network" / halaman isolir.
+                                    Setelah sync, pelanggan tes harus reconnect PPPoE. Portal memakai IP publik server (<code>server_host</code>); override per-tenant lewat <code>isolir_billing_server_ip</code> jika perlu tunnel VPN.
                                 </small>
                             </div>
                         </div>
@@ -318,8 +319,9 @@
                                     <div class="small">HTTP → halaman isolir (walled garden + WhatsApp)</div>
                                 </div>
                                 <small class="text-muted d-block mt-3">
-                                    Tombol sync memasang/memperbarui rule firewall &amp; NAT redirect di semua router tenant.
-                                    IP billing &amp; port isolir mengikuti pengaturan portal management.
+                                    Tombol sync memasang ulang rule firewall &amp; NAT redirect di semua router tenant
+                                    (drop tidak boleh di atas allow; DNS captive portal ikut dipasang).
+                                    IP portal memakai IP publik server (bukan wajib VPN). Tes: <code>http://neverssl.com</code>.
                                 </small>
                             </div>
                         </div>
@@ -1291,10 +1293,13 @@
             const original = btn.html();
             btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm me-1"></span>Syncing...');
             showToast('info', 'Sync', 'Menyinkronkan firewall isolir static IP ke MikroTik...');
+            const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            const timer = ctrl ? setTimeout(() => ctrl.abort(), 120000) : null;
             fetch('/admin/billing/service-suspension/static-ip-isolir/sync', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: '{}'
+                body: '{}',
+                signal: ctrl ? ctrl.signal : undefined
             })
             .then(r => r.json())
             .then(data => {
@@ -1304,9 +1309,9 @@
                         if (!r.success) return null;
                         const nat = r.nat || {};
                         if (nat.skipped) return (r.router_name || '') + ': NAT dilewati (IP billing kosong)';
-                        return (r.router_name || '') + ': NAT +' + (nat.added || 0) + ' / ada ' + (nat.exists || 0);
+                        return (r.router_name || '') + ': portal ' + (r.billing_server_ip || data.billing_server_ip || '-') + ':' + (data.isolir_port || r.isolir_port || '') + ' NAT +' + (nat.added || 0);
                     }).filter(Boolean).join('; ');
-                    showToast('success', 'Sync berhasil', natInfo || data.message || (n + ' router tersinkron'));
+                    showToast('success', 'Sync berhasil', (data.elapsed_ms ? (Math.round(data.elapsed_ms/1000)+'s · ') : '') + (natInfo || data.message || (n + ' router tersinkron')));
                 } else {
                     const fails = (data && data.results || []).filter(x => !x.success);
                     const detail = fails.map(f => (f.router_name || f.router_id || 'router') + ': ' + (f.error || 'gagal')).join('; ');
@@ -1314,9 +1319,11 @@
                 }
             })
             .catch(err => {
-                showToast('error', 'Gagal', err.message || 'Koneksi gagal');
+                const msg = err && err.name === 'AbortError' ? 'Timeout 120s — cek koneksi API MikroTik' : (err.message || 'Koneksi gagal');
+                showToast('error', 'Gagal', msg);
             })
             .finally(() => {
+                if (timer) clearTimeout(timer);
                 btn.prop('disabled', false).html(original);
             });
         });
@@ -1326,10 +1333,13 @@
             const original = btn.html();
             btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm me-1"></span>Syncing...');
             showToast('info', 'Sync', 'Menyinkronkan firewall isolir PPPoE/RADIUS ke MikroTik...');
+            const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            const timer = ctrl ? setTimeout(() => ctrl.abort(), 120000) : null;
             fetch('/admin/billing/service-suspension/pppoe-isolir/sync', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: '{}'
+                body: '{}',
+                signal: ctrl ? ctrl.signal : undefined
             })
             .then(r => r.json())
             .then(data => {
@@ -1339,9 +1349,9 @@
                         if (!r.success) return null;
                         const nat = r.nat || {};
                         if (nat.skipped) return (r.router_name || '') + ': NAT dilewati (IP billing kosong)';
-                        return (r.router_name || '') + ': pool ' + (r.isolir_pool || 'isolir-pool') + ', NAT +' + (nat.added || 0);
+                        return (r.router_name || '') + ': pool ' + (r.isolir_pool || 'isolir-pool') + ' → ' + (r.billing_server_ip || data.billing_server_ip || '-') + ':' + (r.isolir_port || data.isolir_port || '') + ' NAT +' + (nat.added || 0);
                     }).filter(Boolean).join('; ');
-                    showToast('success', 'Sync berhasil', natInfo || data.message || (n + ' router tersinkron'));
+                    showToast('success', 'Sync berhasil', (data.elapsed_ms ? (Math.round(data.elapsed_ms/1000)+'s · ') : '') + (natInfo || data.message || (n + ' router tersinkron')));
                 } else {
                     const fails = (data && data.results || []).filter(x => !x.success);
                     const detail = fails.map(f => (f.router_name || f.router_id || 'router') + ': ' + (f.error || 'gagal')).join('; ');
@@ -1349,9 +1359,11 @@
                 }
             })
             .catch(err => {
-                showToast('error', 'Gagal', err.message || 'Koneksi gagal');
+                const msg = err && err.name === 'AbortError' ? 'Timeout 120s — cek koneksi API MikroTik' : (err.message || 'Koneksi gagal');
+                showToast('error', 'Gagal', msg);
             })
             .finally(() => {
+                if (timer) clearTimeout(timer);
                 btn.prop('disabled', false).html(original);
             });
         });

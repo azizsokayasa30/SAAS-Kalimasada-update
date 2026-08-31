@@ -254,6 +254,7 @@
                                 <thead class="table-light">
                                     <tr>
                                         <th>Tanggal</th>
+                                        <th>Invoice</th>
                                         <th>Kolektor</th>
                                         <th>Pelanggan</th>
                                         <th>Tagihan</th>
@@ -274,16 +275,26 @@
                                     var cancelTitle = 'Batalkan pembayaran: baris ini dihapus; invoice kembali belum lunas jika tidak ada pembayaran lain yang mencukupi.';
                                     var tagInv = Number(p.invoice_tagihan != null ? p.invoice_tagihan : p.invoice_amount || 0);
                                     var jmlSet = Number(p.jumlah_setelah_diskon != null ? p.jumlah_setelah_diskon : 0);
+                                    var rawPayDate = String(p.payment_date || '').trim();
+                                    var payDateLabel = rawPayDate;
+                                    if (/^\d{4}-\d{2}-\d{2}/.test(rawPayDate)) {
+                                        var ds = rawPayDate.slice(0, 10).split('-');
+                                        var ts = rawPayDate.length >= 19 ? rawPayDate.slice(11, 16) : '';
+                                        payDateLabel = ds[2] + '/' + ds[1] + '/' + ds[0] + (ts ? (' ' + ts) : '');
+                                    }
+                                    var methodRaw = String(p.payment_method || '').trim();
+                                    var methodLabel = methodRaw === 'manual_admin' ? 'Admin Kantor' : methodRaw;
                                 %>
                                     <tr>
-                                        <td><%= p.payment_date ? new Date(p.payment_date).toLocaleDateString('id-ID') : '' %></td>
+                                        <td style="white-space:nowrap;"><%= payDateLabel %></td>
+                                        <td><small class="text-muted"><%= p.invoice_number || ('#' + p.invoice_id) %></small></td>
                                         <td><%= p.collector_name ? p.collector_name : 'Admin kantor' %></td>
                                         <td><%= p.customer_name %> <% if (p.customer_phone) { %><small class="text-muted d-block"><%= p.customer_phone %></small><% } %></td>
                                         <td>Rp <%= tagInv.toLocaleString('id-ID') %></td>
                                         <td>Rp <%= Number(p.commission_amount || 0).toLocaleString('id-ID') %></td>
                                         <td><% var dDisc = Number(p.discount_amount || 0); %><%= dDisc > 0 ? ('Rp ' + dDisc.toLocaleString('id-ID')) : '—' %></td>
                                         <td class="fw-semibold">Rp <%= jmlSet.toLocaleString('id-ID') %></td>
-                                        <td><%= p.payment_method || '' %></td>
+                                        <td><%= methodLabel %></td>
                                         <td><span class="badge bg-<%= statusClass %>"><%= statusLabel %></span></td>
                                         <td class="text-muted small"><%= displayPaymentNote(p.notes) %></td>
                                         <td class="text-end">
@@ -523,15 +534,18 @@
             let headers;
             let rows;
             if (isAllPaymentsPage) {
-                headers = ['Tanggal', 'Kolektor', 'Pelanggan', 'Telepon', 'Tagihan', 'Komisi', 'Diskon', 'Jumlah', 'Metode', 'Status', 'Catatan'];
+                headers = ['Tanggal', 'Invoice', 'Kolektor', 'Pelanggan', 'Telepon', 'Tagihan', 'Komisi', 'Diskon', 'Jumlah', 'Metode', 'Status', 'Catatan'];
                 rows = paymentsData.map(function (p) {
                     const invSt = String(p.invoice_status || '').toLowerCase();
                     const statusLabel = invSt === 'paid' ? 'Lunas' : (invSt || '');
                     const dDisc = Number(p.discount_amount || 0) || 0;
                     const tagInv = Number(p.invoice_tagihan != null ? p.invoice_tagihan : p.invoice_amount || 0);
                     const jmlSet = Number(p.jumlah_setelah_diskon != null ? p.jumlah_setelah_diskon : 0);
+                    const methodRaw = String(p.payment_method || '').trim();
+                    const methodLabel = methodRaw === 'manual_admin' ? 'Admin Kantor' : methodRaw;
                     return [
                         p.payment_date || '',
+                        p.invoice_number || ('#' + p.invoice_id),
                         p.collector_name ? p.collector_name : 'Admin kantor',
                         p.customer_name || '',
                         p.customer_phone || '',
@@ -539,7 +553,7 @@
                         p.commission_amount || 0,
                         dDisc,
                         jmlSet,
-                        p.payment_method || '',
+                        methodLabel,
                         statusLabel,
                         csvNoteDisplay(p.notes)
                     ];

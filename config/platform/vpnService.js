@@ -423,6 +423,20 @@ async function getPeerByIdForTenant(id, tenantId) {
     return peer;
 }
 
+async function getPeerByTunnelIp(ip) {
+    await ensureVpnSchema();
+    const raw = stripIp(ip);
+    if (!raw) return null;
+    return tenantStore.dbGet(
+        `SELECT p.*, t.name AS tenant_name, t.subdomain AS tenant_subdomain
+         FROM platform_vpn_peers p
+         LEFT JOIN tenants t ON t.id = p.tenant_id
+         WHERE p.is_active = 1 AND (p.tunnel_ip = ? OR p.tunnel_ip LIKE ?)
+         LIMIT 1`,
+        [raw, `${raw}/%`]
+    );
+}
+
 function normalizePeerInput(data, { requireTunnelIp = true, requirePublicKey = true } = {}) {
     const name = String(data.name || '').trim();
     const tunnelIp = stripIp(data.tunnel_ip);
@@ -1755,6 +1769,7 @@ module.exports = {
     countPeersByTenant,
     getPeerById,
     getPeerByIdForTenant,
+    getPeerByTunnelIp,
     createPeer,
     createPeerForTenant,
     updatePeer,

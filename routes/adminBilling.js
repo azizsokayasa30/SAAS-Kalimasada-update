@@ -16,6 +16,7 @@ const upload = multer();
 const ExcelJS = require('exceljs');
 const { adminAuth } = require('./adminAuth');
 const { adminBillingActivityMiddleware } = require('../config/activityLogger');
+const { localMonthDateRange, toLocalDateString, toLocalDateTimeString } = require('../utils/localDate');
 
 router.use(adminBillingActivityMiddleware);
 
@@ -421,15 +422,16 @@ const ensureCustomersPhoneNonUnique = async (db) => {
 };
 
 // Helper: resolve period from month/year (fallback ke current month)
+// PENTING: jangan pakai Date#toISOString() — di TZ Asia/Jakarta akhir bulan
+// bergeser (mis. Agustus → endDate 2026-08-30) sehingga pembayaran tgl 31 hilang dari riwayat.
 const resolveMonthYearRange = (query = {}) => {
     const now = new Date();
     const parsedMonth = parseInt(query.month, 10);
     const parsedYear = parseInt(query.year, 10);
     const month = Number.isInteger(parsedMonth) && parsedMonth >= 1 && parsedMonth <= 12 ? parsedMonth : (now.getMonth() + 1);
     const year = Number.isInteger(parsedYear) && parsedYear >= 2000 && parsedYear <= 2100 ? parsedYear : now.getFullYear();
-    const startDate = new Date(year, month - 1, 1).toISOString().split('T')[0];
-    const endDate = new Date(year, month, 0).toISOString().split('T')[0];
-    return { month, year, startDate, endDate };
+    const { startStr, endStr } = localMonthDateRange(year, month - 1);
+    return { month, year, startDate: startStr, endDate: endStr };
 };
 
 function parseIsoDateOnly(value) {
@@ -2264,8 +2266,12 @@ router.get('/invoice-list', getAppSettings, async (req, res) => {
     try {
         const { status, customer_username, search, type, month, year } = req.query;
         const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-        const limit = Math.min(100, Math.max(10, parseInt(req.query.limit, 10) || 50));
-        const offset = (page - 1) * limit;
+        const rawLimit = String(req.query.limit || '50').trim().toLowerCase();
+        const ALLOWED_LIMITS = new Set(['50', '100', '500', 'all', 'semua']);
+        const limitKey = ALLOWED_LIMITS.has(rawLimit) ? rawLimit : '50';
+        const showAll = limitKey === 'all' || limitKey === 'semua';
+        const limit = showAll ? null : parseInt(limitKey, 10);
+        const offset = showAll ? 0 : (page - 1) * limit;
         const searchTerm = String(search || customer_username || '').trim();
 
         const now = new Date();
@@ -2286,6 +2292,9 @@ router.get('/invoice-list', getAppSettings, async (req, res) => {
             billingManager.getInvoiceListSummaryWithFilters(filters)
         ]);
         const totalCount = Number(summary && summary.total) || 0;
+        const effectiveLimit = showAll ? Math.max(totalCount, 1) : limit;
+        const totalPages = showAll ? 1 : (Math.ceil(totalCount / effectiveLimit) || 1);
+        const selectedLimit = showAll ? 'all' : String(limit);
         
         res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
         res.render('admin/billing/invoice-list', {
@@ -2296,20 +2305,23 @@ router.get('/invoice-list', getAppSettings, async (req, res) => {
                 total_amount: 0, paid_amount: 0, unpaid_amount: 0, overdue_amount: 0
             },
             pagination: {
-                currentPage: page,
-                totalPages: Math.ceil(totalCount / limit) || 1,
+                currentPage: showAll ? 1 : page,
+                totalPages,
                 totalCount,
-                limit
+                limit: selectedLimit,
+                showAll
             },
             filters: {
                 status: status || '',
                 customer_username: searchTerm || '',
                 type: type || '',
                 month: selectedMonth,
-                year: selectedYear
+                year: selectedYear,
+                limit: selectedLimit
             },
             selectedMonth,
             selectedYear,
+            selectedLimit,
             appSettings: req.appSettings,
             page: 'invoice-list',
             notice: String(req.query.notice || '').trim()
@@ -10194,11 +10206,38 @@ function safeInvoiceListNext(req) {
 }
 
 function localPayDate() {
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, '0');
-    const d = String(now.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
+    return todayInJakarta();
+}
+
+/** Waktu aksi Asia/Jakarta → `YYYY-MM-DD HH:MM:SS` (riwayat all-payments). */
+function jakartaNowDateTime() {
+    try {
+        return new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Jakarta' }).replace('T', ' ').substring(0, 19);
+    } catch (_) {
+        const now = new Date();
+        const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+        const jkt = new Date(utc + 7 * 3600000);
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${jkt.getFullYear()}-${pad(jkt.getMonth() + 1)}-${pad(jkt.getDate())} ${pad(jkt.getHours())}:${pad(jkt.getMinutes())}:${pad(jkt.getSeconds())}`;
+    }
+}
+
+/**
+ * Tanggal+jam untuk payment_date.
+ * - date-only dari form → gabung jam aksi sekarang (Jakarta)
+ * - kosong / invalid → waktu aksi penuh (Jakarta)
+ */
+function localPayDateTime(dateInput) {
+    const nowFull = jakartaNowDateTime();
+    const time = nowFull.slice(11, 19) || '00:00:00';
+    const raw = String(dateInput || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+        return `${raw} ${time}`;
+    }
+    if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(raw)) {
+        return raw.replace('T', ' ').slice(0, 19);
+    }
+    return nowFull;
 }
 
 async function renderInvoiceQuickAction(req, res, mode, extra = {}) {
@@ -10616,6 +10655,265 @@ router.delete('/invoices/:id', adminAuth, async (req, res) => {
     }
 });
 
+async function payInvoiceAsAdmin(invoice, opts = {}, tenantId = null) {
+    const paymentMethod = String(opts.payment_method || 'manual_admin').trim() || 'manual_admin';
+    const discount = Math.max(0, parseFloat(opts.discount_amount) || 0);
+    const invoiceAmount = parseFloat(invoice.amount) || 0;
+    const finalAmount = Math.max(invoiceAmount - discount, 0);
+    const paymentDate = String(opts.payment_date || localPayDate()).trim();
+    const notes = opts.notes
+        || `Pelunasan massal oleh Admin Kantor | Diskon: Rp ${Math.round(discount).toLocaleString('id-ID')} | Tanggal Bayar: ${paymentDate}`;
+
+    const paymentData = {
+        invoice_id: parseInt(invoice.id, 10),
+        amount: finalAmount,
+        payment_method: paymentMethod,
+        reference_number: '',
+        notes,
+        payment_date: paymentDate,
+        discount_amount: Math.round(discount)
+    };
+    if (tenantId) paymentData.tenant_id = tenantId;
+
+    const newPayment = await billingManager.recordPayment(paymentData);
+
+    // Update status cepat (tanpa tunggu Mikrotik restore) agar bulk-pay tidak hang
+    if (opts.deferSideEffects) {
+        await new Promise((resolve, reject) => {
+            const paidAt = new Date().toISOString();
+            billingManager.db.run(
+                `UPDATE invoices SET status = ?, payment_date = ?, payment_method = ? WHERE id = ? AND tenant_id = ?`,
+                ['paid', paidAt, paymentMethod, invoice.id, tenantId || invoice.tenant_id],
+                (err) => (err ? reject(err) : resolve())
+            );
+        });
+    } else {
+        await billingManager.updateInvoiceStatus(invoice.id, 'paid', paymentMethod);
+    }
+
+    return newPayment;
+}
+
+function queueBulkPaySideEffects(invoice, paymentMethod, paymentId) {
+    setImmediate(() => {
+        // Notifikasi async — jangan blokir request
+        if (paymentId) {
+            try {
+                const whatsappNotifications = require('../config/whatsapp-notifications');
+                Promise.resolve(whatsappNotifications.sendPaymentReceivedNotification(paymentId)).catch(() => {});
+            } catch (_) { /* ignore */ }
+            try {
+                const emailNotifications = require('../config/email-notifications');
+                Promise.resolve(emailNotifications.sendPaymentReceivedNotification(paymentId)).catch(() => {});
+            } catch (_) { /* ignore */ }
+        }
+        Promise.resolve()
+            .then(async () => {
+                try {
+                    const cfn = require('../config/collectorFieldNotifications');
+                    if (invoice.customer_id) {
+                        cfn.notifyInvoicePaid(
+                            Number(invoice.customer_id),
+                            invoice.id,
+                            invoice.invoice_number,
+                            Number(invoice.amount) || 0
+                        );
+                    }
+                } catch (_) { /* ignore */ }
+
+                try {
+                    const paidInvoice = await billingManager.getInvoiceById(invoice.id);
+                    if (!paidInvoice || !paidInvoice.customer_id) return;
+                    const customer = await billingManager.getCustomerById(paidInvoice.customer_id);
+                    if (!customer) return;
+
+                    if (customer.renewal_type === 'renewal') {
+                        const nextDueDate = billingManager.calculateNextDueDate(
+                            customer,
+                            paidInvoice.due_date,
+                            paidInvoice.payment_date || new Date().toISOString()
+                        );
+                        await billingManager.syncBillingDateForRenewal(customer.id, nextDueDate);
+                    }
+
+                    const { shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
+                    if (shouldAutoRestoreCustomer(customer)) {
+                        const invoices = await billingManager.getInvoicesByCustomer(customer.id);
+                        const unpaid = invoices.filter((i) => String(i.status || '').toLowerCase() === 'unpaid');
+                        if (unpaid.length === 0) {
+                            await serviceSuspension.restoreCustomerService(
+                                customer,
+                                `Pelunasan massal admin - Invoice ${paidInvoice.invoice_number}`
+                            );
+                        }
+                    }
+                } catch (sideErr) {
+                    logger.error(`Bulk-pay side effects failed for invoice ${invoice.id}:`, sideErr);
+                }
+            })
+            .catch((err) => logger.error(`Bulk-pay side effects crashed for invoice ${invoice.id}:`, err));
+    });
+}
+
+const ALLOWED_ADMIN_PAY_METHODS = new Set(['manual_admin', 'cash', 'transfer_bank', 'qris']);
+
+function dbGet(sql, params = []) {
+    return new Promise((resolve, reject) => {
+        billingManager.db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row || null)));
+    });
+}
+
+function dbRun(sql, params = []) {
+    return new Promise((resolve, reject) => {
+        billingManager.db.run(sql, params, function (err) {
+            if (err) reject(err);
+            else resolve({ id: this.lastID, changes: this.changes });
+        });
+    });
+}
+
+// Bulk mark invoices as paid — path cepat: SQL saja, side-effect setelah response
+router.post('/invoices/bulk-pay', async (req, res) => {
+    const t0 = Date.now();
+    logger.info(`[BULK-PAY] received path=${req.path} content-type=${req.headers['content-type'] || '-'}`);
+    res.set('Content-Type', 'application/json; charset=utf-8');
+    res.set('Cache-Control', 'no-store');
+
+    try {
+        if (!(req.session && req.session.isAdmin)) {
+            return res.status(401).json({ success: false, message: 'Unauthorized — silakan login ulang' });
+        }
+
+        const tenantId = resolveBillingTenantId(req);
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant tidak dikenali' });
+        }
+
+        const { ids, payment_method, payment_date } = req.body || {};
+        logger.info(`[BULK-PAY] hit tenant=${tenantId} ids=${JSON.stringify(ids)} method=${payment_method}`);
+
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ success: false, message: 'Pilih minimal satu invoice' });
+        }
+        if (ids.length > 100) {
+            return res.status(400).json({ success: false, message: 'Maksimal 100 invoice per pelunasan massal' });
+        }
+
+        const paymentMethod = String(payment_method || 'manual_admin').trim() || 'manual_admin';
+        if (!ALLOWED_ADMIN_PAY_METHODS.has(paymentMethod)) {
+            return res.status(400).json({ success: false, message: 'Metode pembayaran tidak valid' });
+        }
+        // Selalu simpan tanggal+jam aksi (Jakarta) — ini yang diurutkan di /all-payments
+        const paymentDateBase = localPayDateTime(payment_date);
+        const uniqueIds = [...new Set(ids.map((raw) => parseInt(raw, 10)).filter((id) => Number.isFinite(id) && id > 0))];
+        if (uniqueIds.length === 0) {
+            return res.status(400).json({ success: false, message: 'Daftar ID invoice tidak valid' });
+        }
+
+        // Pastikan kolom diskon ada (cepat / cached)
+        try { await billingManager._ensurePaymentsDiscountColumn(); } catch (_) { /* ignore */ }
+        try { await dbRun('PRAGMA busy_timeout = 3000'); } catch (_) { /* ignore */ }
+
+        const results = [];
+        const sideEffectQueue = [];
+        let success = 0;
+        let skipped = 0;
+        let failed = 0;
+
+        // Timeout pengaman: jangan biarkan request menggantung > 8 detik
+        let timedOut = false;
+        const watchdog = setTimeout(() => { timedOut = true; }, 8000);
+
+        let paySeq = 0;
+        for (const id of uniqueIds) {
+            if (timedOut) {
+                results.push({ id, success: false, message: 'Timeout — coba batch lebih kecil' });
+                failed++;
+                continue;
+            }
+            try {
+                const invoice = await dbGet(
+                    `SELECT id, tenant_id, customer_id, invoice_number, amount, status, due_date
+                     FROM invoices WHERE id = ? AND tenant_id = ?`,
+                    [id, tenantId]
+                );
+                if (!invoice) throw new Error('Invoice tidak ditemukan di tenant ini');
+
+                const status = String(invoice.status || '').toLowerCase();
+                if (status === 'paid') {
+                    results.push({ id, success: true, skipped: true, invoice_number: invoice.invoice_number, message: 'Sudah lunas' });
+                    skipped++;
+                    continue;
+                }
+                if (status === 'cancelled') throw new Error('Invoice dibatalkan, tidak dapat dilunasi');
+
+                // Detik +paySeq agar tiap baris unik & solid di urutan all-payments
+                const paymentDate = (() => {
+                    const base = String(paymentDateBase).slice(0, 19);
+                    const m = base.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):(\d{2})$/);
+                    if (!m) return base || jakartaNowDateTime();
+                    let h = parseInt(m[2], 10);
+                    let mi = parseInt(m[3], 10);
+                    let s = parseInt(m[4], 10) + paySeq;
+                    paySeq += 1;
+                    mi += Math.floor(s / 60);
+                    s = s % 60;
+                    h += Math.floor(mi / 60);
+                    mi = mi % 60;
+                    h = h % 24;
+                    const pad = (n) => String(n).padStart(2, '0');
+                    return `${m[1]} ${pad(h)}:${pad(mi)}:${pad(s)}`;
+                })();
+
+                const amount = Math.max(0, parseFloat(invoice.amount) || 0);
+                const notes = `Pelunasan massal oleh Admin Kantor | Tanggal Bayar: ${paymentDate}`;
+                const payIns = await dbRun(
+                    `INSERT INTO payments (invoice_id, amount, payment_method, reference_number, notes, payment_date, discount_amount, tenant_id)
+                     VALUES (?, ?, ?, '', ?, ?, 0, ?)`,
+                    [invoice.id, amount, paymentMethod, notes, paymentDate, tenantId]
+                );
+                await dbRun(
+                    `UPDATE invoices SET status = 'paid', payment_date = ?, payment_method = ? WHERE id = ? AND tenant_id = ?`,
+                    [paymentDate, paymentMethod, invoice.id, tenantId]
+                );
+
+                sideEffectQueue.push({ invoice, paymentMethod, paymentId: payIns.id });
+                results.push({ id, success: true, invoice_number: invoice.invoice_number });
+                success++;
+            } catch (e) {
+                logger.error(`[BULK-PAY] fail id=${id}: ${e.message}`);
+                results.push({ id, success: false, message: e.message || 'Gagal melunasi' });
+                failed++;
+            }
+        }
+        clearTimeout(watchdog);
+
+        const ok = success > 0 || (skipped > 0 && failed === 0);
+        const payload = {
+            success: ok,
+            message: `Pelunasan massal selesai. Berhasil: ${success}, Dilewati: ${skipped}, Gagal: ${failed}`,
+            summary: { success, skipped, failed, total: uniqueIds.length, ms: Date.now() - t0 },
+            paid_ids: results.filter((r) => r.success && !r.skipped).map((r) => r.id),
+            results
+        };
+        logger.info(`[BULK-PAY] done tenant=${tenantId} success=${success} skipped=${skipped} failed=${failed} ms=${Date.now() - t0}`);
+        res.status(ok ? 200 : 400).json(payload);
+
+        // Side effects SETELAH response terkirim
+        setImmediate(() => {
+            for (const item of sideEffectQueue) {
+                queueBulkPaySideEffects(item.invoice, item.paymentMethod, item.paymentId);
+            }
+        });
+        return;
+    } catch (error) {
+        logger.error('Error bulk paying invoices:', error);
+        if (!res.headersSent) {
+            return res.status(500).json({ success: false, message: 'Gagal melakukan pelunasan massal', error: error.message });
+        }
+    }
+});
+
 // Bulk delete invoices
 router.post('/invoices/bulk-delete', adminAuth, async (req, res) => {
     try {
@@ -10735,6 +11033,7 @@ router.get('/all-payments', getAppSettings, async (req, res) => {
             : [[], [], { transaction_count: 0, total_amount: 0, total_tagihan: 0, total_commission: 0, total_net: 0, total_discount: 0 }];
 
         const settings = getSettingsWithCache();
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
         res.render('admin/billing/payments', {
             title: 'Riwayat Pembayaran',
             payments,
@@ -12487,7 +12786,7 @@ router.post('/service-suspension/toggle-feature', adminAuth, async (req, res) =>
 router.get('/service-suspension/static-ip-isolir', adminAuth, async (req, res) => {
     try {
         const staticIPSuspension = require('../config/staticIPSuspension');
-        const info = staticIPSuspension.getStaticIpIsolirInfo();
+        const info = await staticIPSuspension.getStaticIpIsolirInfo();
         const tenantId = resolveBillingTenantId(req);
         const routers = await staticIPSuspension.listRoutersForTenant(tenantId);
         res.json({
@@ -12527,7 +12826,7 @@ router.post('/service-suspension/static-ip-isolir/sync', adminAuth, async (req, 
 router.get('/service-suspension/pppoe-isolir', adminAuth, async (req, res) => {
     try {
         const { getPppoeIsolirInfo, listRoutersForTenant } = require('../config/radiusIsolirFirewallSync');
-        const info = getPppoeIsolirInfo();
+        const info = await getPppoeIsolirInfo();
         const tenantId = resolveBillingTenantId(req);
         const routers = await listRoutersForTenant(tenantId);
         res.json({

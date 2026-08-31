@@ -49,7 +49,8 @@ function isIpAddress(value) {
     return /^(\d{1,3}\.){3}\d{1,3}$/.test(String(value || '').trim());
 }
 
-function getIsolirAccessConfig() {
+async function getIsolirAccessConfig() {
+    const { resolveBillingServerIp } = require('./mikrotikIsolirWalledGarden');
     const globalServerHost = String(getSetting('server_host', '') || '').trim();
     let host = globalServerHost;
     let port = String(getSetting('server_port', process.env.PORT || 4555));
@@ -61,12 +62,7 @@ function getIsolirAccessConfig() {
         else if (url.protocol === 'http:') port = port || '80';
     } catch (_) {}
 
-    const billingServerIp =
-        String(process.env.ISOLIR_BILLING_SERVER_IP || '').trim() ||
-        String(getSetting('isolir_billing_server_ip', '') || '').trim() ||
-        String(getSetting('billing_server_ip', '') || '').trim() ||
-        (isIpAddress(host) ? host : '') ||
-        (isIpAddress(globalServerHost) ? globalServerHost : '');
+    const billingServerIp = await resolveBillingServerIp();
 
     return {
         billingServerIp,
@@ -173,7 +169,7 @@ async function removePoolFirewall(mikrotik) {
 }
 
 async function ensurePoolFirewall(mikrotik) {
-    const access = getIsolirAccessConfig();
+    const access = await getIsolirAccessConfig();
     const acceptComment = `${COMMENT_PREFIX} accept allowed`;
     const legacyDropComment = `${COMMENT_PREFIX} drop blocked`;
 

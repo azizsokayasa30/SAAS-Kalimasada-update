@@ -928,6 +928,22 @@ app.use((req, res, next) => {
   return next();
 });
 
+// Favicon portal manage (logo navy) — jangan pakai favicon tenant (latar putih)
+const MANAGEMENT_FAVICON_FILES = {
+  '/favicon.ico': path.join(__dirname, 'public/img/management-favicon.ico'),
+  '/favicon-16x16.png': path.join(__dirname, 'public/img/management-favicon-16.png'),
+  '/favicon-32x32.png': path.join(__dirname, 'public/img/management-favicon-32.png'),
+  '/apple-touch-icon.png': path.join(__dirname, 'public/img/management-apple-touch.png'),
+};
+app.use((req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+  if (!isCentralHost(req.get('host'))) return next();
+  const file = MANAGEMENT_FAVICON_FILES[req.path];
+  if (!file) return next();
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  return res.sendFile(file);
+});
+
 app.use(resolveTenantMiddleware);
 
 const { attachTenantAppSettings } = require('./config/platform/tenantAppSettings');
@@ -1464,6 +1480,33 @@ async function renderIsolirPage(req, res) {
             resolvedTenantId = Number(tenantRecord.id);
         }
 
+        // Captive portal HTTP tidak membawa ?tenant= — kenali tenant dari IP tunnel VPN router.
+        if (!resolvedTenantId) {
+            const remoteIp = String(
+                (req.headers['x-forwarded-for'] || '').split(',')[0] ||
+                req.ip ||
+                req.socket?.remoteAddress ||
+                ''
+            ).trim().replace(/^::ffff:/, '');
+            if (remoteIp) {
+                try {
+                    const vpnService = require('./config/platform/vpnService');
+                    const peer = await vpnService.getPeerByTunnelIp(remoteIp);
+                    if (peer?.tenant_id) {
+                        resolvedTenantId = Number(peer.tenant_id);
+                        if (!tenantRecord || Number(tenantRecord.id) !== resolvedTenantId) {
+                            try {
+                                tenantRecord = await tenantStore.getTenantById(resolvedTenantId);
+                            } catch (_) {}
+                        }
+                        logger.info(`[ISOLIR] Tenant ${resolvedTenantId} dari IP tunnel ${remoteIp}`);
+                    }
+                } catch (vpnErr) {
+                    logger.warn(`[ISOLIR] Lookup peer VPN ${remoteIp}: ${vpnErr.message}`);
+                }
+            }
+        }
+
         const lookupCustomer = async () => {
             const sessionUsername = req.session && (req.session.customer_username || req.session.username);
             const qUser = (req.query.pppoe || req.query.username || req.query.user || '').toString().trim();
@@ -1974,19 +2017,43 @@ function startIsolirPortal(portToUse) {
     }
     if (isolirPort === mainPort) {
         logger.info(`[ISOLIR] Port isolir sama dengan port utama (${isolirPort}), memakai route /isolir di app utama.`);
+        try {
+            const { captiveProbeMiddleware, startIsolirDnsServer } = require('./config/isolirCaptivePortal');
+            const { resolveBillingServerIp } = require('./config/mikrotikIsolirWalledGarden');
+            app.use(captiveProbeMiddleware);
+            let sinkholeIp = String(require('./config/settingsManager').getSetting('server_host', '103.132.40.78') || '103.132.40.78');
+            if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(sinkholeIp)) sinkholeIp = '103.132.40.78';
+            resolveBillingServerIp().then((ip) => { if (ip) sinkholeIp = ip; }).catch(() => {});
+            startIsolirDnsServer(() => sinkholeIp);
+        } catch (e) {
+            logger.warn(`[ISOLIR] Captive/DNS pada port utama: ${e.message}`);
+        }
         return;
     }
 
     const isolirApp = express();
     isolirApp.set('view engine', 'ejs');
     isolirApp.set('views', path.join(__dirname, 'views'));
+    isolirApp.disable('x-powered-by');
+    isolirApp.set('etag', false);
     isolirApp.use(express.urlencoded({ extended: true, limit: '1mb' }));
     isolirApp.use(express.json({ limit: '1mb' }));
+    const {
+        captiveProbeMiddleware,
+        isolirNoCacheMiddleware,
+        rootTrampolineMiddleware,
+        startIsolirDnsServer
+    } = require('./config/isolirCaptivePortal');
+    const { resolveBillingServerIp } = require('./config/mikrotikIsolirWalledGarden');
+    isolirApp.use(isolirNoCacheMiddleware);
+    isolirApp.use(captiveProbeMiddleware);
+    isolirApp.use(rootTrampolineMiddleware);
     isolirApp.use(express.static(path.join(__dirname, 'public'), {
-        maxAge: '7d',
-        etag: true
+        maxAge: 0,
+        etag: false,
+        lastModified: false
     }));
-    isolirApp.get(['/', '/isolir', '/isolir/'], renderIsolirPage);
+    isolirApp.get(['/isolir', '/isolir/'], renderIsolirPage);
     isolirApp.get(['/isolir/t/:tenantId', '/isolir/tenant/:tenantId', '/t/:tenantId'], renderIsolirPage);
     isolirApp.get('*', renderIsolirPage);
 
@@ -1995,6 +2062,18 @@ function startIsolirPortal(portToUse) {
     }).on('error', (err) => {
         logger.warn(`[ISOLIR] Gagal membuka port ${isolirPort}: ${err.message}`);
     });
+
+    let sinkholeIp = String(require('./config/settingsManager').getSetting('server_host', '103.132.40.78') || '103.132.40.78');
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(sinkholeIp)) sinkholeIp = '103.132.40.78';
+    resolveBillingServerIp().then((ip) => {
+        if (ip) sinkholeIp = ip;
+    }).catch(() => {});
+    setInterval(() => {
+        resolveBillingServerIp().then((ip) => {
+            if (ip) sinkholeIp = ip;
+        }).catch(() => {});
+    }, 60000);
+    startIsolirDnsServer(() => sinkholeIp);
 }
 
 const isolirPort = process.env.ISOLIR_PORT || getSetting('isolir_page_port', 8899);

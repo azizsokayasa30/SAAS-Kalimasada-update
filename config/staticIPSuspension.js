@@ -1,9 +1,7 @@
 const logger = require('./logger');
 const { getMikrotikConnectionForCustomer, getMikrotikConnectionForRouter } = require('./mikrotik');
-const { getSetting } = require('./settingsManager');
-const { getTenantSetting } = require('./platform/tenantSettings');
-const { getPublicAppBaseUrl } = require('./public-endpoint');
 const { getCustomerStaticIp } = require('./staticIPProvisioning');
+const { getIsolirAccessConfig, applyIsolirWalledGarden } = require('./mikrotikIsolirWalledGarden');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 
@@ -11,69 +9,8 @@ const sqlite3 = require('sqlite3').verbose();
 const ISOLIR_LIST = 'isolir_customer';
 const LEGACY_ISOLIR_LIST = 'blocked_customers';
 
-function isIpAddress(value) {
-    return /^(\d{1,3}\.){3}\d{1,3}$/.test(String(value || '').trim());
-}
-
-function settingOrGlobal(key, defaultValue = '') {
-    try {
-        return getTenantSetting(key, getSetting(key, defaultValue));
-    } catch (_) {
-        return getSetting(key, defaultValue);
-    }
-}
-
-function getBillingWalledGardenConfig() {
-    // Selalu ambil IP server dari settings global (portal management) sebagai fallback.
-    // PUBLIC_APP_BASE_URL sering memakai domain → hostname bukan IP, tidak valid untuk NAT to-addresses.
-    const globalServerHost = String(getSetting('server_host', '') || '').trim();
-    let host = String(settingOrGlobal('server_host', globalServerHost) || '').trim() || globalServerHost;
-    let port = String(settingOrGlobal('server_port', process.env.PORT || 4555));
-    try {
-        const url = new URL(getPublicAppBaseUrl());
-        if (url.hostname) host = url.hostname;
-        if (url.port) port = url.port;
-        else if (url.protocol === 'https:') port = '443';
-        else if (url.protocol === 'http:') port = port || '80';
-    } catch (_) {}
-
-    const billingServerIp =
-        String(process.env.ISOLIR_BILLING_SERVER_IP || '').trim() ||
-        String(settingOrGlobal('isolir_billing_server_ip', '') || '').trim() ||
-        String(settingOrGlobal('billing_server_ip', '') || '').trim() ||
-        (isIpAddress(host) ? host : '') ||
-        (isIpAddress(globalServerHost) ? globalServerHost : '');
-
-    return {
-        billingServerIp,
-        billingHost: host,
-        billingPorts: Array.from(new Set([
-            String(process.env.ISOLIR_PORT || settingOrGlobal('isolir_page_port', 8899)),
-            String(port || ''),
-            '80',
-            '443'
-        ].filter(Boolean))).join(','),
-        isolirPort: String(process.env.ISOLIR_PORT || settingOrGlobal('isolir_page_port', 8899)),
-        whatsappHosts: [
-            'wa.me',
-            'whatsapp.com',
-            'web.whatsapp.com',
-            'api.whatsapp.com',
-            'static.whatsapp.net',
-            'whatsapp.net',
-            'graph.whatsapp.com',
-            'mmg.whatsapp.net',
-            'pps.whatsapp.net',
-            'media.whatsapp.net',
-            'mmg-fna.whatsapp.net',
-            'g.whatsapp.net',
-            'v.whatsapp.net',
-            'scontent.whatsapp.net',
-            'facebook.com',
-            'fbcdn.net',
-            'fbsbx.com'
-        ]
-    };
+async function getBillingWalledGardenConfig() {
+    return getIsolirAccessConfig();
 }
 
 /**
@@ -582,7 +519,7 @@ class StaticIPSuspensionManager {
      * Dipakai saat isolir pelanggan maupun Sync manual dari halaman admin.
      */
     async ensureIsolirFirewallOnConnection(mikrotik) {
-        const access = getBillingWalledGardenConfig();
+        const access = await getBillingWalledGardenConfig();
 
         // Migrasi entry lama blocked_customers → isolir_customer (sekali jalan per setup)
         try {
@@ -611,216 +548,13 @@ class StaticIPSuspensionManager {
             logger.warn(`Legacy isolir list migrate: ${migErr.message}`);
         }
 
-        const addAddressListIfMissing = async (list, address, comment) => {
-            if (!address || address === 'GANTI_IP_SERVER_BILLING') return;
-            try {
-                const existing = await mikrotik.write('/ip/firewall/address-list/print', [
-                    `?list=${list}`,
-                    `?address=${address}`
-                ]);
-                if (!existing || existing.length === 0) {
-                    await mikrotik.write('/ip/firewall/address-list/add', [
-                        `=list=${list}`,
-                        `=address=${address}`,
-                        `=comment=${comment}`
-                    ]);
-                }
-            } catch (error) {
-                logger.warn(`Failed to add walled-garden address ${address}: ${error.message}`);
-            }
-        };
-
-        const addFilterIfMissing = async (comment, params) => {
-            try {
-                const existing = await mikrotik.write('/ip/firewall/filter/print', [
-                    `?comment=${comment}`
-                ]);
-                if (existing && existing.length > 0) return 'exists';
-                const firstRules = await mikrotik.write('/ip/firewall/filter/print', []);
-                const firstId = firstRules && firstRules[0] && firstRules[0]['.id'];
-                try {
-                    await mikrotik.write('/ip/firewall/filter/add', [
-                        ...params,
-                        `=comment=${comment}`,
-                        ...(firstId ? [`=place-before=${firstId}`] : [])
-                    ]);
-                } catch (placeErr) {
-                    await mikrotik.write('/ip/firewall/filter/add', [
-                        ...params,
-                        `=comment=${comment}`
-                    ]);
-                }
-                logger.info(`[STATIC-IP-ISOLIR] filter added: ${comment}`);
-                return 'added';
-            } catch (error) {
-                logger.warn(`Failed to add firewall allow rule "${comment}": ${error.message}`);
-                return 'error';
-            }
-        };
-
-        await addAddressListIfMissing('isolir-allowed-dst', access.billingServerIp, 'BILLING-ISOLIR billing server');
-        if (access.billingHost && !isIpAddress(access.billingHost)) {
-            await addAddressListIfMissing('isolir-allowed-dst', access.billingHost, 'BILLING-ISOLIR billing host');
-        }
-        for (const host of access.whatsappHosts) {
-            await addAddressListIfMissing('isolir-allowed-dst', host, `BILLING-ISOLIR whatsapp ${host}`);
-        }
-
-        // Whitelist ini harus berada sebelum drop isolir_customer supaya pelanggan isolir
-        // tetap bisa bayar di portal dan mengirim bukti lewat WhatsApp.
-        await addFilterIfMissing('BILLING-ISOLIR static allow established', [
-            '=chain=forward',
-            '=connection-state=established,related',
-            '=action=accept'
-        ]);
-        await addFilterIfMissing('BILLING-ISOLIR static allow dns udp', [
-            '=chain=forward',
-            '=src-address-list=isolir_customer',
-            '=protocol=udp',
-            '=dst-port=53',
-            '=action=accept'
-        ]);
-        await addFilterIfMissing('BILLING-ISOLIR static allow dns tcp', [
-            '=chain=forward',
-            '=src-address-list=isolir_customer',
-            '=protocol=tcp',
-            '=dst-port=53',
-            '=action=accept'
-        ]);
-        if (access.billingServerIp) {
-            await addFilterIfMissing('BILLING-ISOLIR static allow billing app', [
-                '=chain=forward',
-                '=src-address-list=isolir_customer',
-                `=dst-address=${access.billingServerIp}`,
-                '=protocol=tcp',
-                `=dst-port=${access.billingPorts}`,
-                '=action=accept'
-            ]);
-        }
-        await addFilterIfMissing('BILLING-ISOLIR static allow whatsapp', [
-            '=chain=forward',
-            '=src-address-list=isolir_customer',
-            '=dst-address-list=isolir-allowed-dst',
-            '=protocol=tcp',
-            '=dst-port=80,443,5222,5223,5228,4244',
-            '=action=accept'
-        ]);
-
-        const natResults = { added: 0, exists: 0, skipped: false, error: null };
-        const addNatIfMissing = async (comment, params) => {
-            try {
-                const existing = await mikrotik.write('/ip/firewall/nat/print', [
-                    `?comment=${comment}`
-                ]);
-                if (existing && existing.length > 0) {
-                    natResults.exists++;
-                    return 'exists';
-                }
-                const firstRules = await mikrotik.write('/ip/firewall/nat/print', []);
-                const firstId = firstRules && firstRules[0] && firstRules[0]['.id'];
-                try {
-                    await mikrotik.write('/ip/firewall/nat/add', [
-                        ...params,
-                        `=comment=${comment}`,
-                        ...(firstId ? [`=place-before=${firstId}`] : [])
-                    ]);
-                } catch (placeErr) {
-                    await mikrotik.write('/ip/firewall/nat/add', [
-                        ...params,
-                        `=comment=${comment}`
-                    ]);
-                }
-                natResults.added++;
-                logger.info(`[STATIC-IP-ISOLIR] NAT added: ${comment}`);
-                return 'added';
-            } catch (error) {
-                natResults.error = error.message;
-                logger.warn(`Failed to add NAT redirect "${comment}": ${error.message}`);
-                return 'error';
-            }
-        };
-
-        if (access.billingServerIp) {
-            await addNatIfMissing('BILLING-ISOLIR static bypass allowed destinations', [
-                '=chain=dstnat',
-                '=src-address-list=isolir_customer',
-                '=dst-address-list=isolir-allowed-dst',
-                '=protocol=tcp',
-                '=action=accept'
-            ]);
-            await addNatIfMissing('BILLING-ISOLIR static force http to isolir page', [
-                '=chain=dstnat',
-                '=src-address-list=isolir_customer',
-                '=protocol=tcp',
-                '=dst-port=80,8080,8000,8888',
-                '=action=dst-nat',
-                `=to-addresses=${access.billingServerIp}`,
-                `=to-ports=${access.isolirPort}`
-            ]);
-            await addNatIfMissing('BILLING-ISOLIR static masquerade to billing server', [
-                '=chain=srcnat',
-                '=src-address-list=isolir_customer',
-                `=dst-address=${access.billingServerIp}`,
-                '=action=masquerade'
-            ]);
-        } else {
-            natResults.skipped = true;
-            logger.warn(
-                '[STATIC-IP-ISOLIR] billingServerIp kosong — NAT redirect isolir tidak dipasang. Set server_host (IP) di portal management.'
-            );
-        }
-
-        // 1. Pastikan firewall rule untuk block address list ada
-        const existingRules = await mikrotik.write('/ip/firewall/filter/print', [
-            '?src-address-list=isolir_customer',
-            '?action=drop'
-        ]);
-
-        if (!existingRules || existingRules.length === 0) {
-            const firstRules = await mikrotik.write('/ip/firewall/filter/print', []);
-            const firstId = firstRules && firstRules[0] && firstRules[0]['.id'];
-            try {
-                await mikrotik.write('/ip/firewall/filter/add', [
-                    '=chain=forward',
-                    '=src-address-list=isolir_customer',
-                    '=action=drop',
-                    '=comment=Block suspended customers (static IP)',
-                    ...(firstId ? [`=place-before=${firstId}`] : [])
-                ]);
-            } catch (_) {
-                await mikrotik.write('/ip/firewall/filter/add', [
-                    '=chain=forward',
-                    '=src-address-list=isolir_customer',
-                    '=action=drop',
-                    '=comment=Block suspended customers (static IP)'
-                ]);
-            }
-            logger.info('Created firewall rule for isolir_customer address list');
-        }
-
-        // 2. Tambahkan rule untuk block dari internal juga (jika diperlukan)
-        const internalRules = await mikrotik.write('/ip/firewall/filter/print', [
-            '?chain=input',
-            '?src-address-list=isolir_customer',
-            '?action=drop'
-        ]);
-
-        if (!internalRules || internalRules.length === 0) {
-            await mikrotik.write('/ip/firewall/filter/add', [
-                '=chain=input',
-                '=src-address-list=isolir_customer',
-                '=action=drop',
-                '=comment=Block suspended customers from accessing router (static IP)'
-            ]);
-            logger.info('Created input chain rule for isolir_customer address list');
-        }
-
+        const sync = await applyIsolirWalledGarden(mikrotik, 'static', access);
         return {
-            success: true,
-            billing_server_ip: access.billingServerIp || null,
-            isolir_port: access.isolirPort,
+            success: Boolean(sync.success),
+            billing_server_ip: sync.billing_server_ip || null,
+            isolir_port: sync.isolir_port,
             address_list: ISOLIR_LIST,
-            nat: natResults
+            nat: sync.nat || null
         };
     }
 
@@ -867,9 +601,10 @@ class StaticIPSuspensionManager {
      * Sync firewall redirect isolir static IP ke semua router milik tenant.
      */
     async syncIsolirFirewallForTenant(tenantId) {
-        const access = getBillingWalledGardenConfig();
+        const { patchNodeRouterosEmptyReply, hardenMikrotikConnection } = require('./mikrotikIsolirWalledGarden');
+        patchNodeRouterosEmptyReply();
+        const access = await getBillingWalledGardenConfig();
         const routers = await this.listRoutersForTenant(tenantId);
-        const results = [];
 
         if (!routers.length) {
             return {
@@ -880,47 +615,91 @@ class StaticIPSuspensionManager {
             };
         }
 
-        for (const router of routers) {
+        const PER_ROUTER_TIMEOUT_MS = 45000;
+        const SYNC_CONCURRENCY = 2;
+        const withTimeout = (promise, ms, label) => {
+            let timer;
+            return Promise.race([
+                promise.finally(() => clearTimeout(timer)),
+                new Promise((_, reject) => {
+                    timer = setTimeout(
+                        () => reject(new Error(`Timeout ${Math.round(ms / 1000)}s: ${label}`)),
+                        ms
+                    );
+                })
+            ]);
+        };
+        const mapPool = async (items, concurrency, worker) => {
+            const out = new Array(items.length);
+            let next = 0;
+            const run = async () => {
+                while (next < items.length) {
+                    const i = next++;
+                    out[i] = await worker(items[i], i);
+                }
+            };
+            const n = Math.max(1, Math.min(concurrency, items.length || 1));
+            await Promise.all(Array.from({ length: n }, () => run()));
+            return out;
+        };
+
+        const t0 = Date.now();
+        const results = await mapPool(routers, SYNC_CONCURRENCY, async (router) => {
+            const label = `${router.name || router.id} (${router.nas_ip})`;
+            const started = Date.now();
             try {
-                const mikrotik = await getMikrotikConnectionForRouter(router);
-                const sync = await this.ensureIsolirFirewallOnConnection(mikrotik);
-                results.push({
-                    success: true,
+                const sync = await withTimeout(
+                    (async () => {
+                        const mikrotik = hardenMikrotikConnection(await getMikrotikConnectionForRouter(router));
+                        return this.ensureIsolirFirewallOnConnection(mikrotik);
+                    })(),
+                    PER_ROUTER_TIMEOUT_MS,
+                    label
+                );
+                return {
+                    success: Boolean(sync.success),
                     router_id: router.id,
                     router_name: router.name,
                     nas_ip: router.nas_ip,
                     billing_server_ip: sync.billing_server_ip,
                     isolir_port: sync.isolir_port,
-                    nat: sync.nat || null
-                });
+                    elapsed_ms: Date.now() - started,
+                    nat: sync.nat || null,
+                    error: sync.success
+                        ? undefined
+                        : 'NAT redirect gagal (cek server_host / isolir_billing_server_ip)'
+                };
             } catch (e) {
                 logger.warn(`[STATIC-IP-ISOLIR] sync router ${router.id} (${router.name}): ${e.message}`);
-                results.push({
+                return {
                     success: false,
                     router_id: router.id,
                     router_name: router.name,
                     nas_ip: router.nas_ip,
+                    elapsed_ms: Date.now() - started,
                     error: e.message
-                });
+                };
             }
-        }
+        });
 
         const ok = results.filter((r) => r.success).length;
         const failed = results.length - ok;
+        const elapsed = Date.now() - t0;
         return {
             success: failed === 0,
             message: failed
-                ? `Sync selesai: ${ok} berhasil, ${failed} gagal`
-                : `Sync berhasil ke ${ok} router`,
+                ? `Sync selesai ${elapsed}ms: ${ok} berhasil, ${failed} gagal`
+                : `Sync berhasil ke ${ok} router dalam ${elapsed}ms (IP portal ${access.billingServerIp || '-'} port ${access.isolirPort})`,
             billing_server_ip: access.billingServerIp || null,
             isolir_port: access.isolirPort,
+            elapsed_ms: elapsed,
             address_list: ISOLIR_LIST,
             results
         };
     }
 
-    getStaticIpIsolirInfo() {
-        const access = getBillingWalledGardenConfig();
+    async getStaticIpIsolirInfo() {
+        const access = await getBillingWalledGardenConfig();
         return {
             address_list: ISOLIR_LIST,
             allowed_dst_list: 'isolir-allowed-dst',

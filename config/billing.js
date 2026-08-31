@@ -5163,6 +5163,11 @@ ${lifetimePaymentStatusSql}
         if (hasFixDate) selectClause += `, c.fix_date`;
         selectClause += `, p.name as package_name, p.speed as package_speed`;
 
+        // Daftar lunas: urutkan tanggal bayar terbaru di atas (bukan created_at invoice)
+        const orderBy = String(filters.status || '').toLowerCase() === 'paid'
+            ? 'ORDER BY datetime(COALESCE(i.payment_date, i.created_at)) DESC, i.id DESC'
+            : 'ORDER BY i.created_at DESC, i.id DESC';
+
         let sql = `
             ${selectClause}
             FROM invoices i
@@ -5170,7 +5175,7 @@ ${lifetimePaymentStatusSql}
             LEFT JOIN members m ON i.member_id = m.id AND m.tenant_id = i.tenant_id
             LEFT JOIN packages p ON i.package_id = p.id
             WHERE 1=1 ${filterSql}
-            ORDER BY i.created_at DESC, i.id DESC
+            ${orderBy}
         `;
         const params = [...filterParams];
 
@@ -7297,7 +7302,7 @@ ${lifetimePaymentStatusSql}
                 params.push(searchTerm, searchTerm, searchTerm, searchTerm);
             }
             
-            sql += ` ORDER BY p.payment_date DESC`;
+            sql += ` ORDER BY datetime(p.payment_date) DESC, p.id DESC`;
             
             this.db.all(sql, params, (err, rows) => {
                 if (err) {

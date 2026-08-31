@@ -46,7 +46,12 @@ function adminAuth(req, res, next) {
     next();
   } else {
     // Check if this is an API request
-    if (req.path.startsWith('/api/') || req.headers.accept?.includes('application/json') || ['DELETE', 'PUT', 'PATCH'].includes(req.method)) {
+    const wantsJson =
+      req.path.startsWith('/api/') ||
+      req.headers.accept?.includes('application/json') ||
+      String(req.headers['content-type'] || '').includes('application/json') ||
+      ['DELETE', 'PUT', 'PATCH'].includes(req.method);
+    if (wantsJson) {
       res.status(401).json({ success: false, message: 'Unauthorized' });
     } else {
       res.redirect('/login');
