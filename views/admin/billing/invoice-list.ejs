@@ -162,6 +162,20 @@
             border-radius: 6px !important;
             box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12) !important;
         }
+        .invoice-select-column {
+            width: 42px;
+            text-align: center;
+        }
+        .invoice-select-checkbox,
+        #selectAllInvoices {
+            width: 1.1rem;
+            height: 1.1rem;
+            cursor: pointer;
+        }
+        #bulkInvoicePayBtn:disabled {
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
     </style>
 
     <%- include('../../partials/theme-head') %>
@@ -348,13 +362,19 @@
 
                 <!-- Invoice Table -->
                 <div class="card invoice-list-table-card">
-                    <div class="card-header">
+                    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
                         <h5 class="mb-0">
                             <i class="bi bi-list-ul"></i> Daftar Invoice
                             <span class="badge bg-light text-dark ms-2">
                                 Halaman <%= pagination.currentPage %> dari <%= pagination.totalPages %>
                             </span>
                         </h5>
+                        <div class="d-flex align-items-center gap-2">
+                            <span id="selectedInvoiceSummary" class="small text-white">0 dipilih</span>
+                            <button type="button" id="bulkInvoicePayBtn" class="btn btn-sm btn-light text-success fw-semibold" disabled>
+                                <i class="bi bi-check2-all"></i> Lunaskan yang Dipilih
+                            </button>
+                        </div>
                     </div>
                     <div class="card-body">
                         <%
@@ -366,6 +386,9 @@
                                 <table class="table table-hover">
                                     <thead>
                                         <tr>
+                                            <th class="invoice-select-column">
+                                                <input type="checkbox" id="selectAllInvoices" title="Pilih semua invoice belum lunas di halaman ini" aria-label="Pilih semua invoice belum lunas">
+                                            </th>
                                             <th>Invoice #</th>
                                             <th>Pelanggan</th>
                                             <th>Paket</th>
@@ -391,6 +414,15 @@
                                                 data-amount="<%= invoiceAmount %>"
                                                 data-status="<%= invoice.status || '' %>"
                                                 data-overdue="<%= isOverdue ? '1' : '0' %>">
+                                                <td class="invoice-select-column">
+                                                    <% if (isUnpaid) { %>
+                                                        <input type="checkbox"
+                                                               class="invoice-select-checkbox"
+                                                               value="<%= invoice.id %>"
+                                                               data-amount="<%= invoiceAmount %>"
+                                                               aria-label="Pilih invoice <%= invoice.invoice_number %>">
+                                                    <% } %>
+                                                </td>
                                                 <td>
                                                     <strong>#<%= invoice.invoice_number %></strong>
                                                 </td>
@@ -444,7 +476,7 @@
                                                     <div class="admin-action-btns">
                                                         <% if (isUnpaid) { %>
                                                             <a href="/admin/billing/invoices/<%= invoice.id %>/pay?next=<%= invoiceListNextEnc %>"
-                                                               class="btn btn-sm btn-success"
+                                                               class="btn btn-sm btn-success js-mark-paid"
                                                                title="Tandai tagihan sebagai lunas" aria-label="Tandai lunas">Lunas</a>
                                                         <% } %>
                                                         <a href="/admin/billing/invoices/<%= invoice.id %>/hapus?next=<%= invoiceListNextEnc %>"
@@ -767,9 +799,113 @@
             if (statusCell) statusCell.innerHTML = '<span class="badge bg-success">Lunas</span>';
             var paidBtn = row.querySelector('.js-mark-paid');
             if (paidBtn) paidBtn.remove();
+            var checkbox = row.querySelector('.invoice-select-checkbox');
+            if (checkbox) checkbox.remove();
             if (invoiceListFilterStatus === 'unpaid' || invoiceListFilterStatus === 'overdue') {
                 row.remove();
             }
+        }
+
+        function getSelectedInvoiceCheckboxes() {
+            return Array.prototype.slice.call(document.querySelectorAll('.invoice-select-checkbox:checked'));
+        }
+
+        function updateBulkInvoiceSelection() {
+            var checkboxes = Array.prototype.slice.call(document.querySelectorAll('.invoice-select-checkbox'));
+            var selected = getSelectedInvoiceCheckboxes();
+            var total = selected.reduce(function(sum, checkbox) {
+                return sum + (Number(checkbox.getAttribute('data-amount')) || 0);
+            }, 0);
+            var summary = document.getElementById('selectedInvoiceSummary');
+            var bulkButton = document.getElementById('bulkInvoicePayBtn');
+            var selectAll = document.getElementById('selectAllInvoices');
+
+            if (summary) {
+                summary.textContent = selected.length
+                    ? selected.length + ' dipilih · ' + formatRp(total)
+                    : '0 dipilih';
+            }
+            if (bulkButton) {
+                bulkButton.disabled = selected.length === 0;
+            }
+            if (selectAll) {
+                selectAll.checked = checkboxes.length > 0 && selected.length === checkboxes.length;
+                selectAll.indeterminate = selected.length > 0 && selected.length < checkboxes.length;
+            }
+        }
+
+        function bulkPaySelectedInvoices() {
+            var selected = getSelectedInvoiceCheckboxes();
+            if (!selected.length) {
+                showToast('info', 'Belum Ada Pilihan', 'Pilih minimal satu invoice yang belum lunas');
+                return;
+            }
+
+            var total = selected.reduce(function(sum, checkbox) {
+                return sum + (Number(checkbox.getAttribute('data-amount')) || 0);
+            }, 0);
+            var confirmed = confirm(
+                'Tandai ' + selected.length + ' invoice sebagai lunas?\n' +
+                'Total: ' + formatRp(total) + '\n\n' +
+                'Pembayaran akan dicatat sebagai Admin Kantor (Manual).'
+            );
+            if (!confirmed) return;
+
+            var button = document.getElementById('bulkInvoicePayBtn');
+            var originalText = button ? button.innerHTML : '';
+            if (button) {
+                button.disabled = true;
+                button.innerHTML = '<i class="bi bi-hourglass-split"></i> Memproses...';
+            }
+            showToast('info', 'Memproses...', 'Menyimpan pelunasan invoice yang dipilih');
+
+            fetch('/admin/billing/invoices/bulk-pay', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ids: selected.map(function(checkbox) { return checkbox.value; }),
+                    payment_method: 'manual_admin',
+                    payment_date: new Date().toISOString().slice(0, 10)
+                })
+            })
+            .then(function(response) {
+                return response.json().then(function(data) {
+                    return { response: response, data: data || {} };
+                });
+            })
+            .then(function(result) {
+                var data = result.data;
+                if (!result.response.ok || !data.success) {
+                    throw new Error(data.message || 'Gagal melakukan pelunasan massal');
+                }
+
+                (data.results || []).forEach(function(item) {
+                    if (!item.success || item.skipped) return;
+                    var row = Array.prototype.slice.call(document.querySelectorAll('tr[data-invoice-id]'))
+                        .find(function(candidate) {
+                            return candidate.getAttribute('data-invoice-id') === String(item.id);
+                        });
+                    if (row) markRowPaid(row);
+                });
+                updateBulkInvoiceSelection();
+
+                var summary = data.summary || {};
+                var message = (summary.success || 0) + ' invoice berhasil ditandai lunas';
+                if ((summary.failed || 0) > 0 || (summary.skipped || 0) > 0) {
+                    message += ', ' + (summary.failed || 0) + ' gagal, ' + (summary.skipped || 0) + ' dilewati';
+                }
+                showToast('success', 'Pelunasan Berhasil', message);
+            })
+            .catch(function(error) {
+                showToast('error', 'Pelunasan Gagal', error.message || 'Terjadi kesalahan saat melunaskan invoice');
+            })
+            .then(function() {
+                if (button) {
+                    button.disabled = false;
+                    button.innerHTML = originalText;
+                }
+                updateBulkInvoiceSelection();
+            });
         }
 
         function updateFinalPaymentAmount() {
@@ -875,6 +1011,24 @@
 
         var payDiscount = document.getElementById('pay_discount');
         if (payDiscount) payDiscount.addEventListener('input', updateFinalPaymentAmount);
+
+        var selectAllInvoices = document.getElementById('selectAllInvoices');
+        if (selectAllInvoices) {
+            selectAllInvoices.addEventListener('change', function() {
+                document.querySelectorAll('.invoice-select-checkbox').forEach(function(checkbox) {
+                    checkbox.checked = selectAllInvoices.checked;
+                });
+                updateBulkInvoiceSelection();
+            });
+        }
+        document.querySelectorAll('.invoice-select-checkbox').forEach(function(checkbox) {
+            checkbox.addEventListener('change', updateBulkInvoiceSelection);
+        });
+        var bulkInvoicePayBtn = document.getElementById('bulkInvoicePayBtn');
+        if (bulkInvoicePayBtn) {
+            bulkInvoicePayBtn.addEventListener('click', bulkPaySelectedInvoices);
+        }
+        updateBulkInvoiceSelection();
 
         var paymentForm = document.getElementById('paymentConfirmForm');
         if (paymentForm) {
