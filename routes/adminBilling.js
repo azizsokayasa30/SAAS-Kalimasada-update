@@ -10694,6 +10694,9 @@ router.post('/invoices/bulk-pay', adminAuth, async (req, res) => {
                 if (!invoice) {
                     throw new Error('Invoice tidak ditemukan');
                 }
+                if (tenantId && Number(invoice.tenant_id) !== tenantId) {
+                    throw new Error('Invoice tidak ditemukan');
+                }
 
                 const status = String(invoice.status || '').toLowerCase();
                 if (status === 'paid') {

@@ -899,6 +899,10 @@
             if (statusCell) statusCell.innerHTML = '<span class="badge bg-success">Lunas</span>';
             var paidBtn = row.querySelector('.js-mark-paid');
             if (paidBtn) paidBtn.remove();
+            var selectionCheckbox = row.querySelector('.invoice-select-checkbox');
+            if (selectionCheckbox) {
+                selectionCheckbox.parentElement.innerHTML = '<span class="text-muted" aria-hidden="true">—</span>';
+            }
             if (invoiceListFilterStatus === 'unpaid' || invoiceListFilterStatus === 'overdue') {
                 row.remove();
             }
