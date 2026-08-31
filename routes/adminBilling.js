@@ -2278,8 +2278,6 @@ router.get('/invoice-list', getAppSettings, async (req, res) => {
         if (status) filters.status = status;
         if (searchTerm) filters.customer_username = searchTerm;
         if (type) filters.type = type;
-        
-        filters.listMode = true;
 
         const [invoices, summary] = await Promise.all([
             billingManager.getInvoicesWithFilters(filters, limit, offset),

@@ -5154,21 +5154,21 @@ ${lifetimePaymentStatusSql}
     async getInvoicesWithFilters(filters = {}, limit = null, offset = null) {
         const flags = await this._ensureBillingSchemaFlags();
         const { hasRenewalType, hasFixDate, hasCustomerId } = flags;
-        const listMode = Boolean(filters.listMode);
         const { sql: filterSql, params: filterParams } = this._buildInvoiceListFilterSql(filters, flags);
 
         let selectClause = `SELECT i.*, COALESCE(c.username, m.hotspot_username, m.username) as username, COALESCE(c.name, m.name) as customer_name, COALESCE(c.phone, m.phone) as customer_phone`;
         if (hasCustomerId) selectClause += `, c.customer_id`;
         if (hasRenewalType) selectClause += `, c.renewal_type`;
         if (hasFixDate) selectClause += `, c.fix_date`;
-        selectClause += `, p.name as package_name, p.speed as package_speed`;
+        // Paket yang sudah dihapus/diganti tetap tampil lewat snapshot di invoices.package_name.
+        selectClause += `, COALESCE(p.name, i.package_name) as package_name, p.speed as package_speed`;
 
         let sql = `
             ${selectClause}
             FROM invoices i
             LEFT JOIN customers c ON i.customer_id = c.id AND c.tenant_id = i.tenant_id
             LEFT JOIN members m ON i.member_id = m.id AND m.tenant_id = i.tenant_id
-            LEFT JOIN packages p ON i.package_id = p.id
+            LEFT JOIN packages p ON i.package_id = p.id AND p.tenant_id = i.tenant_id
             WHERE 1=1 ${filterSql}
             ORDER BY i.created_at DESC, i.id DESC
         `;
@@ -5196,7 +5196,7 @@ ${lifetimePaymentStatusSql}
                         ? `Fix Date (${fixDate || 'N/A'})`
                         : 'Renewal';
                     let nextDueDate = null;
-                    if (!listMode && row.status === 'paid' && row.payment_date) {
+                    if (row.status === 'paid' && row.payment_date) {
                         try {
                             nextDueDate = this.calculateNextDueDate(
                                 { renewal_type: renewalType, fix_date: fixDate },
