@@ -10616,6 +10616,137 @@ router.delete('/invoices/:id', adminAuth, async (req, res) => {
     }
 });
 
+// Mark multiple unpaid invoices as paid
+router.post('/invoices/bulk-pay', adminAuth, async (req, res) => {
+    try {
+        const tenantId = resolveBillingTenantId(req);
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant tidak dikenali' });
+        }
+
+        const rawIds = req.body?.ids;
+        if (!Array.isArray(rawIds) || rawIds.length === 0) {
+            return res.status(400).json({ success: false, message: 'Pilih minimal satu invoice' });
+        }
+        if (rawIds.length > 100) {
+            return res.status(400).json({ success: false, message: 'Maksimal 100 invoice dapat diproses sekaligus' });
+        }
+
+        const ids = rawIds.map((rawId) => Number(rawId));
+        if (ids.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+            return res.status(400).json({ success: false, message: 'Daftar ID invoice tidak valid' });
+        }
+        const uniqueIds = [...new Set(ids)];
+
+        const paymentMethod = String(req.body?.payment_method || 'manual_admin').trim().toLowerCase();
+        const allowedPaymentMethods = new Set(['manual_admin', 'cash', 'transfer_bank', 'qris']);
+        if (!allowedPaymentMethods.has(paymentMethod)) {
+            return res.status(400).json({ success: false, message: 'Metode pembayaran tidak valid' });
+        }
+
+        const paymentDate = String(req.body?.payment_date || localPayDate()).trim();
+        const dateMatch = paymentDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        const parsedDate = dateMatch
+            ? new Date(Date.UTC(Number(dateMatch[1]), Number(dateMatch[2]) - 1, Number(dateMatch[3])))
+            : null;
+        const validPaymentDate = parsedDate
+            && parsedDate.getUTCFullYear() === Number(dateMatch[1])
+            && parsedDate.getUTCMonth() === Number(dateMatch[2]) - 1
+            && parsedDate.getUTCDate() === Number(dateMatch[3]);
+        if (!validPaymentDate) {
+            return res.status(400).json({ success: false, message: 'Tanggal pembayaran tidak valid' });
+        }
+
+        const results = [];
+        let success = 0;
+        let skipped = 0;
+        let failed = 0;
+
+        for (const id of uniqueIds) {
+            try {
+                const invoice = await new Promise((resolve, reject) => {
+                    billingManager.db.get(
+                        `SELECT id, invoice_number, amount, status
+                         FROM invoices
+                         WHERE id = ? AND tenant_id = ?`,
+                        [id, tenantId],
+                        (err, row) => (err ? reject(err) : resolve(row || null))
+                    );
+                });
+
+                if (!invoice) {
+                    results.push({ id, success: false, message: 'Invoice tidak ditemukan di tenant ini' });
+                    failed++;
+                    continue;
+                }
+                if (String(invoice.status || '').toLowerCase() !== 'unpaid') {
+                    results.push({
+                        id,
+                        success: false,
+                        skipped: true,
+                        invoice_number: invoice.invoice_number,
+                        message: 'Invoice bukan berstatus belum bayar'
+                    });
+                    skipped++;
+                    continue;
+                }
+
+                const amount = Math.max(0, Number(invoice.amount) || 0);
+                const notes = `Pelunasan massal oleh Admin Kantor | Tanggal Bayar: ${paymentDate}`;
+                const payment = await billingManager.recordPayment({
+                    invoice_id: id,
+                    amount,
+                    payment_method: paymentMethod,
+                    reference_number: '',
+                    notes,
+                    payment_date: paymentDate,
+                    discount_amount: 0,
+                    tenant_id: tenantId
+                });
+                try {
+                    await billingManager.updateInvoiceStatus(id, 'paid', paymentMethod);
+                } catch (statusError) {
+                    await new Promise((resolve, reject) => {
+                        billingManager.db.run(
+                            'DELETE FROM payments WHERE id = ? AND tenant_id = ?',
+                            [payment.id, tenantId],
+                            (err) => (err ? reject(err) : resolve())
+                        );
+                    });
+                    throw statusError;
+                }
+
+                results.push({
+                    id,
+                    success: true,
+                    invoice_number: invoice.invoice_number,
+                    payment_id: payment.id
+                });
+                success++;
+            } catch (error) {
+                logger.error(`Error bulk paying invoice ${id}:`, error);
+                results.push({ id, success: false, message: error.message || 'Gagal menyimpan pelunasan' });
+                failed++;
+            }
+        }
+
+        logger.info(`Bulk invoice payment completed for tenant ${tenantId}: ${success} paid, ${skipped} skipped, ${failed} failed`);
+        return res.json({
+            success: true,
+            message: `${success} invoice berhasil ditandai lunas`,
+            summary: { success, skipped, failed, total: uniqueIds.length },
+            results
+        });
+    } catch (error) {
+        logger.error('Error bulk paying invoices:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Gagal melakukan pelunasan massal invoice',
+            error: error.message
+        });
+    }
+});
+
 // Bulk delete invoices
 router.post('/invoices/bulk-delete', adminAuth, async (req, res) => {
     try {
