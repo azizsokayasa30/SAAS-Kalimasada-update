@@ -10201,6 +10201,158 @@ function localPayDate() {
     return `${y}-${m}-${d}`;
 }
 
+const BULK_INVOICE_PAYMENT_LIMIT = 100;
+const BULK_INVOICE_PAYMENT_METHODS = new Set(['manual_admin', 'cash', 'transfer_bank', 'qris']);
+
+function normalizeBulkInvoiceIds(rawIds) {
+    if (!Array.isArray(rawIds) || rawIds.length === 0 || rawIds.length > BULK_INVOICE_PAYMENT_LIMIT) {
+        return null;
+    }
+
+    const ids = [];
+    for (const rawId of rawIds) {
+        const value = String(rawId == null ? '' : rawId).trim();
+        if (!/^\d+$/.test(value)) return null;
+        const id = parseInt(value, 10);
+        if (!Number.isSafeInteger(id) || id <= 0) return null;
+        if (!ids.includes(id)) ids.push(id);
+    }
+    return ids;
+}
+
+function isValidInvoicePaymentDate(value) {
+    const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return false;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year
+        && date.getUTCMonth() === month - 1
+        && date.getUTCDate() === day;
+}
+
+router.post('/invoices/bulk-pay', async (req, res) => {
+    try {
+        const tenantId = resolveBillingTenantId(req);
+        if (!tenantId) {
+            return res.status(403).json({ success: false, message: 'Tenant tidak dikenali' });
+        }
+
+        const rawIds = req.body && req.body.invoice_ids;
+        const invoiceIds = normalizeBulkInvoiceIds(rawIds);
+        if (!invoiceIds) {
+            return res.status(400).json({
+                success: false,
+                message: `Pilih 1 sampai ${BULK_INVOICE_PAYMENT_LIMIT} invoice yang valid`
+            });
+        }
+
+        const paymentMethod = String((req.body && req.body.payment_method) || 'manual_admin').trim();
+        if (!BULK_INVOICE_PAYMENT_METHODS.has(paymentMethod)) {
+            return res.status(400).json({ success: false, message: 'Metode pembayaran tidak valid' });
+        }
+
+        const paymentDate = String((req.body && req.body.payment_date) || localPayDate()).trim();
+        if (!isValidInvoicePaymentDate(paymentDate)) {
+            return res.status(400).json({ success: false, message: 'Tanggal pembayaran tidak valid' });
+        }
+
+        const placeholders = invoiceIds.map(() => '?').join(',');
+        const invoices = await new Promise((resolve, reject) => {
+            billingManager.db.all(
+                `SELECT id, invoice_number, amount, status
+                 FROM invoices
+                 WHERE tenant_id = ? AND id IN (${placeholders})`,
+                [tenantId, ...invoiceIds],
+                (err, rows) => (err ? reject(err) : resolve(rows || []))
+            );
+        });
+
+        if (invoices.length !== invoiceIds.length) {
+            return res.status(403).json({
+                success: false,
+                message: 'Satu atau beberapa invoice tidak ditemukan di tenant ini'
+            });
+        }
+
+        const unsupported = invoices.filter((invoice) => !['unpaid', 'paid'].includes(String(invoice.status || '').toLowerCase()));
+        if (unsupported.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invoice yang dibatalkan atau berstatus tidak aktif tidak dapat dilunasi'
+            });
+        }
+
+        const paidInvoiceIds = [];
+        const skippedInvoiceIds = invoices
+            .filter((invoice) => String(invoice.status || '').toLowerCase() === 'paid')
+            .map((invoice) => Number(invoice.id));
+        const failed = [];
+
+        for (const invoice of invoices) {
+            if (String(invoice.status || '').toLowerCase() !== 'unpaid') continue;
+
+            let paymentId = null;
+            try {
+                const amount = Math.max(0, Number(invoice.amount) || 0);
+                const payment = await billingManager.recordPayment({
+                    invoice_id: Number(invoice.id),
+                    amount,
+                    payment_method: paymentMethod,
+                    reference_number: '',
+                    notes: `Pelunasan massal oleh Admin Kantor | Tanggal Bayar: ${paymentDate}`,
+                    payment_date: paymentDate,
+                    discount_amount: 0,
+                    tenant_id: tenantId
+                });
+                paymentId = payment && payment.id;
+                await billingManager.updateInvoiceStatus(invoice.id, 'paid', paymentMethod);
+                paidInvoiceIds.push(Number(invoice.id));
+            } catch (error) {
+                if (paymentId) {
+                    await new Promise((resolve) => {
+                        billingManager.db.run(
+                            'DELETE FROM payments WHERE id = ? AND tenant_id = ?',
+                            [paymentId, tenantId],
+                            () => resolve()
+                        );
+                    });
+                }
+                failed.push({
+                    id: Number(invoice.id),
+                    invoice_number: invoice.invoice_number || String(invoice.id),
+                    message: error.message || 'Gagal menyimpan pelunasan'
+                });
+                logger.error(`Bulk invoice payment failed for invoice ${invoice.id}:`, error);
+            }
+        }
+
+        const successCount = paidInvoiceIds.length;
+        const skippedCount = skippedInvoiceIds.length;
+        const failedCount = failed.length;
+        let message = `${successCount} invoice berhasil dilunasi`;
+        if (skippedCount > 0) message += `, ${skippedCount} sudah lunas`;
+        if (failedCount > 0) message += `, ${failedCount} gagal`;
+
+        logger.info(`Bulk invoice payment completed for tenant ${tenantId}: ${message}`);
+        return res.status(failedCount > 0 ? 207 : 200).json({
+            success: failedCount === 0,
+            message,
+            paid_invoice_ids: paidInvoiceIds,
+            skipped_invoice_ids: skippedInvoiceIds,
+            failed
+        });
+    } catch (error) {
+        logger.error('Error paying selected invoices:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Gagal melunasi invoice terpilih',
+            error: error.message
+        });
+    }
+});
+
 async function renderInvoiceQuickAction(req, res, mode, extra = {}) {
     const invoice = await billingManager.getInvoiceById(req.params.id);
     if (!invoice) {
