@@ -198,28 +198,53 @@
                 <form method="GET" action="/admin/billing/invoice-list" class="mb-3 d-flex align-items-end gap-2 flex-wrap" id="timeFilterForm">
                     <div>
                         <label class="form-label small fw-bold text-muted mb-1">Bulan</label>
-                        <select name="month" class="form-select form-select-sm shadow-sm border-primary" style="width: 150px;" onchange="this.form.submit()">
+                        <select name="month" class="form-select form-select-sm shadow-sm border-primary" style="width: 160px;" onchange="this.form.submit()">
                             <% const months = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember']; %>
+                            <option value="all" <%= selectedMonth === 'all' ? 'selected' : '' %>>Semua bulan</option>
                             <% for(let i=1; i<=12; i++) { %>
-                                <option value="<%= i %>" <%= typeof selectedMonth !== 'undefined' && selectedMonth == i ? 'selected' : '' %>><%= months[i-1] %></option>
+                                <option value="<%= i %>" <%= selectedMonth !== 'all' && selectedMonth == i ? 'selected' : '' %>><%= months[i-1] %></option>
                             <% } %>
                         </select>
                     </div>
                     <div>
                         <label class="form-label small fw-bold text-muted mb-1">Tahun</label>
-                        <select name="year" class="form-select form-select-sm shadow-sm border-primary" style="width: 100px;" onchange="this.form.submit()">
+                        <select name="year" class="form-select form-select-sm shadow-sm border-primary" style="width: 130px;" onchange="this.form.submit()">
                             <% const currentY = new Date().getFullYear(); %>
+                            <option value="all" <%= selectedYear === 'all' ? 'selected' : '' %>>Semua tahun</option>
                             <% for(let y=currentY-3; y<=currentY+1; y++) { %>
-                                <option value="<%= y %>" <%= typeof selectedYear !== 'undefined' && selectedYear == y ? 'selected' : '' %>><%= y %></option>
+                                <option value="<%= y %>" <%= selectedYear !== 'all' && selectedYear == y ? 'selected' : '' %>><%= y %></option>
                             <% } %>
                         </select>
                     </div>
                     <% if (filters.status) { %><input type="hidden" name="status" value="<%= filters.status %>"><% } %>
                     <% if (filters.type) { %><input type="hidden" name="type" value="<%= filters.type %>"><% } %>
                     <% if (filters.customer_username) { %><input type="hidden" name="customer_username" value="<%= filters.customer_username %>"><% } %>
+                    <%
+                        let periodLabel = 'Semua periode';
+                        if (selectedMonth !== 'all' && selectedYear !== 'all') {
+                            periodLabel = months[Number(selectedMonth) - 1] + ' ' + selectedYear;
+                        } else if (selectedMonth === 'all' && selectedYear !== 'all') {
+                            periodLabel = 'Semua bulan ' + selectedYear;
+                        } else if (selectedMonth !== 'all' && selectedYear === 'all') {
+                            periodLabel = months[Number(selectedMonth) - 1] + ' (semua tahun)';
+                        }
+                        const listQsCore = `month=${encodeURIComponent(selectedMonth)}&year=${encodeURIComponent(selectedYear)}&type=${encodeURIComponent(filters.type || '')}&customer_username=${encodeURIComponent(filters.customer_username || '')}`;
+                    %>
+                    <div class="pb-1">
+                        <span class="badge bg-primary-subtle text-primary border"><%= periodLabel %></span>
+                        <% if (pagination && pagination.totalCount != null) { %>
+                            <span class="badge bg-light text-dark border"><%= Number(pagination.totalCount).toLocaleString('id-ID') %> invoice</span>
+                        <% } %>
+                    </div>
                 </form>
 
                 <style>
+                    .summary-cards-solid a {
+                        color: inherit;
+                    }
+                    .summary-cards-solid a .summary-card {
+                        cursor: pointer;
+                    }
                     .summary-card:hover { transform: translateY(-3px); box-shadow: 0 .5rem 1rem rgba(0,0,0,.15)!important; }
                     .summary-cards-solid .summary-card {
                         border-left: 0 !important;
@@ -258,10 +283,10 @@
                 <%
                     const sum = typeof summary !== 'undefined' ? summary : {};
                     const invoiceSummaryCards = [
-                        { title: 'Total Invoice', value: sum.total || 0, nominal: sum.total_amount || 0, hint: 'semua jenis invoice', icon: 'bi-receipt' },
-                        { title: 'Lunas', value: sum.paid || 0, nominal: sum.paid_amount || 0, hint: 'sesuai filter aktif', icon: 'bi-check-circle-fill' },
-                        { title: 'Belum Bayar', value: sum.unpaid || 0, nominal: sum.unpaid_amount || 0, hint: 'sesuai filter aktif', icon: 'bi-circle' },
-                        { title: 'Terlambat', value: sum.overdue || 0, nominal: sum.overdue_amount || 0, hint: 'belum bayar & lewat jatuh tempo', icon: 'bi-exclamation-circle-fill' }
+                        { title: 'Total Invoice', value: sum.total || 0, nominal: sum.total_amount || 0, hint: 'semua jenis invoice', icon: 'bi-receipt', status: '' },
+                        { title: 'Lunas', value: sum.paid || 0, nominal: sum.paid_amount || 0, hint: 'sesuai filter aktif', icon: 'bi-check-circle-fill', status: 'paid' },
+                        { title: 'Belum Bayar', value: sum.unpaid || 0, nominal: sum.unpaid_amount || 0, hint: 'sesuai filter aktif', icon: 'bi-circle', status: 'unpaid' },
+                        { title: 'Terlambat', value: sum.overdue || 0, nominal: sum.overdue_amount || 0, hint: 'belum bayar & lewat jatuh tempo', icon: 'bi-exclamation-circle-fill', status: 'overdue' }
                     ];
                 %>
                 <div class="row mb-4 g-3 summary-cards-solid" id="invoiceSummaryCards"
@@ -275,21 +300,25 @@
                      data-overdue-amount="<%= Number(sum.overdue_amount || 0) %>">
                     <% invoiceSummaryCards.forEach(function(card) { %>
                         <div class="col-md-3 col-12">
-                            <div class="card border-0 shadow-sm h-100 summary-card" style="border:0 !important; border-radius: 12px;">
-                                <div class="card-body p-3" style="border-radius: 12px;">
-                                    <div class="d-flex justify-content-between align-items-center">
-                                        <div>
-                                            <p class="text-muted fw-semibold mb-1" style="font-size:0.75rem;"><%= card.title %></p>
-                                            <h3 class="mb-0 fw-bold mt-2 summary-card-count" style="color:#fff !important;"><%= card.value %></h3>
-                                            <div class="summary-card-nominal mt-1">Rp <%= Number(card.nominal || 0).toLocaleString('id-ID') %></div>
-                                            <div class="summary-card-nominal-hint"><%= card.hint %></div>
-                                        </div>
-                                        <div class="rounded-circle d-flex align-items-center justify-content-center" style="width:40px;height:40px;background:rgba(255,255,255,0.22);flex-shrink:0;">
-                                            <i class="bi <%= card.icon %>" style="font-size:1.1rem;color:#fff !important;"></i>
+                            <a href="/admin/billing/invoice-list?<%= listQsCore %><%= card.status ? '&status=' + encodeURIComponent(card.status) : '' %>"
+                               class="text-decoration-none d-block"
+                               title="Filter: <%= card.title %>">
+                                <div class="card border-0 shadow-sm h-100 summary-card" style="border:0 !important; border-radius: 12px;">
+                                    <div class="card-body p-3" style="border-radius: 12px;">
+                                        <div class="d-flex justify-content-between align-items-center">
+                                            <div>
+                                                <p class="text-muted fw-semibold mb-1" style="font-size:0.75rem;"><%= card.title %></p>
+                                                <h3 class="mb-0 fw-bold mt-2 summary-card-count" style="color:#fff !important;"><%= card.value %></h3>
+                                                <div class="summary-card-nominal mt-1">Rp <%= Number(card.nominal || 0).toLocaleString('id-ID') %></div>
+                                                <div class="summary-card-nominal-hint"><%= card.hint %></div>
+                                            </div>
+                                            <div class="rounded-circle d-flex align-items-center justify-content-center" style="width:40px;height:40px;background:rgba(255,255,255,0.22);flex-shrink:0;">
+                                                <i class="bi <%= card.icon %>" style="font-size:1.1rem;color:#fff !important;"></i>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
+                            </a>
                         </div>
                     <% }); %>
                 </div>
@@ -444,14 +473,20 @@
                                                     <div class="admin-action-btns">
                                                         <% if (isUnpaid) { %>
                                                             <a href="/admin/billing/invoices/<%= invoice.id %>/pay?next=<%= invoiceListNextEnc %>"
-                                                               class="btn btn-sm btn-success"
+                                                               class="btn btn-sm btn-success js-mark-paid"
+                                                               data-invoice-id="<%= invoice.id %>"
+                                                               onclick="return markInvoicePaid(this, event);"
                                                                title="Tandai tagihan sebagai lunas" aria-label="Tandai lunas">Lunas</a>
                                                         <% } %>
                                                         <a href="/admin/billing/invoices/<%= invoice.id %>/hapus?next=<%= invoiceListNextEnc %>"
                                                            class="btn btn-sm btn-danger"
+                                                           data-invoice-id="<%= invoice.id %>"
+                                                           onclick="return deleteInvoiceRow(this, event);"
                                                            title="Hapus tagihan dari sistem" aria-label="Hapus tagihan">Hapus</a>
                                                         <a href="/admin/billing/invoices/<%= invoice.id %>/notify-whatsapp?next=<%= invoiceListNextEnc %>"
                                                            class="btn btn-sm btn-whatsapp"
+                                                           data-invoice-id="<%= invoice.id %>"
+                                                           onclick="return sendInvoiceWhatsApp(this, event);"
                                                            title="Kirim pemberitahuan WhatsApp ke pelanggan" aria-label="Kirim WhatsApp">WA</a>
                                                         <a href="/admin/billing/invoices/<%= invoice.id %>"
                                                            class="btn btn-sm btn-info" title="Lihat detail tagihan" aria-label="Lihat tagihan">Lihat</a>
@@ -505,6 +540,12 @@
                                 <i class="bi bi-receipt fs-1 text-muted"></i>
                                 <h5 class="mt-3">Tidak ada invoice ditemukan</h5>
                                 <p class="text-muted">Belum ada invoice yang sesuai dengan filter yang dipilih.</p>
+                                <% if (selectedMonth !== 'all' || selectedYear !== 'all' || filters.status || filters.customer_username) { %>
+                                    <p class="text-muted small">Coba pilih <strong>Semua bulan</strong> dan <strong>Semua tahun</strong> untuk melihat invoice periode lain.</p>
+                                    <a href="/admin/billing/invoice-list?month=all&year=all<%= filters.status ? '&status=' + encodeURIComponent(filters.status) : '' %>" class="btn btn-outline-primary me-2">
+                                        Lihat semua periode
+                                    </a>
+                                <% } %>
                                 <a href="/admin/billing/invoices" class="btn btn-primary">
                                     <i class="bi bi-plus-lg"></i> Buat Invoice Baru
                                 </a>
@@ -783,31 +824,39 @@
             return { invoiceAmount: invoiceAmount, discount: discount, finalAmount: finalAmount };
         }
 
-        function markInvoicePaid(btn) {
+        function markInvoicePaid(btn, e) {
+            if (e && e.preventDefault) e.preventDefault();
             var row = rowFromBtn(btn);
-            if (!row) return false;
+            if (!row) return true;
             currentPaymentRow = row;
             document.getElementById('pay_invoice_id').value = row.getAttribute('data-invoice-id') || btn.getAttribute('data-invoice-id') || '';
             document.getElementById('pay_customer_name').value = row.getAttribute('data-customer-name') || '-';
             document.getElementById('pay_invoice_amount').value = Number(row.getAttribute('data-amount')) || 0;
             document.getElementById('pay_discount').value = 0;
             document.getElementById('pay_payment_method').value = 'manual_admin';
-            document.getElementById('pay_payment_date').value = new Date().toISOString().slice(0, 10);
+            document.getElementById('pay_payment_date').value = (function() {
+                var now = new Date();
+                var m = String(now.getMonth() + 1).padStart(2, '0');
+                var d = String(now.getDate()).padStart(2, '0');
+                return now.getFullYear() + '-' + m + '-' + d;
+            })();
             updateFinalPaymentAmount();
             showInvoiceModal('paymentConfirmModal');
             return false;
         }
 
-        function deleteInvoiceRow(btn) {
+        function deleteInvoiceRow(btn, e) {
+            if (e && e.preventDefault) e.preventDefault();
             var row = rowFromBtn(btn);
-            if (!row) return false;
+            if (!row) return true;
             var invoiceId = row.getAttribute('data-invoice-id') || btn.getAttribute('data-invoice-id');
             var number = row.getAttribute('data-invoice-number') || invoiceId;
             if (!confirm('Hapus invoice #' + number + '? Tindakan ini tidak dapat dibatalkan.')) return false;
             showToast('info', 'Memproses...', 'Menghapus tagihan');
             fetch('/admin/billing/invoices/' + invoiceId, {
                 method: 'DELETE',
-                headers: { 'Content-Type': 'application/json' }
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }
             })
             .then(function(response) {
                 return response.json().then(function(data) {
@@ -830,9 +879,10 @@
             return false;
         }
 
-        function sendInvoiceWhatsApp(btn) {
+        function sendInvoiceWhatsApp(btn, e) {
+            if (e && e.preventDefault) e.preventDefault();
             var row = rowFromBtn(btn);
-            if (!row) return false;
+            if (!row) return true;
             var invoiceId = row.getAttribute('data-invoice-id') || btn.getAttribute('data-invoice-id');
             currentNotificationData = { invoiceId: invoiceId };
             document.getElementById('waPhoneNumber').value = row.getAttribute('data-phone') || '';
@@ -840,7 +890,10 @@
             document.getElementById('notificationPreview').innerHTML =
                 '<div class="card"><div class="card-body text-muted"><i class="bi bi-hourglass-split"></i> Memuat preview dari template WhatsApp tenant...</div></div>';
             showInvoiceModal('whatsappModal');
-            fetch('/admin/billing/invoices/' + invoiceId + '/whatsapp-preview')
+            fetch('/admin/billing/invoices/' + invoiceId + '/whatsapp-preview', {
+                credentials: 'same-origin',
+                headers: { 'Accept': 'application/json' }
+            })
                 .then(function(response) { return response.json(); })
                 .then(function(data) {
                     if (data.success) {
@@ -900,7 +953,8 @@
                 showToast('info', 'Memproses...', 'Menyimpan pelunasan invoice');
                 fetch('/admin/billing/payments', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
                     body: JSON.stringify({
                         invoice_id: invoiceId,
                         amount: calc.finalAmount,
@@ -940,7 +994,8 @@
                 btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Mengirim...';
                 fetch('/admin/billing/invoices/send-whatsapp', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
                     body: JSON.stringify(currentNotificationData)
                 })
                 .then(function(response) { return response.json(); })

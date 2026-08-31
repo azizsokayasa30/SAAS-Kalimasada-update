@@ -3090,6 +3090,12 @@
         if (monthBounds) {
             sql += ` AND i.created_at >= ? AND i.created_at < ?`;
             params.push(monthBounds.start, monthBounds.end);
+        } else if (filters.year) {
+            const y = parseInt(filters.year, 10);
+            if (Number.isFinite(y) && y >= 2000 && y <= 2100) {
+                sql += ` AND i.created_at >= ? AND i.created_at < ?`;
+                params.push(`${y}-01-01`, `${y + 1}-01-01`);
+            }
         } else if (filters.month) {
             sql += ` AND strftime('%Y-%m', i.created_at) = ?`;
             params.push(filters.month);
@@ -5154,7 +5160,6 @@ ${lifetimePaymentStatusSql}
     async getInvoicesWithFilters(filters = {}, limit = null, offset = null) {
         const flags = await this._ensureBillingSchemaFlags();
         const { hasRenewalType, hasFixDate, hasCustomerId } = flags;
-        const listMode = Boolean(filters.listMode);
         const { sql: filterSql, params: filterParams } = this._buildInvoiceListFilterSql(filters, flags);
 
         let selectClause = `SELECT i.*, COALESCE(c.username, m.hotspot_username, m.username) as username, COALESCE(c.name, m.name) as customer_name, COALESCE(c.phone, m.phone) as customer_phone`;
@@ -5196,7 +5201,7 @@ ${lifetimePaymentStatusSql}
                         ? `Fix Date (${fixDate || 'N/A'})`
                         : 'Renewal';
                     let nextDueDate = null;
-                    if (!listMode && row.status === 'paid' && row.payment_date) {
+                    if (row.status === 'paid' && row.payment_date) {
                         try {
                             nextDueDate = this.calculateNextDueDate(
                                 { renewal_type: renewalType, fix_date: fixDate },

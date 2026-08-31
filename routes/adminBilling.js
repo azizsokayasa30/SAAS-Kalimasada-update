@@ -2267,18 +2267,17 @@ router.get('/invoice-list', getAppSettings, async (req, res) => {
         const limit = Math.min(100, Math.max(10, parseInt(req.query.limit, 10) || 50));
         const offset = (page - 1) * limit;
         const searchTerm = String(search || customer_username || '').trim();
+        const { parseInvoiceListPeriod } = require('../utils/invoiceListPeriod');
+        const period = parseInvoiceListPeriod({ month, year });
+        const selectedMonth = period.selectedMonth;
+        const selectedYear = period.selectedYear;
 
-        const now = new Date();
-        const selectedMonth = Math.min(12, Math.max(1, parseInt(month, 10) || (now.getMonth() + 1)));
-        const selectedYear = parseInt(year, 10) || now.getFullYear();
-        const monthKey = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}`;
-        
-        // Prepare filters object
-        const filters = { month: monthKey };
+        // Prepare filters object (month YYYY-MM, year-only, or no date filter)
+        const filters = { ...period.filters };
         if (status) filters.status = status;
         if (searchTerm) filters.customer_username = searchTerm;
         if (type) filters.type = type;
-        
+
         filters.listMode = true;
 
         const [invoices, summary] = await Promise.all([
@@ -10837,12 +10836,18 @@ router.post('/payments', async (req, res) => {
 
         const invoice = await new Promise((resolve, reject) => {
             billingManager.db.get(
-                `SELECT i.id, i.tenant_id, i.customer_id, i.amount, i.status
+                `SELECT i.id, i.tenant_id, i.customer_id, i.member_id, i.amount, i.status
                  FROM invoices i
                  WHERE i.id = ? AND i.tenant_id = ?
-                   AND EXISTS (
-                        SELECT 1 FROM customers c
-                        WHERE c.id = i.customer_id AND c.tenant_id = i.tenant_id
+                   AND (
+                        EXISTS (
+                            SELECT 1 FROM customers c
+                            WHERE c.id = i.customer_id AND c.tenant_id = i.tenant_id
+                        )
+                        OR EXISTS (
+                            SELECT 1 FROM members m
+                            WHERE m.id = i.member_id AND m.tenant_id = i.tenant_id
+                        )
                    )`,
                 [parseInt(invoice_id, 10), tenantId],
                 (err, row) => (err ? reject(err) : resolve(row || null))

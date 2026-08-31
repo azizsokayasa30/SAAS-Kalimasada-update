@@ -246,7 +246,7 @@
                     <div class="sc-value dash-amount" data-amount="Rp <%= blmBln.toLocaleString('id-ID') %>"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : ('Rp ' + blmBln.toLocaleString('id-ID')) %></div>
                     <div class="sc-sub">Dari tagihan terbit bulan ini</div>
                 </a>
-                <a href="/admin/billing/invoice-list?status=unpaid" class="stat-card-big stat-rose" id="sc-piutang-all" title="Semua invoice belum lunas (termasuk bulan lalu)">
+                <a href="/admin/billing/invoice-list?status=unpaid&month=all&year=all" class="stat-card-big stat-rose" id="sc-piutang-all" title="Semua invoice belum lunas (termasuk bulan lalu)">
                     <div class="sc-header">
                         <span class="sc-label">Piutang Aktif</span>
                         <span class="sc-badge"><%= piutangCnt %> Inv</span>
