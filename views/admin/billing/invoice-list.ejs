@@ -609,7 +609,7 @@
 
     <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
     <script>
-        var invoiceListFilterStatus = <%= JSON.stringify(filters.status || '') %>;
+        var invoiceListFilterStatus = <%- JSON.stringify(filters.status || '').replace(/</g, '\\u003c') %>;
         var currentPaymentRow = null;
         var currentNotificationData = null;
 
