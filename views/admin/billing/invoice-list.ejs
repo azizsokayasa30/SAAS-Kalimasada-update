@@ -609,7 +609,8 @@
 
     <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
     <script>
-        var invoiceListFilterStatus = <%= JSON.stringify(filters.status || '') %>;
+        <%# Wajib output mentah di dalam script: escape HTML mengubah kutip jadi &#34; dan mematahkan seluruh script. Escape "<" mencegah breakout tag script. %>
+        var invoiceListFilterStatus = <%- JSON.stringify(String(filters.status || '')).replace(/</g, '\\u003c') %>;
         var currentPaymentRow = null;
         var currentNotificationData = null;
 
