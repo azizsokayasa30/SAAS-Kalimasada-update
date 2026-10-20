@@ -1,5 +1,6 @@
             // ========== NAS MONITORING DASHBOARD ==========
             let monitoringInterval = null;
+            let monitoringInFlight = false;
             let selectedNAS1 = null;
             let selectedNAS2 = null;
             
@@ -243,6 +244,7 @@
             // Update monitoring display - tanpa menghilangkan tampilan
             async function updateMonitoring(initialLoad = false) {
                 const container = document.getElementById('monitoringContainer');
+                if (monitoringInFlight && !initialLoad) return;
                 
                 if (!selectedNAS1 && !selectedNAS2) {
                     if (initialLoad) {
@@ -259,18 +261,26 @@
                     }
                     return;
                 }
+
+                if (document.hidden && !initialLoad) return;
                 
                 // Untuk initial load, tampilkan spinner. Untuk update berikutnya, langsung update data
                 if (initialLoad && container.children.length === 0 || container.querySelector('.spinner-border')) {
                     container.innerHTML = '<div class="col-12 text-center py-3"><div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div></div>';
                 }
+
+                monitoringInFlight = true;
+                const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+                const abortTimer = ctrl ? setTimeout(() => ctrl.abort(), 12000) : null;
                 
                 try {
                     const routerIds = [];
                     if (selectedNAS1) routerIds.push(selectedNAS1);
                     if (selectedNAS2) routerIds.push(selectedNAS2);
                     
-                    const res = await fetch(`/api/dashboard/resources-multi?router_ids=${routerIds.join(',')}`);
+                    const res = await fetch(`/api/dashboard/resources-multi?router_ids=${routerIds.join(',')}`, {
+                        signal: ctrl ? ctrl.signal : undefined
+                    });
                     const result = await res.json();
                     
                     if (result.success && result.data) {
@@ -364,6 +374,9 @@
                         `;
                     }
                     console.error('Error updating monitoring:', e);
+                } finally {
+                    if (abortTimer) clearTimeout(abortTimer);
+                    monitoringInFlight = false;
                 }
             }
             
@@ -685,8 +698,16 @@
                 }
                 
                 interfaceUpdateIntervals[routerId][interfaceName] = setInterval(async () => {
+                    if (document.hidden) return;
+                    const lockKey = `${routerId}:${interfaceName}`;
+                    if (interfaceTrafficInFlight[lockKey]) return;
+                    interfaceTrafficInFlight[lockKey] = true;
+                    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+                    const timer = ctrl ? setTimeout(() => ctrl.abort(), 8000) : null;
                     try {
-                        const res = await fetch(`/api/dashboard/interface-traffic?router_id=${routerId}&interface=${encodeURIComponent(interfaceName)}`);
+                        const res = await fetch(`/api/dashboard/interface-traffic?router_id=${routerId}&interface=${encodeURIComponent(interfaceName)}`, {
+                            signal: ctrl ? ctrl.signal : undefined
+                        });
                         const data = await res.json();
                         
                         if (data.success && data.data) {
@@ -747,8 +768,11 @@
                         }
                     } catch (e) {
                         console.error(`Error updating interface traffic for ${interfaceName}:`, e);
+                    } finally {
+                        if (timer) clearTimeout(timer);
+                        interfaceTrafficInFlight[lockKey] = false;
                     }
-                }, 5000); // Update setiap 5 detik untuk real-time
+                }, 15000); // 15 detik, pause saat tab hidden, skip request overlap
             }
             
             // Update Interface Traffic Statistics
@@ -841,6 +865,7 @@
             const interfaceTrafficData = {}; // { routerId: { interfaceName: { labels: [], rxData: [], txData: [] } } }
             const interfaceUpdateIntervals = {}; // { routerId: { interfaceName: intervalId } }
             const interfaceChartInstances = {}; // { routerId: { interfaceName: chartInstance } }
+            const interfaceTrafficInFlight = {};
             
             // Create interface traffic line chart (per interface dengan dropdown) - Time series dengan area fill
             function createInterfaceChart(canvasId, routerId, selectedInterfaceName = null) {
@@ -1154,7 +1179,9 @@
             // Auto refresh every 30 seconds - dioptimasi untuk mengurangi beban API MikroTik (dari 5 detik)
             function startAutoRefresh() {
                 if (monitoringInterval) clearInterval(monitoringInterval);
-                monitoringInterval = setInterval(() => updateMonitoring(false), 30000); // 30 detik (dioptimasi untuk mengurangi beban API MikroTik)
+                monitoringInterval = setInterval(() => {
+                    if (!document.hidden) updateMonitoring(false);
+                }, 30000);
             }
             
             // Initialize — tunda agar halaman dashboard tampil dulu (NAS monitoring tidak blocking)

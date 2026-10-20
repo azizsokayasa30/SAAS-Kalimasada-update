@@ -114,6 +114,8 @@ async function savePlatformPaymentGateway(data) {
 
 module.exports = {
     ensurePlatformSettingsSchema,
+    getSetting,
+    setSetting,
     getCompanyProfile,
     saveCompanyProfile,
     getPlatformPaymentGateway,

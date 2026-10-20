@@ -171,15 +171,23 @@ async function upsertTenantInvoice(row) {
     const cols = [
         'invoice_number', 'tenant_id', 'period_start', 'period_end',
         'gross_amount', 'tax_amount', 'bhp_uso_amount', 'management_fee_amount', 'net_amount',
+        'pokok_amount', 'bhp_amount', 'uso_amount', 'total_amount', 'source',
         'status', 'notes', 'owner_snapshot', 'created_by', 'created_at', 'updated_at',
     ];
-    const vals = cols.map((c) => row[c] ?? null);
+    const vals = cols.map((c) => {
+        if (['pokok_amount', 'bhp_amount', 'uso_amount', 'total_amount'].includes(c)) {
+            return row[c] ?? 0;
+        }
+        if (c === 'source') return row[c] || 'manual';
+        return row[c] ?? null;
+    });
 
     if (existing) {
         await tenantStore.dbRun(
             `UPDATE platform_tenant_invoices SET
                 invoice_number = ?, tenant_id = ?, period_start = ?, period_end = ?,
                 gross_amount = ?, tax_amount = ?, bhp_uso_amount = ?, management_fee_amount = ?, net_amount = ?,
+                pokok_amount = ?, bhp_amount = ?, uso_amount = ?, total_amount = ?, source = ?,
                 status = ?, notes = ?, owner_snapshot = ?, created_by = ?,
                 created_at = COALESCE(?, created_at), updated_at = COALESCE(?, updated_at)
              WHERE id = ?`,
@@ -192,8 +200,9 @@ async function upsertTenantInvoice(row) {
         `INSERT INTO platform_tenant_invoices (
             id, invoice_number, tenant_id, period_start, period_end,
             gross_amount, tax_amount, bhp_uso_amount, management_fee_amount, net_amount,
+            pokok_amount, bhp_amount, uso_amount, total_amount, source,
             status, notes, owner_snapshot, created_by, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now','localtime')), COALESCE(?, datetime('now','localtime')))`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now','localtime')), COALESCE(?, datetime('now','localtime')))`,
         [row.id, ...vals]
     );
     return row.id;
@@ -203,14 +212,14 @@ async function upsertInvoiceItem(row) {
     const existing = await tenantStore.dbGet('SELECT id FROM platform_tenant_invoice_items WHERE id = ?', [row.id]);
     if (existing) {
         await tenantStore.dbRun(
-            `UPDATE platform_tenant_invoice_items SET invoice_id = ?, description = ?, amount = ?, item_type = ?, created_at = COALESCE(?, created_at) WHERE id = ?`,
-            [row.invoice_id, row.description, row.amount, row.item_type, row.created_at, row.id]
+            `UPDATE platform_tenant_invoice_items SET invoice_id = ?, description = ?, amount = ?, item_type = ?, qty = ?, unit_price = ?, created_at = COALESCE(?, created_at) WHERE id = ?`,
+            [row.invoice_id, row.description, row.amount, row.item_type, row.qty ?? 1, row.unit_price ?? row.amount ?? 0, row.created_at, row.id]
         );
         return;
     }
     await tenantStore.dbRun(
-        `INSERT INTO platform_tenant_invoice_items (id, invoice_id, description, amount, item_type, created_at) VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now','localtime')))`,
-        [row.id, row.invoice_id, row.description, row.amount, row.item_type, row.created_at]
+        `INSERT INTO platform_tenant_invoice_items (id, invoice_id, description, amount, item_type, qty, unit_price, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now','localtime')))`,
+        [row.id, row.invoice_id, row.description, row.amount, row.item_type, row.qty ?? 1, row.unit_price ?? row.amount ?? 0, row.created_at]
     );
 }
 

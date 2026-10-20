@@ -90,17 +90,10 @@
                     throw new Error('Bukan JSON, kemungkinan session tidak valid');
                 }
             } catch (err) {
-                // Fallback ke GET /customer/trouble/test
-                try {
-                    const params = new URLSearchParams(data);
-                    response = await fetch('/customer/trouble/test?' + params.toString());
-                    json = await response.json();
-                } catch (err2) {
-                    resultBox.innerHTML = '<div class="alert alert-danger">Gagal mengirim laporan. Silakan coba lagi.</div>';
-                    resultBox.classList.remove('d-none');
-                    backBtnBox.classList.remove('d-none');
-                    return;
-                }
+                resultBox.innerHTML = '<div class="alert alert-danger">Gagal mengirim laporan. Silakan login lalu coba lagi.</div>';
+                resultBox.classList.remove('d-none');
+                backBtnBox.classList.remove('d-none');
+                return;
             }
             if (json && json.success) {
                 resultBox.innerHTML = `<div class="alert alert-success">${json.message}<br><b>ID Tiket:</b> ${json.reportId}<br><small>Anda akan diarahkan ke dashboard dalam 3 detik...</small></div>`;

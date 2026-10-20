@@ -166,7 +166,7 @@ class _TagCustomerLocationScreenState extends State<TagCustomerLocationScreen>
   void _onCustomerQueryChanged(String q) {
     _debounce?.cancel();
     final trimmed = q.trim();
-    if (trimmed.length < 2) {
+    if (trimmed.length < 1) {
       setState(() {
         _searchHits = [];
         _searching = false;

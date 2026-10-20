@@ -80,7 +80,15 @@ function stripTechnicianInstallCompletionNotes(notes) {
   return out || null;
 }
 
+/** Sinyal SSE/polling admin: teknisi mengubah progress instalasi. */
+function notifyAdminInstallProgress() {
+  try {
+    require('./adminNotificationBus').pingAdminNotifications('INSTALL');
+  } catch (_) {}
+}
+
 module.exports = {
   extractTechnicianInstallCompletion,
-  stripTechnicianInstallCompletionNotes
+  stripTechnicianInstallCompletionNotes,
+  notifyAdminInstallProgress
 };

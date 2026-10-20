@@ -97,7 +97,7 @@ async function getVoucherOnlineSettings() {
 
 // Test route
 router.get('/test', (req, res) => {
-    res.json({ success: true, message: 'Voucher router works!' });
+    res.status(404).json({ success: false, message: 'Not found' });
 });
 
 // GET: API untuk payment methods (sama dengan invoice)

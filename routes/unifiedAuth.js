@@ -10,6 +10,8 @@ const {
 } = require('../middleware/resolveTenant');
 const tenantStore = require('../config/platform/tenantStore');
 const { logAdminActivity } = require('../config/activityLogger');
+const billingManager = require('../config/billing');
+const { isBcryptHash, verifyAdminPassword, hashAdminPassword } = require('../utils/adminPassword');
 
 const CENTRAL_SUBDOMAIN = process.env.KALIMASADA_CENTRAL_SUBDOMAIN || 'manage';
 
@@ -108,8 +110,27 @@ router.post('/', async (req, res) => {
 
         const { adminUsername, adminPassword, tenant } = creds;
 
-        if (username === adminUsername && password === adminPassword) {
+        if (username === adminUsername && await verifyAdminPassword(password, adminPassword)) {
+            if (!isBcryptHash(adminPassword)) {
+                hashAdminPassword(password).then((hashed) => {
+                    if (tenant?.id) {
+                        return tenantStore.updateTenantAdminCredentials(tenant.id, {
+                            admin_username: adminUsername,
+                            admin_password: hashed,
+                        });
+                    }
+                    const { setSetting } = require('../config/settingsManager');
+                    setSetting('admin_password', hashed);
+                    return null;
+                }).catch((err) => console.warn('[SECURITY] gagal menyimpan hash password admin:', err.message));
+            }
             req.session.isAdmin = true;
+            req.session.isAreaManager = false;
+            delete req.session.areaManagerId;
+            delete req.session.areaManagerName;
+            delete req.session.executiveId;
+            delete req.session.executiveName;
+            delete req.session.executiveJabatan;
             req.session.adminUser = username;
             req.session.lastActivityAt = Date.now();
             if (tenant?.id) {
@@ -123,7 +144,64 @@ router.post('/', async (req, res) => {
             return jsonAfterSessionSave(req, res, { success: true, redirect: '/admin/dashboard' });
         }
 
-        return res.status(401).json({ success: false, message: 'Username atau password admin tidak valid' });
+        // Jabatan pimpinan master tenant — akses sama dengan admin utama
+        if (tenant?.id && (tenant.is_master === 1 || tenant.is_master === true)) {
+            const executive = await billingManager.authenticateMasterExecutive(username, password, tenant.id);
+            if (executive) {
+                req.session.isAdmin = true;
+                req.session.isAreaManager = false;
+                delete req.session.areaManagerId;
+                delete req.session.areaManagerName;
+                req.session.executiveId = executive.id;
+                req.session.executiveName = executive.name;
+                req.session.executiveJabatan = executive.jabatan;
+                req.session.adminUser = executive.username;
+                req.session.lastActivityAt = Date.now();
+                req.session.tenantId = tenant.id;
+                req.session.tenantSubdomain = tenant.subdomain;
+                await logAdminActivity(
+                    req,
+                    'executive_login',
+                    `Login ${executive.jabatan}: ${executive.username} (id=${executive.id})`
+                );
+                return jsonAfterSessionSave(req, res, { success: true, redirect: '/admin/dashboard' });
+            }
+        }
+
+        // Manager Area (multi-wilayah)
+        const tenantId =
+            tenant?.id ||
+            (hasTenantContext() ? getTenant()?.id : null) ||
+            req.tenantId ||
+            null;
+        if (tenantId) {
+            const manager = await billingManager.authenticateAreaManager(username, password, tenantId);
+            if (manager) {
+                req.session.isAdmin = false;
+                req.session.isAreaManager = true;
+                req.session.areaManagerId = manager.id;
+                req.session.areaManagerName = manager.name;
+                delete req.session.executiveId;
+                delete req.session.executiveName;
+                delete req.session.executiveJabatan;
+                req.session.adminUser = manager.username;
+                req.session.lastActivityAt = Date.now();
+                req.session.tenantId = tenantId;
+                if (tenant?.subdomain) {
+                    req.session.tenantSubdomain = tenant.subdomain;
+                } else if (hasTenantContext()) {
+                    req.session.tenantSubdomain = getTenant().subdomain;
+                }
+                await logAdminActivity(
+                    req,
+                    'area_manager_login',
+                    `Login Manager Area: ${manager.username} (id=${manager.id})`
+                );
+                return jsonAfterSessionSave(req, res, { success: true, redirect: '/admin/dashboard' });
+            }
+        }
+
+        return res.status(401).json({ success: false, message: 'Username atau password tidak valid' });
 
     } catch (error) {
         console.error('Unified login error:', error);

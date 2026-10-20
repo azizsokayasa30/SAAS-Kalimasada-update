@@ -12,15 +12,62 @@
     <link href="/css/admin-mobile.css" rel="stylesheet">
     <style>
         .main-content { min-height: 100vh; }
-        .page-header { margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 1px solid var(--sb-border, #dee2e6); }
+        .page-header { margin-bottom: 1.25rem; padding-bottom: 1rem; border-bottom: 1px solid var(--sb-border, #dee2e6); }
         .table-container { background: var(--panel-bg, #ffffff); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 0; overflow: hidden; }
         .table th { background-color: var(--table-head-bg, #f1f3f5); font-weight: 600; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.5px; border-top: none; padding: 12px 15px; }
         .table td { vertical-align: middle; padding: 12px 15px; font-size: 0.9rem; }
-        .status-badge { font-weight: 600; font-size: 0.75rem; padding: 4px 10px; border-radius: 999px; letter-spacing: 0.2px; }
-        .status-hadir { background: #22c55e; color: #ffffff; }
-        .status-izin, .status-cuti, .status-sakit { background: #eab308; color: #111827; }
-        .status-alpha, .status-tidak-hadir, .status-tidak_hadir { background: #ef4444; color: #ffffff; }
+        .status-badge { font-weight: 600; font-size: 0.75rem; padding: 4px 10px; border-radius: 999px; letter-spacing: 0.2px; display: inline-block; }
+        .status-badge.status-hadir { background: #22c55e !important; color: #ffffff !important; }
+        .status-badge.status-izin, .status-badge.status-cuti, .status-badge.status-sakit { background: #eab308 !important; color: #111827 !important; }
+        .status-badge.status-alpha, .status-badge.status-tidak-hadir, .status-badge.status-tidak_hadir, .status-badge.status-belum {
+            background: #ef4444 !important;
+            color: #ffffff !important;
+        }
         .badge-late { background: #fff3cd; color: #7a4b00; border: 1px solid #f1d18a; font-size: 0.72rem; }
+        .att-card {
+            border: none;
+            border-radius: 14px;
+            padding: 18px 16px;
+            color: #fff;
+            height: 100%;
+            cursor: pointer;
+            transition: transform 180ms ease, box-shadow 180ms ease, outline 180ms ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .att-card:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0,0,0,0.14); }
+        .att-card.active { outline: 3px solid rgba(255,255,255,0.85); box-shadow: 0 10px 24px rgba(0,0,0,0.18); }
+        .att-card .att-label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.92; }
+        .att-card .att-value { font-size: 2rem; font-weight: 800; line-height: 1.1; margin: 8px 0 4px; }
+        .att-card .att-sub { font-size: 0.75rem; opacity: 0.88; }
+        .att-card .att-icon {
+            position: absolute; right: 14px; top: 14px;
+            width: 38px; height: 38px; border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            background: rgba(255,255,255,0.18); font-size: 1.15rem;
+        }
+        .att-card-total { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); }
+        .att-card-in { background: linear-gradient(135deg, #10b981 0%, #059669 100%); }
+        .att-card-out { background: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%); }
+        .att-card-leave { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); }
+        .live-dot {
+            width: 8px; height: 8px; border-radius: 50%; background: #22c55e;
+            display: inline-block; box-shadow: 0 0 0 0 rgba(34,197,94,0.7);
+            animation: livePulse 1.6s infinite;
+        }
+        @keyframes livePulse {
+            0% { box-shadow: 0 0 0 0 rgba(34,197,94,0.7); }
+            70% { box-shadow: 0 0 0 8px rgba(34,197,94,0); }
+            100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+        }
+        .dashboard-date-title { font-size: 0.95rem; color: var(--fg-muted, #6b7280); }
+        .emp-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 1px solid #ddd; }
+        .progress-att { height: 8px; border-radius: 999px; background: var(--table-head-bg, #eef2f6); overflow: hidden; }
+        .progress-att > span { display: block; height: 100%; background: #10b981; border-radius: 999px; transition: width 300ms ease; }
+        @media (max-width: 768px) {
+            .att-card .att-value { font-size: 1.55rem; }
+            .att-card { padding: 14px 12px; }
+        }
     </style>
     <%- include('../../partials/theme-head') %>
 </head>
@@ -30,19 +77,39 @@
             <%- include('../../partials/admin-responsive-sidebar') %>
             
             <main class="col-md-10 ms-sm-auto col-lg-10 px-md-4 main-content">
-                <div class="page-header d-flex justify-content-between align-items-center mt-4">
-                    <h1 class="h4 m-0">Absensi Karyawan</h1>
-                    <button class="btn btn-primary" onclick="openModal()">
-                        <i class="bi bi-calendar-check-fill me-1"></i> Input Manual
-                    </button>
+                <div class="page-header d-flex justify-content-between align-items-center mt-4 flex-wrap gap-2">
+                    <div>
+                        <h1 class="h4 m-0">Dashboard Absensi Harian</h1>
+                        <div class="dashboard-date-title mt-1" id="selectedDateLabel">Memuat tanggal...</div>
+                    </div>
+                    <div class="d-flex gap-2 flex-wrap">
+                        <button type="button" class="btn btn-outline-secondary" onclick="goToday()">
+                            <i class="bi bi-calendar-event me-1"></i> Hari Ini
+                        </button>
+                        <button class="btn btn-primary" onclick="openModal()">
+                            <i class="bi bi-calendar-check-fill me-1"></i> Input Manual
+                        </button>
+                    </div>
                 </div>
 
-                <div class="card mb-4 border-0 shadow-sm">
+                <div class="card mb-3 border-0 shadow-sm">
                     <div class="card-body">
-                        <div class="row g-3 align-items-center">
+                        <div class="row g-3 align-items-end">
                             <div class="col-md-3">
+                                <label class="form-label mb-1">Filter Harian</label>
+                                <div class="input-group">
+                                    <button class="btn btn-outline-secondary" type="button" onclick="shiftDay(-1)" title="Hari sebelumnya">
+                                        <i class="bi bi-chevron-left"></i>
+                                    </button>
+                                    <input type="date" id="filterHari" class="form-control" onchange="onDateChange()">
+                                    <button class="btn btn-outline-secondary" type="button" onclick="shiftDay(1)" title="Hari berikutnya">
+                                        <i class="bi bi-chevron-right"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="col-md-2">
                                 <label class="form-label mb-1">Bulan</label>
-                                <select id="filterBulan" class="form-select" onchange="loadData()">
+                                <select id="filterBulan" class="form-select" onchange="onMonthYearChange()">
                                     <option value="1">Januari</option>
                                     <option value="2">Februari</option>
                                     <option value="3">Maret</option>
@@ -59,8 +126,7 @@
                             </div>
                             <div class="col-md-2">
                                 <label class="form-label mb-1">Tahun</label>
-                                <select id="filterTahun" class="form-select" onchange="loadData()">
-                                    <!-- Options generated by JS -->
+                                <select id="filterTahun" class="form-select" onchange="onMonthYearChange()">
                                 </select>
                             </div>
                             <div class="col-md-3">
@@ -69,12 +135,63 @@
                                     <option value="">Semua Karyawan</option>
                                 </select>
                             </div>
-                            <div class="col-md-4 ms-auto">
-                                <label class="form-label mb-1">Cari Karyawan</label>
-                                <input type="text" id="searchInput" class="form-control" placeholder="Ketik nama karyawan..." oninput="renderTable()">
+                            <div class="col-md-2">
+                                <label class="form-label mb-1">Cari</label>
+                                <input type="text" id="searchInput" class="form-control" placeholder="Nama / NIK..." oninput="renderTable()">
                             </div>
                         </div>
                     </div>
+                </div>
+
+                <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                    <div class="d-flex align-items-center gap-2" id="liveStatus">
+                        <span class="live-dot" id="liveDot"></span>
+                        <span class="small text-muted" id="liveLabel">Realtime aktif</span>
+                    </div>
+                    <div class="small text-muted" id="lastUpdated">Belum diperbarui</div>
+                </div>
+
+                <div class="row g-3 mb-3">
+                    <div class="col-6 col-lg-3">
+                        <div class="att-card att-card-total active" id="cardTotal" onclick="setStatusFilter('all')">
+                            <div class="att-icon"><i class="bi bi-people-fill"></i></div>
+                            <div class="att-label">Total Karyawan</div>
+                            <div class="att-value" id="cardTotalValue">0</div>
+                            <div class="att-sub">Karyawan aktif</div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-lg-3">
+                        <div class="att-card att-card-in" id="cardAttended" onclick="setStatusFilter('attended')">
+                            <div class="att-icon"><i class="bi bi-check-circle-fill"></i></div>
+                            <div class="att-label">Sudah Absen</div>
+                            <div class="att-value" id="cardAttendedValue">0</div>
+                            <div class="att-sub" id="cardAttendedSub">0% dari total</div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-lg-3">
+                        <div class="att-card att-card-out" id="cardNotAttended" onclick="setStatusFilter('not_attended')">
+                            <div class="att-icon"><i class="bi bi-x-circle-fill"></i></div>
+                            <div class="att-label">Alpa</div>
+                            <div class="att-value" id="cardNotAttendedValue">0</div>
+                            <div class="att-sub" id="cardNotAttendedSub">0% dari total</div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-lg-3">
+                        <div class="att-card att-card-leave" id="cardLeave" onclick="setStatusFilter('leave')">
+                            <div class="att-icon"><i class="bi bi-file-earmark-medical-fill"></i></div>
+                            <div class="att-label">Izin / Sakit</div>
+                            <div class="att-value" id="cardLeaveValue">0</div>
+                            <div class="att-sub" id="cardLeaveSub">Tercatat izin atau sakit</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between small mb-1">
+                        <span class="text-muted">Tingkat kehadiran hari ini</span>
+                        <span class="fw-semibold" id="attendanceRateLabel">0%</span>
+                    </div>
+                    <div class="progress-att"><span id="attendanceRateBar" style="width:0%"></span></div>
                 </div>
 
                 <div class="table-container shadow-sm">
@@ -82,9 +199,9 @@
                         <table class="table table-hover">
                             <thead>
                                 <tr>
-                                    <th>Tanggal</th>
                                     <th>Nama Karyawan</th>
                                     <th>NIK</th>
+                                    <th>Shift</th>
                                     <th class="text-center">Check-In</th>
                                     <th class="text-center">Check-Out</th>
                                     <th class="text-center">Status</th>
@@ -184,25 +301,149 @@
         let modalInstance;
         let detailModalInstance;
         let allData = [];
-        
+        let statusFilter = 'all';
+        let pollTimer = null;
+        const POLL_MS = 5000;
+
+        function jakartaTodayYmd() {
+            return new Intl.DateTimeFormat('en-CA', {
+                timeZone: 'Asia/Jakarta',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit'
+            }).format(new Date());
+        }
+
+        function selectedDate() {
+            return document.getElementById('filterHari').value || jakartaTodayYmd();
+        }
+
+        function isViewingToday() {
+            return selectedDate() === jakartaTodayYmd();
+        }
+
+        function formatDateLabel(ymd) {
+            const d = new Date(`${ymd}T00:00:00`);
+            if (Number.isNaN(d.getTime())) return ymd;
+            return d.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+        }
+
+        function syncMonthYearFromDate() {
+            const ymd = selectedDate();
+            const parts = ymd.split('-');
+            if (parts.length !== 3) return;
+            document.getElementById('filterTahun').value = String(parseInt(parts[0], 10));
+            document.getElementById('filterBulan').value = String(parseInt(parts[1], 10));
+        }
+
+        function applyMonthYearToDate() {
+            const y = document.getElementById('filterTahun').value;
+            const m = String(document.getElementById('filterBulan').value).padStart(2, '0');
+            const current = selectedDate();
+            const dayPart = current && current.split('-')[2] ? parseInt(current.split('-')[2], 10) : 1;
+            const maxDay = new Date(Number(y), Number(m), 0).getDate();
+            const day = Math.min(Number.isFinite(dayPart) ? dayPart : 1, maxDay);
+            document.getElementById('filterHari').value = `${y}-${m}-${String(day).padStart(2, '0')}`;
+        }
+
+        function updateDateLabel() {
+            const ymd = selectedDate();
+            const todayMark = isViewingToday() ? ' (Hari ini)' : '';
+            document.getElementById('selectedDateLabel').textContent = formatDateLabel(ymd) + todayMark;
+        }
+
+        function updateLiveStatus() {
+            const live = isViewingToday();
+            document.getElementById('liveDot').style.background = live ? '#22c55e' : '#9ca3af';
+            document.getElementById('liveDot').style.animation = live ? '' : 'none';
+            document.getElementById('liveLabel').textContent = live
+                ? 'Realtime aktif · diperbarui otomatis'
+                : 'Realtime mati · tampilan tanggal lampau';
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             modalInstance = new bootstrap.Modal(document.getElementById('attendanceModal'));
             detailModalInstance = new bootstrap.Modal(document.getElementById('attendanceDetailModal'));
-            
-            // Set current month & year
-            const now = new Date();
-            document.getElementById('filterBulan').value = now.getMonth() + 1;
-            
+
+            const nowYmd = jakartaTodayYmd();
+            const [curYear] = nowYmd.split('-');
+            document.getElementById('filterHari').value = nowYmd;
+
             const yearSelect = document.getElementById('filterTahun');
             const startYear = 2024;
-            const curYear = now.getFullYear();
-            for(let y = startYear; y <= curYear + 1; y++) {
-                yearSelect.innerHTML += `<option value="${y}" ${y === curYear ? 'selected' : ''}>${y}</option>`;
+            const yNum = parseInt(curYear, 10);
+            for (let y = startYear; y <= yNum + 1; y++) {
+                yearSelect.innerHTML += `<option value="${y}" ${y === yNum ? 'selected' : ''}>${y}</option>`;
             }
-            
+            syncMonthYearFromDate();
+            updateDateLabel();
+            updateLiveStatus();
+
             loadEmployees();
             loadData();
+            startPolling();
+
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) stopPolling();
+                else {
+                    loadData(true);
+                    startPolling();
+                }
+            });
         });
+
+        function startPolling() {
+            stopPolling();
+            pollTimer = setInterval(() => {
+                if (isViewingToday()) loadData(true);
+            }, POLL_MS);
+        }
+
+        function stopPolling() {
+            if (pollTimer) {
+                clearInterval(pollTimer);
+                pollTimer = null;
+            }
+        }
+
+        function onDateChange() {
+            syncMonthYearFromDate();
+            updateDateLabel();
+            updateLiveStatus();
+            loadData();
+            startPolling();
+        }
+
+        function onMonthYearChange() {
+            applyMonthYearToDate();
+            updateDateLabel();
+            updateLiveStatus();
+            loadData();
+            startPolling();
+        }
+
+        function shiftDay(delta) {
+            const current = selectedDate();
+            const d = new Date(`${current}T00:00:00`);
+            d.setDate(d.getDate() + delta);
+            const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            document.getElementById('filterHari').value = ymd;
+            onDateChange();
+        }
+
+        function goToday() {
+            document.getElementById('filterHari').value = jakartaTodayYmd();
+            onDateChange();
+        }
+
+        function setStatusFilter(next) {
+            statusFilter = next;
+            document.getElementById('cardTotal').classList.toggle('active', next === 'all');
+            document.getElementById('cardAttended').classList.toggle('active', next === 'attended');
+            document.getElementById('cardNotAttended').classList.toggle('active', next === 'not_attended');
+            document.getElementById('cardLeave').classList.toggle('active', next === 'leave');
+            renderTable();
+        }
 
         async function loadEmployees() {
             try {
@@ -221,15 +462,46 @@
             } catch (e) { console.error('Gagal load employee', e); }
         }
 
-        async function loadData() {
-            const m = document.getElementById('filterBulan').value;
-            const y = document.getElementById('filterTahun').value;
+        async function loadData(silent) {
+            const ymd = selectedDate();
             try {
-                const res = await fetch(`/admin/employees/api/attendance?month=${m}&year=${y}`);
+                const res = await fetch(`/admin/employees/api/attendance/daily?date=${encodeURIComponent(ymd)}`);
                 const json = await res.json();
                 allData = json.data || [];
+                renderSummary(json.summary || {});
                 renderTable();
-            } catch (e) { console.error(e); }
+                const now = new Date();
+                document.getElementById('lastUpdated').textContent = 'Diperbarui ' + now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            } catch (e) {
+                if (!silent) console.error(e);
+            }
+        }
+
+        function isAttended(a) {
+            const status = String(a.status || '').trim().toLowerCase();
+            return Boolean(String(a.check_in || '').trim()) || status === 'hadir';
+        }
+
+        function isLeave(a) {
+            const status = String(a.status || '').trim().toLowerCase();
+            return status === 'izin' || status === 'sakit' || status === 'cuti';
+        }
+
+        function renderSummary(summary) {
+            const total = Number(summary.total || 0);
+            const attended = Number(summary.attended || 0);
+            const notAttended = Number(summary.not_attended || 0);
+            const leave = Number(summary.izin || 0) + Number(summary.sakit || 0);
+            const pct = (n) => total > 0 ? Math.round((n / total) * 100) : 0;
+            document.getElementById('cardTotalValue').textContent = total;
+            document.getElementById('cardAttendedValue').textContent = attended;
+            document.getElementById('cardNotAttendedValue').textContent = notAttended;
+            document.getElementById('cardLeaveValue').textContent = leave;
+            document.getElementById('cardAttendedSub').textContent = `${pct(attended)}% dari total`;
+            document.getElementById('cardNotAttendedSub').textContent = `${pct(notAttended)}% dari total`;
+            document.getElementById('cardLeaveSub').textContent = leave > 0 ? `${leave} karyawan izin/sakit` : 'Tidak ada izin/sakit';
+            document.getElementById('attendanceRateLabel').textContent = `${pct(attended)}%`;
+            document.getElementById('attendanceRateBar').style.width = `${pct(attended)}%`;
         }
 
         /** Tampilan sel tabel: datetime penuh (mobile) atau hanya jam (input manual). */
@@ -242,9 +514,6 @@
                 const d = new Date(normalized);
                 if (!Number.isNaN(d.getTime())) {
                     return d.toLocaleString('id-ID', {
-                        day: '2-digit',
-                        month: 'short',
-                        year: 'numeric',
                         hour: '2-digit',
                         minute: '2-digit',
                         second: '2-digit',
@@ -299,39 +568,71 @@
             return Math.max(0, checkInTotal - shiftTotal);
         }
 
+        function statusLabel(a) {
+            if (isAttended(a)) {
+                const st = String(a.status || 'hadir').toLowerCase();
+                return st === 'alpha' ? 'HADIR' : String(a.status || 'hadir').toUpperCase();
+            }
+            if (isLeave(a)) return String(a.status).toUpperCase();
+            return 'ALPA';
+        }
+
+        function statusClass(a) {
+            if (isAttended(a)) return 'status-hadir';
+            const st = String(a.status || '').toLowerCase();
+            if (st === 'izin' || st === 'sakit' || st === 'cuti') return `status-${st}`;
+            return 'status-alpha';
+        }
+
         function renderTable() {
             const tbody = document.getElementById('dataTableBody');
             const term = document.getElementById('searchInput').value.toLowerCase();
             const selectedEmployee = document.getElementById('filterEmployee').value;
-            
+
             const filtered = allData.filter(a => {
-                const matchName = (a.nama_lengkap || '').toLowerCase().includes(term);
+                const matchName = (a.nama_lengkap || '').toLowerCase().includes(term)
+                    || String(a.nik || '').toLowerCase().includes(term);
                 const matchEmployee = !selectedEmployee || String(a.employee_id) === String(selectedEmployee);
-                return matchName && matchEmployee;
+                let matchStatus = true;
+                if (statusFilter === 'attended') matchStatus = isAttended(a);
+                else if (statusFilter === 'not_attended') matchStatus = !isAttended(a) && !isLeave(a);
+                else if (statusFilter === 'leave') matchStatus = isLeave(a);
+                return matchName && matchEmployee && matchStatus;
             });
-            
+
             if (filtered.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="8" class="text-center py-4 text-muted">Belum ada data absensi di bulan ini.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="8" class="text-center py-4 text-muted">Tidak ada data absensi untuk filter ini.</td></tr>`;
                 return;
             }
-            
+
             tbody.innerHTML = filtered.map(a => {
-                const dt = new Date(a.date).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
                 const noteInfo = parseAttendanceNotes(a.notes);
                 const lateByShift = computeLateMinutesFromShift(a.check_in, a.shift_check_in_time);
                 const effectiveLateMinutes = noteInfo.lateMinutes > 0 ? noteInfo.lateMinutes : lateByShift;
-                const lateBadge = effectiveLateMinutes > 0
+                const lateBadge = isAttended(a) && effectiveLateMinutes > 0
                     ? `<span class="badge badge-late mt-1">Terlambat ${effectiveLateMinutes} menit</span>`
                     : '';
+                const shiftLabel = a.shift_name
+                    ? `${a.shift_name}<div class="small text-muted">${a.shift_check_in_time || '-'} – ${a.shift_check_out_time || '-'}</div>`
+                    : '<span class="text-muted">-</span>';
+                const photo = a.foto_path || '/img/placeholder-user.png';
                 return `
                 <tr>
-                    <td class="fw-bold">${dt}</td>
-                    <td>${a.nama_lengkap}</td>
-                    <td>${a.nik}</td>
+                    <td>
+                        <div class="d-flex align-items-center gap-2">
+                            <img src="${photo}" class="emp-avatar" onerror="this.src='/img/placeholder-user.png'" alt="">
+                            <div>
+                                <div class="fw-semibold">${a.nama_lengkap || '-'}</div>
+                                <div class="small text-muted">${a.jabatan || ''}</div>
+                            </div>
+                        </div>
+                    </td>
+                    <td>${a.nik || '-'}</td>
+                    <td>${shiftLabel}</td>
                     <td class="text-center">${formatCheckCell(a.check_in)}</td>
                     <td class="text-center">${formatCheckCell(a.check_out)}</td>
                     <td class="text-center">
-                        <span class="status-badge status-${a.status}">${String(a.status).toLowerCase() === 'alpha' ? 'TIDAK HADIR' : String(a.status).toUpperCase()}</span>
+                        <span class="status-badge ${statusClass(a)}">${statusLabel(a)}</span>
                     </td>
                     <td>
                         <div class="small text-muted">${noteInfo.cleanNotes}</div>
@@ -348,13 +649,13 @@
 
         function openModal() {
             document.getElementById('attendanceForm').reset();
-            document.getElementById('date').valueAsDate = new Date();
+            document.getElementById('date').value = selectedDate();
             modalInstance.show();
         }
 
         function viewData(a) {
-            const dateOnly = (a.date || '').split('T')[0] || a.date;
-            const dt = dateOnly ? new Date(dateOnly).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : '-';
+            const dateOnly = (a.date || '').split('T')[0] || a.date || selectedDate();
+            const dt = dateOnly ? formatDateLabel(dateOnly) : '-';
             const noteInfo = parseAttendanceNotes(a.notes);
             const lateByShift = computeLateMinutesFromShift(a.check_in, a.shift_check_in_time);
             const effectiveLateMinutes = noteInfo.lateMinutes > 0 ? noteInfo.lateMinutes : lateByShift;
@@ -364,7 +665,7 @@
             document.getElementById('detailTanggal').textContent = dt;
             document.getElementById('detailNama').textContent = a.nama_lengkap || '-';
             document.getElementById('detailNik').textContent = a.nik || '-';
-            document.getElementById('detailStatus').textContent = (a.status || '-').toUpperCase();
+            document.getElementById('detailStatus').textContent = statusLabel(a);
             document.getElementById('detailCheckIn').textContent = formatCheckCell(a.check_in);
             document.getElementById('detailCheckOut').textContent = formatCheckCell(a.check_out);
             document.getElementById('detailNotes').innerHTML = detailNotesHtml;

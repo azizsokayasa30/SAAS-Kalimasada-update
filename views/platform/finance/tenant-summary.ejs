@@ -3,8 +3,8 @@
 <main class="km-main">
   <div class="km-topbar">
     <div>
-      <h2>Rekap Keuangan Per Tenant</h2>
-      <p class="km-subtitle">Ringkasan koleksi payment gateway per tenant dengan breakdown PPN, BHP USO, dan management fee</p>
+      <h2>Rekap Pembayaran Per Tenant</h2>
+      <p class="km-subtitle">Total tagihan, status pelunasan, dan metode pembayaran (cash, transfer, payment gateway) per tenant</p>
     </div>
   </div>
 
@@ -39,52 +39,54 @@
     </form>
   </div>
 
-  <div class="row g-3 mb-4">
-    <div class="col-md-4 col-6"><div class="km-stat"><div class="label">Total Koleksi</div><div class="value"><%= formatRupiah(totals.gross) %></div></div></div>
-    <div class="col-md-4 col-6"><div class="km-stat"><div class="label">BHP USO + Mgmt Fee</div><div class="value text-warning"><%= formatRupiah(totals.bhp_uso + totals.management_fee) %></div></div></div>
-    <div class="col-md-4 col-6"><div class="km-stat"><div class="label">Net ke Tenant</div><div class="value text-success"><%= formatRupiah(totals.net) %></div></div></div>
-  </div>
-
   <div class="km-card km-card--flush">
     <div class="table-responsive">
-      <table class="table table-hover align-middle mb-0 km-tenant-table">
+      <table class="table table-hover align-middle mb-0 km-tenant-table km-recap-table">
         <thead>
           <tr>
             <th>Tenant</th>
-            <th>Pemilik</th>
-            <th class="text-end">Transaksi</th>
-            <th class="text-end">Gross</th>
-            <th class="text-end">PPN</th>
-            <th class="text-end">BHP USO</th>
-            <th class="text-end">Mgmt Fee</th>
-            <th class="text-end">Net</th>
-            <th></th>
+            <th class="text-end">Total Tagihan</th>
+            <th class="text-end">Tagihan Belum Lunas</th>
+            <th class="text-end">Tagihan Lunas</th>
+            <th class="text-end">Lunas by Cash</th>
+            <th class="text-end">Lunas by Transfer</th>
+            <th class="text-end">Lunas by PG</th>
           </tr>
         </thead>
         <tbody>
           <% if (!summary.length) { %>
-            <tr><td colspan="9" class="text-center py-4" style="color: var(--text-muted)">Tidak ada data pada periode ini.</td></tr>
+            <tr><td colspan="7" class="text-center py-4" style="color: var(--text-muted)">Tidak ada tenant pada periode ini.</td></tr>
           <% } %>
           <% summary.forEach(function(row) { %>
             <tr>
-              <td class="fw-semibold"><%= row.tenant_name %></td>
-              <td><%= row.owner_name %></td>
-              <td class="text-end"><%= row.transaction_count %></td>
-              <td class="text-end"><%= formatRupiah(row.gross_amount) %></td>
-              <td class="text-end"><%= formatRupiah(row.tax_amount) %></td>
-              <td class="text-end"><%= formatRupiah(row.bhp_uso_amount) %></td>
-              <td class="text-end"><%= formatRupiah(row.management_fee_amount) %></td>
-              <td class="text-end fw-semibold text-success"><%= formatRupiah(row.net_amount) %></td>
-              <td class="text-end">
-                <a href="/management/finance/payments?tenant_id=<%= row.tenant_id %>&month=<%= filters.month %>&year=<%= filters.year %>" class="btn btn-outline-primary btn-sm py-0">Detail</a>
+              <td>
+                <div class="fw-semibold"><%= row.tenant_name %></div>
+                <% if (row.owner_name) { %><div class="small" style="color: var(--text-muted)"><%= row.owner_name %></div><% } %>
               </td>
+              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(row.total_tagihan) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning"><%= formatRupiah(row.unpaid_amount) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--success"><%= formatRupiah(row.paid_amount) %></td>
+              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(row.paid_cash) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--accent"><%= formatRupiah(row.paid_transfer) %></td>
+              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(row.paid_pg) %></td>
             </tr>
           <% }); %>
         </tbody>
+        <% if (summary.length) { %>
+          <tfoot>
+            <tr class="km-recap-table__summary">
+              <td>Summary</td>
+              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(totals.total_tagihan) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning"><%= formatRupiah(totals.unpaid_amount) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--success"><%= formatRupiah(totals.paid_amount) %></td>
+              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(totals.paid_cash) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--accent"><%= formatRupiah(totals.paid_transfer) %></td>
+              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(totals.paid_pg) %></td>
+            </tr>
+          </tfoot>
+        <% } %>
       </table>
     </div>
   </div>
-
-  <%- include('_backup-restore') %>
 </main>
 <%- include('../partials/footer') %>

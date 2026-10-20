@@ -1,8 +1,19 @@
 const express = require('express');
 const router = express.Router();
-const { adminAuth } = require('./adminAuth');
+const { adminAuth, requireFullAdmin } = require('./adminAuth');
 const billingManager = require('../config/billing');
 const { getTenantId, hasTenantContext } = require('../config/platform/tenantContext');
+const { isPublicIpv4 } = require('../config/mikrotikApiGuard');
+
+function publicRouterRow(row) {
+  if (!row) return row;
+  const copy = { ...row };
+  copy.has_password = !!(copy.password || copy.secret);
+  copy.api_public = isPublicIpv4(copy.nas_ip);
+  delete copy.password;
+  delete copy.secret;
+  return copy;
+}
 
 function tAnd(alias = '') {
   const t = billingManager._tenantWhere(alias);
@@ -53,7 +64,7 @@ router.get('/routers', adminAuth, async (req, res) => {
             LEFT JOIN genieacs_servers g ON r.genieacs_server_id = g.id 
             ${tWhere('r')}
             ORDER BY r.id`, (err, rows) => {
-      const routers = rows || [];
+      const routers = (rows || []).map(publicRouterRow);
       res.render('admin/routers', { title: 'NAS (RADIUS)', routers, genieacsServers, page: 'routers' });
     });
   } catch (e) {
@@ -126,8 +137,8 @@ router.post('/routers/:id', adminAuth, async (req, res) => {
     const { isValidClientName, isValidClientIp, sanitizeClientName } = require('../config/radiusClients');
     const safeName = String(name || '').trim();
     const safeIp = String(nas_ip || '').trim();
-    if (!safeName || !safeIp || !user || !password) {
-      return res.json({ success: false, message: 'Nama, NAS IP, user, dan password wajib diisi' });
+    if (!safeName || !safeIp || !user) {
+      return res.json({ success: false, message: 'Nama, NAS IP, dan user wajib diisi' });
     }
     if (!isValidClientName(safeName)) {
       const suggested = sanitizeClientName(safeName);
@@ -146,34 +157,41 @@ router.post('/routers/:id', adminAuth, async (req, res) => {
     }
     const portToUse2 = parseInt(port || 8728);
     const genieacsServerId = genieacs_server_id ? parseInt(genieacs_server_id) : null;
+    const passwordProvided = String(password || '').trim();
     const db = billingManager.db;
-    db.run(
-      `UPDATE routers SET name=?, nas_ip=?, nas_identifier=?, location=?, pop=?, port=?, user=?, password=?, genieacs_server_id=?
-       WHERE id=?${tAnd()}`,
-      [safeName, safeIp, nas_identifier, location, pop, portToUse2, user, password, genieacsServerId, id],
-      function(err) {
-        if (err) return res.json({ success: false, message: err.message });
-        if (this.changes === 0) return res.json({ success: false, message: 'Router tidak ditemukan atau bukan milik tenant ini.' });
-        const tenantId = hasTenantContext() ? getTenantId() : null;
-        setImmediate(async () => {
-          try {
-            const { upsertRadiusNasFromRouter } = require('../config/radiusClients');
-            await upsertRadiusNasFromRouter({
-              id: parseInt(id, 10),
-              name: safeName,
-              nas_ip: safeIp,
-              nas_identifier,
-              location,
-              password,
-              tenant_id: tenantId
-            }, tenantId);
-          } catch (e) {
-            console.warn('[adminRouters] sync RADIUS nas (edit) gagal:', e.message);
-          }
-        });
-        res.json({ success: true });
-      }
-    );
+    db.get(`SELECT password FROM routers WHERE id=?${tAnd()}`, [id], (selErr, existing) => {
+      if (selErr) return res.json({ success: false, message: selErr.message });
+      if (!existing) return res.json({ success: false, message: 'Router tidak ditemukan atau bukan milik tenant ini.' });
+      const passwordToSave = passwordProvided || existing.password;
+      if (!passwordToSave) return res.json({ success: false, message: 'Password API wajib diisi' });
+      db.run(
+        `UPDATE routers SET name=?, nas_ip=?, nas_identifier=?, location=?, pop=?, port=?, user=?, password=?, genieacs_server_id=?
+         WHERE id=?${tAnd()}`,
+        [safeName, safeIp, nas_identifier, location, pop, portToUse2, user, passwordToSave, genieacsServerId, id],
+        function(err) {
+          if (err) return res.json({ success: false, message: err.message });
+          if (this.changes === 0) return res.json({ success: false, message: 'Router tidak ditemukan atau bukan milik tenant ini.' });
+          const tenantId = hasTenantContext() ? getTenantId() : null;
+          setImmediate(async () => {
+            try {
+              const { upsertRadiusNasFromRouter } = require('../config/radiusClients');
+              await upsertRadiusNasFromRouter({
+                id: parseInt(id, 10),
+                name: safeName,
+                nas_ip: safeIp,
+                nas_identifier,
+                location,
+                password: passwordToSave,
+                tenant_id: tenantId
+              }, tenantId);
+            } catch (e) {
+              console.warn('[adminRouters] sync RADIUS nas (edit) gagal:', e.message);
+            }
+          });
+          res.json({ success: true, warning: isPublicIpv4(safeIp) ? 'NAS IP publik. Kunci port API supaya tidak terbuka ke internet.' : undefined });
+        }
+      );
+    });
   } catch (e) { res.json({ success: false, message: e.message }); }
 });
 
@@ -214,7 +232,13 @@ router.post('/routers/:id/test', adminAuth, async (req, res) => {
       try {
         const { testMikrotikConnectionForRouter } = require('../config/mikrotik');
         const result = await testMikrotikConnectionForRouter(row);
-        res.json(result);
+        res.json({
+          ...result,
+          publicNas: isPublicIpv4(row.nas_ip),
+          warning: isPublicIpv4(row.nas_ip)
+            ? 'NAS IP publik. Port API 8728/8729 terlihat dari internet. Tekan tombol kunci API.'
+            : undefined
+        });
       } catch (e) {
         res.json({
           success: false,
@@ -222,6 +246,27 @@ router.post('/routers/:id/test', adminAuth, async (req, res) => {
           host: row.nas_ip,
           port: row.port || 8728
         });
+      }
+    });
+  } catch (e) {
+    res.json({ success: false, message: e.message });
+  }
+});
+
+router.post('/routers/:id/lock-api', adminAuth, requireFullAdmin, async (req, res) => {
+  try {
+    const db = billingManager.db;
+    db.get(`SELECT * FROM routers WHERE id=?${tAnd()}`, [req.params.id], async (err, row) => {
+      if (err) return res.json({ success: false, message: err.message });
+      if (!row) return res.json({ success: false, message: 'Router tidak ditemukan' });
+      try {
+        const { lockRouterApi } = require('../config/mikrotikApiGuard');
+        const dryRun = !!(req.body && (req.body.dryRun === true || req.body.dryRun === 'true'));
+        const confirm = !!(req.body && (req.body.confirm === true || req.body.confirm === 'true'));
+        const result = await lockRouterApi(row, { dryRun, confirm });
+        res.json(result);
+      } catch (e) {
+        res.json({ success: false, message: e.message, host: row.nas_ip, port: row.port || 8728 });
       }
     });
   } catch (e) {

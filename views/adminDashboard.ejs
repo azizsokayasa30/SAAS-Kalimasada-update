@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-    <!-- Theme Init: Di-handle oleh theme-head.ejs -->
     <%- include('partials/hard-reload') %>
     <meta charset="UTF-8">
     <title><% if (typeof isTechnicianView !== 'undefined' && isTechnicianView) { %>Dashboard Teknisi<% } else { %>Dashboard Admin<% } %></title>
@@ -10,76 +9,70 @@
     <noscript><link rel="stylesheet" href="/css/fonts-inter-local.css"></noscript>
     <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
     <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
-    
-    
     <link href="/css/responsive-admin.css" rel="stylesheet">
-    <link href="/css/dashboard-modern.css" rel="stylesheet">
     <% if (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) { %>
-    <style>.dash-stat-loading .sc-value, .dash-stat-loading .sc-sub { opacity: 0.45; }</style>
     <script>
     window.__dashOverviewPrefetch = fetch('/admin/dashboard/api/overview', { credentials: 'same-origin' })
       .then(function (r) { return r.json(); })
       .catch(function () { return null; });
     </script>
     <% } %>
-
     <%- include('partials/theme-head') %>
+    <link href="/css/dashboard-premium.css?v=10" rel="stylesheet">
 </head>
-<body>
+<body class="isp-dash">
+<% const _greetUser = typeof dashboardGreetingUser !== 'undefined' ? dashboardGreetingUser : (typeof technician !== 'undefined' && technician && technician.name ? technician.name : 'Admin'); %>
+<% const _roleLabel = (typeof executiveJabatan !== 'undefined' && executiveJabatan) ? executiveJabatan : ((typeof isAreaManager !== 'undefined' && isAreaManager) ? 'Manager Area' : 'Admin Panel'); %>
+<% const _company = (typeof settings !== 'undefined' && settings && (settings.company_header || settings.company_name)) ? (settings.company_header || settings.company_name) : 'PT. Kalimasada Inti Sarana'; %>
+<% const _initial = String(_greetUser || 'A').trim().charAt(0).toUpperCase() || 'A'; %>
 <div class="container-fluid">
     <div class="row">
-        <!-- Include Responsive Sidebar (Admin or Technician based on context) -->
         <% if (typeof isTechnicianView !== 'undefined' && isTechnicianView) { %>
         <%- include('partials/technician-responsive-sidebar', { page: page || 'dashboard', settings: settings, technician: technician }) %>
         <% } else { %>
         <%- include('partials/admin-responsive-sidebar', { page: 'dashboard', settings: settings }) %>
         <% } %>
-        
+
         <main id="pjax-container" class="col-md-10 ms-sm-auto main-content">
-            <% const _greetUser = typeof dashboardGreetingUser !== 'undefined' ? dashboardGreetingUser : (typeof technician !== 'undefined' && technician && technician.name ? technician.name : 'Admin'); %>
-            <% const _greetDate = typeof dashboardGreetingDate !== 'undefined' ? dashboardGreetingDate : ''; %>
             <% if (typeof isTechnicianView === 'undefined' || !isTechnicianView) { %>
             <% const _btc = typeof adminNotifBadgeTotal === 'number' ? adminNotifBadgeTotal : 0; %>
-            <div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-4 dashboard-top-bar">
-                <div class="dashboard-greeting">
-                    <p class="dashboard-greeting-line mb-0">
-                        <span class="dashboard-greeting-title">Hallo <%= _greetUser %>,</span>
-                        <span class="dashboard-greeting-subtitle"><%= _greetDate %></span>
-                    </p>
-                </div>
-                <div class="dropdown ms-auto">
-                    <button class="btn btn-success d-flex align-items-center gap-2 rounded-pill px-3 py-2 border-0 position-relative shadow text-start text-white fw-semibold"
-                            type="button" id="adminNotifBellBtn" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" aria-label="Pusat notifikasi">
-                        <span class="fw-bold text-white lh-sm d-none d-sm-inline" style="font-size:0.95rem; letter-spacing:0.02em;">Pusat notifikasi</span>
-                        <span class="fw-bold text-white lh-sm d-sm-none" style="font-size:0.78rem;">Notifikasi</span>
-                        <i class="bi bi-bell-fill text-white align-middle" style="font-size:2.15rem; line-height:1;"></i>
-                        <span id="adminNotifBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger <%= _btc > 0 ? '' : 'd-none' %>"><%= _btc > 99 ? '99+' : _btc %></span>
-                    </button>
-                    <div class="dropdown-menu dropdown-menu-end shadow-lg border mt-2 p-0 rounded-3 overflow-hidden" style="width:min(440px, 96vw);">
-                        <div class="px-3 py-2 bg-primary bg-opacity-10 border-bottom small fw-bold text-primary d-flex justify-content-between align-items-center flex-wrap gap-1">
-                            <span><i class="bi bi-inboxes me-1"></i>Pratinjau</span>
-                            <span class="text-muted fw-normal" style="font-size:0.72rem;">Teknisi · Lunas/isolir · Portal</span>
+            <header class="isp-topbar">
+                <div class="isp-top-meta">
+                    <div class="isp-clock">
+                        <div class="isp-clock-date" id="ispClockDate">—</div>
+                        <div class="isp-clock-time" id="ispClockTime">--:--:--</div>
+                    </div>
+                    <div class="dropdown">
+                        <button class="isp-bell" type="button" id="adminNotifBellBtn" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" aria-label="Pusat notifikasi">
+                            <i class="bi bi-bell"></i>
+                            <span id="adminNotifBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger <%= _btc > 0 ? '' : 'd-none' %>"><%= _btc > 99 ? '99+' : _btc %></span>
+                        </button>
+                        <div class="dropdown-menu dropdown-menu-end mt-2 p-0 overflow-hidden" style="width:min(440px, 96vw);">
+                            <div class="px-3 py-2 border-bottom small fw-bold d-flex justify-content-between align-items-center">
+                                <span><i class="bi bi-inboxes me-1"></i>Pratinjau</span>
+                                <span class="text-muted fw-normal" style="font-size:0.72rem;">Teknisi · Lunas/isolir · Portal</span>
+                            </div>
+                            <div id="adminNotifList" style="max-height:min(380px, 58vh); overflow-y: auto;">
+                                <div class="px-3 py-4 text-muted small text-center">Buka menu untuk memuat…</div>
+                            </div>
+                            <div class="border-top py-2 px-3 d-grid gap-2">
+                                <a href="/admin/dashboard/notifications" class="btn btn-sm btn-primary w-100">Buka halaman lengkap</a>
+                                <button type="button" class="btn btn-sm btn-outline-secondary w-100" onclick="clearAdminNotificationsShell(event)">Bersihkan notifikasi</button>
+                            </div>
                         </div>
-                        <div id="adminNotifList" class="bg-white" style="max-height:min(380px, 58vh); overflow-y: auto;">
-                            <div class="px-3 py-4 text-muted small text-center">Buka menu untuk memuat…</div>
-                        </div>
-                        <div class="border-top bg-light py-2 px-3 d-grid gap-2">
-                            <a href="/admin/dashboard/notifications" class="btn btn-sm btn-primary w-100">Buka halaman lengkap</a>
-                            <button type="button" class="btn btn-sm btn-outline-secondary w-100" onclick="clearAdminNotificationsShell(event)">Bersihkan notifikasi</button>
+                    </div>
+                    <div class="isp-user">
+                        <div class="isp-avatar" title="<%= _greetUser %>"><%= _initial %></div>
+                        <div class="isp-user-copy">
+                            <div class="isp-user-name"><%= _greetUser %></div>
+                            <div class="isp-user-role"><%= _roleLabel %></div>
                         </div>
                     </div>
                 </div>
-            </div>
-            <% } else { %>
-            <div class="dashboard-greeting mb-4">
-                <p class="dashboard-greeting-line mb-0">
-                    <span class="dashboard-greeting-title">Hallo <%= _greetUser %>,</span>
-                    <span class="dashboard-greeting-subtitle"><%= _greetDate %></span>
-                </p>
-            </div>
+            </header>
             <% } %>
 
-            <div id="baileysDisconnectAlert" class="alert alert-warning border-0 shadow-sm d-none mb-4" role="alert">
+            <div id="baileysDisconnectAlert" class="alert alert-warning border-0 d-none mb-3" role="alert">
                 <div class="d-flex flex-wrap align-items-start gap-2 justify-content-between">
                     <div class="d-flex align-items-start gap-2">
                         <i class="bi bi-whatsapp fs-4 mt-1" id="baileysAlertIcon"></i>
@@ -94,56 +87,85 @@
                 </div>
             </div>
 
-            <!-- LICENSE STATUS CARD REMOVED -->
+            <section class="isp-hero">
+                <img class="isp-hero-bg" src="/img/dashboard-hero-landscape.png?v=8" alt="KALIMASADA INTI SARANA. Internet Untuk Masa Depan Yang Lebih Baik" width="2172" height="303">
+                <div class="isp-hello">
+                    <h1><span aria-hidden="true">👋</span> Hallo, <%= _greetUser %>!</h1>
+                    <p>Selamat datang di sistem manajemen <%= _company %></p>
+                    <p class="isp-tagline">Pelayanan internet lebih baik</p>
+                </div>
+            </section>
 
-            <!-- ====== QUICK ACTION ====== -->
-            <% const bs = typeof billingStats !== 'undefined' ? billingStats : {}; %>
-            <div class="db-section-label"><i class="bi bi-lightning-charge-fill me-2"></i>Akses Cepat Operasional</div>
-            <div class="quick-action-grid mb-4">
+            <div class="isp-section-title">Akses Cepat</div>
+            <div class="quick-action-grid isp-qa mb-3">
                 <a href="/admin/billing/customers?quickAction=add-pppoe-customer" class="qa-card qa-indigo" id="qa-add-customer">
-                    <div class="qa-icon"><i class="bi bi-person-plus-fill"></i></div>
-                    <div class="qa-label">Tambah Pelanggan</div>
+                    <div class="qa-icon" title="Tambah pelanggan"><i class="bi bi-person-fill"></i></div>
+                    <div class="qa-copy">
+                        <div class="qa-label">Tambah Pelanggan</div>
+                        <div class="qa-sub">Input pelanggan baru</div>
+                    </div>
+                    <i class="bi bi-chevron-right qa-arrow" aria-hidden="true"></i>
                 </a>
                 <a href="/admin/installations/create" class="qa-card qa-green" id="qa-add-job">
-                    <div class="qa-icon"><i class="bi bi-tools"></i></div>
-                    <div class="qa-label">Tambah Job Teknisi</div>
+                    <div class="qa-icon" title="Job teknisi"><i class="bi bi-wrench"></i></div>
+                    <div class="qa-copy">
+                        <div class="qa-label">Tambah Job Teknisi</div>
+                        <div class="qa-sub">Penugasan teknisi</div>
+                    </div>
+                    <i class="bi bi-chevron-right qa-arrow" aria-hidden="true"></i>
                 </a>
                 <a href="/admin/trouble?quickAction=create-ticket" class="qa-card qa-orange" id="qa-add-ticket">
-                    <div class="qa-icon"><i class="bi bi-exclamation-triangle-fill"></i></div>
-                    <div class="qa-label">Tambah Tiket Gangguan</div>
+                    <div class="qa-icon" title="Tiket gangguan"><i class="bi bi-exclamation-triangle-fill"></i></div>
+                    <div class="qa-copy">
+                        <div class="qa-label">Tambah Tiket Gangguan</div>
+                        <div class="qa-sub">Laporan masalah</div>
+                    </div>
+                    <i class="bi bi-chevron-right qa-arrow" aria-hidden="true"></i>
                 </a>
                 <a href="/admin/billing/all-payments?quickAction=input-pembayaran" class="qa-card qa-blue" id="qa-payment">
-                    <div class="qa-icon"><i class="bi bi-cash-coin"></i></div>
-                    <div class="qa-label">Input Pembayaran</div>
+                    <div class="qa-icon" title="Input pembayaran"><i class="bi bi-credit-card-fill"></i></div>
+                    <div class="qa-copy">
+                        <div class="qa-label">Input Pembayaran</div>
+                        <div class="qa-sub">Verifikasi pembayaran</div>
+                    </div>
+                    <i class="bi bi-chevron-right qa-arrow" aria-hidden="true"></i>
                 </a>
                 <a href="/admin/billing/collector-remittance" class="qa-card qa-purple" id="qa-setoran">
-                    <div class="qa-icon"><i class="bi bi-wallet2"></i></div>
-                    <div class="qa-label">Terima Setoran</div>
+                    <div class="qa-icon" title="Terima setoran"><i class="bi bi-wallet2"></i></div>
+                    <div class="qa-copy">
+                        <div class="qa-label">Terima Setoran</div>
+                        <div class="qa-sub">Setoran dari kolektor</div>
+                    </div>
+                    <i class="bi bi-chevron-right qa-arrow" aria-hidden="true"></i>
                 </a>
                 <a href="/admin/billing/expenses" class="qa-card qa-red" id="qa-expense">
-                    <div class="qa-icon"><i class="bi bi-box-arrow-up-right"></i></div>
-                    <div class="qa-label">Tambah Pengeluaran</div>
+                    <div class="qa-icon" title="Pengeluaran"><i class="bi bi-receipt"></i></div>
+                    <div class="qa-copy">
+                        <div class="qa-label">Tambah Pengeluaran</div>
+                        <div class="qa-sub">Catat pengeluaran baru</div>
+                    </div>
+                    <i class="bi bi-chevron-right qa-arrow" aria-hidden="true"></i>
                 </a>
             </div>
 
             <% const pkgReqs = typeof portalPackageRequests !== 'undefined' && portalPackageRequests ? portalPackageRequests : []; %>
             <% if (pkgReqs.length > 0) { %>
-            <div id="adminPortalPackageRequestsBlock">
-            <div class="alert alert-primary d-flex align-items-center gap-2 mb-3 py-3 shadow-sm" role="alert">
+            <div id="adminPortalPackageRequestsBlock" class="isp-portal">
+            <div class="alert alert-primary d-flex align-items-center gap-2 mb-3 py-3" role="alert">
                 <i class="bi bi-arrow-left-right fs-4"></i>
                 <div>
                     <strong>Portal pelanggan:</strong> Ada <strong><%= pkgReqs.length %></strong> permintaan ubah paket (upgrade/downgrade) menunggu tindakan.
                 </div>
             </div>
-            <div class="card border-primary border-opacity-25 shadow-sm mb-4">
-                <div class="card-header bg-primary text-white py-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div class="card border-0 mb-4">
+                <div class="card-header py-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <span class="fw-bold"><i class="bi bi-box-seam me-2"></i>Permintaan ubah paket (portal)</span>
-                    <span class="badge bg-light text-primary rounded-pill"><%= pkgReqs.length %> pending</span>
+                    <span class="badge bg-primary rounded-pill"><%= pkgReqs.length %> pending</span>
                 </div>
                 <div class="card-body p-0">
                     <div class="table-responsive">
                         <table class="table table-hover align-middle mb-0 small">
-                            <thead class="table-light">
+                            <thead>
                                 <tr>
                                     <th class="ps-3">Waktu</th>
                                     <th>Pelanggan</th>
@@ -161,11 +183,11 @@
                                         <div class="text-muted" style="font-size:0.75rem;"><%= r.customer_phone || '' %></div>
                                     </td>
                                     <td>
-                                        <span class="badge bg-secondary-subtle text-secondary"><%= r.current_package_name || '—' %></span>
+                                        <span class="badge bg-secondary"><%= r.current_package_name || '—' %></span>
                                         <% if (r.current_speed) { %><div class="text-muted mt-1" style="font-size:0.75rem;"><%= r.current_speed %></div><% } %>
                                     </td>
                                     <td>
-                                        <span class="badge bg-primary-subtle text-primary"><%= r.target_package_name %></span>
+                                        <span class="badge bg-primary"><%= r.target_package_name %></span>
                                         <div class="mt-1" style="font-size:0.75rem;">
                                             <%= r.target_speed || '' %>
                                             <% if (r.target_price_rupiah != null) { %> · <span class="dash-amount" data-amount="Rp <%= Number(r.target_price_rupiah).toLocaleString('id-ID') %>">Rp <%= Number(r.target_price_rupiah).toLocaleString('id-ID') %></span><% } %>
@@ -189,261 +211,315 @@
             </div>
             <% } %>
 
-            <!-- ====== STAT CARDS ====== -->
-            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
-                <div class="db-section-label m-0"><i class="bi bi-bar-chart-fill me-2"></i>Statistik Pelanggan & Tagihan</div>
-                <button type="button" id="dashAmountToggle" class="btn btn-sm btn-outline-secondary dash-amount-toggle-btn" title="Tampilkan nominal" aria-label="Tampilkan nominal" aria-pressed="false">
+            <div id="dashOverviewError" class="isp-error d-none" role="alert">Data dashboard gagal dimuat. Muat ulang halaman untuk mencoba lagi.</div>
+
+            <div class="isp-section-title">
+                <span>Statistik Pelanggan &amp; Tagihan</span>
+                <button type="button" id="dashAmountToggle" class="isp-amount-btn" title="Tampilkan nominal" aria-label="Tampilkan nominal" aria-pressed="false">
                     <i class="bi bi-eye" id="dashAmountToggleIcon"></i>
                 </button>
             </div>
-            <div class="stat-grid-6 mb-4<%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? ' dash-stat-loading' : '' %>" id="dashStatsGrid">
+            <% const bs = typeof billingStats !== 'undefined' ? billingStats : {}; %>
+            <%
+              var tagihanBln = bs.monthly_total_tagihan != null ? bs.monthly_total_tagihan : ((bs.monthly_revenue || 0) + (bs.monthly_unpaid || 0));
+              var lunasBln = bs.monthly_lunas_canonical != null ? bs.monthly_lunas_canonical : (bs.monthly_revenue || 0);
+              var blmBln = bs.monthly_belum_lunas_canonical != null ? bs.monthly_belum_lunas_canonical : (bs.monthly_unpaid || 0);
+              var invBln = bs.monthly_invoice_count_canonical != null ? bs.monthly_invoice_count_canonical : (bs.monthly_invoices || 0);
+              var invBlmBln = bs.monthly_belum_lunas_count_canonical != null ? bs.monthly_belum_lunas_count_canonical : (bs.unpaid_monthly_invoices || 0);
+              var piutangAll = bs.outstanding_unpaid_total != null ? bs.outstanding_unpaid_total : 0;
+              var piutangCnt = bs.outstanding_unpaid_count != null ? bs.outstanding_unpaid_count : 0;
+              var loading = typeof deferStatsLoad !== 'undefined' && deferStatsLoad;
+            %>
+            <div class="isp-kpi-grid stat-grid-6<%= loading ? ' dash-stat-loading' : '' %>" id="dashStatsGrid">
                 <a href="/admin/billing/customers" class="stat-card-big stat-indigo" id="sc-total-customer">
                     <div class="sc-header">
                         <span class="sc-label">Total Pelanggan</span>
-                        <span class="sc-badge"><i class="bi bi-people-fill me-1"></i> Database</span>
+                        <span class="sc-badge" title="Database pelanggan"><i class="bi bi-people-fill"></i></span>
                     </div>
-                    <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : (bs.total_customers || 0) %></div>
+                    <div class="sc-value"><%= loading ? '…' : (bs.total_customers || 0).toLocaleString('id-ID') %></div>
                     <div class="sc-sub">Pelanggan terdaftar total</div>
+                    <span class="sc-spark spark-line" aria-hidden="true"></span>
+                    <span class="isp-detail">Lihat Detail <i class="bi bi-chevron-right"></i></span>
                 </a>
                 <a href="/admin/billing/customers?status=active" class="stat-card-big stat-emerald" id="sc-active">
                     <div class="sc-header">
                         <span class="sc-label">Pelanggan Aktif</span>
-                        <span class="sc-badge"><i class="bi bi-check-circle-fill me-1"></i> Aktif</span>
+                        <span class="sc-badge" title="Aktif"><i class="bi bi-wifi"></i></span>
                     </div>
-                    <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : (bs.active_customers || 0) %></div>
+                    <div class="sc-value"><%= loading ? '…' : (bs.active_customers || 0).toLocaleString('id-ID') %></div>
                     <div class="sc-sub">Status terkoneksi saat ini</div>
+                    <span class="sc-spark spark-line" aria-hidden="true"></span>
+                    <span class="isp-detail">Lihat Detail <i class="bi bi-chevron-right"></i></span>
                 </a>
                 <a href="/admin/billing/customers?status=inactive" class="stat-card-big stat-rose" id="sc-inactive">
                     <div class="sc-header">
                         <span class="sc-label">Pelanggan Nonaktif</span>
-                        <span class="sc-badge"><i class="bi bi-x-circle-fill me-1"></i> Isolir</span>
+                        <span class="sc-badge" title="Nonaktif"><i class="bi bi-slash-circle"></i></span>
                     </div>
-                    <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : ((bs.total_customers || 0) - (bs.active_customers || 0)) %></div>
-                    <div class="sc-sub">Isolir / Berhenti berlangganan</div>
+                    <div class="sc-value"><%= loading ? '…' : Math.max((bs.total_customers || 0) - (bs.active_customers || 0), 0).toLocaleString('id-ID') %></div>
+                    <div class="sc-sub">Isolir / berhenti berlangganan</div>
+                    <span class="sc-spark spark-line" aria-hidden="true"></span>
+                    <span class="isp-detail">Lihat Detail <i class="bi bi-chevron-right"></i></span>
                 </a>
-                <% 
-                  var tagihanBln = bs.monthly_total_tagihan != null ? bs.monthly_total_tagihan : ((bs.monthly_revenue || 0) + (bs.monthly_unpaid || 0));
-                  var lunasBln = bs.monthly_lunas_canonical != null ? bs.monthly_lunas_canonical : (bs.monthly_revenue || 0);
-                  var blmBln = bs.monthly_belum_lunas_canonical != null ? bs.monthly_belum_lunas_canonical : (bs.monthly_unpaid || 0);
-                  var invBln = bs.monthly_invoice_count_canonical != null ? bs.monthly_invoice_count_canonical : (bs.monthly_invoices || 0);
-                  var invBlmBln = bs.monthly_belum_lunas_count_canonical != null ? bs.monthly_belum_lunas_count_canonical : (bs.unpaid_monthly_invoices || 0);
-                  var piutangAll = bs.outstanding_unpaid_total != null ? bs.outstanding_unpaid_total : 0;
-                  var piutangCnt = bs.outstanding_unpaid_count != null ? bs.outstanding_unpaid_count : 0;
-                %>
                 <a href="/admin/billing/invoice-list" class="stat-card-big stat-blue" id="sc-total-invoice">
                     <div class="sc-header">
                         <span class="sc-label">Total Tagihan</span>
-                        <span class="sc-badge"><i class="bi bi-receipt me-1"></i> <%= invBln %> Inv</span>
+                        <span class="sc-badge" title="Invoice bulan ini"><i class="bi bi-receipt"></i></span>
                     </div>
-                    <div class="sc-value dash-amount" data-amount="Rp <%= tagihanBln.toLocaleString('id-ID') %>"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : ('Rp ' + tagihanBln.toLocaleString('id-ID')) %></div>
-                    <div class="sc-sub"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? 'Memuat…' : ('Lunas Rp ' + lunasBln.toLocaleString('id-ID') + ' · Blm Rp ' + blmBln.toLocaleString('id-ID')) %></div>
+                    <div class="sc-value dash-amount" data-amount="<%= loading ? '' : ('Rp ' + tagihanBln.toLocaleString('id-ID')) %>"><%= loading ? '…' : ('Rp ' + tagihanBln.toLocaleString('id-ID')) %></div>
+                    <div class="sc-sub"><span class="sc-count"><%= loading ? '…' : (invBln.toLocaleString('id-ID') + ' Inv') %></span> · Lunas <span class="dash-amount" id="sc-total-invoice-paid" data-amount="<%= loading ? '' : ('Rp ' + lunasBln.toLocaleString('id-ID')) %>"><%= loading ? '…' : ('Rp ' + lunasBln.toLocaleString('id-ID')) %></span></div>
+                    <span class="sc-spark spark-bars" aria-hidden="true"></span>
+                    <span class="isp-detail">Lihat Detail <i class="bi bi-chevron-right"></i></span>
                 </a>
                 <a href="/admin/billing/invoice-list?status=unpaid" class="stat-card-big stat-amber" id="sc-unpaid">
                     <div class="sc-header">
                         <span class="sc-label">Belum Lunas</span>
-                        <span class="sc-badge"><%= invBlmBln %> Inv · Bln Ini</span>
+                        <span class="sc-badge" title="Belum lunas bulan ini"><i class="bi bi-clock"></i></span>
                     </div>
-                    <div class="sc-value dash-amount" data-amount="Rp <%= blmBln.toLocaleString('id-ID') %>"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : ('Rp ' + blmBln.toLocaleString('id-ID')) %></div>
-                    <div class="sc-sub">Dari tagihan terbit bulan ini</div>
+                    <div class="sc-value dash-amount" data-amount="<%= loading ? '' : ('Rp ' + blmBln.toLocaleString('id-ID')) %>"><%= loading ? '…' : ('Rp ' + blmBln.toLocaleString('id-ID')) %></div>
+                    <div class="sc-sub"><span class="sc-count"><%= loading ? '…' : (invBlmBln.toLocaleString('id-ID') + ' Inv') %></span> · Dari tagihan terbit bulan ini</div>
+                    <span class="sc-spark spark-bars" aria-hidden="true"></span>
+                    <span class="isp-detail">Lihat Detail <i class="bi bi-chevron-right"></i></span>
                 </a>
-                <a href="/admin/billing/invoice-list?status=unpaid" class="stat-card-big stat-rose" id="sc-piutang-all" title="Semua invoice belum lunas (termasuk bulan lalu)">
+                <a href="/admin/billing/invoice-list?status=unpaid" class="stat-card-big stat-teal" id="sc-piutang-all" title="Semua invoice belum lunas (termasuk bulan lalu)">
                     <div class="sc-header">
                         <span class="sc-label">Piutang Aktif</span>
-                        <span class="sc-badge"><%= piutangCnt %> Inv</span>
+                        <span class="sc-badge" title="Piutang semua periode"><i class="bi bi-cash-stack"></i></span>
                     </div>
-                    <div class="sc-value dash-amount" data-amount="Rp <%= piutangAll.toLocaleString('id-ID') %>"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : ('Rp ' + piutangAll.toLocaleString('id-ID')) %></div>
-                    <div class="sc-sub">Total belum lunas (semua periode)</div>
+                    <div class="sc-value dash-amount" data-amount="<%= loading ? '' : ('Rp ' + piutangAll.toLocaleString('id-ID')) %>"><%= loading ? '…' : ('Rp ' + piutangAll.toLocaleString('id-ID')) %></div>
+                    <div class="sc-sub"><span class="sc-count"><%= loading ? '…' : (piutangCnt.toLocaleString('id-ID') + ' Inv') %></span> · Total belum lunas</div>
+                    <span class="sc-spark spark-bars" aria-hidden="true"></span>
+                    <span class="isp-detail">Lihat Detail <i class="bi bi-chevron-right"></i></span>
                 </a>
-                <a href="/admin/billing/customers" class="stat-card-big stat-teal" id="sc-new-customer">
+                <a href="/admin/billing/customers" class="stat-card-big stat-purple" id="sc-new-customer">
                     <div class="sc-header">
                         <span class="sc-label">Pelanggan Baru</span>
-                        <span class="sc-badge"><i class="bi bi-graph-up-arrow me-1"></i> Plus</span>
+                        <span class="sc-badge" title="Bulan berjalan"><i class="bi bi-person-plus"></i></span>
                     </div>
-                    <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : (typeof newCustomersThisMonth !== 'undefined' ? newCustomersThisMonth : 0) %></div>
+                    <div class="sc-value"><%= loading ? '…' : (typeof newCustomersThisMonth !== 'undefined' ? newCustomersThisMonth : 0).toLocaleString('id-ID') %></div>
                     <div class="sc-sub">Bulan berjalan</div>
+                    <span class="sc-spark spark-bars" aria-hidden="true"></span>
+                    <span class="isp-detail">Lihat Detail <i class="bi bi-chevron-right"></i></span>
                 </a>
             </div>
 
-            <!-- ====== OPERASIONAL HARI INI ====== -->
+            <div class="isp-charts">
+                <section class="isp-panel">
+                    <div class="isp-panel-head"><h3>Grafik Pelanggan (6 Bulan Terakhir)</h3></div>
+                    <div id="dashCustomerTrend">
+                        <div class="isp-empty">
+                            <i class="bi bi-graph-up"></i>
+                            <div>Memuat grafik pelanggan…</div>
+                        </div>
+                    </div>
+                </section>
+                <section class="isp-panel">
+                    <div class="isp-panel-head"><h3>Status Tagihan Bulan Ini</h3></div>
+                    <div class="isp-donut-wrap">
+                        <div class="isp-donut-stage" id="dashDonutStage">
+                            <canvas id="dashInvoiceDonut" aria-label="Status tagihan bulan ini"></canvas>
+                            <div class="isp-donut-center">
+                                <strong id="dashDonutCenterValue">…</strong>
+                                <span>Total pelanggan</span>
+                            </div>
+                        </div>
+                        <div>
+                            <ul class="isp-legend" id="dashDonutLegend">
+                                <li><span class="isp-dot isp-dot-green"></span><span>Lunas</span><b id="dashDonutLunas">…</b></li>
+                                <li><span class="isp-dot isp-dot-orange"></span><span>Belum Lunas</span><b id="dashDonutBelum">…</b></li>
+                            </ul>
+                            <div id="dashDonutEmpty" class="isp-empty d-none"><i class="bi bi-pie-chart"></i><div>Belum ada tagihan bulan ini.</div></div>
+                            <p class="isp-note">Kategori lain belum tersedia dari data tagihan.</p>
+                        </div>
+                    </div>
+                </section>
+                <section class="isp-panel">
+                    <div class="isp-panel-head"><h3>Top 5 Area Pelanggan</h3></div>
+                    <div id="dashTopAreas">
+                        <div class="isp-empty">
+                            <i class="bi bi-hourglass-split"></i>
+                            <div>Memuat peringkat area…</div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
             <% const ops = (typeof operationalStats !== 'undefined' && operationalStats) ? operationalStats : {}; %>
-            <% 
+            <%
                 const pendingInstallations = Number(ops.pendingInstallations || 0);
                 const pendingTroubleTickets = Number(ops.pendingTroubleTickets || 0);
                 const employeesAttendedToday = Number(ops.employeesAttendedToday || 0);
-
-                const clsPendingInstallations = pendingInstallations === 0 ? 'stat-emerald' : (pendingInstallations <= 5 ? 'stat-amber' : 'stat-rose');
-                const clsPendingTrouble = pendingTroubleTickets === 0 ? 'stat-emerald' : (pendingTroubleTickets <= 10 ? 'stat-amber' : 'stat-rose');
-                const clsAttendanceToday = employeesAttendedToday >= 5 ? 'stat-emerald' : (employeesAttendedToday >= 1 ? 'stat-amber' : 'stat-rose');
             %>
-            <div class="db-section-label"><i class="bi bi-clipboard2-data-fill me-2"></i>Operasional Hari Ini</div>
-            <div class="row mb-4">
-                <div class="col-lg-4 mb-3">
-                    <a href="/admin/installations" class="stat-card-big <%= clsPendingInstallations %> h-100 d-block text-decoration-none" id="sc-pending-installations">
-                        <div class="sc-header">
-                            <span class="sc-label">Pending Job Instalasi</span>
-                            <span class="sc-badge"><i class="bi bi-tools me-1"></i> Teknisi</span>
-                        </div>
-                        <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : pendingInstallations %></div>
-                        <div class="sc-sub">Status scheduled / assigned / in progress</div>
-                    </a>
-                </div>
-                <div class="col-lg-4 mb-3">
-                    <a href="/admin/trouble" class="stat-card-big <%= clsPendingTrouble %> h-100 d-block text-decoration-none" id="sc-pending-trouble">
-                        <div class="sc-header">
-                            <span class="sc-label">Pending Tiket Gangguan</span>
-                            <span class="sc-badge"><i class="bi bi-exclamation-triangle-fill me-1"></i> Trouble</span>
-                        </div>
-                        <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : pendingTroubleTickets %></div>
-                        <div class="sc-sub">Tiket open / pending / in progress</div>
-                    </a>
-                </div>
-                <div class="col-lg-4 mb-3">
-                    <a href="/admin/employees/attendance" class="stat-card-big <%= clsAttendanceToday %> h-100 d-block text-decoration-none" id="sc-attendance-today">
-                        <div class="sc-header">
-                            <span class="sc-label">Karyawan Sudah Absen</span>
-                            <span class="sc-badge"><i class="bi bi-calendar-check-fill me-1"></i> Hari Ini</span>
-                        </div>
-                        <div class="sc-value"><%= (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) ? '…' : employeesAttendedToday %></div>
-                        <div class="sc-sub">Jumlah karyawan unik yang tercatat absen hari ini</div>
-                    </a>
-                </div>
+            <div class="isp-section-title">Operasional Hari Ini</div>
+            <div class="isp-ops">
+                <a href="/admin/installations" class="isp-ops-card ops-blue" id="sc-pending-installations">
+                    <span class="ops-icon"><i class="bi bi-wrench"></i></span>
+                    <span class="ops-copy">
+                        <span class="sc-label">Pending Job Instalasi</span>
+                        <span class="sc-value"><%= loading ? '…' : pendingInstallations.toLocaleString('id-ID') %></span>
+                        <span class="sc-sub">Scheduled, assigned, dan in progress</span>
+                    </span>
+                    <i class="bi bi-chevron-right ops-arrow" aria-hidden="true"></i>
+                    <i class="bi bi-wrench ops-watermark" aria-hidden="true"></i>
+                </a>
+                <a href="/admin/trouble" class="isp-ops-card ops-red" id="sc-pending-trouble">
+                    <span class="ops-icon"><i class="bi bi-exclamation-triangle-fill"></i></span>
+                    <span class="ops-copy">
+                        <span class="sc-label">Pending Tiket Gangguan</span>
+                        <span class="sc-value"><%= loading ? '…' : pendingTroubleTickets.toLocaleString('id-ID') %></span>
+                        <span class="sc-sub">Tiket open, pending, dan in progress</span>
+                    </span>
+                    <i class="bi bi-chevron-right ops-arrow" aria-hidden="true"></i>
+                    <i class="bi bi-exclamation-triangle-fill ops-watermark" aria-hidden="true"></i>
+                </a>
+                <a href="/admin/employees/attendance" class="isp-ops-card ops-green" id="sc-attendance-today">
+                    <span class="ops-icon"><i class="bi bi-people-fill"></i></span>
+                    <span class="ops-copy">
+                        <span class="sc-label">Karyawan Sudah Absen</span>
+                        <span class="sc-value"><%= loading ? '…' : employeesAttendedToday.toLocaleString('id-ID') %></span>
+                        <span class="sc-sub">Karyawan unik yang tercatat absen hari ini</span>
+                    </span>
+                    <i class="bi bi-chevron-right ops-arrow" aria-hidden="true"></i>
+                    <i class="bi bi-people-fill ops-watermark" aria-hidden="true"></i>
+                </a>
             </div>
 
-            <!-- ====== NAS MONITORING ====== -->
-            <div class="d-flex justify-content-between align-items-center mb-3">
-                <div class="db-section-label m-0"><i class="bi bi-router-fill me-2"></i>Monitoring NAS & Traffic</div>
-                <div class="d-flex align-items-center gap-2">
+            <div class="isp-bottom">
+                <section class="isp-panel">
+                    <div class="isp-panel-head"><h3>Aktivitas Terbaru</h3></div>
+                    <div class="isp-activity-grid">
+                        <div class="isp-feed isp-feed-customers">
+                            <h4>Pelanggan <a href="/admin/billing/customers">Lihat Semua</a></h4>
+                            <div id="dashRecentCustomers">
+                                <% if (loading) { %>
+                                <div class="isp-empty"><i class="bi bi-hourglass-split"></i><div>Memuat data…</div></div>
+                                <% } else if (typeof recentCustomers !== 'undefined' && recentCustomers && recentCustomers.length > 0) { %>
+                                <ul class="recent-list">
+                                    <% recentCustomers.forEach(function(c) { %>
+                                    <li class="recent-item">
+                                        <div class="ri-info">
+                                            <div class="ri-name"><%= c.name %></div>
+                                            <div class="ri-sub"><%= c.area || 'Tanpa Area' %></div>
+                                        </div>
+                                        <div class="ri-right">
+                                            <% if (c.status === 'aktif' || c.status === 'active') { %>
+                                            <span class="badge-status green">Aktif</span>
+                                            <% } else { %>
+                                            <span class="badge-status brown">Non-Aktif</span>
+                                            <% } %>
+                                        </div>
+                                    </li>
+                                    <% }); %>
+                                </ul>
+                                <% } else { %>
+                                <div class="isp-empty"><i class="bi bi-inbox"></i><div>Belum ada aktivitas terbaru.</div></div>
+                                <% } %>
+                            </div>
+                        </div>
+                        <div class="isp-feed isp-feed-payments">
+                            <h4>Pembayaran <a href="/admin/billing/invoice-list?status=paid">Lihat Semua</a></h4>
+                            <div id="dashRecentInvoices">
+                                <% if (loading) { %>
+                                <div class="isp-empty"><i class="bi bi-hourglass-split"></i><div>Memuat data…</div></div>
+                                <% } else if (typeof recentPaidInvoices !== 'undefined' && recentPaidInvoices && recentPaidInvoices.length > 0) { %>
+                                <ul class="recent-list">
+                                    <% recentPaidInvoices.forEach(function(inv) { %>
+                                    <li class="recent-item">
+                                        <div class="ri-info">
+                                            <div class="ri-name"><%= inv.customer_name || 'N/A' %></div>
+                                            <div class="ri-sub"><%= inv.invoice_number || '-' %></div>
+                                        </div>
+                                        <div class="ri-right ri-amount dash-amount" data-amount="Rp <%= parseFloat(inv.amount || 0).toLocaleString('id-ID') %>">Rp <%= parseFloat(inv.amount || 0).toLocaleString('id-ID') %></div>
+                                    </li>
+                                    <% }); %>
+                                </ul>
+                                <% } else { %>
+                                <div class="isp-empty"><i class="bi bi-inbox"></i><div>Belum ada aktivitas terbaru.</div></div>
+                                <% } %>
+                            </div>
+                        </div>
+                        <div class="isp-feed isp-feed-trouble">
+                            <h4>Gangguan <a href="/admin/trouble">Lihat Semua</a></h4>
+                            <div id="dashRecentTickets">
+                                <% if (loading) { %>
+                                <div class="isp-empty"><i class="bi bi-hourglass-split"></i><div>Memuat data…</div></div>
+                                <% } else if (typeof recentTickets !== 'undefined' && recentTickets && recentTickets.length > 0) { %>
+                                <ul class="recent-list">
+                                    <% recentTickets.forEach(function(t) { %>
+                                    <li class="recent-item">
+                                        <div class="ri-info">
+                                            <div class="ri-name"><%= t.name || t.customer_name || 'Pelanggan' %></div>
+                                            <div class="ri-sub"><%= t.category || (t.description && t.description.substring(0,30)) || '-' %></div>
+                                        </div>
+                                        <div class="ri-right">
+                                            <% if (t.status === 'open') { %>
+                                            <span class="badge-status yellow">Pending</span>
+                                            <% } else if (t.status === 'in_progress') { %>
+                                            <span class="badge-status blue">Proses</span>
+                                            <% } else if (t.status === 'resolved' || t.status === 'closed') { %>
+                                            <span class="badge-status green">Selesai</span>
+                                            <% } else { %>
+                                            <span class="badge-status brown"><%= t.status %></span>
+                                            <% } %>
+                                        </div>
+                                    </li>
+                                    <% }); %>
+                                </ul>
+                                <% } else { %>
+                                <div class="isp-empty"><i class="bi bi-inbox"></i><div>Belum ada aktivitas terbaru.</div></div>
+                                <% } %>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+                <section class="isp-panel" id="dashSystemStatus">
+                    <div class="isp-panel-head"><h3>Status Sistem</h3></div>
+                    <ul class="isp-status-list">
+                        <li>
+                            <span><i class="bi bi-whatsapp me-1"></i>WhatsApp Gateway</span>
+                            <span class="isp-pill isp-pill-unknown" id="dashWaStatusPill">Memuat…</span>
+                        </li>
+                        <li>
+                            <span><i class="bi bi-credit-card me-1"></i>Payment Gateway</span>
+                            <span class="isp-pill isp-pill-unknown" id="dashPayStatusPill">Memuat…</span>
+                        </li>
+                        <li>
+                            <span><i class="bi bi-hdd-network me-1"></i>RADIUS Engine</span>
+                            <span class="isp-pill isp-pill-unknown" id="dashRadiusStatusPill">Memuat…</span>
+                        </li>
+                        <li>
+                            <span><i class="bi bi-router me-1"></i>Koneksi MikroTik</span>
+                            <span class="isp-pill isp-pill-unknown" id="dashMikrotikStatusPill">Memuat…</span>
+                        </li>
+                    </ul>
+                    <p class="isp-note" id="dashWaStatusNote">Status dicek dari layanan yang terpasang.</p>
+                </section>
+            </div>
+
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+                <div class="isp-section-title m-0">Monitoring NAS &amp; Traffic</div>
+                <div class="d-flex align-items-center gap-2 flex-wrap">
                     <div id="nasSelect1Container" class="d-flex align-items-center gap-1">
-                        <select id="nasSelect1" class="form-select form-select-sm" style="width:180px;font-size:0.85rem; border-color:var(--border);">
+                        <select id="nasSelect1" class="form-select form-select-sm" style="width:180px;font-size:0.85rem;">
                             <option value="">-- Pilih NAS 1 --</option>
                         </select>
                     </div>
                     <div id="nasSelect2Container" class="d-flex align-items-center gap-1">
-                        <select id="nasSelect2" class="form-select form-select-sm" style="width:180px;font-size:0.85rem; border-color:var(--border);">
+                        <select id="nasSelect2" class="form-select form-select-sm" style="width:180px;font-size:0.85rem;">
                             <option value="">-- Pilih NAS 2 --</option>
                         </select>
                     </div>
-                    <button id="refreshMonitoring" class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-clockwise"></i></button>
+                    <button id="refreshMonitoring" class="btn btn-sm btn-outline-secondary" title="Muat ulang monitoring"><i class="bi bi-arrow-clockwise"></i></button>
                     <span id="lastUpdate" class="text-muted" style="font-size:0.75rem;"></span>
                 </div>
             </div>
-            
             <div id="monitoringContainer" class="row mb-4">
-                <div class="col-12 text-center text-muted py-5" style="background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border);">
-                    <i class="bi bi-router" style="font-size:3rem;opacity:0.3;"></i>
-                    <p class="mt-3">Pilih NAS untuk memulai monitoring</p>
+                <div class="col-12 text-center text-muted py-5 isp-panel">
+                    <i class="bi bi-router" style="font-size:2rem;opacity:0.35;"></i>
+                    <p class="mt-3 mb-0">Pilih NAS untuk memulai monitoring</p>
                 </div>
             </div>
-
-            <!-- ====== 3 RECENT CARDS ====== -->
-            <div class="db-section-label"><i class="bi bi-clock-history me-2"></i>Aktivitas Terbaru</div>
-            <div class="row mb-5">
-                <!-- Pelanggan Terbaru -->
-                <div class="col-lg-4 mb-3">
-                    <div class="card recent-card h-100">
-                        <div class="card-header recent-card-header d-flex justify-content-between align-items-center">
-                            <span><i class="bi bi-person-lines-fill me-2"></i>Pelanggan Terbaru</span>
-                            <a href="/admin/billing/customers" class="btn btn-xs btn-outline-primary">Lihat Semua</a>
-                        </div>
-                        <div class="card-body p-0" id="dashRecentCustomers">
-                            <% if (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) { %>
-                            <div class="text-center py-4 text-muted small">Memuat data…</div>
-                            <% } else if (typeof recentCustomers !== 'undefined' && recentCustomers && recentCustomers.length > 0) { %>
-                            <ul class="recent-list">
-                                <% recentCustomers.forEach(function(c) { %>
-                                <li class="recent-item">
-                                    <div class="ri-avatar ri-avatar-blue"><i class="bi bi-person-fill"></i></div>
-                                    <div class="ri-info">
-                                        <div class="ri-name"><%= c.name %></div>
-                                        <div class="ri-sub"><%= c.area || 'Tanpa Area' %></div>
-                                    </div>
-                                    <div class="ri-right">
-                                        <% if (c.status === 'aktif' || c.status === 'active') { %>
-                                        <span class="badge-status green">Aktif</span>
-                                        <% } else { %>
-                                        <span class="badge-status brown">Non-Aktif</span>
-                                        <% } %>
-                                    </div>
-                                </li>
-                                <% }); %>
-                            </ul>
-                            <% } else { %>
-                            <div class="text-center py-4 text-muted small"><i class="bi bi-inbox d-block fs-3 mb-2 opacity-25"></i>Belum ada data</div>
-                            <% } %>
-                        </div>
-                    </div>
-                </div>
-                <!-- Tagihan Lunas Terbaru -->
-                <div class="col-lg-4 mb-3">
-                    <div class="card recent-card h-100">
-                        <div class="card-header recent-card-header d-flex justify-content-between align-items-center">
-                            <span><i class="bi bi-receipt-check me-2"></i>Tagihan Lunas Terbaru</span>
-                            <a href="/admin/billing/invoice-list?status=paid" class="btn btn-xs btn-outline-success">Lihat Semua</a>
-                        </div>
-                        <div class="card-body p-0" id="dashRecentInvoices">
-                            <% if (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) { %>
-                            <div class="text-center py-4 text-muted small">Memuat data…</div>
-                            <% } else if (typeof recentPaidInvoices !== 'undefined' && recentPaidInvoices && recentPaidInvoices.length > 0) { %>
-                            <ul class="recent-list">
-                                <% recentPaidInvoices.forEach(function(inv) { %>
-                                <li class="recent-item">
-                                    <div class="ri-avatar ri-avatar-green"><i class="bi bi-check-lg"></i></div>
-                                    <div class="ri-info">
-                                        <div class="ri-name"><%= inv.customer_name || 'N/A' %></div>
-                                        <div class="ri-sub"><%= inv.invoice_number || '-' %></div>
-                                    </div>
-                                    <div class="ri-right ri-amount dash-amount" data-amount="Rp <%= parseFloat(inv.amount || 0).toLocaleString('id-ID') %>">Rp <%= parseFloat(inv.amount || 0).toLocaleString('id-ID') %></div>
-                                </li>
-                                <% }); %>
-                            </ul>
-                            <% } else { %>
-                            <div class="text-center py-4 text-muted small"><i class="bi bi-inbox d-block fs-3 mb-2 opacity-25"></i>Belum ada data</div>
-                            <% } %>
-                        </div>
-                    </div>
-                </div>
-                <!-- Tiket Gangguan Terbaru -->
-                <div class="col-lg-4 mb-3">
-                    <div class="card recent-card h-100">
-                        <div class="card-header recent-card-header d-flex justify-content-between align-items-center">
-                            <span><i class="bi bi-bug-fill me-2"></i>Tiket Gangguan Terbaru</span>
-                            <a href="/admin/trouble" class="btn btn-xs btn-outline-danger">Lihat Semua</a>
-                        </div>
-                        <div class="card-body p-0" id="dashRecentTickets">
-                            <% if (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) { %>
-                            <div class="text-center py-4 text-muted small">Memuat data…</div>
-                            <% } else if (typeof recentTickets !== 'undefined' && recentTickets && recentTickets.length > 0) { %>
-                            <ul class="recent-list">
-                                <% recentTickets.forEach(function(t) { %>
-                                <li class="recent-item">
-                                    <div class="ri-avatar ri-avatar-red"><i class="bi bi-exclamation-triangle-fill"></i></div>
-                                    <div class="ri-info">
-                                        <div class="ri-name"><%= t.name || t.customer_name || 'Pelanggan' %></div>
-                                        <div class="ri-sub"><%= t.category || t.description && t.description.substring(0,30) || '-' %></div>
-                                    </div>
-                                    <div class="ri-right">
-                                        <% if (t.status === 'open') { %>
-                                        <span class="badge-status yellow">Pending</span>
-                                        <% } else if (t.status === 'in_progress') { %>
-                                        <span class="badge-status blue">Proses</span>
-                                        <% } else if (t.status === 'resolved' || t.status === 'closed') { %>
-                                        <span class="badge-status green">Selesai</span>
-                                        <% } else { %>
-                                        <span class="badge-status brown"><%= t.status %></span>
-                                        <% } %>
-                                    </div>
-                                </li>
-                                <% }); %>
-                            </ul>
-                            <% } else { %>
-                            <div class="text-center py-4 text-muted small"><i class="bi bi-inbox d-block fs-3 mb-2 opacity-25"></i>Belum ada tiket</div>
-                            <% } %>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            </main>
+        </main>
     </div>
 </div>
 <!-- Modal Konfirmasi Restart Mikrotik -->
@@ -688,10 +764,19 @@ $(function() {
       }
     }
 
+    var pulseInFlight = false;
     async function refreshPulse(opts) {
       opts = opts || {};
+      if (pulseInFlight) return;
+      if (document.hidden && !opts.force && !opts.forceList) return;
+      pulseInFlight = true;
+      var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 8000) : null;
       try {
-        var res = await fetch('/admin/dashboard/api/notifications/pulse', { credentials: 'same-origin' });
+        var res = await fetch('/admin/dashboard/api/notifications/pulse', {
+          credentials: 'same-origin',
+          signal: ctrl ? ctrl.signal : undefined
+        });
         var data = await res.json();
         if (!data.success) return;
         var n = parseInt(data.badge, 10) || 0;
@@ -707,23 +792,30 @@ $(function() {
         }
       } catch (e) {
         console.warn('[Admin notif pulse]', e);
+      } finally {
+        if (timer) clearTimeout(timer);
+        pulseInFlight = false;
       }
     }
 
     function connectNotifStream() {
       if (typeof EventSource === 'undefined') return;
       var es;
+      var retryMs = 4000;
       try {
         es = new EventSource('/admin/dashboard/api/notifications/stream');
       } catch (e) {
         return;
       }
       es.addEventListener('notif', function () {
-        refreshPulse({ forceList: dropdownOpen });
+        retryMs = 4000;
+        refreshPulse({ forceList: dropdownOpen, force: true });
       });
       es.onerror = function () {
         try { es.close(); } catch (e) {}
-        setTimeout(connectNotifStream, 4000);
+        var wait = retryMs;
+        retryMs = Math.min(retryMs * 2, 30000);
+        setTimeout(connectNotifStream, wait);
       };
     }
 
@@ -741,7 +833,10 @@ $(function() {
 
     refreshPulse();
     connectNotifStream();
-    setInterval(function () { refreshPulse(); }, 2500);
+    setInterval(function () { refreshPulse(); }, 20000);
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) refreshPulse();
+    });
   })();
   <% } %>
 });
@@ -807,24 +902,65 @@ function sendWaReminderFromBtn(btn) {
 
 <script src="/js/dashboard-amount-privacy.js"></script>
 <% if (typeof deferStatsLoad !== 'undefined' && deferStatsLoad) { %>
-<script src="/js/dashboard-overview.js?v=2"></script>
+<script src="/js/dashboard-overview.js?v=8"></script>
 <% } %>
 <script>
 (function () {
   var alertEl = document.getElementById('baileysDisconnectAlert');
-  if (!alertEl) return;
   var titleEl = document.getElementById('baileysAlertTitle');
   var msgEl = document.getElementById('baileysAlertMessage');
   var iconEl = document.getElementById('baileysAlertIcon');
+  var note = document.getElementById('dashWaStatusNote');
+
+  function setNamedPill(id, kind, text) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.className = 'isp-pill isp-pill-' + kind;
+    el.textContent = text;
+  }
+
+  function setPill(kind, text) {
+    setNamedPill('dashWaStatusPill', kind, text);
+  }
+
+  function renderSystemStatus(payload) {
+    if (!payload || payload.success === false) {
+      setNamedPill('dashPayStatusPill', 'unknown', 'Tidak tersedia');
+      setNamedPill('dashRadiusStatusPill', 'unknown', 'Tidak tersedia');
+      setNamedPill('dashMikrotikStatusPill', 'unknown', 'Tidak tersedia');
+      return;
+    }
+    var pay = payload.payment || {};
+    var radius = payload.radius || {};
+    var mikrotik = payload.mikrotik || {};
+    setNamedPill('dashPayStatusPill', pay.state || 'unknown', pay.label || 'Tidak tersedia');
+    setNamedPill('dashRadiusStatusPill', radius.state || 'unknown', radius.label || 'Tidak tersedia');
+    setNamedPill('dashMikrotikStatusPill', mikrotik.state || 'unknown', mikrotik.label || 'Tidak tersedia');
+    if (note) note.textContent = 'Payment gateway mengikuti pengaturan aktif. RADIUS dan MikroTik dicek langsung.';
+  }
 
   function renderBaileysAlert(payload) {
     var alert = payload && payload.alert;
-    if (!payload || !payload.applicable || !alert || alert.connected || !alert.message) {
-      alertEl.classList.add('d-none');
+    if (!payload || payload.success === false || !payload.applicable || !alert) {
+      setPill('unknown', 'Tidak tersedia');
+      if (alertEl) alertEl.classList.add('d-none');
       return;
     }
+    if (alert.connected) {
+      setPill('online', 'Online');
+      if (alertEl) alertEl.classList.add('d-none');
+      return;
+    }
+    if (!alert.message) {
+      setPill('unknown', 'Tidak tersedia');
+      if (alertEl) alertEl.classList.add('d-none');
+      return;
+    }
+    var danger = alert.level === 'danger';
+    setPill(danger ? 'off' : 'warn', danger ? 'Offline' : 'Warning');
+    if (!alertEl) return;
     alertEl.classList.remove('d-none', 'alert-warning', 'alert-danger', 'alert-success');
-    alertEl.classList.add(alert.level === 'danger' ? 'alert-danger' : 'alert-warning');
+    alertEl.classList.add(danger ? 'alert-danger' : 'alert-warning');
     if (titleEl) {
       titleEl.textContent = alert.needsScan
         ? 'WhatsApp Baileys terputus — perlu scan QR'
@@ -832,19 +968,27 @@ function sendWaReminderFromBtn(btn) {
     }
     if (msgEl) msgEl.textContent = alert.message;
     if (iconEl) {
-      iconEl.className = 'bi bi-whatsapp fs-4 mt-1 ' + (alert.level === 'danger' ? 'text-danger' : 'text-warning');
+      iconEl.className = 'bi bi-whatsapp fs-4 mt-1 ' + (danger ? 'text-danger' : 'text-warning');
     }
   }
 
   function refreshBaileysAlert() {
+    if (document.hidden) return;
     fetch('/admin/dashboard/api/baileys-status', { credentials: 'same-origin' })
       .then(function (r) { return r.json(); })
       .then(renderBaileysAlert)
-      .catch(function () { /* silent */ });
+      .catch(function () { setPill('unknown', 'Tidak tersedia'); });
+    fetch('/admin/dashboard/api/system-status', { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(renderSystemStatus)
+      .catch(function () { renderSystemStatus(null); });
   }
 
   refreshBaileysAlert();
   setInterval(refreshBaileysAlert, 60000);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) refreshBaileysAlert();
+  });
 })();
 </script>
 <script>
@@ -861,7 +1005,11 @@ function sendWaReminderFromBtn(btn) {
   }
   function loadCharts() {
     loadScript('https://cdn.jsdelivr.net/npm/chart.js')
-      .then(function () { return loadScript('/js/dashboard-charts.js'); })
+      .then(function () {
+        if (typeof window.__renderDashDonut === 'function') window.__renderDashDonut();
+        if (typeof window.__renderCustomerTrend === 'function') window.__renderCustomerTrend();
+        return loadScript('/js/dashboard-charts.js?v=20260921');
+      })
       .catch(function (e) { console.warn('[dashboard] deferred charts:', e); });
   }
   if ('requestIdleCallback' in window) {
@@ -869,6 +1017,24 @@ function sendWaReminderFromBtn(btn) {
   } else {
     window.addEventListener('load', function () { setTimeout(loadCharts, 800); });
   }
+})();
+</script>
+<script>
+(function () {
+  var dateEl = document.getElementById('ispClockDate');
+  var timeEl = document.getElementById('ispClockTime');
+  function tick() {
+    if (!dateEl || !timeEl) return;
+    var now = new Date();
+    dateEl.textContent = now.toLocaleDateString('id-ID', {
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Jakarta'
+    });
+    timeEl.textContent = now.toLocaleTimeString('id-ID', {
+      hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Jakarta'
+    });
+  }
+  tick();
+  setInterval(tick, 1000);
 })();
 </script>
 </body>

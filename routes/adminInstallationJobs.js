@@ -139,114 +139,350 @@ const {
     stripTechnicianInstallCompletionNotes
 } = require('../config/installationJobHelpers');
 
+const MONTH_NAMES_ID = [
+    'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+    'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+];
+const WEEKDAY_NAMES_ID = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
+const JOB_PERIOD_EXPR = "COALESCE(ij.installation_date, ij.created_at)";
+
+function jakartaNowParts() {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Jakarta',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    }).formatToParts(new Date());
+    const map = {};
+    for (const p of parts) {
+        if (p.type !== 'literal') map[p.type] = p.value;
+    }
+    return {
+        year: parseInt(map.year, 10),
+        month: parseInt(map.month, 10),
+        day: parseInt(map.day, 10),
+        stamp: `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}:${map.second}`
+    };
+}
+
+function parseDashboardPeriod(query) {
+    const now = jakartaNowParts();
+    let year = parseInt(query && query.year, 10);
+    let month = parseInt(query && query.month, 10);
+    if (!Number.isFinite(year) || year < 2000 || year > 2100) year = now.year;
+    if (!Number.isFinite(month) || month < 1 || month > 12) month = now.month;
+    const daysInMonth = new Date(year, month, 0).getDate();
+    let day = parseInt(query && query.day, 10);
+    if (!Number.isFinite(day) || day < 1 || day > daysInMonth) day = null;
+    let prevMonth = month - 1;
+    let prevYear = year;
+    if (prevMonth < 1) {
+        prevMonth = 12;
+        prevYear -= 1;
+    }
+    let nextMonth = month + 1;
+    let nextYear = year;
+    if (nextMonth > 12) {
+        nextMonth = 1;
+        nextYear += 1;
+    }
+    return {
+        year,
+        month,
+        day,
+        monthPad: String(month).padStart(2, '0'),
+        daysInMonth,
+        prevMonth,
+        prevYear,
+        nextMonth,
+        nextYear,
+        now,
+        isCurrentMonth: year === now.year && month === now.month
+    };
+}
+
+function countUnreadInstallProgress(tenantAndSql, seenAt) {
+    return new Promise((resolve) => {
+        const since = seenAt || (() => {
+            const d = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+            return getLocalTimestamp(d);
+        })();
+        db.get(
+            `
+            SELECT COUNT(DISTINCT h.job_id) AS n
+            FROM installation_job_status_history h
+            INNER JOIN installation_jobs ij ON ij.id = h.job_id
+            WHERE LOWER(TRIM(COALESCE(h.changed_by_type,''))) = 'technician'
+              AND datetime(h.created_at) > datetime(?)
+              ${tenantAndSql || ''}
+            `,
+            [since],
+            (err, row) => {
+                if (err) {
+                    logger.warn('[admin-install-jobs] unread progress:', err.message);
+                    return resolve(0);
+                }
+                resolve(Number(row && row.n) || 0);
+            }
+        );
+    });
+}
+
+function dbAll(sql, params = []) {
+    return new Promise((resolve, reject) => {
+        db.all(sql, params, (err, rows) => {
+            if (err) reject(err);
+            else resolve(rows || []);
+        });
+    });
+}
+
+function dbGet(sql, params = []) {
+    return new Promise((resolve, reject) => {
+        db.get(sql, params, (err, row) => {
+            if (err) reject(err);
+            else resolve(row);
+        });
+    });
+}
+
 /**
- * Installation Jobs - Halaman daftar jadwal instalasi
+ * Badge count progress instalasi (update dari teknisi yang belum dilihat admin).
+ */
+router.get('/progress-badge', adminAuth, async (req, res) => {
+    try {
+        const t = tenantSqlFromRequest(req);
+        const count = await countUnreadInstallProgress(t.and('ij'), req.session.installationsProgressSeenAt);
+        res.json({ success: true, count });
+    } catch (error) {
+        logger.warn('[admin-install-jobs] progress-badge:', error.message);
+        res.json({ success: true, count: 0 });
+    }
+});
+
+/**
+ * Dashboard bulanan jadwal instalasi
  */
 router.get('/', adminAuth, attachTenantAppSettings, async (req, res) => {
     try {
         const t = tenantSqlFromRequest(req);
-        const page = parseInt(req.query.page) || 1;
+        const period = parseDashboardPeriod(req.query);
+        const page = parseInt(req.query.page, 10) || 1;
         const limit = 20;
         const offset = (page - 1) * limit;
         const search = req.query.search || '';
         const status = req.query.status || '';
         const technician = req.query.technician || '';
 
-        // Build query conditions
-        let whereConditions = [];
-        let params = [];
+        const periodSql = `strftime('%Y', ${JOB_PERIOD_EXPR}) = ? AND strftime('%m', ${JOB_PERIOD_EXPR}) = ?`;
+        const periodParams = [String(period.year), period.monthPad];
 
+        const monthConditions = [];
+        const monthParams = [];
         const tenantCond = t.cond('ij');
-        if (tenantCond) whereConditions.push(tenantCond);
+        if (tenantCond) monthConditions.push(tenantCond);
+        monthConditions.push(periodSql);
+        monthParams.push(...periodParams);
+
+        const listConditions = [...monthConditions];
+        const listParams = [...monthParams];
+
+        if (period.day) {
+            listConditions.push(`CAST(strftime('%d', ${JOB_PERIOD_EXPR}) AS INTEGER) = ?`);
+            listParams.push(period.day);
+        }
 
         if (search) {
-            whereConditions.push('(job_number LIKE ? OR customer_name LIKE ? OR customer_phone LIKE ?)');
-            params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+            listConditions.push('(ij.job_number LIKE ? OR ij.customer_name LIKE ? OR ij.customer_phone LIKE ?)');
+            listParams.push(`%${search}%`, `%${search}%`, `%${search}%`);
         }
 
         if (status && status !== 'all') {
-            whereConditions.push('status = ?');
-            params.push(status);
+            listConditions.push('ij.status = ?');
+            listParams.push(status);
         }
 
         if (technician && technician !== 'all') {
-            whereConditions.push('assigned_technician_id = ?');
-            params.push(technician);
+            listConditions.push('ij.assigned_technician_id = ?');
+            listParams.push(technician);
         }
 
-        const whereClause = whereConditions.length > 0 ? 'WHERE ' + whereConditions.join(' AND ') : '';
+        // Manager Area: hanya job pelanggan di wilayah yang ditugaskan
+        if (req.isAreaManager || (req.session && req.session.isAreaManager)) {
+            const areaIds = req.areaManagerAreaIds || [];
+            const areaScope = billingManager._sqlCustomerInAreaIds('c', areaIds);
+            listConditions.push(
+                `(ij.customer_id IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM customers c WHERE c.id = ij.customer_id AND ${areaScope.clause}
+                ))`
+            );
+            listParams.push(...areaScope.params);
+            monthConditions.push(
+                `(ij.customer_id IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM customers c WHERE c.id = ij.customer_id AND ${areaScope.clause}
+                ))`
+            );
+            monthParams.push(...areaScope.params);
+        }
 
-        // Get installation jobs with pagination
-        const installationJobs = await new Promise((resolve, reject) => {
-            const query = `
-                SELECT ij.*, 
-                       p.name as package_name,
-                       t.name as technician_name
-                FROM installation_jobs ij
-                LEFT JOIN packages p ON ij.package_id = p.id AND p.tenant_id = ij.tenant_id
-                LEFT JOIN technicians t ON ij.assigned_technician_id = t.id
-                ${whereClause}
-                ORDER BY ij.created_at DESC 
-                LIMIT ? OFFSET ?
-            `;
-            
-            db.all(query, [...params, limit, offset], (err, rows) => {
-                if (err) reject(err);
-                else resolve(rows);
-            });
+        const monthWhere = monthConditions.length ? 'WHERE ' + monthConditions.join(' AND ') : '';
+        const listWhere = listConditions.length ? 'WHERE ' + listConditions.join(' AND ') : '';
+
+        const installationJobs = await dbAll(
+            `
+            SELECT ij.*,
+                   p.name as package_name,
+                   tech.name as technician_name
+            FROM installation_jobs ij
+            LEFT JOIN packages p ON ij.package_id = p.id AND p.tenant_id = ij.tenant_id
+            LEFT JOIN technicians tech ON ij.assigned_technician_id = tech.id
+            ${listWhere}
+            ORDER BY COALESCE(ij.installation_date, ij.created_at) ASC, ij.created_at ASC
+            LIMIT ? OFFSET ?
+            `,
+            [...listParams, limit, offset]
+        );
+
+        const totalRow = await dbGet(
+            `SELECT COUNT(*) as count FROM installation_jobs ij ${listWhere}`,
+            listParams
+        );
+        const totalJobs = Number(totalRow && totalRow.count) || 0;
+        const totalPages = Math.max(1, Math.ceil(totalJobs / limit));
+
+        const technicians = await dbAll(
+            `SELECT id, name, phone FROM technicians WHERE is_active = 1${t.and('')} ORDER BY name`
+        );
+
+        const monthStatusRows = await dbAll(
+            `SELECT LOWER(TRIM(COALESCE(ij.status,''))) AS status, COUNT(*) AS count
+             FROM installation_jobs ij
+             ${monthWhere}
+             GROUP BY LOWER(TRIM(COALESCE(ij.status,'')))`,
+            monthParams
+        );
+
+        const stats = {
+            total: 0,
+            scheduled: 0,
+            assigned: 0,
+            in_progress: 0,
+            completed: 0,
+            cancelled: 0
+        };
+        monthStatusRows.forEach((row) => {
+            const key = String(row.status || '');
+            const n = Number(row.count) || 0;
+            stats.total += n;
+            if (Object.prototype.hasOwnProperty.call(stats, key)) {
+                stats[key] = n;
+            }
+        });
+        const activeJobs = stats.scheduled + stats.assigned + stats.in_progress;
+        const completionRate = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
+
+        const dailyRows = await dbAll(
+            `SELECT CAST(strftime('%d', ${JOB_PERIOD_EXPR}) AS INTEGER) AS day,
+                    LOWER(TRIM(COALESCE(ij.status,''))) AS status,
+                    COUNT(*) AS count
+             FROM installation_jobs ij
+             ${monthWhere}
+             GROUP BY day, LOWER(TRIM(COALESCE(ij.status,'')))`,
+            monthParams
+        );
+
+        const dailyMap = {};
+        for (let d = 1; d <= period.daysInMonth; d++) {
+            dailyMap[d] = { day: d, total: 0, scheduled: 0, assigned: 0, in_progress: 0, completed: 0, cancelled: 0 };
+        }
+        dailyRows.forEach((row) => {
+            const d = Number(row.day);
+            if (!dailyMap[d]) return;
+            const n = Number(row.count) || 0;
+            dailyMap[d].total += n;
+            const st = String(row.status || '');
+            if (Object.prototype.hasOwnProperty.call(dailyMap[d], st)) {
+                dailyMap[d][st] += n;
+            }
         });
 
-        // Get total count
-        const totalJobs = await new Promise((resolve, reject) => {
-            const countQuery = `SELECT COUNT(*) as count FROM installation_jobs ij ${whereClause}`;
-            db.get(countQuery, params, (err, row) => {
-                if (err) reject(err);
-                else resolve(row.count);
-            });
+        const jsDow = new Date(period.year, period.month - 1, 1).getDay();
+        const mondayOffset = (jsDow + 6) % 7;
+        const calendarCells = [];
+        for (let i = 0; i < mondayOffset; i++) calendarCells.push(null);
+        for (let d = 1; d <= period.daysInMonth; d++) calendarCells.push(dailyMap[d]);
+        while (calendarCells.length % 7 !== 0) calendarCells.push(null);
+
+        const seenAt = req.session.installationsProgressSeenAt || null;
+        let recentProgress = [];
+        try {
+            recentProgress = await dbAll(
+                `
+                SELECT h.id, h.job_id, h.old_status, h.new_status, h.notes, h.created_at, h.changed_by_id,
+                       ij.job_number, ij.customer_name, ij.status AS job_status,
+                       tech.name AS technician_name
+                FROM installation_job_status_history h
+                INNER JOIN installation_jobs ij ON ij.id = h.job_id
+                LEFT JOIN technicians tech ON tech.id = h.changed_by_id
+                WHERE LOWER(TRIM(COALESCE(h.changed_by_type,''))) = 'technician'
+                  ${t.and('ij')}
+                  AND strftime('%Y', h.created_at) = ?
+                  AND strftime('%m', h.created_at) = ?
+                ORDER BY datetime(h.created_at) DESC
+                LIMIT 12
+                `,
+                [...periodParams]
+            );
+        } catch (histErr) {
+            logger.warn('[admin-install-jobs] recent progress:', histErr.message);
+            recentProgress = [];
+        }
+
+        const unreadJobIdSet = new Set();
+        recentProgress = recentProgress.map((row) => {
+            const isUnread = !seenAt || String(row.created_at || '') > String(seenAt);
+            if (isUnread) unreadJobIdSet.add(Number(row.job_id));
+            return { ...row, is_unread: isUnread };
         });
 
-        const totalPages = Math.ceil(totalJobs / limit);
+        try {
+            const extraUnread = await dbAll(
+                `
+                SELECT DISTINCT h.job_id
+                FROM installation_job_status_history h
+                INNER JOIN installation_jobs ij ON ij.id = h.job_id
+                WHERE LOWER(TRIM(COALESCE(h.changed_by_type,''))) = 'technician'
+                  AND datetime(h.created_at) > datetime(?)
+                  ${t.and('ij')}
+                `,
+                [seenAt || getLocalTimestamp(new Date(Date.now() - 14 * 24 * 60 * 60 * 1000))]
+            );
+            extraUnread.forEach((r) => unreadJobIdSet.add(Number(r.job_id)));
+        } catch (_) {}
 
-        // Get technicians for filter dropdown
-        const technicians = await new Promise((resolve, reject) => {
-            db.all(`SELECT id, name, phone FROM technicians WHERE is_active = 1${t.and('')} ORDER BY name`, (err, rows) => {
-                if (err) reject(err);
-                else resolve(rows);
-            });
-        });
+        const unreadJobIds = Array.from(unreadJobIdSet).filter((id) => Number.isFinite(id));
+        req.session.installationsProgressSeenAt = jakartaNowParts().stamp;
 
-        // Calculate statistics
-        const stats = await new Promise((resolve, reject) => {
-            db.all(`
-                SELECT status, COUNT(*) as count 
-                FROM installation_jobs ij${t.where('ij')}
-                GROUP BY status
-            `, (err, rows) => {
-                if (err) reject(err);
-                else {
-                    const statistics = {
-                        total: totalJobs,
-                        scheduled: 0,
-                        assigned: 0,
-                        in_progress: 0,
-                        completed: 0,
-                        cancelled: 0
-                    };
-                    
-                    rows.forEach(row => {
-                        statistics[row.status] = row.count;
-                    });
-                    
-                    resolve(statistics);
-                }
-            });
-        });
+        const yearOptions = [];
+        const yEnd = Math.max(period.now.year + 1, period.year);
+        const yStart = Math.min(period.now.year - 4, period.year);
+        for (let y = yStart; y <= yEnd; y++) yearOptions.push(y);
 
         res.render('admin/installation-jobs', {
-            title: 'Manajemen Jadwal Instalasi',
+            title: 'Dashboard Instalasi Bulanan',
             installationJobs,
             technicians,
             stats,
+            completionRate,
+            activeJobs,
+            calendarCells,
+            weekdayNames: WEEKDAY_NAMES_ID,
+            recentProgress,
+            unreadJobIds,
             pagination: {
                 currentPage: page,
                 totalPages,
@@ -257,6 +493,12 @@ router.get('/', adminAuth, attachTenantAppSettings, async (req, res) => {
             search,
             status,
             selectedTechnician: technician,
+            selectedMonth: period.month,
+            selectedYear: period.year,
+            selectedDay: period.day,
+            monthNames: MONTH_NAMES_ID,
+            yearOptions,
+            period,
             settings: {
                 logo_filename: req.appSettings?.logoFilename || 'logo.png',
                 company_header: req.appSettings?.companyHeader || ''
@@ -1232,15 +1474,15 @@ router.get('/api/search-customers', adminAuth, async (req, res) => {
     try {
         const { q: searchTerm } = req.query;
 
-        if (!searchTerm || searchTerm.length < 2) {
+        if (!searchTerm || String(searchTerm).trim().length < 1) {
             return res.json({
                 success: true,
                 customers: [],
-                message: 'Minimal 2 karakter untuk pencarian'
+                message: 'Masukkan kata kunci pencarian'
             });
         }
 
-        const customers = await billingManager.searchCustomers(searchTerm);
+        const customers = await billingManager.searchCustomers(searchTerm, { limit: 100 });
 
         res.json({
             success: true,

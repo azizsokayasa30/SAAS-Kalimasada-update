@@ -1245,26 +1245,61 @@ router.get('/installations', technicianAuth, async (req, res) => {
  */
 router.get('/troubletickets', technicianAuth, async (req, res) => {
     try {
-        // Get trouble reports with technician-specific filtering
-        const reports = await getTroubleReportsForTechnician(req.technician.id, req.technician.role);
-        
-        // Calculate stats
+        const { getMonthlyTroubleDashboard } = require('../config/troubleReport');
+        const dash = await getMonthlyTroubleDashboard(req.query.month, req.query.year);
+        const techReports = await getTroubleReportsForTechnician(req.technician.id, req.technician.role, { includeResolved: true });
+        const allowed = new Set((techReports || []).map((r) => String(r.id)));
+        const reports = (dash.reports || []).filter((r) => allowed.has(String(r.id)));
+        const carryOver = (dash.carryOver || []).filter((r) => allowed.has(String(r.id)));
+        const recentProgress = (dash.recentProgress || []).filter((n) => allowed.has(String(n.reportId)));
+        const daysInMonth = dash.daysInMonth || 30;
+        const dailyCreated = Array(daysInMonth).fill(0);
+        const dailyResolved = Array(daysInMonth).fill(0);
+        reports.forEach((r) => {
+            const raw = String(r.created_at || r.createdAt || '').replace('T', ' ');
+            const day = parseInt(raw.slice(8, 10), 10);
+            if (day >= 1 && day <= daysInMonth) dailyCreated[day - 1] += 1;
+            const st = String(r.status || '').toLowerCase();
+            if (st === 'resolved' || st === 'closed') {
+                const u = String(r.updated_at || r.updatedAt || '').replace('T', ' ');
+                const uday = parseInt(u.slice(8, 10), 10);
+                if (uday >= 1 && uday <= daysInMonth) dailyResolved[uday - 1] += 1;
+            }
+        });
         const stats = {
             total: reports.length,
-            open: reports.filter(r => r.status === 'open').length,
-            inProgress: reports.filter(r => r.status === 'in_progress').length,
-            resolved: reports.filter(r => r.status === 'resolved').length,
-            closed: reports.filter(r => r.status === 'closed').length
+            open: reports.filter((r) => r.status === 'open').length,
+            inProgress: reports.filter((r) => r.status === 'in_progress').length,
+            resolved: reports.filter((r) => r.status === 'resolved').length,
+            closed: reports.filter((r) => r.status === 'closed').length,
+            resolvedThisMonth: reports.filter((r) => r.status === 'resolved' || r.status === 'closed').length,
+            carryOver: carryOver.length,
+            doneCount: reports.filter((r) => r.status === 'resolved' || r.status === 'closed').length,
+            unreadProgress: 0,
+            resolutionRate: reports.length
+                ? Math.round((reports.filter((r) => r.status === 'resolved' || r.status === 'closed').length / reports.length) * 100)
+                : 0
         };
+        const monthNames = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+        const monthLabel = `${monthNames[dash.period.month - 1]} ${dash.period.year}`;
 
-        // Log activity
         await authManager.logActivity(req.technician.id, 'troubletickets_access', 'Mengakses laporan gangguan');
 
-        // Render using admin/trouble-reports.ejs but with technician context
         res.render('admin/trouble-reports', {
-            title: 'Laporan Gangguan - Portal Teknisi',
+            title: 'Dashboard Gangguan - Portal Teknisi',
             reports,
+            carryOver,
+            recentProgress,
+            dailyCreated,
+            dailyResolved,
+            daysInMonth,
             stats,
+            selectedMonth: dash.period.month,
+            selectedYear: dash.period.year,
+            currentMonth: dash.period.currentMonth,
+            currentYear: dash.period.currentYear,
+            monthLabel,
+            unreadBefore: 0,
             appSettings: {
                 companyHeader: getSetting('company_header', 'GEMBOK'),
                 footerInfo: getSetting('footer_info', 'Portal Teknisi'),
@@ -1277,7 +1312,6 @@ router.get('/troubletickets', technicianAuth, async (req, res) => {
                 company_header: getSetting('company_header', 'GEMBOK'),
                 footer_info: getSetting('footer_info', 'Portal Teknisi')
             },
-            // Add technician context to differentiate from admin
             isTechnicianView: true,
             technician: req.technician,
             technicianRole: req.technician.role
@@ -1689,29 +1723,25 @@ async function getTotalInstallations(search, status = 'pending') {
 }
 
 // Helper function untuk trouble tickets
-async function getTroubleReportsForTechnician(technicianId, role) {
-    // Import trouble report functions
+async function getTroubleReportsForTechnician(technicianId, role, opts = {}) {
     try {
         const { getAllTroubleReports } = require('../config/troubleReport');
-        const allReports = getAllTroubleReports();
-        
-        // Filter berdasarkan role teknisi
+        const allReports = await getAllTroubleReports();
+        const includeResolved = opts.includeResolved === true;
+
         const isDone = (st) => {
             const s = String(st || '').toLowerCase();
             return s === 'closed' || s === 'resolved';
         };
+        const assignedToMe = (report) => {
+            if (!report.assigned_technician_id) return true;
+            return String(report.assigned_technician_id) === String(technicianId);
+        };
         if (role === 'technician') {
-            // Teknisi: assigned / belum assign, hanya tiket aktif (bukan riwayat selesai)
-            return allReports.filter(
-                (report) =>
-                    (!report.assigned_technician_id || report.assigned_technician_id === technicianId) &&
-                    !isDone(report.status)
-            );
+            return allReports.filter((report) => assignedToMe(report) && (includeResolved || !isDone(report.status)));
         } else if (role === 'field_officer') {
-            // Field officer: semua laporan aktif (selesai tidak tampil di daftar tugas)
-            return allReports.filter((report) => !isDone(report.status));
+            return allReports.filter((report) => includeResolved || !isDone(report.status));
         } else {
-            // Role lain (collector) hanya melihat laporan terbatas
             return allReports.filter(report => report.status === 'resolved' || report.status === 'closed');
         }
     } catch (error) {
@@ -1958,6 +1988,20 @@ router.post('/installations/update-status', async (req, res) => {
                     message: 'Job instalasi tidak ditemukan' 
                 });
             }
+
+            const technicianId = req.session.technicianId || (req.technician && req.technician.id) || 0;
+            db.run(
+                `INSERT INTO installation_job_status_history (
+                    job_id, old_status, new_status, changed_by_type, changed_by_id, notes
+                ) VALUES (?, ?, ?, 'technician', ?, ?)`,
+                [jobId, currentJob.status, status, technicianId, notes || null],
+                (hErr) => {
+                    if (hErr) console.warn('Install status history:', hErr.message);
+                }
+            );
+            try {
+                require('../config/installationJobHelpers').notifyAdminInstallProgress();
+            } catch (_) {}
 
             // Log the status change
             console.log(`Installation job ${jobId} status updated to ${status}`);
@@ -2342,43 +2386,6 @@ router.get('/api/mapping-data', technicianAuth, async (req, res) => {
         res.json({
             success: false,
             message: 'Failed to load mapping data: ' + error.message
-        });
-    }
-});
-
-// TEST: Mapping data tanpa authentication (untuk debugging)
-router.get('/api/test-mapping-data', async (req, res) => {
-    try {
-        // Fix database connection issue
-        const sqlite3 = require('sqlite3').verbose();
-        const dbPath = path.join(__dirname, '../data/billing.db');
-        const db = new sqlite3.Database(dbPath);
-        
-        // Get ODPs data from database
-        const odps = await new Promise((resolve, reject) => {
-            db.all(`SELECT * FROM odps WHERE latitude IS NOT NULL AND longitude IS NOT NULL`, (err, rows) => {
-                if (err) reject(err);
-                else resolve(rows || []);
-            });
-        });
-        
-        // Close database connection
-        db.close();
-        
-        console.log(`✅ Test mapping data: ${odps.length} ODPs found`);
-        
-        res.json({
-            success: true,
-            data: {
-                odps: odps,
-                message: `${odps.length} ODPs loaded successfully`
-            }
-        });
-    } catch (error) {
-        console.error('Test mapping error:', error);
-        res.json({
-            success: false,
-            message: 'Test mapping failed: ' + error.message
         });
     }
 });

@@ -456,7 +456,7 @@
                             <div class="card-body text-center">
                                 <i class="bi bi-check-circle-fill text-success d-block mb-2"></i>
                                 <h6 class="fw-semibold">Restore Pelanggan Bayar</h6>
-                                <p class="text-muted small mb-3">Aktifkan kembali pelanggan yang tagihannya sudah lunas.</p>
+                                <p class="text-muted small mb-3">Aktifkan kembali pelanggan isolir yang tagihannya sudah lunas, termasuk isolir manual.</p>
                                 <button class="btn btn-restore w-100 btn-sm" id="checkPaidBtn">
                                     <i class="bi bi-check-lg me-1"></i>Jalankan
                                 </button>
@@ -689,8 +689,16 @@
 
             $.post('/admin/billing/service-suspension/check-paid', function(response) {
                 if (response.success) {
-                    const message = `Checked: ${response.checked || 0}, Restored: ${response.restored || 0}, Errors: ${response.errors || 0}`;
-                    showToast('success', 'Check Paid Complete', message);
+                    const message = `Dicek: ${response.checked || 0}, Direstore: ${response.restored || 0}, Masih nunggak: ${response.still_unpaid || 0}, Isolir manual dilewati: ${response.skipped_manual || 0}, Gagal: ${response.errors || 0}`;
+                    const restored = Number(response.restored || 0);
+                    const failed = Number(response.errors || 0);
+                    if (restored === 0 && failed > 0) {
+                        showToast('error', 'Restore Gagal', message);
+                    } else if (restored === 0) {
+                        showToast('warning', 'Tidak Ada yang Direstore', message);
+                    } else {
+                        showToast('success', 'Restore Selesai', message);
+                    }
                     loadStats();
                     loadSuspendedCustomers();
                 } else {

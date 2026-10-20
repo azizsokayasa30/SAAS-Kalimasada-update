@@ -21,9 +21,164 @@ function _parseNotes(raw) {
     }
 }
 
+function pingTroubleProgress() {
+    try {
+        require('./adminNotificationBus').pingAdminNotifications('TROUBLE_PROGRESS');
+    } catch (_) { /* ignore */ }
+}
+
+function jakartaYearMonth() {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Jakarta',
+        year: 'numeric',
+        month: '2-digit'
+    }).formatToParts(new Date());
+    const pick = (type) => {
+        const p = parts.find((x) => x.type === type);
+        return p ? p.value : '';
+    };
+    return {
+        year: parseInt(pick('year'), 10) || new Date().getFullYear(),
+        month: parseInt(pick('month'), 10) || (new Date().getMonth() + 1)
+    };
+}
+
+function normalizeMonthYear(month, year) {
+    const cur = jakartaYearMonth();
+    let y = parseInt(year, 10);
+    let m = parseInt(month, 10);
+    if (!Number.isFinite(y) || y < 2020 || y > cur.year + 2) y = cur.year;
+    if (!Number.isFinite(m) || m < 1 || m > 12) m = cur.month;
+    return {
+        month: m,
+        year: y,
+        mm: String(m).padStart(2, '0'),
+        yyyy: String(y),
+        currentMonth: cur.month,
+        currentYear: cur.year
+    };
+}
+
+function dateInPeriod(raw, yyyy, mm) {
+    if (!raw) return false;
+    const s = String(raw).replace('T', ' ');
+    return s.startsWith(`${yyyy}-${mm}`);
+}
+
+function dayOfTimestamp(raw) {
+    const s = String(raw || '').replace('T', ' ');
+    const day = parseInt(s.slice(8, 10), 10);
+    return Number.isFinite(day) ? day : 0;
+}
+
+function isActiveTroubleStatus(status) {
+    const s = String(status || '').toLowerCase().trim();
+    return s === 'open' || s === 'in_progress' || s === 'pending' || s === 'baru';
+}
+
+function isResolvedTroubleStatus(status) {
+    const s = String(status || '').toLowerCase().trim();
+    return s === 'resolved' || s === 'closed';
+}
+
+function isUnreadProgressRow(row) {
+    const progressAt = row && (row.progress_updated_at || row.progressUpdatedAt);
+    if (!progressAt) return false;
+    const seenAt = row && (row.admin_seen_at || row.adminSeenAt);
+    if (!seenAt) return true;
+    return new Date(seenAt).getTime() < new Date(progressAt).getTime();
+}
+
+let _progressColumnsEnsured = false;
+let _troubleReportColumnsCache = null;
+
+/** Tunggu writer lain (invoice, notifikasi, scheduler) alih-alih gagal instan. */
+const BUSY_TIMEOUT_MS = 8000;
+const BUSY_MAX_ATTEMPTS = 3;
+
+function isSqliteBusyError(err) {
+    if (!err) return false;
+    const msg = String(err.message || err);
+    return err.code === 'SQLITE_BUSY' || /SQLITE_BUSY|database is locked/i.test(msg);
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function dbAll(db, sql, params = []) {
+    return new Promise((resolve, reject) => {
+        db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows || [])));
+    });
+}
+
+function dbRun(db, sql, params = []) {
+    return new Promise((resolve, reject) => {
+        db.run(sql, params, function (err) {
+            if (err) reject(err);
+            else resolve(this);
+        });
+    });
+}
+
+function ensureProgressColumns(db) {
+    if (_progressColumnsEnsured) return Promise.resolve();
+    return (async () => {
+        let rows;
+        try {
+            rows = await dbAll(db, 'PRAGMA table_info(trouble_reports)');
+        } catch (err) {
+            logger.warn(`ensureProgressColumns pragma: ${err.message}`);
+            return;
+        }
+        const names = new Set((rows || []).map((r) => r.name));
+        const missing = ['progress_updated_at', 'admin_seen_at'].filter((col) => !names.has(col));
+        if (!missing.length) {
+            _progressColumnsEnsured = true;
+            return;
+        }
+        for (const col of missing) {
+            try {
+                await dbRun(db, `ALTER TABLE trouble_reports ADD COLUMN ${col} TEXT`);
+            } catch (alterErr) {
+                const msg = String(alterErr.message || '');
+                if (!/duplicate column/i.test(msg)) {
+                    logger.warn(`ensureProgressColumns alter ${col}: ${msg}`);
+                }
+            }
+        }
+        if (missing.includes('progress_updated_at')) {
+            try {
+                await dbRun(
+                    db,
+                    `UPDATE trouble_reports
+                     SET progress_updated_at = COALESCE(progress_updated_at, updated_at, created_at)
+                     WHERE progress_updated_at IS NULL
+                       AND LOWER(TRIM(COALESCE(status,''))) IN ('open','in_progress','pending','baru')`
+                );
+            } catch (updErr) {
+                logger.warn(`ensureProgressColumns backfill: ${updErr.message}`);
+            }
+            _troubleReportColumnsCache = null;
+        }
+        try {
+            const after = await dbAll(db, 'PRAGMA table_info(trouble_reports)');
+            const have = new Set((after || []).map((r) => r.name));
+            _progressColumnsEnsured = ['progress_updated_at', 'admin_seen_at'].every((col) => have.has(col));
+        } catch (_) {
+            _progressColumnsEnsured = false;
+        }
+    })();
+}
+
 // Database helper
 const dbPath = path.join(__dirname, '../data/billing.db');
-const getDB = () => new sqlite3.Database(dbPath);
+function getDB() {
+    const db = new sqlite3.Database(dbPath);
+    // Diantrekan lebih dulu supaya statement berikutnya di koneksi ini menunggu kunci.
+    db.run(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    return db;
+}
 
 // Helper function untuk format tanggal Indonesia yang benar
 function formatIndonesianDateTime(date = new Date()) {
@@ -90,6 +245,166 @@ async function getAllTroubleReports() {
   });
 }
 
+async function countUnreadTroubleProgress() {
+  const _t = _tWhere();
+  return new Promise((resolve) => {
+    const db = getDB();
+    ensureProgressColumns(db).then(() => {
+      db.get(
+        `SELECT COUNT(*) AS n FROM trouble_reports
+         WHERE progress_updated_at IS NOT NULL
+           AND TRIM(progress_updated_at) != ''
+           AND (
+             admin_seen_at IS NULL
+             OR TRIM(admin_seen_at) = ''
+             OR datetime(admin_seen_at) < datetime(progress_updated_at)
+           )${_t.sql}`,
+        [..._t.params],
+        (err, row) => {
+          db.close();
+          if (err) {
+            logger.warn(`countUnreadTroubleProgress: ${err.message}`);
+            return resolve(0);
+          }
+          resolve(Number(row && row.n) || 0);
+        }
+      );
+    });
+  });
+}
+
+async function markTroubleProgressSeen(reportId = null) {
+  const _t = _tWhere();
+  const now = getLocalTimestamp();
+  return new Promise((resolve) => {
+    const db = getDB();
+    ensureProgressColumns(db).then(() => {
+      const hasId = reportId != null && String(reportId).trim() !== '';
+      const sql = hasId
+        ? `UPDATE trouble_reports SET admin_seen_at = ?
+           WHERE id = ?
+             AND progress_updated_at IS NOT NULL${_t.sql}`
+        : `UPDATE trouble_reports SET admin_seen_at = ?
+           WHERE progress_updated_at IS NOT NULL
+             AND (
+               admin_seen_at IS NULL
+               OR TRIM(admin_seen_at) = ''
+               OR datetime(admin_seen_at) < datetime(progress_updated_at)
+             )${_t.sql}`;
+      const params = hasId
+        ? [now, String(reportId).trim(), ..._t.params]
+        : [now, ..._t.params];
+      db.run(sql, params, function (err) {
+        db.close();
+        if (err) {
+          logger.warn(`markTroubleProgressSeen: ${err.message}`);
+          return resolve(0);
+        }
+        resolve(Number(this.changes) || 0);
+      });
+    });
+  });
+}
+
+async function flagTroubleProgressUpdated(reportId) {
+  if (reportId == null || String(reportId).trim() === '') return false;
+  const _t = _tWhere();
+  const now = getLocalTimestamp();
+  return new Promise((resolve) => {
+    const db = getDB();
+    ensureProgressColumns(db).then(() => {
+      db.run(
+        `UPDATE trouble_reports
+         SET progress_updated_at = ?, updated_at = COALESCE(updated_at, ?)
+         WHERE id = ?${_t.sql}`,
+        [now, now, String(reportId).trim(), ..._t.params],
+        function (err) {
+          db.close();
+          if (err) {
+            logger.warn(`flagTroubleProgressUpdated: ${err.message}`);
+            return resolve(false);
+          }
+          if (this.changes > 0) pingTroubleProgress();
+          resolve(this.changes > 0);
+        }
+      );
+    });
+  });
+}
+
+async function getMonthlyTroubleDashboard(month, year) {
+  const period = normalizeMonthYear(month, year);
+  const all = await getAllTroubleReports();
+  const monthReports = all.filter((r) => dateInPeriod(r.created_at || r.createdAt, period.yyyy, period.mm));
+  const carryOver = all.filter((r) => {
+    return isActiveTroubleStatus(r.status) && !dateInPeriod(r.created_at || r.createdAt, period.yyyy, period.mm);
+  });
+  const resolvedThisMonth = all.filter((r) => {
+    return isResolvedTroubleStatus(r.status) && dateInPeriod(r.updated_at || r.updatedAt, period.yyyy, period.mm);
+  });
+
+  const daysInMonth = new Date(period.year, period.month, 0).getDate();
+  const dailyCreated = Array(daysInMonth).fill(0);
+  const dailyResolved = Array(daysInMonth).fill(0);
+  monthReports.forEach((r) => {
+    const day = dayOfTimestamp(r.created_at || r.createdAt);
+    if (day >= 1 && day <= daysInMonth) dailyCreated[day - 1] += 1;
+  });
+  all.forEach((r) => {
+    if (!isResolvedTroubleStatus(r.status)) return;
+    const raw = r.updated_at || r.updatedAt;
+    if (!dateInPeriod(raw, period.yyyy, period.mm)) return;
+    const day = dayOfTimestamp(raw);
+    if (day >= 1 && day <= daysInMonth) dailyResolved[day - 1] += 1;
+  });
+
+  const recentProgress = [];
+  all.forEach((r) => {
+    const notes = Array.isArray(r.notes) ? r.notes : [];
+    notes.forEach((n) => {
+      if (!n || n.type === 'assignment_change') return;
+      if (!dateInPeriod(n.timestamp, period.yyyy, period.mm)) return;
+      const content = String(n.content || '').trim();
+      if (!content) return;
+      recentProgress.push({
+        reportId: r.id,
+        name: r.name || '',
+        phone: r.phone || '',
+        status: n.status || r.status,
+        content: content.slice(0, 280),
+        timestamp: n.timestamp,
+        unread: isUnreadProgressRow(r)
+      });
+    });
+  });
+  recentProgress.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+
+  const doneCount = monthReports.filter((r) => isResolvedTroubleStatus(r.status)).length;
+  const unreadProgress = all.filter(isUnreadProgressRow).length;
+
+  return {
+    period,
+    reports: monthReports,
+    carryOver,
+    recentProgress: recentProgress.slice(0, 12),
+    dailyCreated,
+    dailyResolved,
+    daysInMonth,
+    stats: {
+      total: monthReports.length,
+      open: monthReports.filter((r) => String(r.status || '').toLowerCase() === 'open').length,
+      inProgress: monthReports.filter((r) => String(r.status || '').toLowerCase() === 'in_progress').length,
+      resolved: monthReports.filter((r) => String(r.status || '').toLowerCase() === 'resolved').length,
+      closed: monthReports.filter((r) => String(r.status || '').toLowerCase() === 'closed').length,
+      resolvedThisMonth: resolvedThisMonth.length,
+      carryOver: carryOver.length,
+      doneCount,
+      unreadProgress,
+      resolutionRate: monthReports.length ? Math.round((doneCount / monthReports.length) * 100) : 0
+    }
+  };
+}
+
 // Mendapatkan laporan gangguan berdasarkan ID
 async function getTroubleReportById(id) {
   const _t = _tWhere();
@@ -121,48 +436,49 @@ async function getTroubleReportsByPhone(phone) {
 
 // Membuat laporan gangguan baru
 async function createTroubleReport(reportData) {
-  return new Promise((resolve, reject) => {
+  const id = `TR${Date.now().toString().slice(-6)}${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
+  const now = getLocalTimestamp();
+
+  const rawCid = reportData.customer_id ?? reportData.customerId;
+  const customerId =
+      rawCid != null && String(rawCid).trim() !== '' ? parseInt(String(rawCid), 10) : NaN;
+  const customerIdSql = Number.isFinite(customerId) && customerId > 0 ? customerId : null;
+
+  const sql = `
+    INSERT INTO trouble_reports (
+      id, status, created_at, updated_at, name, phone, location, 
+      category, description, assigned_technician_id, priority, notes, customer_id, tenant_id,
+      progress_updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+
+  const tenantId = hasTenantContext() ? getTenantId() : 1;
+  const params = [
+    id,
+    'open',
+    now,
+    now,
+    reportData.name,
+    reportData.phone,
+    reportData.location,
+    reportData.category,
+    reportData.description,
+    reportData.assigned_technician_id || reportData.assignedTechnicianId,
+    reportData.priority || 'Normal',
+    JSON.stringify([]),
+    customerIdSql,
+    tenantId,
+    now
+  ];
+
+  let lastErr;
+  for (let attempt = 0; attempt < BUSY_MAX_ATTEMPTS; attempt++) {
     const db = getDB();
-    const id = `TR${Date.now().toString().slice(-6)}${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
-    const now = getLocalTimestamp();
-    
-    const rawCid = reportData.customer_id ?? reportData.customerId;
-    const customerId =
-        rawCid != null && String(rawCid).trim() !== '' ? parseInt(String(rawCid), 10) : NaN;
-    const customerIdSql = Number.isFinite(customerId) && customerId > 0 ? customerId : null;
+    try {
+      await ensureProgressColumns(db);
+      await dbRun(db, sql, params);
+      try { db.close(); } catch (_) { /* ignore */ }
 
-    const sql = `
-      INSERT INTO trouble_reports (
-        id, status, created_at, updated_at, name, phone, location, 
-        category, description, assigned_technician_id, priority, notes, customer_id, tenant_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `;
-    
-    const tenantId = hasTenantContext() ? getTenantId() : 1;
-    const params = [
-      id,
-      'open',
-      now,
-      now,
-      reportData.name,
-      reportData.phone,
-      reportData.location,
-      reportData.category,
-      reportData.description,
-      reportData.assigned_technician_id || reportData.assignedTechnicianId,
-      reportData.priority || 'Normal',
-      JSON.stringify([]),
-      customerIdSql,
-      tenantId
-    ];
-
-    db.run(sql, params, async function(err) {
-      db.close();
-      if (err) {
-        logger.error(`Gagal membuat laporan gangguan: ${err.message}`);
-        return reject(err);
-      }
-      
       const newReport = {
         id,
         status: 'open',
@@ -172,7 +488,6 @@ async function createTroubleReport(reportData) {
         notes: []
       };
 
-      // Notifikasi
       try {
         if (getSetting('trouble_report.auto_ticket', 'true') === 'true') {
           sendNotificationToTechnicians(newReport);
@@ -180,18 +495,26 @@ async function createTroubleReport(reportData) {
       } catch (notificationError) {
         logger.warn('Failed to send technician notification:', notificationError.message);
       }
-      
+
       try {
         require('./adminNotificationBus').pingAdminNotifications('TROUBLE');
       } catch (_) {}
-      resolve(newReport);
-    });
-  });
+      return newReport;
+    } catch (err) {
+      try { db.close(); } catch (_) { /* ignore */ }
+      lastErr = err;
+      if (!isSqliteBusyError(err) || attempt === BUSY_MAX_ATTEMPTS - 1) {
+        logger.error(`Gagal membuat laporan gangguan: ${err.message}`);
+        throw err;
+      }
+      logger.warn(`createTroubleReport SQLITE_BUSY, ulang ${attempt + 1}/${BUSY_MAX_ATTEMPTS - 1}`);
+      await sleep(200 * (attempt + 1));
+    }
+  }
+  throw lastErr;
 }
 
 /** Cache kolom trouble_reports (untuk UPDATE dinamis). */
-let _troubleReportColumnsCache = null;
-
 function getTroubleReportColumns(db) {
   return new Promise((resolve, reject) => {
     if (_troubleReportColumnsCache) return resolve(_troubleReportColumnsCache);
@@ -228,9 +551,14 @@ async function updateTroubleReportStatus(id, status, notes, technicalData = {}, 
 
     (async () => {
       try {
+        await ensureProgressColumns(db);
         const cols = await getTroubleReportColumns(db);
         const setParts = ['status = ?', 'notes = ?', 'updated_at = ?'];
         const params = [status, JSON.stringify(updatedNotes), now];
+        if (cols.has('progress_updated_at')) {
+          setParts.push('progress_updated_at = ?');
+          params.push(now);
+        }
 
         // Sertakan kolom teknis hanya jika ada di skema (hindari "no such column")
         if (cols.has('odp')) {
@@ -277,6 +605,7 @@ async function updateTroubleReportStatus(id, status, notes, technicalData = {}, 
             sendStatusUpdateToCustomer(updatedReport);
           }
 
+          pingTroubleProgress();
           resolve(updatedReport);
         });
       } catch (e) {
@@ -557,5 +886,10 @@ module.exports = {
   sendNotificationToTechnicians,
   sendStatusUpdateToCustomer,
   setSockInstance,
-  extractTechnicianCompletion
+  extractTechnicianCompletion,
+  countUnreadTroubleProgress,
+  markTroubleProgressSeen,
+  flagTroubleProgressUpdated,
+  getMonthlyTroubleDashboard,
+  normalizeMonthYear
 };

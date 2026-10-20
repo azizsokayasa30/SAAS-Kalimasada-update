@@ -221,12 +221,8 @@ function resolveTenantMiddleware(req, res, next) {
         }
 
         attachTenantToRequest(req, tenant);
-
-        if (tenant.is_master) {
-            return res.status(404).render('platform/errors/tenant-not-found', {
-                title: 'Tenant Tidak Ditemukan',
-            });
-        }
+        res.locals.isMasterTenant = Boolean(tenant.is_master);
+        res.locals.currentTenant = tenant;
 
         const blockedStatuses = new Set(['provisioning', 'pending', 'failed']);
         if (blockedStatuses.has(tenant.status) && !req.path.startsWith('/login')) {

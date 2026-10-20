@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <%- include('../../partials/hard-reload') %>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><%= title || 'WhatsApp Pelanggan' %> - Admin Portal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+    <link href="/css/admin-mobile.css" rel="stylesheet">
+    <link href="/css/dashboard-modern.css" rel="stylesheet">
+    <%- include('../../partials/theme-head') %>
+    <style>
+        .wa-stat {
+            border-radius: 14px;
+            padding: 16px 18px;
+            height: 100%;
+            color: #fff;
+            border: none;
+            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
+            position: relative;
+            overflow: hidden;
+        }
+        .wa-stat::after {
+            content: '';
+            position: absolute;
+            right: -12px;
+            bottom: -18px;
+            width: 84px;
+            height: 84px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.14);
+        }
+        .wa-stat .label {
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            opacity: 0.9;
+            margin-bottom: 6px;
+        }
+        .wa-stat .value {
+            font-size: 1.55rem;
+            font-weight: 800;
+            line-height: 1.15;
+        }
+        .wa-stat .hint { font-size: 0.78rem; opacity: 0.9; }
+        .wa-stat-total { background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 55%, #0ea5e9 100%); }
+        .wa-stat-ready { background: linear-gradient(135deg, #059669 0%, #10b981 55%, #34d399 100%); }
+        .wa-stat-quota { background: linear-gradient(135deg, #d97706 0%, #f59e0b 55%, #fbbf24 100%); }
+        .wa-stat-quota.warn { background: linear-gradient(135deg, #dc2626 0%, #ef4444 55%, #f97316 100%); }
+        .wa-stat-gateway { background: linear-gradient(135deg, #7c3aed 0%, #8b5cf6 55%, #a78bfa 100%); }
+        .wa-stat-gateway.off { background: linear-gradient(135deg, #64748b 0%, #475569 100%); }
+        .wa-compose {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+        }
+        @media (min-width: 992px) {
+            .wa-compose-sticky { position: sticky; top: 16px; }
+        }
+        .wa-preview {
+            background: var(--bg-secondary);
+            border-radius: 10px;
+            padding: 12px;
+            white-space: pre-wrap;
+            font-size: 0.82rem;
+            max-height: 220px;
+            overflow: auto;
+            min-height: 80px;
+        }
+        .wa-table-wrap {
+            max-height: min(70vh, 720px);
+            overflow: auto;
+        }
+        .wa-table th {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--fg-muted);
+            white-space: nowrap;
+            position: sticky;
+            top: 0;
+            background: var(--card-bg);
+            z-index: 1;
+        }
+        .wa-table td { font-size: 0.85rem; vertical-align: middle; }
+        .wa-progress-wrap { display: none; }
+        .wa-progress-wrap.active { display: block; }
+        .no-phone { opacity: 0.55; }
+        .wa-filter-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px 16px;
+        }
+        .gateway-dot {
+            width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px;
+            background: rgba(255,255,255,0.85);
+        }
+        .gateway-dot.on { box-shadow: 0 0 0 3px rgba(255,255,255,0.25); }
+        .gateway-dot.off { background: #fecaca; }
+        #quotaWarnBanner { display: none; }
+        #quotaWarnBanner.show { display: block; }
+    </style>
+</head>
+<body>
+<div class="container-fluid">
+    <div class="row">
+        <%- include('../../partials/billing-sidebar', { page: 'whatsapp-customers' }) %>
+        <main class="col-md-10 ms-sm-auto col-lg-10 px-md-4 main-content">
+            <div class="dashboard-header mt-3">
+                <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+                    <div>
+                        <h5 class="mb-1"><i class="bi bi-whatsapp me-2 text-success"></i>WhatsApp Pelanggan</h5>
+                        <p class="text-muted small mb-0">Broadcast manual tagihan, pengingat, greeting, dan informasi — cadangan kiriman otomatis.</p>
+                    </div>
+                    <a href="/admin/billing/whatsapp-settings" class="btn btn-outline-secondary btn-sm">
+                        <i class="bi bi-sliders"></i> Kelola template
+                    </a>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-3" id="waStatsRow">
+                <div class="col-6 col-xl-3">
+                    <div class="wa-stat wa-stat-total">
+                        <div class="label"><i class="bi bi-funnel me-1"></i>Hasil filter</div>
+                        <div class="value" id="statTotal">0</div>
+                        <div class="hint">Pelanggan sesuai filter</div>
+                    </div>
+                </div>
+                <div class="col-6 col-xl-3">
+                    <div class="wa-stat wa-stat-ready">
+                        <div class="label"><i class="bi bi-whatsapp me-1"></i>Siap dikirim</div>
+                        <div class="value" id="statWithPhone">0</div>
+                        <div class="hint"><span id="statWithoutPhone">0</span> tanpa nomor dilewati</div>
+                    </div>
+                </div>
+                <div class="col-6 col-xl-3">
+                    <div class="wa-stat wa-stat-quota" id="statQuotaCard">
+                        <div class="label"><i class="bi bi-speedometer2 me-1"></i>Kuota harian WA</div>
+                        <div class="value" id="statQuota">—</div>
+                        <div class="hint" id="statQuotaHint">Tidak dibatasi</div>
+                    </div>
+                </div>
+                <div class="col-6 col-xl-3">
+                    <div class="wa-stat wa-stat-gateway" id="statGatewayCard">
+                        <div class="label"><i class="bi bi-hdd-network me-1"></i>Gateway</div>
+                        <div class="value" id="statGateway"><span class="gateway-dot off"></span>—</div>
+                        <div class="hint" id="statGatewayHint">Memuat status…</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="alert alert-danger border-0 shadow-sm mb-3" id="quotaWarnBanner" role="alert">
+                <i class="bi bi-exclamation-triangle-fill me-1"></i>
+                <strong>Melebihi kuota harian WhatsApp.</strong>
+                <span id="quotaWarnText">Jumlah penerima lebih besar dari sisa kuota hari ini. Sebagian pesan tidak akan terkirim.</span>
+            </div>
+
+            <div class="row g-3">
+                <div class="col-lg-8">
+                    <div class="wa-filter-card mb-3">
+                        <form id="waFilterForm" class="row g-2 align-items-end">
+                            <div class="col-12">
+                                <label class="form-label">Cari pelanggan</label>
+                                <div class="input-group">
+                                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                                    <input type="text" class="form-control" name="search" id="filterSearch" placeholder="Nama, no. HP, username, alamat…">
+                                </div>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label">Status langganan</label>
+                                <select class="form-select" name="status" id="filterStatus">
+                                    <option value="">Semua</option>
+                                    <option value="aktif">Aktif</option>
+                                    <option value="nonaktif">Nonaktif</option>
+                                    <option value="isolir">Isolir</option>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label">Status bayar</label>
+                                <select class="form-select" name="payment_status" id="filterPayment">
+                                    <option value="">Semua</option>
+                                    <option value="unpaid">Belum lunas</option>
+                                    <option value="paid">Lunas</option>
+                                    <option value="no_invoice">Belum ada tagihan</option>
+                                    <option value="has_invoice">Ada tagihan</option>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label">Area</label>
+                                <select class="form-select" name="area" id="filterArea">
+                                    <option value="">Semua area</option>
+                                    <% (uniqueAreas || []).forEach(function(areaName) { %>
+                                        <option value="<%= areaName %>"><%= areaName %></option>
+                                    <% }); %>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label">Kolektor</label>
+                                <select class="form-select" name="collector_id" id="filterCollector">
+                                    <option value="">Semua kolektor</option>
+                                    <% (collectors || []).forEach(function(col) { %>
+                                        <option value="<%= col.id %>"><%= col.name %></option>
+                                    <% }); %>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label">Paket</label>
+                                <select class="form-select" name="package_id" id="filterPackage">
+                                    <option value="">Semua paket</option>
+                                    <% (packages || []).forEach(function(pkg) { %>
+                                        <option value="<%= pkg.id %>"><%= pkg.name %></option>
+                                    <% }); %>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-3">
+                                <label class="form-label">Bulan tagihan</label>
+                                <select class="form-select" name="month" id="filterMonth">
+                                    <% const months = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember']; %>
+                                    <% for (let i = 1; i <= 12; i++) { %>
+                                        <option value="<%= i %>" <%= selectedMonth == i ? 'selected' : '' %>><%= months[i-1] %></option>
+                                    <% } %>
+                                </select>
+                            </div>
+                            <div class="col-6 col-md-2">
+                                <label class="form-label">Tahun</label>
+                                <select class="form-select" name="year" id="filterYear">
+                                    <% const cy = new Date().getFullYear(); %>
+                                    <% for (let y = cy - 3; y <= cy + 1; y++) { %>
+                                        <option value="<%= y %>" <%= selectedYear == y ? 'selected' : '' %>><%= y %></option>
+                                    <% } %>
+                                </select>
+                            </div>
+                            <div class="col-12 col-md-4 d-flex gap-1">
+                                <button type="submit" class="btn btn-primary flex-fill btn-sm"><i class="bi bi-funnel"></i> Filter</button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm" id="btnResetFilter">Reset</button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <div class="wa-filter-card">
+                        <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="selectPage">
+                                <label class="form-check-label" for="selectPage">Pilih semua</label>
+                            </div>
+                            <div class="small text-muted" id="selectedCountLabel">0 dipilih · 0 ditampilkan</div>
+                        </div>
+                        <div class="table-responsive wa-table-wrap">
+                            <table class="table table-hover wa-table mb-0">
+                                <thead>
+                                    <tr>
+                                        <th></th>
+                                        <th>ID</th>
+                                        <th>Nama</th>
+                                        <th>WhatsApp</th>
+                                        <th>Paket</th>
+                                        <th>Area</th>
+                                        <th>Kolektor</th>
+                                        <th>Status</th>
+                                        <th>Bayar</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="customerTableBody">
+                                    <tr><td colspan="9" class="text-center text-muted py-4">Memuat pelanggan…</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="small text-muted mt-3" id="pageInfo">—</div>
+                    </div>
+                </div>
+
+                <div class="col-lg-4">
+                    <div class="wa-compose wa-compose-sticky">
+                        <h6 class="mb-3"><i class="bi bi-send me-1"></i> Kirim pesan</h6>
+                        <div class="mb-3">
+                            <label class="form-label">Sasaran</label>
+                            <select class="form-select" id="targetMode">
+                                <option value="filter">Semua hasil filter</option>
+                                <option value="selected">Hanya yang dicentang</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Template</label>
+                            <select class="form-select" id="templateKey">
+                                <% (templates || []).forEach(function(t) { %>
+                                    <option value="<%= t.key %>" <%= t.enabled === false ? 'disabled' : '' %>>
+                                        <%= t.title %><%= t.enabled === false ? ' (nonaktif)' : '' %>
+                                    </option>
+                                <% }); %>
+                            </select>
+                        </div>
+                        <div id="extraFields"></div>
+                        <div class="mb-3">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <label class="form-label mb-0">Preview pesan</label>
+                                <button type="button" class="btn btn-link btn-sm py-0" id="btnRefreshPreview">Perbarui</button>
+                            </div>
+                            <div class="wa-preview mt-2" id="messagePreview">Pilih template, lalu filter pelanggan untuk melihat contoh pesan.</div>
+                        </div>
+                        <div class="d-grid gap-2">
+                            <button type="button" class="btn btn-success" id="btnBroadcast">
+                                <i class="bi bi-broadcast"></i> Broadcast
+                            </button>
+                            <button type="button" class="btn btn-outline-danger" id="btnCancelJob" disabled>
+                                Batalkan pengiriman
+                            </button>
+                        </div>
+
+                        <div class="wa-progress-wrap mt-3" id="progressWrap">
+                            <div class="d-flex justify-content-between small mb-1">
+                                <span id="progressLabel">Menyiapkan…</span>
+                                <span id="progressPercent">0%</span>
+                            </div>
+                            <div class="progress" style="height: 8px;">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated bg-success" id="progressBar" style="width: 0%"></div>
+                            </div>
+                            <div class="small text-muted mt-2" id="progressDetail"></div>
+                            <div class="small mt-2" id="progressFailures"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="modal fade" id="confirmModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Konfirmasi broadcast</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-2" id="confirmText">Kirim pesan ke pelanggan terfilter?</p>
+                <div class="alert alert-warning py-2 small d-none" id="confirmQuotaWarn">
+                    <i class="bi bi-exclamation-triangle-fill me-1"></i>
+                    <span id="confirmQuotaWarnText">Jumlah penerima melebihi sisa kuota harian.</span>
+                </div>
+                <pre class="wa-preview mb-0" id="confirmPreview"></pre>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+                <button type="button" class="btn btn-success" id="btnConfirmSend">Ya, kirim sekarang</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+window.WA_CUSTOMERS_BOOT = {
+    templates: <%- JSON.stringify(templates || []).replace(/</g, '\\u003c') %>,
+    activeJob: <%- JSON.stringify(activeJob || null).replace(/</g, '\\u003c') %>,
+    month: <%= selectedMonth %>,
+    year: <%= selectedYear %>
+};
+</script>
+<script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script src="/js/whatsapp-customers.js"></script>
+</body>
+</html>

@@ -575,9 +575,10 @@ a:hover { color: var(--accent-hover); }
 /* Sidebar styles have been moved to kalimasada-sidebar.css */
 
 /* ============================================================
-   ===== THEME TOGGLE BUTTON =====
+   ===== THEME TOGGLE BUTTON (admin .sb sidebar only) =====
+   Scoped so management portal compact toggle is not stretched.
    ============================================================ */
-#globalThemeToggle {
+.sb #globalThemeToggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -595,17 +596,17 @@ a:hover { color: var(--accent-hover); }
   transition: all 200ms ease;
   margin-bottom: 6px;
 }
-#globalThemeToggle:hover {
+.sb #globalThemeToggle:hover {
   background: rgba(255,255,255,0.1);
   color: var(--sb-text);
   border-color: rgba(255,255,255,0.2);
 }
-#globalThemeToggle i {
+.sb #globalThemeToggle i {
   font-size: 13px;
   flex-shrink: 0;
   transition: transform 0.4s ease;
 }
-#globalThemeToggle:hover i { transform: rotate(20deg); }
+.sb #globalThemeToggle:hover i { transform: rotate(20deg); }
 
 /* Collapsed sidebar — only show icon */
 .sb.collapsed #globalThemeToggle span.sb-item-text { display: none; }

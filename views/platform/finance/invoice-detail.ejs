@@ -19,11 +19,18 @@
   <% if (flash && flash.success === 'restored') { %><div class="alert alert-success">Backup finance berhasil di-restore.</div><% } %>
   <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
 
+  <%
+    const pokok = Number(invoice.pokok_amount) || 0;
+    const pajakTotal = (Number(invoice.tax_amount) || 0) + (Number(invoice.bhp_amount) || 0) + (Number(invoice.uso_amount) || 0);
+    const fee = Number(invoice.management_fee_amount) || 0;
+    const totalTagihan = Number(invoice.total_amount) || (pokok + pajakTotal + fee);
+  %>
+
   <div class="row g-3 mb-4">
-    <div class="col-md-3"><div class="km-stat"><div class="label">Gross Koleksi</div><div class="value"><%= formatRupiah(invoice.gross_amount) %></div></div></div>
-    <div class="col-md-3"><div class="km-stat"><div class="label">PPN</div><div class="value text-muted"><%= formatRupiah(invoice.tax_amount) %></div></div></div>
-    <div class="col-md-3"><div class="km-stat"><div class="label">BHP USO + Fee</div><div class="value text-warning"><%= formatRupiah(Number(invoice.bhp_uso_amount) + Number(invoice.management_fee_amount)) %></div></div></div>
-    <div class="col-md-3"><div class="km-stat"><div class="label">Net ke Tenant</div><div class="value text-success"><%= formatRupiah(invoice.net_amount) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pokok</div><div class="value"><%= formatRupiah(pokok) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pajak</div><div class="value"><%= formatRupiah(pajakTotal) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Mgmt Fee</div><div class="value text-warning"><%= formatRupiah(fee) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Total Tagihan</div><div class="value text-success"><%= formatRupiah(totalTagihan) %></div></div></div>
   </div>
 
   <div class="row g-3">
@@ -31,20 +38,44 @@
       <div class="km-card">
         <h5 class="mb-3">Rincian Invoice</h5>
         <table class="table table-sm mb-0">
-          <thead><tr><th>Deskripsi</th><th class="text-end">Jumlah</th></tr></thead>
+          <thead>
+            <tr>
+              <th>Item</th>
+              <th class="text-end">Qty</th>
+              <th class="text-end">Harga</th>
+              <th class="text-end">Jumlah</th>
+            </tr>
+          </thead>
           <tbody>
             <% invoice.items.forEach(function(item) { %>
               <tr>
                 <td><%= item.description %></td>
+                <td class="text-end">
+                  <% if (item.item_type === 'tax') { %>
+                    <%= String(item.qty).replace('.', ',') %>%
+                  <% } else { %>
+                    <%= Number(item.qty) || 1 %>
+                  <% } %>
+                </td>
+                <td class="text-end">
+                  <% if (item.item_type === 'tax') { %>
+                    <%= formatRupiah(item.unit_price) %>
+                  <% } else { %>
+                    <%= formatRupiah(item.unit_price || item.amount) %>
+                  <% } %>
+                </td>
                 <td class="text-end"><%= formatRupiah(item.amount) %></td>
               </tr>
             <% }); %>
             <tr class="fw-bold border-top">
-              <td>Net ke Pemilik Tenant</td>
-              <td class="text-end text-success"><%= formatRupiah(invoice.net_amount) %></td>
+              <td colspan="3">Total Tagihan</td>
+              <td class="text-end text-success"><%= formatRupiah(totalTagihan) %></td>
             </tr>
           </tbody>
         </table>
+        <% if (invoice.notes) { %>
+          <p class="small mt-3 mb-0" style="color: var(--text-muted)">Catatan: <%= invoice.notes %></p>
+        <% } %>
       </div>
     </div>
     <div class="col-lg-5">
@@ -75,7 +106,5 @@
       </div>
     </div>
   </div>
-
-  <%- include('_backup-restore') %>
 </main>
 <%- include('../partials/footer') %>

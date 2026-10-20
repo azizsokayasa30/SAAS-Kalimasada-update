@@ -6,6 +6,89 @@ const { tenantSqlFromRequest } = require('../config/platform/tenantSqlHelpers');
 const { attachTenantAppSettings } = require('../config/platform/tenantAppSettings');
 const { getTenantId, hasTenantContext } = require('../config/platform/tenantContext');
 const vpnService = require('../config/platform/vpnService');
+const {
+  getMikrotikConnectionForRouter,
+  getCachedFullPppSecrets,
+  getCachedPppActivePrint,
+  getRadiusConnection,
+  addPPPoEUserRadius,
+} = require('../config/mikrotik');
+const { claimTenantPppoeUsername, releaseTenantPppoeUsername } = require('../utils/tenantPppoeOwnership');
+
+const ROUTER_QUERY_TIMEOUT_MS = 9000;
+
+function withRouterTimeout(promise, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timeout (${ROUTER_QUERY_TIMEOUT_MS}ms)`)), ROUTER_QUERY_TIMEOUT_MS)
+    ),
+  ]);
+}
+
+function loadTenantRouters(t) {
+  const db = billingManager.db;
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT id, name, nas_ip, nas_identifier, location, pop, port, user, password, secret, genieacs_server_id, tenant_id
+       FROM routers WHERE 1=1${t.and('')} ORDER BY id`,
+      (err, rows) => {
+        if (err) return reject(err);
+        resolve(rows || []);
+      }
+    );
+  });
+}
+
+function loadTenantRouterById(t, id) {
+  const db = billingManager.db;
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT * FROM routers WHERE id = ?${t.and('')}`,
+      [id],
+      (err, row) => {
+        if (err) return reject(err);
+        resolve(row || null);
+      }
+    );
+  });
+}
+
+async function getRadiusPasswordUsernameSet() {
+  const conn = await getRadiusConnection();
+  const [rows] = await conn.execute(
+    `SELECT DISTINCT LOWER(TRIM(username)) AS u FROM radcheck
+     WHERE LOWER(TRIM(attribute)) IN (
+       'cleartext-password',
+       'user-password',
+       'crypt-password',
+       'md5-password',
+       'sha-password',
+       'smd5-password',
+       'mikrotik-password'
+     )`
+  );
+  const set = new Set();
+  for (const row of rows || []) {
+    const u = String(row?.u || '').trim().toLowerCase();
+    if (u) set.add(u);
+  }
+  return set;
+}
+
+function secretName(sec) {
+  return String(sec?.name || '').trim();
+}
+
+async function listRouterPppSecrets(router) {
+  const conn = await getMikrotikConnectionForRouter(router);
+  const secrets = await getCachedFullPppSecrets(conn, `admin_${router.id}`);
+  const active = await getCachedPppActivePrint(conn, `admin_${router.id}`);
+  return {
+    secrets: Array.isArray(secrets) ? secrets : [],
+    active: Array.isArray(active) ? active : [],
+  };
+}
 
 router.use(attachTenantAppSettings);
 
@@ -94,7 +177,15 @@ router.get('/connection-settings', adminAuth, async (req, res) => {
               LEFT JOIN genieacs_servers g ON r.genieacs_server_id = g.id AND g.tenant_id = r.tenant_id
               WHERE 1=1${t.and('r')}
               ORDER BY r.id`, (err, rows) => {
-        resolve(rows || []);
+        const { isPublicIpv4 } = require('../config/mikrotikApiGuard');
+        resolve((rows || []).map((row) => {
+          const copy = { ...row };
+          copy.has_password = !!(copy.password || copy.secret);
+          copy.api_public = isPublicIpv4(copy.nas_ip);
+          delete copy.password;
+          delete copy.secret;
+          return copy;
+        }));
       });
     });
 
@@ -117,10 +208,6 @@ router.get('/connection-settings', adminAuth, async (req, res) => {
     }
 
     const tenantSettings = req.tenantSettings || {};
-    const vpnTunnelIp = String(vpnServer?.tunnel_address || '').trim().split('/')[0] || '10.10.0.1';
-    const isolirPagePort = String(
-      process.env.ISOLIR_PORT || tenantSettings.isolir_page_port || '8899'
-    ).trim() || '8899';
 
     res.render('admin/connection-settings', {
       title: 'Setting Mikrotik',
@@ -132,8 +219,6 @@ router.get('/connection-settings', adminAuth, async (req, res) => {
       vpnServerReady,
       wgServerReady,
       l2tpServerReady,
-      vpnTunnelIp,
-      isolirPagePort,
       tenantPrefix,
       tenantId,
       tenantName: req.tenant?.name || tenantPrefix,
@@ -229,6 +314,190 @@ router.post('/connection-settings/vpn/devices/:id/delete', adminAuth, async (req
   } catch (err) {
     console.error('[connection-settings] delete vpn:', err);
     res.status(400).json({ success: false, message: err.message || 'Gagal hapus perangkat VPN' });
+  }
+});
+
+router.get('/connection-settings/mikrotik-pppoe-stats', adminAuth, async (req, res) => {
+  try {
+    const t = tenantSqlFromRequest(req);
+    const routers = await loadTenantRouters(t);
+    const stats = await Promise.all(
+      routers.map((r) =>
+        withRouterTimeout(
+          (async () => {
+            try {
+              const { secrets, active } = await listRouterPppSecrets(r);
+              return {
+                id: r.id,
+                name: r.name,
+                nas_ip: r.nas_ip,
+                secret_count: secrets.length,
+                active_count: active.length,
+                ok: true,
+                error: null,
+              };
+            } catch (err) {
+              return {
+                id: r.id,
+                name: r.name,
+                nas_ip: r.nas_ip,
+                secret_count: null,
+                active_count: null,
+                ok: false,
+                error: err.message || 'Gagal query MikroTik',
+              };
+            }
+          })(),
+          r.name || r.nas_ip || `router-${r.id}`
+        ).catch((err) => ({
+          id: r.id,
+          name: r.name,
+          nas_ip: r.nas_ip,
+          secret_count: null,
+          active_count: null,
+          ok: false,
+          error: err.message || 'Timeout query MikroTik',
+        }))
+      )
+    );
+    res.json({ success: true, routers: stats });
+  } catch (err) {
+    console.error('[connection-settings] pppoe stats:', err);
+    res.status(500).json({ success: false, message: err.message || 'Gagal memuat status PPPoE' });
+  }
+});
+
+router.get('/connection-settings/routers/:id/pppoe-not-in-radius', adminAuth, async (req, res) => {
+  try {
+    const t = tenantSqlFromRequest(req);
+    const routerRow = await loadTenantRouterById(t, req.params.id);
+    if (!routerRow) return res.status(404).json({ success: false, message: 'Router tidak ditemukan.' });
+
+    const [{ secrets }, radiusSet] = await Promise.all([
+      withRouterTimeout(listRouterPppSecrets(routerRow), routerRow.name || routerRow.nas_ip),
+      getRadiusPasswordUsernameSet(),
+    ]);
+
+    const missing = [];
+    const seen = new Set();
+    for (const sec of secrets) {
+      const name = secretName(sec);
+      if (!name) continue;
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (radiusSet.has(key)) continue;
+      const password = sec.password != null ? String(sec.password) : '';
+      missing.push({
+        name,
+        profile: sec.profile != null ? String(sec.profile) : '',
+        has_password: !!password.trim(),
+        password,
+      });
+    }
+
+    res.json({
+      success: true,
+      router: { id: routerRow.id, name: routerRow.name, nas_ip: routerRow.nas_ip },
+      total_secrets: secrets.length,
+      missing_count: missing.length,
+      missing,
+    });
+  } catch (err) {
+    console.error('[connection-settings] pppoe-not-in-radius:', err);
+    res.status(500).json({ success: false, message: err.message || 'Gagal cek PPPoE vs RADIUS' });
+  }
+});
+
+router.post('/connection-settings/routers/:id/pppoe-sync-to-radius', adminAuth, async (req, res) => {
+  try {
+    const t = tenantSqlFromRequest(req);
+    const routerRow = await loadTenantRouterById(t, req.params.id);
+    if (!routerRow) return res.status(404).json({ success: false, message: 'Router tidak ditemukan.' });
+
+    const requested = Array.isArray(req.body?.usernames) ? req.body.usernames : [];
+    const want = new Set(
+      requested.map((u) => String(u || '').trim().toLowerCase()).filter(Boolean)
+    );
+    if (!want.size) {
+      return res.status(400).json({ success: false, message: 'Pilih minimal satu username.' });
+    }
+
+    const [{ secrets }, radiusSet] = await Promise.all([
+      withRouterTimeout(listRouterPppSecrets(routerRow), routerRow.name || routerRow.nas_ip),
+      getRadiusPasswordUsernameSet(),
+    ]);
+
+    const byName = new Map();
+    for (const sec of secrets) {
+      const name = secretName(sec);
+      if (!name) continue;
+      const key = name.toLowerCase();
+      if (!byName.has(key)) byName.set(key, sec);
+    }
+
+    const results = [];
+    for (const key of want) {
+      const sec = byName.get(key);
+      if (!sec) {
+        results.push({ username: key, success: false, message: 'Secret tidak ada di MikroTik ini' });
+        continue;
+      }
+      const username = secretName(sec);
+      if (radiusSet.has(key)) {
+        results.push({ username, success: true, skipped: true, message: 'Sudah ada di RADIUS' });
+        continue;
+      }
+      const password = sec.password != null ? String(sec.password) : '';
+      if (!password.trim()) {
+        results.push({ username, success: false, message: 'Password secret kosong, dilewati' });
+        continue;
+      }
+      const profile = sec.profile != null ? String(sec.profile).trim() : '';
+      try {
+        await claimTenantPppoeUsername(username);
+      } catch (claimErr) {
+        results.push({ username, success: false, message: claimErr.message || 'Gagal klaim username' });
+        continue;
+      }
+      let added = await addPPPoEUserRadius({
+        username,
+        password,
+        profile: profile || null,
+      });
+      let profileWarning = null;
+      if (!added.success && added.error === 'unknown_profile') {
+        profileWarning = added.message;
+        added = await addPPPoEUserRadius({ username, password, profile: null });
+      }
+      if (!added.success) {
+        await releaseTenantPppoeUsername(username).catch(() => {});
+        results.push({ username, success: false, message: added.message || 'Gagal tambah ke RADIUS' });
+        continue;
+      }
+      radiusSet.add(key);
+      results.push({
+        username,
+        success: true,
+        message: profileWarning
+          ? `Ditambahkan ke RADIUS tanpa profil (${profileWarning})`
+          : added.message || 'Ditambahkan ke RADIUS',
+        profile_warning: profileWarning || undefined,
+      });
+    }
+
+    const synced = results.filter((r) => r.success && !r.skipped).length;
+    const failed = results.filter((r) => !r.success).length;
+    res.json({
+      success: failed === 0,
+      message: `Sync selesai: ${synced} ditambahkan, ${failed} gagal.`,
+      synced,
+      failed,
+      results,
+    });
+  } catch (err) {
+    console.error('[connection-settings] pppoe-sync-to-radius:', err);
+    res.status(500).json({ success: false, message: err.message || 'Gagal sync PPPoE ke RADIUS' });
   }
 });
 

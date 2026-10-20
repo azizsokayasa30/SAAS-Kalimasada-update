@@ -36,11 +36,167 @@ async function ensureFinanceSchema() {
             }
         }
     }
+    await ensureManualInvoiceColumns();
     schemaReady = true;
+}
+
+async function ensureManualInvoiceColumns() {
+    const statements = [
+        "ALTER TABLE platform_tenant_invoices ADD COLUMN pokok_amount REAL NOT NULL DEFAULT 0",
+        "ALTER TABLE platform_tenant_invoices ADD COLUMN bhp_amount REAL NOT NULL DEFAULT 0",
+        "ALTER TABLE platform_tenant_invoices ADD COLUMN uso_amount REAL NOT NULL DEFAULT 0",
+        "ALTER TABLE platform_tenant_invoices ADD COLUMN total_amount REAL NOT NULL DEFAULT 0",
+        "ALTER TABLE platform_tenant_invoices ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'",
+        "ALTER TABLE platform_tenant_invoice_items ADD COLUMN qty REAL NOT NULL DEFAULT 1",
+        "ALTER TABLE platform_tenant_invoice_items ADD COLUMN unit_price REAL NOT NULL DEFAULT 0",
+    ];
+    for (const stmt of statements) {
+        try {
+            await tenantStore.dbRun(stmt);
+        } catch (err) {
+            const msg = String(err.message || '').toLowerCase();
+            if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+                console.warn('[platformFinance] column migrate warn:', err.message);
+            }
+        }
+    }
 }
 
 function roundMoney(n) {
     return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+function parseMoney(value) {
+    const raw = String(value ?? '').trim().replace(/[^\d,.-]/g, '');
+    if (!raw) return 0;
+    if (raw.includes(',')) {
+        return roundMoney(Number(raw.replace(/\./g, '').replace(',', '.')) || 0);
+    }
+    if (/^\d{1,3}(\.\d{3})+$/.test(raw)) {
+        return roundMoney(Number(raw.replace(/\./g, '')) || 0);
+    }
+    return roundMoney(Number(raw) || 0);
+}
+
+function parseDecimal(value) {
+    const raw = String(value ?? '').trim().replace(/[^\d,.-]/g, '');
+    if (!raw) return 0;
+    if (raw.includes(',')) {
+        return Number(raw.replace(/\./g, '').replace(',', '.')) || 0;
+    }
+    return Number(raw) || 0;
+}
+
+const MANUAL_INVOICE_ITEM_TYPES = [
+    { type: 'pokok', label: 'Pokok', calc: 'qty_price' },
+    { type: 'tax', label: 'Pajak', calc: 'percent_of_pokok' },
+    { type: 'management_fee', label: 'Management Fee', calc: 'qty_price' },
+];
+
+function toItemList(rawItems) {
+    if (Array.isArray(rawItems)) return rawItems;
+    if (rawItems && typeof rawItems === 'object') {
+        return Object.keys(rawItems)
+            .sort((a, b) => Number(a) - Number(b))
+            .map((key) => rawItems[key]);
+    }
+    return [];
+}
+
+function normalizeManualInvoiceItems(rawItems) {
+    const list = toItemList(rawItems);
+    const allowed = new Set(['pokok', 'tax', 'bhp', 'uso', 'management_fee']);
+    const pokokItems = [];
+    const extraRaw = [];
+
+    for (const raw of list) {
+        if (!raw || typeof raw !== 'object') continue;
+        const itemType = allowed.has(String(raw.item_type || '').trim())
+            ? String(raw.item_type).trim()
+            : 'pokok';
+        if (itemType === 'pokok') {
+            const qty = parseDecimal(raw.qty);
+            const unitPrice = parseMoney(raw.unit_price);
+            let amount = parseMoney(raw.amount);
+            const safeQty = qty > 0 ? qty : 1;
+            if (!amount && safeQty && unitPrice) amount = roundMoney(safeQty * unitPrice);
+            if (amount <= 0) continue;
+            pokokItems.push({
+                item_type: 'pokok',
+                description: String(raw.description || 'Pokok').trim() || 'Pokok',
+                qty: safeQty,
+                unit_price: unitPrice > 0 ? unitPrice : (safeQty ? roundMoney(amount / safeQty) : amount),
+                amount,
+            });
+        } else {
+            extraRaw.push({ ...raw, item_type: itemType });
+        }
+    }
+
+    const pokokTotal = roundMoney(pokokItems.reduce((sum, item) => sum + item.amount, 0));
+    const items = [...pokokItems];
+
+    for (const raw of extraRaw) {
+        if (raw.item_type === 'tax' || raw.item_type === 'bhp' || raw.item_type === 'uso') {
+            const percent = parseDecimal(raw.qty);
+            if (percent <= 0 || pokokTotal <= 0) continue;
+            const amount = roundMoney(pokokTotal * percent / 100);
+            if (amount <= 0) continue;
+            const percentLabel = String(percent).replace('.', ',');
+            items.push({
+                item_type: 'tax',
+                description: `Pajak (${percentLabel}%)`,
+                qty: percent,
+                unit_price: pokokTotal,
+                amount,
+            });
+        } else if (raw.item_type === 'management_fee') {
+            const qty = parseDecimal(raw.qty);
+            const unitPrice = parseMoney(raw.unit_price);
+            let amount = parseMoney(raw.amount);
+            const safeQty = qty > 0 ? qty : 1;
+            if (!amount && safeQty && unitPrice) amount = roundMoney(safeQty * unitPrice);
+            if (amount <= 0) continue;
+            items.push({
+                item_type: 'management_fee',
+                description: String(raw.description || 'Management Fee').trim() || 'Management Fee',
+                qty: safeQty,
+                unit_price: unitPrice > 0 ? unitPrice : (safeQty ? roundMoney(amount / safeQty) : amount),
+                amount,
+            });
+        }
+    }
+    return items;
+}
+
+function summarizeManualInvoiceItems(items) {
+    const totals = {
+        pokok_amount: 0,
+        tax_amount: 0,
+        bhp_amount: 0,
+        uso_amount: 0,
+        management_fee_amount: 0,
+        total_amount: 0,
+    };
+    for (const item of items) {
+        totals.total_amount += item.amount;
+        if (item.item_type === 'tax' || item.item_type === 'bhp' || item.item_type === 'uso') {
+            totals.tax_amount += item.amount;
+        } else if (item.item_type === 'management_fee') {
+            totals.management_fee_amount += item.amount;
+        } else {
+            totals.pokok_amount += item.amount;
+        }
+    }
+    return {
+        pokok_amount: roundMoney(totals.pokok_amount),
+        tax_amount: roundMoney(totals.tax_amount),
+        bhp_amount: 0,
+        uso_amount: 0,
+        management_fee_amount: roundMoney(totals.management_fee_amount),
+        total_amount: roundMoney(totals.total_amount),
+        bhp_uso_amount: 0,
+    };
 }
 
 function defaultDateRange(filters = {}) {
@@ -237,6 +393,80 @@ async function getTenantFinancialSummary(filters = {}) {
     });
 }
 
+function invoiceResolvedPaymentMethodExpr() {
+    return `LOWER(TRIM(COALESCE(
+        NULLIF(TRIM(COALESCE(i.payment_method, '')), ''),
+        (SELECT TRIM(p.payment_method) FROM payments p WHERE p.invoice_id = i.id ORDER BY p.id DESC LIMIT 1),
+        ''
+    )))`;
+}
+
+function paymentMethodTransferExpr(pm) {
+    return `(${pm} IN ('transfer', 'transfer bank', 'transfer_bank') OR ${pm} LIKE '%transfer%')`;
+}
+
+function paymentMethodPgExpr(pm) {
+    return `(${pm} IN ('online', 'gateway', 'pg', 'payment gateway', 'payment_gateway')
+        OR ${pm} LIKE '%online%'
+        OR ${pm} LIKE '%gateway%'
+        OR ${pm} LIKE '%qris%'
+        OR ${pm} LIKE '%midtrans%'
+        OR ${pm} LIKE '%xendit%'
+        OR ${pm} LIKE '%tripay%'
+        OR ${pm} LIKE '%duitku%'
+        OR ${pm} LIKE '%ewallet%'
+        OR ${pm} LIKE '%e-wallet%'
+        OR ${pm} LIKE '%e_wallet%')`;
+}
+
+async function getTenantPaymentRecap(filters = {}) {
+    await ensureFinanceSchema();
+    const { startDate, endDate } = defaultDateRange(filters);
+    const pm = invoiceResolvedPaymentMethodExpr();
+    const transferExpr = paymentMethodTransferExpr(pm);
+    const pgExpr = paymentMethodPgExpr(pm);
+
+    const rows = await tenantStore.dbAll(
+        `SELECT
+            t.id AS tenant_id,
+            t.name AS tenant_name,
+            t.subdomain,
+            t.owner_name,
+            COALESCE(SUM(CASE WHEN i.status IN ('paid', 'unpaid') THEN i.amount ELSE 0 END), 0) AS total_tagihan,
+            COALESCE(SUM(CASE WHEN i.status = 'unpaid' THEN i.amount ELSE 0 END), 0) AS unpaid_amount,
+            COALESCE(SUM(CASE WHEN i.status = 'paid' THEN i.amount ELSE 0 END), 0) AS paid_amount,
+            COALESCE(SUM(CASE WHEN i.status = 'paid' AND ${transferExpr} THEN i.amount ELSE 0 END), 0) AS paid_transfer,
+            COALESCE(SUM(CASE WHEN i.status = 'paid' AND ${pgExpr} THEN i.amount ELSE 0 END), 0) AS paid_pg,
+            COALESCE(SUM(CASE
+                WHEN i.status = 'paid' AND NOT ${transferExpr} AND NOT ${pgExpr} THEN i.amount
+                ELSE 0
+            END), 0) AS paid_cash
+         FROM tenants t
+         LEFT JOIN invoices i
+            ON i.tenant_id = t.id
+           AND ${voucherExclusionClause('i')}
+           AND DATE(i.created_at) BETWEEN ? AND ?
+         WHERE t.deleted_at IS NULL
+           AND COALESCE(t.is_master, 0) = 0
+         GROUP BY t.id
+         ORDER BY t.name COLLATE NOCASE ASC, t.id ASC`,
+        [startDate, endDate]
+    );
+
+    return rows.map((row) => ({
+        tenant_id: row.tenant_id,
+        tenant_name: row.tenant_name,
+        subdomain: row.subdomain,
+        owner_name: row.owner_name,
+        total_tagihan: roundMoney(row.total_tagihan),
+        unpaid_amount: roundMoney(row.unpaid_amount),
+        paid_amount: roundMoney(row.paid_amount),
+        paid_cash: roundMoney(row.paid_cash),
+        paid_transfer: roundMoney(row.paid_transfer),
+        paid_pg: roundMoney(row.paid_pg),
+    }));
+}
+
 async function getTaxFeeBreakdownByMonth(filters = {}) {
     await ensureFinanceSchema();
     const settings = await getFinanceSettings();
@@ -389,6 +619,142 @@ async function generateTenantInvoice(tenantId, periodStart, periodEnd, createdBy
     }
 
     return getTenantInvoice(invoiceId);
+}
+
+async function createManualTenantInvoice(data = {}, createdBy = null) {
+    await ensureFinanceSchema();
+    const tenantId = Number(data.tenant_id);
+    if (!tenantId) throw new Error('Tenant wajib dipilih.');
+
+    const tenant = await tenantStore.getTenantById(tenantId);
+    if (!tenant) throw new Error('Tenant tidak ditemukan.');
+    if (tenant.is_master) throw new Error('Invoice tidak bisa dibuat untuk tenant master.');
+
+    const range = defaultDateRange({
+        startDate: data.period_start,
+        endDate: data.period_end,
+        month: data.month,
+        year: data.year,
+    });
+    const periodStart = data.period_start || range.startDate;
+    const periodEnd = data.period_end || range.endDate;
+    if (!periodStart || !periodEnd) throw new Error('Periode invoice wajib diisi.');
+
+    const items = normalizeManualInvoiceItems(data.items);
+    if (!items.length) throw new Error('Minimal satu item invoice dengan jumlah lebih dari 0.');
+
+    const existing = await tenantStore.dbGet(
+        `SELECT id, invoice_number FROM platform_tenant_invoices
+         WHERE tenant_id = ? AND period_start = ? AND period_end = ?
+         ORDER BY id DESC LIMIT 1`,
+        [tenantId, periodStart, periodEnd]
+    );
+    if (existing) {
+        throw new Error(`Tenant ini sudah memiliki invoice ${existing.invoice_number} untuk periode tersebut.`);
+    }
+
+    const totals = summarizeManualInvoiceItems(items);
+    const invoiceNumber = await generateInvoiceNumber();
+    const ownerSnapshot = JSON.stringify({
+        owner_name: tenant.owner_name,
+        owner_email: tenant.owner_email,
+        owner_phone: tenant.owner_phone,
+        tenant_name: tenant.name,
+    });
+
+    const insert = await tenantStore.dbRun(
+        `INSERT INTO platform_tenant_invoices (
+            invoice_number, tenant_id, period_start, period_end,
+            gross_amount, tax_amount, bhp_uso_amount, management_fee_amount, net_amount,
+            pokok_amount, bhp_amount, uso_amount, total_amount, source,
+            status, notes, owner_snapshot, created_by
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', 'draft', ?, ?, ?)`,
+        [
+            invoiceNumber,
+            tenantId,
+            periodStart,
+            periodEnd,
+            totals.pokok_amount,
+            totals.tax_amount,
+            totals.bhp_uso_amount,
+            totals.management_fee_amount,
+            totals.total_amount,
+            totals.pokok_amount,
+            totals.bhp_amount,
+            totals.uso_amount,
+            totals.total_amount,
+            data.notes ? String(data.notes).trim() : null,
+            ownerSnapshot,
+            createdBy,
+        ]
+    );
+
+    const invoiceId = insert.id;
+    for (const item of items) {
+        await tenantStore.dbRun(
+            `INSERT INTO platform_tenant_invoice_items (invoice_id, description, amount, item_type, qty, unit_price)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [invoiceId, item.description, item.amount, item.item_type, item.qty, item.unit_price]
+        );
+    }
+
+    return getTenantInvoice(invoiceId);
+}
+
+async function listTenantInvoiceOverview(filters = {}) {
+    await ensureFinanceSchema();
+    const { startDate, endDate } = defaultDateRange(filters);
+    const rows = await tenantStore.dbAll(
+        `SELECT
+            t.id AS tenant_id,
+            t.name AS tenant_name,
+            t.owner_name,
+            t.subdomain,
+            CASE WHEN inv.id IS NOT NULL THEN 1 ELSE 0 END AS has_invoice,
+            inv.id AS invoice_id,
+            inv.invoice_number,
+            inv.status,
+            COALESCE(NULLIF(inv.pokok_amount, 0), COALESCE(inv.gross_amount, 0), 0) AS pokok_amount,
+            (
+                COALESCE(inv.tax_amount, 0)
+                + COALESCE(inv.bhp_amount, 0)
+                + COALESCE(inv.uso_amount, 0)
+            ) AS tax_amount,
+            COALESCE(inv.management_fee_amount, 0) AS management_fee_amount,
+            COALESCE(
+                NULLIF(inv.total_amount, 0),
+                NULLIF(inv.net_amount, 0),
+                COALESCE(NULLIF(inv.pokok_amount, 0), COALESCE(inv.gross_amount, 0), 0)
+                    + COALESCE(inv.tax_amount, 0)
+                    + COALESCE(inv.bhp_amount, 0)
+                    + COALESCE(inv.uso_amount, 0)
+                    + COALESCE(inv.management_fee_amount, 0)
+            ) AS total_amount
+         FROM tenants t
+         LEFT JOIN platform_tenant_invoices inv
+            ON inv.id = (
+                SELECT pti.id
+                FROM platform_tenant_invoices pti
+                WHERE pti.tenant_id = t.id
+                  AND DATE(pti.period_start) = DATE(?)
+                  AND DATE(pti.period_end) = DATE(?)
+                ORDER BY pti.id DESC
+                LIMIT 1
+            )
+         WHERE t.deleted_at IS NULL
+           AND COALESCE(t.is_master, 0) = 0
+         ORDER BY t.name COLLATE NOCASE ASC, t.id ASC`,
+        [startDate, endDate]
+    );
+
+    return rows.map((row) => ({
+        ...row,
+        has_invoice: Number(row.has_invoice) === 1,
+        pokok_amount: roundMoney(row.pokok_amount),
+        tax_amount: roundMoney(row.tax_amount),
+        management_fee_amount: roundMoney(row.management_fee_amount),
+        total_amount: roundMoney(row.total_amount),
+    }));
 }
 
 async function listTenantInvoices(filters = {}) {
@@ -628,8 +994,12 @@ module.exports = {
     defaultDateRange,
     getGatewayPayments,
     getTenantFinancialSummary,
+    getTenantPaymentRecap,
     getTaxFeeBreakdownByMonth,
+    MANUAL_INVOICE_ITEM_TYPES,
     generateTenantInvoice,
+    createManualTenantInvoice,
+    listTenantInvoiceOverview,
     listTenantInvoices,
     getTenantInvoice,
     updateTenantInvoiceStatus,

@@ -56,6 +56,7 @@ const RESERVED_SUBDOMAINS = new Set([
     'manage', 'management', 'mobile', 'api', 'www', 'admin', 'mail', 'ftp', 'cdn', 'static', 'app', 'billing',
     '__master__',
 ]);
+const MASTER_ONLY_SUBDOMAINS = new Set(['billing', '__master__']);
 
 function isReservedSubdomain(subdomain) {
     return RESERVED_SUBDOMAINS.has(String(subdomain || '').toLowerCase());
@@ -291,7 +292,65 @@ async function getMasterTenant() {
     return parseTenant(row);
 }
 
-const MASTER_TENANT_SUBDOMAIN = '__master__';
+const MASTER_TENANT_SUBDOMAIN = 'billing';
+
+async function migrateMasterTenantSubdomain() {
+    const master = await getMasterTenant();
+    if (!master) return null;
+    if (String(master.subdomain || '').toLowerCase() === MASTER_TENANT_SUBDOMAIN) {
+        return master;
+    }
+    const taken = await dbGet(
+        `SELECT id FROM tenants WHERE subdomain = ? AND id != ? AND deleted_at IS NULL`,
+        [MASTER_TENANT_SUBDOMAIN, master.id]
+    );
+    if (taken) {
+        console.warn('[tenantStore] subdomain billing sudah dipakai tenant lain — skip migrate master');
+        return master;
+    }
+    await dbRun(
+        `UPDATE tenants SET subdomain = ?, slug = ?, updated_at = datetime('now','localtime') WHERE id = ?`,
+        [MASTER_TENANT_SUBDOMAIN, MASTER_TENANT_SUBDOMAIN, master.id]
+    );
+    console.log(`[tenantStore] master tenant #${master.id} subdomain → ${MASTER_TENANT_SUBDOMAIN}`);
+    return getMasterTenant();
+}
+
+async function ensureMasterTenantLoginSettings() {
+    const master = await getMasterTenant();
+    if (!master) return null;
+    const current = master.settings || {};
+    if (current.admin_username && current.admin_password) {
+        if (current.is_master_parent && current.auto_suspension_enabled === false) {
+            return master;
+        }
+    }
+    const creds = resolveAdminCredentials(
+        {
+            admin_username: current.admin_username || 'admin',
+            admin_password: current.admin_password,
+        },
+        current
+    );
+    let full = {
+        ...current,
+        ...creds,
+        is_master_parent: true,
+        auto_suspension_enabled: false,
+    };
+    try {
+        const { getFullSettingsForTenantId } = require('./tenantSettingsManager');
+        const merged = await getFullSettingsForTenantId(master.id);
+        full = {
+            ...merged,
+            ...creds,
+            is_master_parent: true,
+            auto_suspension_enabled: false,
+        };
+    } catch (_) { /* keep compact settings */ }
+    await updateTenantSettings(master.id, full);
+    return getMasterTenant();
+}
 
 async function ensureMasterTenant(data) {
     const existing = await getMasterTenant();
@@ -299,12 +358,15 @@ async function ensureMasterTenant(data) {
         throw new Error('Master tenant sudah ada.');
     }
 
-    const { DEFAULT_COMPANY_HEADER } = require('../companyBranding');
-    const settings = {
-        company_header: DEFAULT_COMPANY_HEADER,
-        company_name: DEFAULT_COMPANY_HEADER,
-        is_master_parent: true,
-    };
+    const settings = defaultTenantSettings({
+        name: data.name,
+        owner_email: data.owner_email,
+        owner_phone: data.owner_phone,
+        admin_username: data.admin_username || 'admin',
+        admin_password: data.admin_password,
+    });
+    settings.is_master_parent = true;
+    settings.auto_suspension_enabled = false;
 
     const insert = await dbRun(
         `INSERT INTO tenants (
@@ -864,6 +926,18 @@ async function initPlatform() {
     await ensurePlatformSchema();
     await ensureMasterTenantSchema();
     try {
+        await migrateMasterTenantSubdomain();
+        await ensureMasterTenantLoginSettings();
+    } catch (err) {
+        console.warn('[tenantStore] master tenant subdomain/login:', err.message);
+    }
+    try {
+        const { ensureMasterMirrorSchema } = require('./masterCustomerCopyService');
+        await ensureMasterMirrorSchema();
+    } catch (err) {
+        console.warn('[tenantStore] master customer mirror schema:', err.message);
+    }
+    try {
         const { ensureMasterPackageSchema } = require('./masterPackageService');
         await ensureMasterPackageSchema();
     } catch (err) {
@@ -907,7 +981,10 @@ module.exports = {
     listOperationalTenants,
     getMasterTenant,
     ensureMasterTenant,
+    migrateMasterTenantSubdomain,
+    ensureMasterTenantLoginSettings,
     MASTER_TENANT_SUBDOMAIN,
+    MASTER_ONLY_SUBDOMAINS,
     getTenantById,
     getTenantBySubdomain,
     getTenantStats,

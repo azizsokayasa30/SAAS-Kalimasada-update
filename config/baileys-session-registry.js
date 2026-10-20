@@ -11,6 +11,7 @@ const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const { getSetting } = require('./settingsManager');
 const logger = require('./logger');
+const { getMessage, attachSentMessageStore } = require('./baileys-sent-message-store');
 const {
     getBaseSessionPath,
     sessionPathFor,
@@ -575,9 +576,13 @@ async function connect(tenantId = null) {
             markOnlineOnConnect: false,
             generateHighQualityLinkPreview: false,
             version,
-            printQRInTerminal: false
+            printQRInTerminal: false,
+            // Wajib: tanpa ini retry dekripsi gagal dan bubble tetap "Menunggu pesan ini"
+            getMessage
         });
 
+        sock.sessionDir = entry.sessionDir;
+        attachSentMessageStore(sock);
         entry.sock = sock;
 
         sock.ev.on('creds.update', saveCreds);

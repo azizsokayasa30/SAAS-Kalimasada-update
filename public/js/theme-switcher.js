@@ -25,7 +25,7 @@
       localStorage.setItem(STORAGE_KEY, currentTheme);
   
       // Sync all UI toggles
-      syncToggleUI();
+      syncToggleUI(true);
     };
   
     window.getCurrentTheme = function() {
@@ -33,7 +33,7 @@
     };
   
     // 3. UI Synchronization
-    function syncToggleUI() {
+    function syncToggleUI(animate) {
       // Header Icon
       const headerIcon = document.getElementById('headerThemeIcon');
       if (headerIcon) {
@@ -46,8 +46,11 @@
       
       if (sidebarIcon) {
         sidebarIcon.className = currentTheme === 'dark' ? 'bi bi-moon-fill' : 'bi bi-sun-fill';
-        sidebarIcon.style.transform = 'rotate(360deg) scale(1.3)';
-        setTimeout(() => { sidebarIcon.style.transform = ''; }, 400);
+        sidebarIcon.style.transform = '';
+        if (animate) {
+          sidebarIcon.style.transform = 'rotate(360deg) scale(1.3)';
+          setTimeout(() => { sidebarIcon.style.transform = ''; }, 400);
+        }
       }
       
       if (sidebarLabel) {
@@ -57,7 +60,7 @@
   
     // 4. Bind Listeners on DOMContentLoaded
     document.addEventListener('DOMContentLoaded', () => {
-      syncToggleUI();
+      syncToggleUI(false);
       
       const headerBtn = document.getElementById('btnHeaderThemeToggle');
       if (headerBtn) {
@@ -81,7 +84,7 @@
       if (e.key === STORAGE_KEY && e.newValue) {
         currentTheme = e.newValue;
         document.documentElement.setAttribute('data-theme', currentTheme);
-        syncToggleUI();
+        syncToggleUI(false);
       }
     });
   })();

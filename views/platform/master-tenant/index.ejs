@@ -1,6 +1,12 @@
 <%
 const children = overview.children || [];
 const summary = overview.summary || { customers: {}, invoices: {}, routers: 0 };
+const statsFilters = typeof filters !== 'undefined' && filters ? filters : (overview.period || {});
+const selectedMonth = statsFilters.month != null ? statsFilters.month : (new Date().getMonth() + 1);
+const selectedYear = statsFilters.year != null ? Number(statsFilters.year) : new Date().getFullYear();
+const periodLabel = statsFilters.label || (overview.period && overview.period.label) || '';
+const monthNamesId = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+const cyFilter = new Date().getFullYear();
 %>
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active: 'master-tenant', adminName }) %>
@@ -8,9 +14,14 @@ const summary = overview.summary || { customers: {}, invoices: {}, routers: 0 };
   <div class="km-topbar">
     <div>
       <h2>Master Tenant</h2>
-      <p class="km-subtitle">Parent read-only — ringkasan agregat semua tenant child</p>
+      <p class="km-subtitle">Tenant manajemen — salin pelanggan terpilih, lalu kelola dummy di billing.kalimasada-app.com</p>
     </div>
-    <span class="km-master-badge"><i class="bi bi-diagram-3 me-1"></i> Parent</span>
+    <div class="d-flex gap-2 align-items-center">
+      <a href="<%= typeof tenantLoginUrl !== 'undefined' ? tenantLoginUrl : '#' %>" class="btn btn-km-primary btn-sm" target="_blank" rel="noopener">
+        <i class="bi bi-box-arrow-up-right me-1"></i> Buka Master Tenant
+      </a>
+      <span class="km-master-badge"><i class="bi bi-diagram-3 me-1"></i> Parent</span>
+    </div>
   </div>
 
   <% if (flash && flash.success === 'created') { %>
@@ -24,6 +35,13 @@ const summary = overview.summary || { customers: {}, invoices: {}, routers: 0 };
         <h3 class="km-master-info__name mb-1"><%= master.name %></h3>
         <p class="km-subtitle mb-0">
           <%= master.owner_name %> · <%= master.owner_email %> · <%= master.owner_phone %>
+        </p>
+        <p class="km-subtitle mb-0 mt-1">
+          Login: <code><%= typeof tenantHostname !== 'undefined' ? tenantHostname : 'billing.kalimasada-app.com' %></code>
+          · user <code><%= (master.settings && master.settings.admin_username) ? master.settings.admin_username : 'admin' %></code>
+          <% if (master.settings && master.settings.admin_password) { %>
+            · password <code><%= master.settings.admin_password %></code>
+          <% } %>
         </p>
       </div>
       <div class="text-end">
@@ -39,6 +57,29 @@ const summary = overview.summary || { customers: {}, invoices: {}, routers: 0 };
     </div>
   </div>
 
+  <div class="km-card km-card--toolbar mb-3">
+    <form method="GET" action="/management/master-tenant" class="km-tenant-toolbar">
+      <div class="km-tenant-toolbar__filters">
+        <select name="month" class="form-select form-select-sm" aria-label="Bulan" title="Bulan">
+          <% for (let m = 1; m <= 12; m++) { %>
+            <option value="<%= m %>" <%= String(selectedMonth) === String(m) ? 'selected' : '' %>><%= monthNamesId[m - 1] %></option>
+          <% } %>
+        </select>
+        <select name="year" class="form-select form-select-sm" aria-label="Tahun" title="Tahun">
+          <% for (let y = cyFilter - 3; y <= cyFilter + 1; y++) { %>
+            <option value="<%= y %>" <%= selectedYear === y ? 'selected' : '' %>><%= y %></option>
+          <% } %>
+        </select>
+        <button type="submit" class="btn btn-km-primary btn-sm" title="Filter tagihan per bulan">
+          <i class="bi bi-funnel"></i><span class="km-tenant-toolbar__btn-text"> Filter</span>
+        </button>
+        <% if (periodLabel) { %>
+          <span class="km-tenant-toolbar__period"><%= periodLabel %></span>
+        <% } %>
+      </div>
+    </form>
+  </div>
+
   <div class="km-card km-card--flush">
     <div class="table-responsive">
       <table class="table table-hover align-middle mb-0 km-tenant-table">
@@ -49,8 +90,8 @@ const summary = overview.summary || { customers: {}, invoices: {}, routers: 0 };
             <th rowspan="2">Subdomain</th>
             <th rowspan="2">Owner</th>
             <th colspan="4" class="km-th-group km-th-group--customers">Pelanggan</th>
-            <th colspan="4" class="km-th-group km-th-group--invoices">Tagihan</th>
-            <th rowspan="2" class="text-end km-tenant-table__actions-col">Detail</th>
+            <th colspan="4" class="km-th-group km-th-group--invoices">Tagihan <span class="fw-normal" style="opacity:.75;font-size:.75em">(<%= periodLabel %>)</span></th>
+            <th rowspan="2" class="text-end km-tenant-table__actions-col km-tenant-table__actions-col--pick">Aksi</th>
           </tr>
           <tr class="km-tenant-table__head-sub">
             <th class="km-metric-th">Total</th>
@@ -88,8 +129,8 @@ const summary = overview.summary || { customers: {}, invoices: {}, routers: 0 };
               <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning"><%= formatRupiah(inv.unpaid) %></td>
               <td class="km-metric-cell km-metric-cell--money km-metric-cell--danger km-th-group--invoices-end"><%= formatRupiah(inv.isolir) %></td>
               <td class="text-end">
-                <a href="/management/master-tenant/children/<%= t.id %>" class="btn btn-sm btn-outline-secondary" title="Lihat detail read-only">
-                  <i class="bi bi-eye"></i>
+                <a href="/management/master-tenant/children/<%= t.id %>?month=<%= selectedMonth %>&amp;year=<%= selectedYear %>" class="btn btn-sm btn-primary text-nowrap" title="Pilih pelanggan">
+                  PILIH PELANGGAN
                 </a>
               </td>
             </tr>
@@ -104,7 +145,7 @@ const summary = overview.summary || { customers: {}, invoices: {}, routers: 0 };
     <div class="km-report-summary__header">
       <div>
         <h5 class="km-report-summary__title">Ringkasan Agregat Master</h5>
-        <p class="km-report-summary__subtitle">Total dari <%= overview.childCount %> tenant child (read-only)</p>
+        <p class="km-report-summary__subtitle">Total dari <%= overview.childCount %> tenant child · tagihan periode <%= periodLabel %> (read-only)</p>
       </div>
       <span class="km-report-summary__badge"><%= overview.childCount %> child</span>
     </div>

@@ -20,6 +20,8 @@ const axios = require('axios');
 const fs = require('fs');
 const pino = require('pino');
 const logger = require('./logger');
+const { getMessage, attachSentMessageStore } = require('./baileys-sent-message-store');
+const { sendStableMessage } = require('./baileys-session-heal');
 const genieacsCommands = require('./genieacs-commands');
 
 const {
@@ -358,11 +360,11 @@ Powered by Alijaya Digital Network`;
 async function sendFormattedMessage(remoteJid, message, options = {}) {
     try {
         const formattedMessage = formatWithHeaderFooter(message);
-        await sock.sendMessage(remoteJid, { text: formattedMessage }, options);
+        await sendStableMessage(sock, remoteJid, { text: formattedMessage, linkPreview: null }, options);
     } catch (error) {
         console.error('Error sending formatted message:', error);
         // Fallback ke pesan tanpa format jika ada error
-        await sock.sendMessage(remoteJid, { text: message }, options);
+        await sendStableMessage(sock, remoteJid, { text: message, linkPreview: null }, options);
     }
 }
 
@@ -680,8 +682,11 @@ async function connectToWhatsApp(tenantId = null) {
             retryRequestDelayMs: 1000,
             version, // Tambahkan versi yang diambil secara dinamis
             printQRInTerminal: true, // Pastikan QR code ditampilkan
-            markOnlineOnConnect: true // Mark online saat connect
+            markOnlineOnConnect: true, // Mark online saat connect
+            getMessage
         });
+        sock.sessionDir = sessionDir;
+        attachSentMessageStore(sock);
         
         console.log('✅ [CONNECT] WhatsApp socket created, setting up event listeners...');
         

@@ -6,7 +6,7 @@ const path = require('path');
 //
 // RAM Node: --max-old-space-size membatasi heap V8 (objek JS). RSS total bisa ~heap + native;
 // max_memory_restart memicu restart PM2 jika RSS melampaui nilai ini (cegah leak membesar tanpa batas).
-// Sesuaikan angka jika traffic berat atau OOM saat import besar: naikkan bertahap (mis. 512 / 768).
+// 1024/1536: cegah restart paksa tiap beberapa jam saat banyak tenant + Baileys + MikroTik.
 module.exports = {
   apps: [
     {
@@ -17,8 +17,8 @@ module.exports = {
       exec_mode: 'fork',
       watch: false,
       autorestart: true,
-      node_args: '--max-old-space-size=400',
-      max_memory_restart: '512M',
+      node_args: '--max-old-space-size=1024',
+      max_memory_restart: '1536M',
       kill_timeout: 8000,
       env: {
         NODE_ENV: 'production',

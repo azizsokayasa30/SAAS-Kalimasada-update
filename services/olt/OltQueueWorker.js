@@ -11,7 +11,7 @@ class OltQueueWorker {
         this.interval = null;
     }
 
-    start(intervalMs = 15000) {
+    start(intervalMs = 60000) {
         if (this.interval) return;
         this.interval = setInterval(() => {
             this.processOnce().catch((err) => logger.error('[olt-worker] loop error:', err));

@@ -19,6 +19,13 @@ const {
 
 const dbPath = path.join(__dirname, '../../data/billing.db');
 const db = new sqlite3.Database(dbPath);
+db.run('PRAGMA busy_timeout = 8000');
+
+function pingInstallProgress() {
+    try {
+        require('../../config/installationJobHelpers').notifyAdminInstallProgress();
+    } catch (_) {}
+}
 
 function dbAllP(sql, params = []) {
     return new Promise((resolve, reject) => {
@@ -510,20 +517,7 @@ function filterCollectorCustomersForMobile(allMappedCustomers, statusFilter, q, 
     // sf === '' (Semua): tidak filter status / pembayaran
 
     if (qLower) {
-        customers = customers.filter((c) => {
-            const name = (c.name || '').toLowerCase();
-            const idStr = String(c.id || '');
-            const phone = (c.phone || '').toLowerCase();
-            const ppp = (c.pppoe_username || '').toString().toLowerCase();
-            const user = (c.username || '').toString().toLowerCase();
-            return (
-                name.includes(qLower) ||
-                idStr.includes(qLower) ||
-                phone.includes(qLower) ||
-                ppp.includes(qLower) ||
-                user.includes(qLower)
-            );
-        });
+        customers = customers.filter((c) => billingManager.customerRowMatchesKeyword(c, q));
     }
 
     if (areaLow) {
@@ -634,8 +628,9 @@ db.run('ALTER TABLE trouble_reports ADD COLUMN customer_id INTEGER', (err) => {
     if (err && !/duplicate column/i.test(String(err.message))) {
         logger.warn('[mobile-adapter] trouble_reports.customer_id:', err.message);
     }
-    if (!err || /duplicate column/i.test(String(err.message))) {
-        // Tiket lama: isi customer_id dari nama pelanggan yang sama (bantu app Gangguan / dashboard).
+    // Backfill hanya saat kolom baru ditambahkan. Jangan UPDATE seluruh tabel tiap proses
+    // nyala — query ini mengunci billing.db dan bikin simpan tiket SQLITE_BUSY.
+    if (!err) {
         db.run(
             `UPDATE trouble_reports SET customer_id = (
                 SELECT c.id FROM customers c
@@ -917,9 +912,13 @@ router.get('/app-update/manifest', (req, res) => {
     res.json({ success: true, source: 'server', data });
 });
 
+function isAdminLike(role) {
+    return role === 'admin' || role === 'area_manager';
+}
+
 function allowFieldOps(req, res, next) {
     const role = req.user && req.user.role;
-    if (!['technician', 'collector', 'admin'].includes(role)) {
+    if (!['technician', 'collector', 'admin', 'area_manager'].includes(role)) {
         return res.status(403).json({ success: false, message: 'Akses ditolak' });
     }
     next();
@@ -927,7 +926,7 @@ function allowFieldOps(req, res, next) {
 
 function requireTechnician(req, res, next) {
     const role = req.user && req.user.role;
-    if (role !== 'technician' && role !== 'admin') {
+    if (role !== 'technician' && !isAdminLike(role)) {
         return res.status(403).json({ success: false, message: 'Hanya teknisi' });
     }
     next();
@@ -935,10 +934,33 @@ function requireTechnician(req, res, next) {
 
 function requireAdmin(req, res, next) {
     const role = req.user && req.user.role;
-    if (role !== 'admin') {
+    if (!isAdminLike(role)) {
         return res.status(403).json({ success: false, message: 'Hanya admin' });
     }
     next();
+}
+
+/** area_ids dari JWT Manager Area (kosong = bukan area manager / full admin). */
+function getMobileAreaManagerAreaIds(req) {
+    if (!req.user || req.user.role !== 'area_manager') return null;
+    const raw = req.user.area_ids || req.user.areaIds || [];
+    if (!Array.isArray(raw)) return [];
+    return raw.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0);
+}
+
+async function assertMobileAreaManagerCustomer(req, customerId) {
+    const areaIds = getMobileAreaManagerAreaIds(req);
+    if (areaIds === null) return true;
+    const tenantId = req.user?.tenantId || req.tenantId || null;
+    return billingManager.isCustomerInAreaManagerAreas(customerId, areaIds, tenantId);
+}
+
+function applyMobileAreaManagerCustomerFilter(req, filters = {}) {
+    const areaIds = getMobileAreaManagerAreaIds(req);
+    if (areaIds !== null) {
+        filters.area_ids = areaIds;
+    }
+    return filters;
 }
 
 function mobileFinancePeriod(query = {}) {
@@ -1262,7 +1284,13 @@ router.get(['/customers/form-options', '/customers/form-option', '/customers/opt
                     used_ports: o.used_ports || 0,
                     parent_odp_id: o.parent_odp_id || null
                 })),
-                areas: (areas || []).map((a) => ({
+                areas: (areas || [])
+                    .filter((a) => {
+                        const amAreas = getMobileAreaManagerAreaIds(req);
+                        if (amAreas === null) return true;
+                        return amAreas.includes(Number(a.id));
+                    })
+                    .map((a) => ({
                     id: a.id,
                     nama_area: a.nama_area,
                     kode_area: a.kode_area || ''
@@ -1288,6 +1316,14 @@ router.post('/customers', verifyToken, allowFieldOps, async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: 'Nama, nomor telepon, area, dan paket wajib diisi'
+            });
+        }
+
+        const amAreas = getMobileAreaManagerAreaIds(req);
+        if (amAreas !== null && !amAreas.includes(areaId)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Area pelanggan harus salah satu wilayah yang ditugaskan kepada Anda'
             });
         }
 
@@ -1426,6 +1462,12 @@ router.get('/customers', verifyToken, allowFieldOps, async (req, res) => {
         where += ' AND c.tenant_id = ?';
         params.push(getTenantId());
     }
+    const areaManagerIds = getMobileAreaManagerAreaIds(req);
+    if (areaManagerIds !== null) {
+        const areaScope = billingManager._sqlCustomerInAreaIds('c', areaManagerIds);
+        where += ` AND ${areaScope.clause}`;
+        params.push(...areaScope.params);
+    }
     const role = req.user && req.user.role;
     const addInvoiceFilter = (dateExpr, invoiceStatus) => {
         where += ` AND EXISTS (
@@ -1462,7 +1504,7 @@ router.get('/customers', verifyToken, allowFieldOps, async (req, res) => {
         params.push(periodStart, periodEnd);
     };
 
-    if (adminFilter && role === 'admin') {
+    if (adminFilter && isAdminLike(role)) {
         if (adminFilter === 'all') {
             where += " AND date(COALESCE(c.join_date, c.created_at, '1970-01-01')) < date(?)";
             params.push(periodEnd);
@@ -1813,6 +1855,9 @@ router.get('/customers/:customerId/payment-history', verifyToken, allowFieldOps,
     if (!Number.isFinite(customerId) || customerId <= 0) {
         return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
     }
+    if (!(await assertMobileAreaManagerCustomer(req, customerId))) {
+        return res.status(403).json({ success: false, message: 'Pelanggan di luar wilayah Anda' });
+    }
     const tenantId = hasTenantContext() ? getTenantId() : (req.tenantId ?? null);
     try {
         // Pastikan pelanggan milik tenant aktif (cegah IDOR lintas tenant).
@@ -1851,12 +1896,15 @@ router.get('/customers/:customerId/payment-history', verifyToken, allowFieldOps,
 });
 
 router.post('/customers/:customerId/status', verifyToken, allowFieldOps, async (req, res) => {
-    if (!req.user || String(req.user.role) !== 'admin') {
+    if (!req.user || !isAdminLike(req.user && req.user.role)) {
         return res.status(403).json({ success: false, message: 'Hanya admin' });
     }
     const customerId = parseInt(String(req.params.customerId), 10);
     if (!Number.isFinite(customerId) || customerId <= 0) {
         return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
+    }
+    if (!(await assertMobileAreaManagerCustomer(req, customerId))) {
+        return res.status(403).json({ success: false, message: 'Pelanggan di luar wilayah Anda' });
     }
     const status = String((req.body || {}).status || '').trim().toLowerCase();
     if (!['active', 'isolated', 'suspended'].includes(status)) {
@@ -1890,7 +1938,7 @@ router.post('/customers/:customerId/status', verifyToken, allowFieldOps, async (
 });
 
 router.patch('/customers/:customerId/contact', verifyToken, allowFieldOps, async (req, res) => {
-    if (!req.user || String(req.user.role) !== 'admin') {
+    if (!req.user || !isAdminLike(req.user && req.user.role)) {
         return res.status(403).json({ success: false, message: 'Hanya admin' });
     }
     const customerId = parseInt(String(req.params.customerId), 10);
@@ -1915,7 +1963,7 @@ router.patch('/customers/:customerId/contact', verifyToken, allowFieldOps, async
 });
 
 router.patch('/customers/:customerId/package', verifyToken, allowFieldOps, async (req, res) => {
-    if (!req.user || String(req.user.role) !== 'admin') {
+    if (!req.user || !isAdminLike(req.user && req.user.role)) {
         return res.status(403).json({ success: false, message: 'Hanya admin' });
     }
     const customerId = parseInt(String(req.params.customerId), 10);
@@ -1999,7 +2047,7 @@ router.get('/customers/location-summary', verifyToken, allowFieldOps, async (req
     }
 });
 
-router.get('/customers/search', verifyToken, allowFieldOps, (req, res) => {
+router.get('/customers/search', verifyToken, allowFieldOps, async (req, res) => {
     const q = (req.query.q && String(req.query.q).trim()) || '';
     if (q.length < 1) {
         return res.json({ success: true, data: [] });
@@ -2008,36 +2056,19 @@ router.get('/customers/search', verifyToken, allowFieldOps, (req, res) => {
     if (tenantId == null) {
         return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
     }
-    const like = `%${q.replace(/%/g, '')}%`;
-    const searchParams = [tenantId, like, like, like, like, like, like, like];
-    const searchWhere = `c.tenant_id = ? AND (c.name LIKE ? OR c.phone LIKE ? OR CAST(c.customer_id AS TEXT) LIKE ? OR IFNULL(c.email, '') LIKE ?
-            OR IFNULL(c.area, '') LIKE ? OR IFNULL(ar.nama_area, '') LIKE ? OR IFNULL(ar.kode_area, '') LIKE ?)`;
-    db.all(
-        `SELECT c.id, c.customer_id, c.name, c.phone, c.email, c.status, c.address, c.area_id,
-                c.latitude, c.longitude,
-                c.package_id, p.name AS package_name,
-                COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, ar.kode_area, '') AS area,
-                ar.nama_area AS nama_area
-         FROM customers c
-         LEFT JOIN areas ar ON c.area_id = ar.id AND ar.tenant_id = c.tenant_id
-         LEFT JOIN packages p ON c.package_id = p.id
-         WHERE ${searchWhere}
-         ORDER BY c.name
-         LIMIT 30`,
-        searchParams,
-        (err, rows) => {
-            if (err) {
-                return res.status(500).json({ success: false, message: err.message });
+    try {
+        const rows = await billingManager.searchCustomers(q, { tenantId, limit: 100 });
+        attachAreaNamesFromMaster(rows || [], (areaErr, enriched) => {
+            if (areaErr) {
+                return res.status(500).json({ success: false, message: areaErr.message });
             }
-            attachAreaNamesFromMaster(rows || [], (areaErr, enriched) => {
-                if (areaErr) {
-                    return res.status(500).json({ success: false, message: areaErr.message });
-                }
-                const data = (enriched || []).map(mapTagSearchCustomerRow);
-                res.json({ success: true, data });
-            }, tenantId);
-        }
-    );
+            const data = (enriched || []).map(mapTagSearchCustomerRow);
+            res.json({ success: true, data });
+        }, tenantId);
+    } catch (error) {
+        logger.error('[mobile-adapter] customers/search', error);
+        return res.status(500).json({ success: false, message: error.message || 'Gagal mencari pelanggan' });
+    }
 });
 
 /** Batch resolve nama area pelanggan (fallback tag pelanggan teknisi). */
@@ -3347,7 +3378,7 @@ router.get('/dashboard', verifyToken, allowFieldOps, (req, res) => {
 });
 
 router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) => {
-    if (!req.user || String(req.user.role) !== 'admin') {
+    if (!req.user || !isAdminLike(req.user && req.user.role)) {
         return res.status(403).json({ success: false, message: 'Hanya admin' });
     }
 
@@ -3356,6 +3387,45 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
         return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
     }
     const tid = Number(tenantId);
+
+    const amAreas = getMobileAreaManagerAreaIds(req);
+    let areaFilterCu = '';
+    let areaFilterBare = '';
+    let areaFilterInvoice = '';
+    let areaFilterPayment = '';
+    const areaParamsCu = [];
+    const areaParamsBare = [];
+    const areaParamsInvoice = [];
+    const areaParamsPayment = [];
+    if (amAreas !== null) {
+        if (!amAreas.length) {
+            return res.json({
+                success: true,
+                data: {
+                    period: { month: 0, year: new Date().getFullYear(), label: '-' },
+                    total_customers: 0, total_customer_amount: 0, active_customers: 0,
+                    active_customer_amount: 0, new_customers: 0, new_customer_amount: 0,
+                    isolir_customers: 0, inactive_customers: 0, isolir_cuti_customers: 0,
+                    stopped_customers: 0, unpaid_invoices: 0, unpaid_amount: 0,
+                    paid_invoices: 0, paid_amount: 0, cash_transactions: 0, cash_amount: 0,
+                    online_transactions: 0, online_amount: 0
+                }
+            });
+        }
+        const ph = amAreas.map(() => '?').join(',');
+        areaFilterCu = ` AND cu.area_id IN (${ph})`;
+        areaFilterBare = ` AND area_id IN (${ph})`;
+        areaFilterInvoice = ` AND EXISTS (SELECT 1 FROM customers cu WHERE cu.id = i.customer_id AND cu.tenant_id = i.tenant_id AND cu.area_id IN (${ph}))`;
+        areaFilterPayment = ` AND EXISTS (
+            SELECT 1 FROM invoices i
+            INNER JOIN customers cu ON cu.id = i.customer_id AND cu.tenant_id = i.tenant_id
+            WHERE i.id = p.invoice_id AND cu.area_id IN (${ph})
+        )`;
+        areaParamsCu.push(...amAreas);
+        areaParamsBare.push(...amAreas);
+        areaParamsInvoice.push(...amAreas);
+        areaParamsPayment.push(...amAreas);
+    }
 
     const now = new Date();
     const year = Math.max(2000, parseInt(req.query.year, 10) || now.getFullYear());
@@ -3366,7 +3436,7 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
     const end = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}-01`;
     const monthNames = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
 
-    const sql = `
+    let sql = `
         SELECT
             (SELECT COUNT(*) FROM customers cu
              WHERE cu.tenant_id = ?
@@ -3497,20 +3567,33 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
              WHERE i.tenant_id = ?
                AND i.status = 'unpaid' AND date(i.due_date) < date('now', 'localtime')) AS arrears_customers
     `;
-    const params = [
-        tid, end, // total_customers
-        tid, end, // total_customer_amount
-        tid, end, // active_customers
-        tid, end, // active_customer_amount
-        tid, start, end, // new_customers
-        tid, start, end, // new_customer_amount
-        tid, end, // isolir_customers
-        tid, end, // inactive_customers
-        tid, end, // isolir_cuti_customers
-        tid, end, // stopped_customers
-    ];
-    for (let i = 0; i < 8; i++) params.push(tid, start, end);
-    params.push(tid, tid); // overdue + arrears
+    if (amAreas !== null) {
+        sql = sql
+            .replace(/FROM customers cu\n\s+WHERE cu\.tenant_id = \?/g, (m) => m + areaFilterCu)
+            .replace(/FROM customers\n\s+WHERE tenant_id = \?/g, (m) => m + areaFilterBare)
+            .replace(/FROM invoices i\n\s+WHERE i\.tenant_id = \?/g, (m) => m + areaFilterInvoice)
+            .replace(/FROM payments p\n\s+WHERE p\.tenant_id = \?/g, (m) => m + areaFilterPayment);
+    }
+
+    const params = [];
+    const pushCu = (...base) => { params.push(...base, ...areaParamsCu); };
+    const pushBare = (...base) => { params.push(...base, ...areaParamsBare); };
+    const pushInv = (...base) => { params.push(...base, ...areaParamsInvoice); };
+    const pushPay = (...base) => { params.push(...base, ...areaParamsPayment); };
+    pushCu(tid, end); // total_customers
+    pushCu(tid, end); // total_customer_amount
+    pushCu(tid, end); // active_customers
+    pushCu(tid, end); // active_customer_amount
+    pushBare(tid, start, end); // new_customers
+    pushCu(tid, start, end); // new_customer_amount
+    pushCu(tid, end); // isolir_customers
+    pushCu(tid, end); // inactive_customers
+    pushCu(tid, end); // isolir_cuti_customers
+    pushCu(tid, end); // stopped_customers
+    for (let i = 0; i < 4; i++) pushInv(tid, start, end); // unpaid/paid count+amount
+    for (let i = 0; i < 4; i++) pushPay(tid, start, end); // cash/online count+amount
+    pushInv(tid); // overdue
+    pushInv(tid); // arrears
 
     db.get(sql, params, (err, row) => {
         if (err) {
@@ -3561,7 +3644,7 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
 // ?history=1 → hanya tugas selesai (untuk riwayat profil). Tanpa param → hanya tugas aktif.
 router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
     const role = req.user && req.user.role;
-    const isAdmin = role === 'admin';
+    const isAdmin = isAdminLike(role);
     const techId = parseTechnicianId(req);
     if (!isAdmin && !techId) {
         return res.status(400).json({ success: false, message: 'ID teknisi tidak valid' });
@@ -4143,7 +4226,7 @@ function attendanceDayScore(row) {
 router.get('/performance/week', verifyToken, requireTechnician, (req, res) => {
     const role = req.user && req.user.role;
     const techId = parseTechnicianId(req);
-    const isAdmin = role === 'admin';
+    const isAdmin = isAdminLike(role);
 
     const now = new Date();
     let anchor = now;
@@ -4391,7 +4474,7 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
         return res.status(400).json({ success: false, message: 'Status wajib diisi' });
     }
     const roleUser = req.user && req.user.role;
-    const isAdminTask = roleUser === 'admin';
+    const isAdminTask = isAdminLike(roleUser);
     const techId = parseTechnicianId(req);
     if (!isAdminTask && !techId) {
         return res.status(400).json({ success: false, message: 'ID teknisi tidak valid' });
@@ -4460,6 +4543,7 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                             if (hErr) {
                                 logger.warn('[mobile-adapter] install pending history:', hErr.message);
                             }
+                            if (!isAdminTask) pingInstallProgress();
                         }
                     );
                     return res.json({ success: true, message: 'Pending tersimpan; admin dapat melihat alasan di catatan job.' });
@@ -4608,6 +4692,7 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                                     if (histErr) {
                                         logger.warn('[mobile-adapter] install history:', histErr.message);
                                     }
+                                    if (!isAdminTask) pingInstallProgress();
                                 }
                             );
                             const phone = (job.customer_phone || '').replace(/\D/g, '');
@@ -4724,6 +4809,7 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                             if (hErr) {
                                 logger.warn('[mobile-adapter] install in_progress history:', hErr.message);
                             }
+                            if (!isAdminTask) pingInstallProgress();
                             res.json({ success: true, message: 'Status diperbarui' });
                         }
                     );
@@ -4777,6 +4863,16 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                         message: 'Tugas tidak ditemukan atau bukan milik Anda'
                     });
                 }
+                db.run(
+                    `INSERT INTO installation_job_status_history (
+                        job_id, old_status, new_status, changed_by_type, changed_by_id, notes
+                    ) VALUES (?, ?, ?, 'technician', ?, ?)`,
+                    [jobId, null, dbStatus, actorHistoryId, 'Update status dari app teknisi'],
+                    (hErr) => {
+                        if (hErr) logger.warn('[mobile-adapter] install other history:', hErr.message);
+                    }
+                );
+                pingInstallProgress();
                 res.json({ success: true, message: 'Status diperbarui' });
             }
         );
@@ -4854,6 +4950,10 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
             if (this.changes === 0) {
                 return res.status(404).json({ success: false, message: 'Tiket tidak ditemukan atau bukan milik Anda' });
             }
+            try {
+                const { flagTroubleProgressUpdated } = require('../../config/troubleReport');
+                flagTroubleProgressUpdated(id).catch(() => {});
+            } catch (_) {}
             res.json({ success: true, message: 'Status diperbarui' });
         }
 
@@ -6673,23 +6773,30 @@ router.post(
     }
 );
 
-function collectorReceiptSettingsForMobile() {
+async function collectorReceiptSettingsForMobile(tenantId) {
+    let settings = {};
+    const tid = parseInt(String(tenantId), 10);
+    if (Number.isFinite(tid) && tid > 0) {
+        const { getFullSettingsForTenantId } = require('../../config/platform/tenantSettingsManager');
+        settings = await getFullSettingsForTenantId(tid);
+    }
+    const { DEFAULT_COMPANY_HEADER } = require('../../config/companyBranding');
     return {
-        companyHeader: getSetting('company_header', 'ISP Monitor'),
-        footerInfo: getSetting('footer_info', ''),
-        logoFilename: getSetting('logo_filename', 'logo.png'),
-        company_slogan: getSetting('company_slogan', ''),
-        company_website: getSetting('company_website', ''),
-        invoice_notes: getSetting('invoice_notes', ''),
-        payment_bank_name: getSetting('payment_bank_name', ''),
-        payment_account_number: getSetting('payment_account_number', ''),
-        payment_account_holder: getSetting('payment_account_holder', ''),
-        payment_cash_address: getSetting('payment_cash_address', ''),
-        payment_cash_hours: getSetting('payment_cash_hours', ''),
-        contact_phone: getSetting('contact_phone', ''),
-        contact_email: getSetting('contact_email', ''),
-        contact_address: getSetting('contact_address', ''),
-        contact_whatsapp: getSetting('contact_whatsapp', '')
+        companyHeader: DEFAULT_COMPANY_HEADER,
+        footerInfo: settings.footer_info || '',
+        logoFilename: settings.logo_filename || 'logo.png',
+        company_slogan: settings.company_slogan || '',
+        company_website: settings.company_website || '',
+        invoice_notes: '',
+        payment_bank_name: '',
+        payment_account_number: '',
+        payment_account_holder: '',
+        payment_cash_address: '',
+        payment_cash_hours: '',
+        contact_phone: settings.contact_phone || '',
+        contact_email: settings.contact_email || '',
+        contact_address: settings.contact_address || '',
+        contact_whatsapp: settings.contact_whatsapp || ''
     };
 }
 
@@ -6738,7 +6845,8 @@ function sanitizeInvoiceForCollectorReceipt(inv, paymentTotals) {
         customer_name: s(inv.customer_name),
         customer_username: s(inv.customer_username),
         customer_phone: s(inv.customer_phone),
-        customer_address: s(inv.customer_address)
+        customer_address: s(inv.customer_address),
+        tenant_id: n(inv.tenant_id)
     };
 }
 
@@ -6905,7 +7013,9 @@ router.get('/collector/customers/:customerId/receipt', verifyToken, requireColle
                     payment_method: (batchTotals && batchTotals.payment_method) || primary.payment_method || '',
                     payment_date: (batchTotals && batchTotals.payment_date) || primary.payment_date || ''
                 },
-                settings: collectorReceiptSettingsForMobile()
+                settings: await collectorReceiptSettingsForMobile(
+                    resolveReqTenantId(req) || (primary && primary.tenant_id)
+                )
             }
         });
     } catch (error) {

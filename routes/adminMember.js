@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const path = require('path');
-const multer = require('multer');
 const fs = require('fs');
 const billingManager = require('../config/billing');
 const logger = require('../config/logger');
@@ -11,37 +10,16 @@ const { getRadiusConfigValue } = require('../config/radiusConfig');
 const { getSettingsWithCache } = require('../config/settingsManager');
 const { getVersionInfo, getVersionBadge } = require('../config/version-utils');
 
-// Configure multer for member photo uploads
-const memberPhotoStorage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        const uploadDir = path.join(__dirname, '../public/img/members/');
-        // Create directory if it doesn't exist
-        if (!fs.existsSync(uploadDir)) {
-            fs.mkdirSync(uploadDir, { recursive: true });
-        }
-        cb(null, uploadDir);
-    },
-    filename: function (req, file, cb) {
-        const phone = req.body.phone || req.params.phone || 'unknown';
+const { createSafeImageUpload } = require('../utils/safeImageUpload');
+
+const memberPhotoUpload = createSafeImageUpload({
+    destination: path.join(__dirname, '../public/img/members/'),
+    maxBytes: 5 * 1024 * 1024,
+    filename: function (req, file, ext, cb) {
+        const phone = String(req.body.phone || req.params.phone || 'unknown').replace(/[^\d]/g, '') || 'unknown';
         const type = file.fieldname === 'ktp_photo' ? 'ktp' : 'house';
-        const ext = path.extname(file.originalname) || '.jpg';
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
         cb(null, `member-${phone}-${type}-${uniqueSuffix}${ext}`);
-    }
-});
-
-const memberPhotoUpload = multer({ 
-    storage: memberPhotoStorage,
-    limits: {
-        fileSize: 20 * 1024 * 1024 // 20MB limit
-    },
-    fileFilter: function (req, file, cb) {
-        // Accept only image files
-        if (file.mimetype.startsWith('image/')) {
-            cb(null, true);
-        } else {
-            cb(new Error('Only image files are allowed'));
-        }
     }
 });
 

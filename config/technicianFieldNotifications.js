@@ -9,6 +9,7 @@ const { pingAdminNotifications } = require('./adminNotificationBus');
 
 const dbPath = path.join(__dirname, '../data/billing.db');
 const db = new sqlite3.Database(dbPath);
+db.run('PRAGMA busy_timeout = 8000');
 
 db.run(
     `CREATE TABLE IF NOT EXISTS technician_field_notifications (

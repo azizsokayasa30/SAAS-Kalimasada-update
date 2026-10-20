@@ -17,8 +17,70 @@ const ExcelJS = require('exceljs');
 const { adminAuth } = require('./adminAuth');
 const { adminBillingActivityMiddleware } = require('../config/activityLogger');
 const { localMonthDateRange, toLocalDateString, toLocalDateTimeString } = require('../utils/localDate');
+const { applyAreaManagerCustomerFilter } = require('../middleware/areaManagerAccess');
+const { verifyAdminPassword } = require('../utils/adminPassword');
 
 router.use(adminBillingActivityMiddleware);
+
+/** Tolak akses data di luar wilayah Manager Area. */
+async function assertAreaManagerCustomerAccess(req, customerOrId) {
+    if (!(req.isAreaManager || (req.session && req.session.isAreaManager))) {
+        return true;
+    }
+    const areaIds = req.areaManagerAreaIds || [];
+    const tenantId = req.session?.tenantId || req.tenantId || null;
+    let customerId = null;
+    if (customerOrId && typeof customerOrId === 'object') {
+        customerId = customerOrId.id;
+        if (customerOrId.area_id != null && areaIds.map(Number).includes(Number(customerOrId.area_id))) {
+            return true;
+        }
+    } else {
+        customerId = customerOrId;
+    }
+    const ok = await billingManager.isCustomerInAreaManagerAreas(customerId, areaIds, tenantId);
+    return ok;
+}
+
+function denyAreaManagerScope(res, wantsJson = true) {
+    const message = 'Akses ditolak: pelanggan di luar wilayah Manager Area Anda.';
+    if (wantsJson) {
+        return res.status(403).json({ success: false, message });
+    }
+    return res.status(403).render('error', { message, error: {} });
+}
+
+function assertAreaManagerAreaId(req, areaId) {
+    if (!(req.isAreaManager || (req.session && req.session.isAreaManager))) {
+        return true;
+    }
+    const ids = (req.areaManagerAreaIds || []).map(Number);
+    const aid = parseInt(areaId, 10);
+    return Number.isFinite(aid) && ids.includes(aid);
+}
+
+function isAreaManagerRequest(req) {
+    return !!(req.isAreaManager || (req.session && req.session.isAreaManager));
+}
+
+/** Area yang boleh diubah Manager Area. null = bukan manager (tanpa batas). */
+function areaIdsAllowedForManager(req, requestedIds) {
+    if (!isAreaManagerRequest(req)) {
+        return { ok: true, ids: requestedIds };
+    }
+    const allowed = new Set((req.areaManagerAreaIds || []).map(Number));
+    const ids = (Array.isArray(requestedIds) ? requestedIds : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0);
+    if (!ids.length || ids.some((id) => !allowed.has(id))) {
+        return { ok: false, ids: [] };
+    }
+    return { ok: true, ids };
+}
+
+async function loadVisibleCustomers(req, options = {}) {
+    return billingManager.getCustomers(applyAreaManagerCustomerFilter(req, { ...options }));
+}
 
 /**
  * Isolasi tenant untuk raw SQL di route ini. tenant_id disisipkan sebagai literal
@@ -72,12 +134,49 @@ function extractConfirmPassword(body) {
     return '';
 }
 
+const DEFAULT_CUSTOMER_PORTAL_PASSWORD = '123456';
+
+function customerHasPortalPassword(row) {
+    return Boolean(row && row.password && String(row.password).trim());
+}
+
+async function hashCustomerPortalPassword(plain) {
+    const bcrypt = require('bcrypt');
+    const pwdPlain = (plain && String(plain).trim()) || DEFAULT_CUSTOMER_PORTAL_PASSWORD;
+    if (pwdPlain.length < 6) {
+        return bcrypt.hash(DEFAULT_CUSTOMER_PORTAL_PASSWORD, 10);
+    }
+    return bcrypt.hash(pwdPlain, 10);
+}
+
+/**
+ * Password portal untuk impor (hash bcrypt, selaras form tambah pelanggan).
+ * Create: default 123456 jika Login Password kosong.
+ * Update: isi default hanya jika existing belum punya password.
+ * Password yang sudah ada tidak ditimpa kecuali spreadsheet mengisi Login Password.
+ */
+async function resolveImportPortalPassword(raw, existing) {
+    const fromSheet = raw && (raw.login_password || raw.password);
+    const explicit = fromSheet != null ? String(fromSheet).trim() : '';
+    if (existing) {
+        if (explicit) {
+            return hashCustomerPortalPassword(explicit);
+        }
+        if (!customerHasPortalPassword(existing)) {
+            return hashCustomerPortalPassword(DEFAULT_CUSTOMER_PORTAL_PASSWORD);
+        }
+        return undefined;
+    }
+    return hashCustomerPortalPassword(explicit);
+}
+
 /**
  * Password konfirmasi aksi sensitif.
  * Tenant: password login admin tenant (settings tenant), bukan settings.json host.
  * Jika `super_admin_password` diisi di pengaturan tenant/host, itu yang dipakai.
+ * Nilai tersimpan bisa teks polos atau hash bcrypt (setelah login admin).
  */
-function verifySuperAdminPassword(plain, req) {
+async function verifySuperAdminPassword(plain, req) {
     const submitted = String(plain ?? '').trim();
     if (!submitted) return false;
 
@@ -106,14 +205,7 @@ function verifySuperAdminPassword(plain, req) {
         expected = dedicated || String(getSetting('admin_password', 'admin') || 'admin').trim();
     }
 
-    const a = Buffer.from(submitted, 'utf8');
-    const b = Buffer.from(expected, 'utf8');
-    if (a.length !== b.length) return false;
-    try {
-        return crypto.timingSafeEqual(a, b);
-    } catch (_) {
-        return false;
-    }
+    return verifyAdminPassword(submitted, expected);
 }
 
 function resolveBillingTenantId(req) {
@@ -148,59 +240,25 @@ async function saveSuspensionSetting(req, key, value) {
     return ok;
 }
 
-// Configure multer for image uploads
-const imageStorage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, path.join(__dirname, '../public/img/'));
-    },
-    filename: function (req, file, cb) {
-        // Generate unique filename with timestamp
+const { createSafeImageUpload } = require('../utils/safeImageUpload');
+
+const imageUpload = createSafeImageUpload({
+    destination: path.join(__dirname, '../public/img/'),
+    maxBytes: 2 * 1024 * 1024,
+    filename: function (req, file, ext, cb) {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, 'package-' + uniqueSuffix + '.jpg');
+        cb(null, 'package-' + uniqueSuffix + ext);
     }
 });
 
-const imageUpload = multer({ 
-    storage: imageStorage,
-    limits: {
-        fileSize: 2 * 1024 * 1024 // 2MB limit
-    },
-    fileFilter: function (req, file, cb) {
-        // Accept only JPG files
-        if (file.mimetype === 'image/jpeg' || file.mimetype === 'image/jpg') {
-            cb(null, true);
-        } else {
-            cb(new Error('Only JPG files are allowed'));
-        }
-    }
-});
-
-// Configure multer for customer photo uploads
-const customerPhotoStorage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, path.join(__dirname, '../public/img/'));
-    },
-    filename: function (req, file, cb) {
-        const phone = req.body.phone || req.params.phone || 'unknown';
+const customerPhotoUpload = createSafeImageUpload({
+    destination: path.join(__dirname, '../public/img/'),
+    maxBytes: 5 * 1024 * 1024,
+    filename: function (req, file, ext, cb) {
+        const phone = String(req.body.phone || req.params.phone || 'unknown').replace(/[^\d]/g, '') || 'unknown';
         const type = file.fieldname === 'ktp_photo' ? 'ktp' : 'house';
-        const ext = path.extname(file.originalname) || '.jpg';
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
         cb(null, `customer-${phone}-${type}-${uniqueSuffix}${ext}`);
-    }
-});
-
-const customerPhotoUpload = multer({ 
-    storage: customerPhotoStorage,
-    limits: {
-        fileSize: 20 * 1024 * 1024 // 20MB limit
-    },
-    fileFilter: function (req, file, cb) {
-        // Accept only image files
-        if (file.mimetype.startsWith('image/')) {
-            cb(null, true);
-        } else {
-            cb(new Error('Hanya file gambar yang diizinkan (JPG, PNG, GIF)'));
-        }
     }
 });
 
@@ -2286,6 +2344,7 @@ router.get('/invoice-list', getAppSettings, async (req, res) => {
         if (type) filters.type = type;
         
         filters.listMode = true;
+        applyAreaManagerCustomerFilter(req, filters);
 
         const [invoices, summary] = await Promise.all([
             billingManager.getInvoicesWithFilters(filters, limit, offset),
@@ -2347,6 +2406,7 @@ router.get('/invoices-by-type', adminAuth, async (req, res) => {
         const typeOpts = { month: monthKey };
 
         // Get invoices by type
+        applyAreaManagerCustomerFilter(req, typeOpts);
         const monthlyInvoices = await billingManager.getInvoicesByType('monthly', typeOpts);
         const voucherInvoices = await billingManager.getInvoicesByType('voucher', typeOpts);
         const manualInvoices = await billingManager.getInvoicesByType('manual', typeOpts);
@@ -2751,15 +2811,23 @@ router.get('/customers/list', async (req, res) => {
             return res.status(403).json({ success: false, message: 'Tenant tidak dikenali', customers: [] });
         }
         const q = String(req.query.q || req.query.search || '').trim();
-        if (q.length < 2) {
+        if (q.length < 1) {
             return res.json({ success: true, customers: [] });
         }
-        const rows = await billingManager.listCustomersForPaymentPicker(tenantId, q);
+        const pickerOpts = applyAreaManagerCustomerFilter(req, {});
+        const rows = await billingManager.listCustomersForPaymentPicker(tenantId, q, pickerOpts);
         const customers = (rows || []).map((c) => ({
             id: c.id,
             name: c.name,
             phone: c.phone,
-            username: c.username || c.pppoe_username || ''
+            username: c.username || c.pppoe_username || '',
+            pppoe_username: c.pppoe_username || '',
+            customer_id: c.customer_id || '',
+            address: c.address || '',
+            package_id: c.package_id || null,
+            package_name: c.package_name || '',
+            status: c.status || '',
+            email: c.email || ''
         }));
         return res.json({ success: true, customers });
     } catch (error) {
@@ -2771,7 +2839,11 @@ router.get('/customers/list', async (req, res) => {
 // Customers summary for live updates
 router.get('/customers/summary', async (req, res) => {
     try {
-        const customers = await billingManager.getCustomers();
+        const filters = {};
+        applyAreaManagerCustomerFilter(req, filters);
+        const customers = Object.prototype.hasOwnProperty.call(filters, 'area_ids')
+            ? await billingManager.getCustomersFiltered(filters)
+            : await billingManager.getCustomers();
         const total = customers.length;
         const paid = customers.filter(c => c.payment_status === 'paid').length;
         const unpaid = customers.filter(c => c.payment_status === 'unpaid').length;
@@ -2989,6 +3061,7 @@ function parseCustomerExportFilters(req) {
     if (req.query.payment_status) filters.payment_status = req.query.payment_status;
     if (req.query.customer_type) filters.customer_type = req.query.customer_type;
     if (req.query.router) filters.router_id = parseInt(req.query.router, 10);
+    applyAreaManagerCustomerFilter(req, filters);
     return filters;
 }
 
@@ -3001,7 +3074,7 @@ async function loadCustomersForExport(req) {
         && Number.isFinite(joinYear) && joinYear >= 2000
         && !listFilters.month) {
         return {
-            customers: await billingManager.getCustomers({ joinMonth, joinYear }),
+            customers: await billingManager.getCustomers(applyAreaManagerCustomerFilter(req, { joinMonth, joinYear })),
             joinMonth,
             joinYear,
             listFilters: null
@@ -3009,6 +3082,15 @@ async function loadCustomersForExport(req) {
     }
 
     if (listFilters.month && listFilters.year) {
+        return {
+            customers: await billingManager.getCustomersFiltered(listFilters),
+            joinMonth: null,
+            joinYear: null,
+            listFilters
+        };
+    }
+
+    if (Object.prototype.hasOwnProperty.call(listFilters, 'area_ids')) {
         return {
             customers: await billingManager.getCustomersFiltered(listFilters),
             joinMonth: null,
@@ -4416,7 +4498,8 @@ async function runCustomerXlsxImport(req, res) {
                     customerData.__skip_radius_sync = true;
                 }
                 if (raw.username) customerData.username = raw.username.trim();
-                if (raw.login_password) customerData.password = raw.login_password;
+                const portalPasswordHash = await resolveImportPortalPassword(raw, existing);
+                if (portalPasswordHash !== undefined) customerData.password = portalPasswordHash;
                 if (raw.latitude != null) customerData.latitude = raw.latitude;
                 if (raw.longitude != null) customerData.longitude = raw.longitude;
                 if (raw.area) customerData.area = raw.area;
@@ -5096,7 +5179,8 @@ async function runCustomerJsonImport(req, res) {
                     customerData.__skip_radius_sync = true;
                 }
                 if (raw.username) customerData.username = String(raw.username).trim();
-                if (raw.login_password || raw.password) customerData.password = String(raw.login_password || raw.password).trim();
+                const portalPasswordHash = await resolveImportPortalPassword(raw, existing);
+                if (portalPasswordHash !== undefined) customerData.password = portalPasswordHash;
                 const latJ = optNum(raw.latitude);
                 const lngJ = optNum(raw.longitude);
                 if (latJ !== undefined) customerData.latitude = latJ;
@@ -5379,7 +5463,7 @@ router.post('/import/customers/json', upload.single('file'), runCustomerJsonImpo
 // Auto Invoice Management
 router.get('/auto-invoice', getAppSettings, async (req, res) => {
     try {
-        const customers = await billingManager.getCustomers();
+        const customers = await loadVisibleCustomers(req);
         const activeCustomers = customers.filter(c => c.status === 'active' && c.package_id);
         
         const currentDate = new Date();
@@ -5535,7 +5619,7 @@ router.get('/auto-invoice/generate/status/:jobId', async (req, res) => {
 // Preview invoices that will be generated
 router.get('/auto-invoice/preview', async (req, res) => {
     try {
-        const customers = await billingManager.getCustomers();
+        const customers = await loadVisibleCustomers(req);
         const activeCustomers = customers.filter(c => c.status === 'active' && c.package_id);
         
         // Get active members
@@ -6167,30 +6251,14 @@ router.post('/whatsapp-settings/billing-notify-schedule', adminAuth, async (req,
     }
 });
 
-// Get WhatsApp rate limit settings
+// Get WhatsApp rate limit settings (per tenant)
 router.get('/whatsapp-settings/rate-limit', async (req, res) => {
     try {
-        // Prefer nested object if exists, fallback to flattened keys
-        const nested = getSetting('whatsapp_rate_limit', null);
-        const settings = nested && typeof nested === 'object' ? {
-            maxMessagesPerBatch: nested.maxMessagesPerBatch ?? 10,
-            delayBetweenBatches: nested.delayBetweenBatches ?? 30,
-            delayBetweenMessages: nested.delayBetweenMessages ?? 2,
-            maxRetries: nested.maxRetries ?? 2,
-            dailyMessageLimit: nested.dailyMessageLimit ?? 0,
-            enabled: nested.enabled ?? true
-        } : {
-            maxMessagesPerBatch: getSetting('whatsapp_rate_limit.maxMessagesPerBatch', 10),
-            delayBetweenBatches: getSetting('whatsapp_rate_limit.delayBetweenBatches', 30),
-            delayBetweenMessages: getSetting('whatsapp_rate_limit.delayBetweenMessages', 2),
-            maxRetries: getSetting('whatsapp_rate_limit.maxRetries', 2),
-            dailyMessageLimit: getSetting('whatsapp_rate_limit.dailyMessageLimit', 0),
-            enabled: getSetting('whatsapp_rate_limit.enabled', true)
-        };
-        
+        const { getRateLimit, tenantIdFromRequest } = require('../config/whatsapp-rate-limit');
+        const settings = await getRateLimit(tenantIdFromRequest(req));
         res.json({
             success: true,
-            settings: settings
+            settings
         });
     } catch (error) {
         logger.error('Error getting WhatsApp rate limit settings:', error);
@@ -6242,30 +6310,20 @@ router.post('/whatsapp-settings/rate-limit', async (req, res) => {
             });
         }
         
-        // Save settings
-        const parsed = {
-            maxMessagesPerBatch: parseInt(maxMessagesPerBatch),
-            delayBetweenBatches: parseInt(delayBetweenBatches),
-            delayBetweenMessages: parseInt(delayBetweenMessages),
-            maxRetries: parseInt(maxRetries),
-            dailyMessageLimit: parseInt(dailyMessageLimit),
+        const { saveRateLimit, tenantIdFromRequest } = require('../config/whatsapp-rate-limit');
+        const saved = await saveRateLimit(tenantIdFromRequest(req), {
+            maxMessagesPerBatch,
+            delayBetweenBatches,
+            delayBetweenMessages,
+            maxRetries,
+            dailyMessageLimit,
             enabled: (enabled === true || enabled === 'true')
-        };
-        // Save flattened keys for backward compatibility
-        setSetting('whatsapp_rate_limit.maxMessagesPerBatch', parsed.maxMessagesPerBatch);
-        setSetting('whatsapp_rate_limit.delayBetweenBatches', parsed.delayBetweenBatches);
-        setSetting('whatsapp_rate_limit.delayBetweenMessages', parsed.delayBetweenMessages);
-        setSetting('whatsapp_rate_limit.maxRetries', parsed.maxRetries);
-        setSetting('whatsapp_rate_limit.dailyMessageLimit', parsed.dailyMessageLimit);
-        setSetting('whatsapp_rate_limit.enabled', parsed.enabled);
-        // Also save as nested object for readability
-        setSetting('whatsapp_rate_limit', parsed);
-        // Ensure new reads reflect immediately
-        clearSettingsCache();
-        
+        });
+
         res.json({
             success: true,
-            message: 'Pengaturan rate limiting berhasil disimpan'
+            message: 'Pengaturan rate limiting berhasil disimpan',
+            settings: saved
         });
     } catch (error) {
         logger.error('Error saving WhatsApp rate limit settings:', error);
@@ -6800,6 +6858,144 @@ router.post('/whatsapp-settings/broadcast', async (req, res) => {
             success: false,
             message: 'Error sending broadcast: ' + error.message
         });
+    }
+});
+
+function resolveWaCustomerTenant(req) {
+    const tenantId = req.session?.tenantId || req.tenantId || req.tenant?.id || null;
+    const n = parseInt(tenantId, 10);
+    return {
+        tenantId: Number.isFinite(n) && n > 0 ? n : null,
+        tenant: req.tenant || (Number.isFinite(n) && n > 0 ? { id: n } : null)
+    };
+}
+
+// Dashboard WhatsApp Pelanggan (broadcast manual)
+router.get('/whatsapp-customers', getAppSettings, async (req, res) => {
+    try {
+        const waCustomerBroadcast = require('../config/whatsapp-customer-broadcast');
+        const { tenantId } = resolveWaCustomerTenant(req);
+        const meta = await waCustomerBroadcast.getPageMeta(tenantId);
+        const now = new Date();
+        res.render('admin/billing/whatsapp-customers', {
+            title: 'WhatsApp Pelanggan',
+            page: 'whatsapp-customers',
+            appSettings: req.appSettings,
+            packages: meta.packages || [],
+            collectors: meta.collectors || [],
+            uniqueAreas: meta.uniqueAreas || [],
+            templates: meta.templates || [],
+            gateway: meta.gateway || { connected: false },
+            quota: meta.quota || {},
+            selectedMonth: now.getMonth() + 1,
+            selectedYear: now.getFullYear(),
+            activeJob: waCustomerBroadcast.getActiveJob(tenantId)
+        });
+    } catch (error) {
+        logger.error('Error loading WhatsApp Pelanggan page:', error);
+        res.status(500).render('error', {
+            message: 'Gagal memuat halaman WhatsApp Pelanggan',
+            error: error.message,
+            appSettings: req.appSettings
+        });
+    }
+});
+
+router.get('/whatsapp-customers/customers', async (req, res) => {
+    try {
+        const waCustomerBroadcast = require('../config/whatsapp-customer-broadcast');
+        const { tenantId } = resolveWaCustomerTenant(req);
+        const data = await waCustomerBroadcast.listCustomers(req.query, {
+            page: req.query.page,
+            limit: req.query.limit,
+            tenantId
+        });
+        res.json({ success: true, ...data });
+    } catch (error) {
+        logger.error('Error listing WhatsApp Pelanggan customers:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/whatsapp-customers/preview', async (req, res) => {
+    try {
+        const waCustomerBroadcast = require('../config/whatsapp-customer-broadcast');
+        const { tenantId } = resolveWaCustomerTenant(req);
+        const body = req.body || {};
+        const result = await waCustomerBroadcast.previewBroadcast({
+            filtersInput: body.filters || body,
+            templateKey: body.template_key || body.templateKey,
+            extraInput: body.extra || body,
+            customerIds: body.customer_ids || body.customerIds,
+            targetMode: body.target_mode || body.targetMode || 'filter',
+            tenantId
+        });
+        if (!result.success) {
+            return res.status(400).json({ success: false, message: result.error });
+        }
+        res.json(result);
+    } catch (error) {
+        logger.error('Error preview WhatsApp Pelanggan broadcast:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/whatsapp-customers/broadcast', async (req, res) => {
+    try {
+        const waCustomerBroadcast = require('../config/whatsapp-customer-broadcast');
+        const { tenantId, tenant } = resolveWaCustomerTenant(req);
+        const body = req.body || {};
+        const result = await waCustomerBroadcast.startBroadcast({
+            filtersInput: body.filters || body,
+            templateKey: body.template_key || body.templateKey,
+            extraInput: body.extra || body,
+            customerIds: body.customer_ids || body.customerIds,
+            targetMode: body.target_mode || body.targetMode || 'filter',
+            tenantId,
+            tenant
+        });
+        if (!result.success) {
+            return res.status(400).json({ success: false, message: result.error, job_id: result.job_id || null });
+        }
+        res.json({
+            success: true,
+            job_id: result.job_id,
+            job: result.job,
+            message: 'Pengiriman dimulai'
+        });
+    } catch (error) {
+        logger.error('Error starting WhatsApp Pelanggan broadcast:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.get('/whatsapp-customers/jobs/:id', async (req, res) => {
+    try {
+        const waCustomerBroadcast = require('../config/whatsapp-customer-broadcast');
+        const { tenantId } = resolveWaCustomerTenant(req);
+        const job = waCustomerBroadcast.getJob(req.params.id, tenantId);
+        if (!job) {
+            return res.status(404).json({ success: false, message: 'Job tidak ditemukan' });
+        }
+        res.json({ success: true, job });
+    } catch (error) {
+        logger.error('Error reading WhatsApp Pelanggan job:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+router.post('/whatsapp-customers/jobs/:id/cancel', async (req, res) => {
+    try {
+        const waCustomerBroadcast = require('../config/whatsapp-customer-broadcast');
+        const { tenantId } = resolveWaCustomerTenant(req);
+        const result = waCustomerBroadcast.cancelJob(req.params.id, tenantId);
+        if (!result.success) {
+            return res.status(400).json({ success: false, message: result.error });
+        }
+        res.json({ success: true, job: result.job, message: 'Pengiriman dibatalkan' });
+    } catch (error) {
+        logger.error('Error cancelling WhatsApp Pelanggan job:', error);
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 
@@ -7965,10 +8161,14 @@ router.get('/areas/list', async (req, res) => {
         if (_lt.sql) { conds.push(`tenant_id = ${parseInt(_lt.params[0], 10)}`); }
         if (status) { conds.push('status = ?'); params.push(status); }
         const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
-        const areas  = await new Promise((resolve) =>
+        let areas  = await new Promise((resolve) =>
             db.all(`SELECT id, kode_area, nama_area, deskripsi, status FROM areas ${where} ORDER BY nama_area ASC`, params,
                    (err, rows) => resolve(rows || []))
         );
+        if (isAreaManagerRequest(req)) {
+            const allowed = new Set((req.areaManagerAreaIds || []).map(Number));
+            areas = areas.filter((a) => allowed.has(Number(a.id)));
+        }
         res.json({ success: true, data: areas });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -8361,7 +8561,9 @@ router.get('/customers', getAppSettings, async (req, res) => {
         // Jika bulan berjalan belum punya invoice (mis. setelah restore / sebelum auto-generate tgl 1),
         // tampilkan ringkasan bulan terakhir yang punya data agar kartu tidak kosong.
         if (!hasMonthQuery && tenantId) {
-            const curTotals = await billingManager.getMonthlyTagihanTotals(month, year, { tenantId });
+            const monthOpts = { tenantId };
+            if (isAreaManagerRequest(req)) monthOpts.areaIds = req.areaManagerAreaIds || [];
+            const curTotals = await billingManager.getMonthlyTagihanTotals(month, year, monthOpts);
             if (!curTotals.count_total) {
                 const latest = await billingManager.getLatestInvoiceActivityMonth({ tenantId });
                 if (latest && latest.year && latest.month) {
@@ -8381,6 +8583,8 @@ router.get('/customers', getAppSettings, async (req, res) => {
         if (req.query.collector_id) filters.collector_id = req.query.collector_id;
         if (req.query.payment_status) filters.payment_status = req.query.payment_status;
         if (req.query.customer_type) filters.customer_type = req.query.customer_type;
+
+        applyAreaManagerCustomerFilter(req, filters);
         
         // Gunakan satu query builder agar semua filter (termasuk NAS/router) konsisten.
         const customersResult = await billingManager.getCustomersPaginated(limit, offset, filters);
@@ -8413,13 +8617,24 @@ router.get('/customers', getAppSettings, async (req, res) => {
 
         // Get areas from areas table (status aktif for dropdown, all for filter)
         await ensureAreasTable(db);
-        const areasForDropdown = await new Promise((resolve) => {
+        const areasForDropdownRaw = await new Promise((resolve) => {
             db.all('SELECT id, nama_area FROM areas WHERE status = "aktif"' + tAnd() + ' ORDER BY nama_area', (err, rows) => {
                 resolve(rows || []);
             });
         });
+        let areasForDropdown = areasForDropdownRaw;
+        if (req.isAreaManager || (req.session && req.session.isAreaManager)) {
+            const allowed = new Set((req.areaManagerAreaIds || []).map(Number));
+            areasForDropdown = areasForDropdownRaw.filter((a) => allowed.has(Number(a.id)));
+        }
 
-        const uniqueAreas = await billingManager.getCustomerAreaFilterOptions({ tenantId });
+        let uniqueAreas = await billingManager.getCustomerAreaFilterOptions({ tenantId });
+        if (req.isAreaManager || (req.session && req.session.isAreaManager)) {
+            const allowedNames = new Set(areasForDropdown.map((a) => String(a.nama_area || '').toLowerCase()));
+            uniqueAreas = (uniqueAreas || []).filter((a) =>
+                allowedNames.has(String(a.name || a.nama_area || a || '').toLowerCase())
+            );
+        }
 
         const customerStats = await billingManager.getCustomerStatsByMonth(month, year, filters, { tenantId });
         
@@ -8476,6 +8691,13 @@ router.post('/customers', customerPhotoUpload.fields([
             return res.status(400).json({
                 success: false,
                 message: 'Nama, username, telepon, dan paket harus diisi'
+            });
+        }
+
+        if (!assertAreaManagerAreaId(req, area_id)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Area pelanggan harus salah satu wilayah yang ditugaskan kepada Anda'
             });
         }
 
@@ -8901,6 +9123,17 @@ router.get('/customers/:phone', getAppSettings, async (req, res) => {
             });
         }
 
+        if (!(await assertAreaManagerCustomerAccess(req, customer))) {
+            return denyAreaManagerScope(res, false);
+        }
+
+        try {
+            const copyService = require('../config/platform/masterCustomerCopyService');
+            await copyService.maybeSyncOnMasterView(customer);
+            const refreshed = await billingManager.getCustomerByPhone(phone);
+            if (refreshed) Object.assign(customer, refreshed);
+        } catch (_) { /* sync is best-effort */ }
+
         // Get PPPoE password (from RADIUS or Mikrotik API)
         let pppoePassword = null;
         let authMode = null;
@@ -8908,8 +9141,15 @@ router.get('/customers/:phone', getAppSettings, async (req, res) => {
             const { getUserAuthModeAsync, getRadiusConnection, getMikrotikConnection } = require('../config/mikrotik');
             authMode = await getUserAuthModeAsync();
             const pppoeUsername = customer.pppoe_username || customer.username;
+            const skipRadiusLookup = String(customer.master_origin || '') === 'copied'
+                || String(customer.master_origin || '') === 'dummy'
+                || Boolean(req.tenant && req.tenant.is_master);
             
-            if (pppoeUsername) {
+            if (skipRadiusLookup) {
+                pppoePassword = customer.password && String(customer.password).trim()
+                    ? String(customer.password).trim()
+                    : null;
+            } else if (pppoeUsername) {
                 if (authMode === 'radius') {
                     // Get password from RADIUS database
                     const conn = await getRadiusConnection();
@@ -9027,6 +9267,10 @@ router.get('/api/customers/:phone', async (req, res) => {
             });
         }
 
+        if (!(await assertAreaManagerCustomerAccess(req, customer))) {
+            return denyAreaManagerScope(res, true);
+        }
+
         return res.json({
             success: true,
             customer: Object.assign({}, customer || {}, { router_id: routerMapping ? routerMapping.router_id : null }),
@@ -9123,6 +9367,20 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
 ]), async (req, res) => {
     try {
         const { phone } = req.params;
+
+        const existingCustomer = await billingManager.getCustomerByPhone(phone);
+        if (!existingCustomer) {
+            return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+        }
+        if (!(await assertAreaManagerCustomerAccess(req, existingCustomer))) {
+            return denyAreaManagerScope(res, true);
+        }
+        if (req.body.area_id != null && req.body.area_id !== '' && !assertAreaManagerAreaId(req, req.body.area_id)) {
+            return res.status(403).json({
+                success: false,
+                message: 'Area pelanggan harus salah satu wilayah yang ditugaskan kepada Anda'
+            });
+        }
         
         // Debug: Log request body to see what we're receiving
         logger.debug('PUT /customers/:phone - Request body:', JSON.stringify(req.body));
@@ -9961,7 +10219,7 @@ router.delete('/customers/:phone', async (req, res) => {
         } else if (error.message.includes('invoice(s) still exist')) {
             errorMessage = 'Tidak dapat menghapus pelanggan karena masih memiliki tagihan. Silakan hapus semua tagihan terlebih dahulu.';
             statusCode = 400;
-        } else if (error.message.includes('foreign key constraint')) {
+        } else if (/foreign key constraint/i.test(error.message || '')) {
             errorMessage = 'Tidak dapat menghapus pelanggan karena masih memiliki data terkait. Silakan hapus data terkait terlebih dahulu.';
             statusCode = 400;
         }
@@ -10000,7 +10258,7 @@ router.delete('/customers/id/:id', async (req, res) => {
         } else if (error.message.includes('invoice(s) still exist')) {
             errorMessage = 'Tidak dapat menghapus pelanggan karena masih memiliki tagihan. Silakan hapus semua tagihan terlebih dahulu.';
             statusCode = 400;
-        } else if (error.message.includes('foreign key constraint')) {
+        } else if (/foreign key constraint/i.test(error.message || '')) {
             errorMessage = 'Tidak dapat menghapus pelanggan karena masih memiliki data terkait. Silakan hapus data terkait terlebih dahulu.';
             statusCode = 400;
         }
@@ -10026,7 +10284,7 @@ router.get('/invoices', getAppSettings, async (req, res) => {
             return res.redirect('/admin/billing/invoice-list' + (qs ? '?' + qs : ''));
         }
 
-        const customers = await billingManager.getCustomers();
+        const customers = await loadVisibleCustomers(req);
         const packages = await billingManager.getPackages();
         
         // Get members if table exists
@@ -10453,6 +10711,15 @@ router.get('/invoices/:id', getAppSettings, async (req, res) => {
                 appSettings: req.appSettings
             });
         }
+
+        if (invoice.customer_id) {
+            try {
+                const copyService = require('../config/platform/masterCustomerCopyService');
+                await copyService.maybeSyncOnMasterView(invoice.customer_id);
+                const refreshed = await billingManager.getInvoiceById(id);
+                if (refreshed) Object.assign(invoice, refreshed);
+            } catch (_) { /* sync is best-effort */ }
+        }
         
         res.render('admin/billing/invoice-detail', {
             title: 'Detail Invoice',
@@ -10498,12 +10765,38 @@ router.get('/invoices/:id/print', getAppSettings, async (req, res) => {
     }
 });
 
+// Kwitansi lunas (PDF yang sama dengan lampiran WhatsApp)
+router.get('/invoices/:id/kwitansi', async (req, res) => {
+    try {
+        const invoiceId = parseInt(String(req.params.id), 10);
+        if (!Number.isFinite(invoiceId) || invoiceId <= 0) {
+            return res.status(400).send('ID invoice tidak valid');
+        }
+        const invoice = await billingManager.getInvoiceById(invoiceId);
+        if (!invoice) {
+            return res.status(404).send('Invoice tidak ditemukan');
+        }
+        if (String(invoice.status || '').toLowerCase() !== 'paid') {
+            return res.status(400).send('Kwitansi hanya untuk tagihan yang sudah lunas');
+        }
+        const { generateInvoicePdf } = require('../config/invoicePdf');
+        const pdfResult = await generateInvoicePdf(invoiceId);
+        const fileName = (pdfResult.fileName || `Kwitansi-${invoiceId}.pdf`).replace(/"/g, '');
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+        res.send(pdfResult.buffer);
+    } catch (error) {
+        logger.error('Error generating kwitansi PDF:', error);
+        res.status(500).send(error.message || 'Gagal membuat kwitansi');
+    }
+});
+
 // Edit invoice
 router.get('/invoices/:id/edit', getAppSettings, async (req, res) => {
     try {
         const { id } = req.params;
         const invoice = await billingManager.getInvoiceById(id);
-        const customers = await billingManager.getCustomers();
+        const customers = await loadVisibleCustomers(req);
         const packages = await billingManager.getPackages();
         
         if (!invoice) {
@@ -10695,65 +10988,159 @@ async function payInvoiceAsAdmin(invoice, opts = {}, tenantId = null) {
 }
 
 function queueBulkPaySideEffects(invoice, paymentMethod, paymentId) {
-    setImmediate(() => {
-        // Notifikasi async — jangan blokir request
-        if (paymentId) {
-            try {
-                const whatsappNotifications = require('../config/whatsapp-notifications');
-                Promise.resolve(whatsappNotifications.sendPaymentReceivedNotification(paymentId)).catch(() => {});
-            } catch (_) { /* ignore */ }
-            try {
-                const emailNotifications = require('../config/email-notifications');
-                Promise.resolve(emailNotifications.sendPaymentReceivedNotification(paymentId)).catch(() => {});
-            } catch (_) { /* ignore */ }
-        }
-        Promise.resolve()
-            .then(async () => {
-                try {
-                    const cfn = require('../config/collectorFieldNotifications');
-                    if (invoice.customer_id) {
-                        cfn.notifyInvoicePaid(
-                            Number(invoice.customer_id),
-                            invoice.id,
-                            invoice.invoice_number,
-                            Number(invoice.amount) || 0
-                        );
-                    }
-                } catch (_) { /* ignore */ }
-
-                try {
-                    const paidInvoice = await billingManager.getInvoiceById(invoice.id);
-                    if (!paidInvoice || !paidInvoice.customer_id) return;
-                    const customer = await billingManager.getCustomerById(paidInvoice.customer_id);
-                    if (!customer) return;
-
-                    if (customer.renewal_type === 'renewal') {
-                        const nextDueDate = billingManager.calculateNextDueDate(
-                            customer,
-                            paidInvoice.due_date,
-                            paidInvoice.payment_date || new Date().toISOString()
-                        );
-                        await billingManager.syncBillingDateForRenewal(customer.id, nextDueDate);
-                    }
-
-                    const { shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
-                    if (shouldAutoRestoreCustomer(customer)) {
-                        const invoices = await billingManager.getInvoicesByCustomer(customer.id);
-                        const unpaid = invoices.filter((i) => String(i.status || '').toLowerCase() === 'unpaid');
-                        if (unpaid.length === 0) {
-                            await serviceSuspension.restoreCustomerService(
-                                customer,
-                                `Pelunasan massal admin - Invoice ${paidInvoice.invoice_number}`
-                            );
-                        }
-                    }
-                } catch (sideErr) {
-                    logger.error(`Bulk-pay side effects failed for invoice ${invoice.id}:`, sideErr);
-                }
-            })
-            .catch((err) => logger.error(`Bulk-pay side effects crashed for invoice ${invoice.id}:`, err));
-    });
+    // Legacy single-call — arahkan ke antrian terbatas
+    enqueueBulkPaySideEffects([{ invoice, paymentMethod, paymentId }]);
 }
+
+/**
+ * Side-effect bulk lunas — SEMENTARA dimatikan yang berat:
+ * email, WhatsApp, Puppeteer/PDF, restore MikroTik.
+ * Hanya sync tanggal renewal (SQL ringan) agar data billing tetap konsisten.
+ * Set true lagi per fitur jika mau diaktifkan kembali.
+ */
+const BULK_PAY_SIDE_EFFECTS = {
+    whatsapp: false,
+    email: false,          // email + Puppeteer PDF
+    mikrotikRestore: false,
+    collectorNotify: false,
+    renewalSync: true      // aman: hanya UPDATE DB (antrian ringan)
+};
+
+const BULK_PAY_MAX_IDS = 500;
+
+/** Antrian side-effect bulk: serial + delay agar CPU/RAM tidak meledak. */
+const BULK_SIDE_EFFECT_STATE = {
+    queue: [],
+    running: false,
+    // Jeda pendek cukup (side-effect berat sudah off)
+    delayMs: 50,
+    processed: 0
+};
+
+function sleepMs(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function enqueueBulkPaySideEffects(items) {
+    if (!Array.isArray(items) || items.length === 0) return;
+    // Jika semua side-effect berat off dan renewalSync off, skip antrian
+    const anyOn = Object.values(BULK_PAY_SIDE_EFFECTS).some(Boolean);
+    if (!anyOn) {
+        logger.info(`[BULK-PAY] side-effects skipped (all disabled) count=${items.length}`);
+        return;
+    }
+    for (const item of items) {
+        if (item && item.invoice) BULK_SIDE_EFFECT_STATE.queue.push(item);
+    }
+    logger.info(`[BULK-PAY] side-effect queued +${items.length} totalPending=${BULK_SIDE_EFFECT_STATE.queue.length} flags=${JSON.stringify(BULK_PAY_SIDE_EFFECTS)}`);
+    setImmediate(() => { pumpBulkPaySideEffects().catch(() => {}); });
+}
+
+async function runOneBulkPaySideEffect(item) {
+    const { invoice, paymentId } = item;
+
+    if (BULK_PAY_SIDE_EFFECTS.whatsapp && paymentId) {
+        try {
+            const whatsappNotifications = require('../config/whatsapp-notifications');
+            await Promise.race([
+                Promise.resolve(whatsappNotifications.sendPaymentReceivedNotification(paymentId)),
+                sleepMs(12000)
+            ]);
+        } catch (_) { /* ignore */ }
+    }
+
+    // Email + generateInvoicePdf (Puppeteer) — sengaja tidak dijalankan saat bulk
+    if (BULK_PAY_SIDE_EFFECTS.email && paymentId) {
+        try {
+            const emailNotifications = require('../config/email-notifications');
+            await Promise.race([
+                Promise.resolve(emailNotifications.sendPaymentReceivedNotification(paymentId)),
+                sleepMs(20000)
+            ]);
+        } catch (_) { /* ignore */ }
+    }
+
+    if (BULK_PAY_SIDE_EFFECTS.collectorNotify) {
+        try {
+            const cfn = require('../config/collectorFieldNotifications');
+            if (invoice.customer_id) {
+                cfn.notifyInvoicePaid(
+                    Number(invoice.customer_id),
+                    invoice.id,
+                    invoice.invoice_number,
+                    Number(invoice.amount) || 0
+                );
+            }
+        } catch (_) { /* ignore */ }
+    }
+
+    if (!BULK_PAY_SIDE_EFFECTS.renewalSync && !BULK_PAY_SIDE_EFFECTS.mikrotikRestore) {
+        return;
+    }
+
+    try {
+        const paidInvoice = await billingManager.getInvoiceById(invoice.id);
+        if (!paidInvoice || !paidInvoice.customer_id) return;
+        const customer = await billingManager.getCustomerById(paidInvoice.customer_id);
+        if (!customer) return;
+
+        if (BULK_PAY_SIDE_EFFECTS.renewalSync && customer.renewal_type === 'renewal') {
+            const nextDueDate = billingManager.calculateNextDueDate(
+                customer,
+                paidInvoice.due_date,
+                paidInvoice.payment_date || new Date().toISOString()
+            );
+            await billingManager.syncBillingDateForRenewal(customer.id, nextDueDate);
+        }
+
+        if (BULK_PAY_SIDE_EFFECTS.mikrotikRestore) {
+            const { shouldAutoRestoreCustomer } = require('../utils/customerSuspendReason');
+            if (shouldAutoRestoreCustomer(customer)) {
+                const invoices = await billingManager.getInvoicesByCustomer(customer.id);
+                const unpaid = invoices.filter((i) => String(i.status || '').toLowerCase() === 'unpaid');
+                if (unpaid.length === 0) {
+                    await Promise.race([
+                        serviceSuspension.restoreCustomerService(
+                            customer,
+                            `Pelunasan massal admin - Invoice ${paidInvoice.invoice_number}`
+                        ),
+                        sleepMs(20000)
+                    ]);
+                }
+            }
+        }
+    } catch (sideErr) {
+        logger.error(`Bulk-pay side effects failed for invoice ${invoice.id}:`, sideErr);
+    }
+}
+
+async function pumpBulkPaySideEffects() {
+    if (BULK_SIDE_EFFECT_STATE.running) return;
+    BULK_SIDE_EFFECT_STATE.running = true;
+    try {
+        while (BULK_SIDE_EFFECT_STATE.queue.length > 0) {
+            const item = BULK_SIDE_EFFECT_STATE.queue.shift();
+            const t0 = Date.now();
+            try {
+                await runOneBulkPaySideEffect(item);
+            } catch (err) {
+                logger.error(`[BULK-PAY] side-effect job crashed:`, err);
+            }
+            BULK_SIDE_EFFECT_STATE.processed += 1;
+            if (BULK_SIDE_EFFECT_STATE.processed % 10 === 0 || BULK_SIDE_EFFECT_STATE.queue.length === 0) {
+                logger.info(`[BULK-PAY] side-effect progress done=${BULK_SIDE_EFFECT_STATE.processed} pending=${BULK_SIDE_EFFECT_STATE.queue.length} lastMs=${Date.now() - t0}`);
+            }
+            // jeda + yield event loop agar request web lain tetap dilayani
+            await sleepMs(BULK_SIDE_EFFECT_STATE.delayMs);
+            await new Promise((r) => setImmediate(r));
+        }
+    } finally {
+        BULK_SIDE_EFFECT_STATE.running = false;
+    }
+}
+
+/** Satu bulk-pay aktif per proses — cegah 2 admin membanjiri server bersamaan */
+let bulkPayInFlight = false;
 
 const ALLOWED_ADMIN_PAY_METHODS = new Set(['manual_admin', 'cash', 'transfer_bank', 'qris']);
 
@@ -10772,7 +11159,7 @@ function dbRun(sql, params = []) {
     });
 }
 
-// Bulk mark invoices as paid — path cepat: SQL saja, side-effect setelah response
+// Bulk mark invoices as paid — path cepat: SQL saja, side-effect antrian terbatas setelah response
 router.post('/invoices/bulk-pay', async (req, res) => {
     const t0 = Date.now();
     logger.info(`[BULK-PAY] received path=${req.path} content-type=${req.headers['content-type'] || '-'}`);
@@ -10780,7 +11167,7 @@ router.post('/invoices/bulk-pay', async (req, res) => {
     res.set('Cache-Control', 'no-store');
 
     try {
-        if (!(req.session && req.session.isAdmin)) {
+        if (!(req.session && (req.session.isAdmin || req.session.isAreaManager))) {
             return res.status(401).json({ success: false, message: 'Unauthorized — silakan login ulang' });
         }
 
@@ -10789,109 +11176,157 @@ router.post('/invoices/bulk-pay', async (req, res) => {
             return res.status(403).json({ success: false, message: 'Tenant tidak dikenali' });
         }
 
+        if (bulkPayInFlight) {
+            return res.status(429).json({
+                success: false,
+                message: 'Pelunasan massal lain masih diproses. Tunggu selesai, lalu coba lagi.'
+            });
+        }
+
         const { ids, payment_method, payment_date } = req.body || {};
         logger.info(`[BULK-PAY] hit tenant=${tenantId} ids=${JSON.stringify(ids)} method=${payment_method}`);
 
         if (!Array.isArray(ids) || ids.length === 0) {
             return res.status(400).json({ success: false, message: 'Pilih minimal satu invoice' });
         }
-        if (ids.length > 100) {
-            return res.status(400).json({ success: false, message: 'Maksimal 100 invoice per pelunasan massal' });
+        if (ids.length > BULK_PAY_MAX_IDS) {
+            return res.status(400).json({
+                success: false,
+                message: `Maksimal ${BULK_PAY_MAX_IDS} invoice per pelunasan massal. Ulangi batch berikutnya untuk sisa invoice.`
+            });
         }
 
         const paymentMethod = String(payment_method || 'manual_admin').trim() || 'manual_admin';
         if (!ALLOWED_ADMIN_PAY_METHODS.has(paymentMethod)) {
             return res.status(400).json({ success: false, message: 'Metode pembayaran tidak valid' });
         }
-        // Selalu simpan tanggal+jam aksi (Jakarta) — ini yang diurutkan di /all-payments
         const paymentDateBase = localPayDateTime(payment_date);
         const uniqueIds = [...new Set(ids.map((raw) => parseInt(raw, 10)).filter((id) => Number.isFinite(id) && id > 0))];
         if (uniqueIds.length === 0) {
             return res.status(400).json({ success: false, message: 'Daftar ID invoice tidak valid' });
         }
 
-        // Pastikan kolom diskon ada (cepat / cached)
         try { await billingManager._ensurePaymentsDiscountColumn(); } catch (_) { /* ignore */ }
-        try { await dbRun('PRAGMA busy_timeout = 3000'); } catch (_) { /* ignore */ }
+        try { await dbRun('PRAGMA busy_timeout = 5000'); } catch (_) { /* ignore */ }
 
+        bulkPayInFlight = true;
         const results = [];
         const sideEffectQueue = [];
         let success = 0;
         let skipped = 0;
         let failed = 0;
 
-        // Timeout pengaman: jangan biarkan request menggantung > 8 detik
+        // SQL-only path: 500 baris biasanya < 30s; watchdog longgar + yield agar event loop hidup
         let timedOut = false;
-        const watchdog = setTimeout(() => { timedOut = true; }, 8000);
+        const watchdogMs = Math.min(120000, Math.max(30000, uniqueIds.length * 150));
+        const watchdog = setTimeout(() => { timedOut = true; }, watchdogMs);
 
         let paySeq = 0;
-        for (const id of uniqueIds) {
-            if (timedOut) {
-                results.push({ id, success: false, message: 'Timeout — coba batch lebih kecil' });
-                failed++;
-                continue;
-            }
-            try {
-                const invoice = await dbGet(
-                    `SELECT id, tenant_id, customer_id, invoice_number, amount, status, due_date
-                     FROM invoices WHERE id = ? AND tenant_id = ?`,
-                    [id, tenantId]
-                );
-                if (!invoice) throw new Error('Invoice tidak ditemukan di tenant ini');
+        let processedInLoop = 0;
+        let txOpen = false;
+        const TX_CHUNK = 40;
 
-                const status = String(invoice.status || '').toLowerCase();
-                if (status === 'paid') {
-                    results.push({ id, success: true, skipped: true, invoice_number: invoice.invoice_number, message: 'Sudah lunas' });
-                    skipped++;
+        const commitTx = async () => {
+            if (!txOpen) return;
+            await dbRun('COMMIT');
+            txOpen = false;
+        };
+        const beginTx = async () => {
+            if (txOpen) return;
+            await dbRun('BEGIN IMMEDIATE');
+            txOpen = true;
+        };
+        const rollbackTx = async () => {
+            if (!txOpen) return;
+            try { await dbRun('ROLLBACK'); } catch (_) { /* ignore */ }
+            txOpen = false;
+        };
+
+        try {
+            await beginTx();
+            for (const id of uniqueIds) {
+                if (timedOut) {
+                    results.push({ id, success: false, message: 'Timeout — coba batch lebih kecil' });
+                    failed++;
                     continue;
                 }
-                if (status === 'cancelled') throw new Error('Invoice dibatalkan, tidak dapat dilunasi');
+                try {
+                    const invoice = await dbGet(
+                        `SELECT id, tenant_id, customer_id, invoice_number, amount, status, due_date
+                         FROM invoices WHERE id = ? AND tenant_id = ?`,
+                        [id, tenantId]
+                    );
+                    if (!invoice) throw new Error('Invoice tidak ditemukan di tenant ini');
 
-                // Detik +paySeq agar tiap baris unik & solid di urutan all-payments
-                const paymentDate = (() => {
-                    const base = String(paymentDateBase).slice(0, 19);
-                    const m = base.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):(\d{2})$/);
-                    if (!m) return base || jakartaNowDateTime();
-                    let h = parseInt(m[2], 10);
-                    let mi = parseInt(m[3], 10);
-                    let s = parseInt(m[4], 10) + paySeq;
-                    paySeq += 1;
-                    mi += Math.floor(s / 60);
-                    s = s % 60;
-                    h += Math.floor(mi / 60);
-                    mi = mi % 60;
-                    h = h % 24;
-                    const pad = (n) => String(n).padStart(2, '0');
-                    return `${m[1]} ${pad(h)}:${pad(mi)}:${pad(s)}`;
-                })();
+                    const status = String(invoice.status || '').toLowerCase();
+                    if (status === 'paid') {
+                        results.push({ id, success: true, skipped: true, invoice_number: invoice.invoice_number, message: 'Sudah lunas' });
+                        skipped++;
+                        continue;
+                    }
+                    if (status === 'cancelled') throw new Error('Invoice dibatalkan, tidak dapat dilunasi');
 
-                const amount = Math.max(0, parseFloat(invoice.amount) || 0);
-                const notes = `Pelunasan massal oleh Admin Kantor | Tanggal Bayar: ${paymentDate}`;
-                const payIns = await dbRun(
-                    `INSERT INTO payments (invoice_id, amount, payment_method, reference_number, notes, payment_date, discount_amount, tenant_id)
-                     VALUES (?, ?, ?, '', ?, ?, 0, ?)`,
-                    [invoice.id, amount, paymentMethod, notes, paymentDate, tenantId]
-                );
-                await dbRun(
-                    `UPDATE invoices SET status = 'paid', payment_date = ?, payment_method = ? WHERE id = ? AND tenant_id = ?`,
-                    [paymentDate, paymentMethod, invoice.id, tenantId]
-                );
+                    const paymentDate = (() => {
+                        const base = String(paymentDateBase).slice(0, 19);
+                        const m = base.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):(\d{2})$/);
+                        if (!m) return base || jakartaNowDateTime();
+                        let h = parseInt(m[2], 10);
+                        let mi = parseInt(m[3], 10);
+                        let s = parseInt(m[4], 10) + paySeq;
+                        paySeq += 1;
+                        mi += Math.floor(s / 60);
+                        s = s % 60;
+                        h += Math.floor(mi / 60);
+                        mi = mi % 60;
+                        h = h % 24;
+                        const pad = (n) => String(n).padStart(2, '0');
+                        return `${m[1]} ${pad(h)}:${pad(mi)}:${pad(s)}`;
+                    })();
 
-                sideEffectQueue.push({ invoice, paymentMethod, paymentId: payIns.id });
-                results.push({ id, success: true, invoice_number: invoice.invoice_number });
-                success++;
-            } catch (e) {
-                logger.error(`[BULK-PAY] fail id=${id}: ${e.message}`);
-                results.push({ id, success: false, message: e.message || 'Gagal melunasi' });
-                failed++;
+                    const amount = Math.max(0, parseFloat(invoice.amount) || 0);
+                    const notes = `Pelunasan massal oleh Admin Kantor | Tanggal Bayar: ${paymentDate}`;
+                    const payIns = await dbRun(
+                        `INSERT INTO payments (invoice_id, amount, payment_method, reference_number, notes, payment_date, discount_amount, tenant_id)
+                         VALUES (?, ?, ?, '', ?, ?, 0, ?)`,
+                        [invoice.id, amount, paymentMethod, notes, paymentDate, tenantId]
+                    );
+                    await dbRun(
+                        `UPDATE invoices SET status = 'paid', payment_date = ?, payment_method = ? WHERE id = ? AND tenant_id = ?`,
+                        [paymentDate, paymentMethod, invoice.id, tenantId]
+                    );
+
+                    sideEffectQueue.push({ invoice, paymentMethod, paymentId: payIns.id });
+                    results.push({ id, success: true, invoice_number: invoice.invoice_number });
+                    success++;
+                } catch (e) {
+                    logger.error(`[BULK-PAY] fail id=${id}: ${e.message}`);
+                    results.push({ id, success: false, message: e.message || 'Gagal melunasi' });
+                    failed++;
+                }
+
+                processedInLoop += 1;
+                // Commit berkala + yield agar web & SQLite tidak terkunci lama
+                if (processedInLoop % TX_CHUNK === 0) {
+                    await commitTx();
+                    await new Promise((r) => setImmediate(r));
+                    if (!timedOut) await beginTx();
+                } else if (processedInLoop % 15 === 0) {
+                    await new Promise((r) => setImmediate(r));
+                }
             }
+            await commitTx();
+        } catch (loopErr) {
+            await rollbackTx();
+            throw loopErr;
+        } finally {
+            clearTimeout(watchdog);
+            bulkPayInFlight = false;
         }
-        clearTimeout(watchdog);
 
         const ok = success > 0 || (skipped > 0 && failed === 0);
         const payload = {
             success: ok,
-            message: `Pelunasan massal selesai. Berhasil: ${success}, Dilewati: ${skipped}, Gagal: ${failed}`,
+            message: `Pelunasan massal selesai. Berhasil: ${success}, Dilewati: ${skipped}, Gagal: ${failed}. (WA/email/Puppeteer/restore MikroTik sementara nonaktif pada bulk lunas)`,
             summary: { success, skipped, failed, total: uniqueIds.length, ms: Date.now() - t0 },
             paid_ids: results.filter((r) => r.success && !r.skipped).map((r) => r.id),
             results
@@ -10899,14 +11334,11 @@ router.post('/invoices/bulk-pay', async (req, res) => {
         logger.info(`[BULK-PAY] done tenant=${tenantId} success=${success} skipped=${skipped} failed=${failed} ms=${Date.now() - t0}`);
         res.status(ok ? 200 : 400).json(payload);
 
-        // Side effects SETELAH response terkirim
-        setImmediate(() => {
-            for (const item of sideEffectQueue) {
-                queueBulkPaySideEffects(item.invoice, item.paymentMethod, item.paymentId);
-            }
-        });
+        // Side effects SETELAH response — antrian serial (bukan parallel storm)
+        enqueueBulkPaySideEffects(sideEffectQueue);
         return;
     } catch (error) {
+        bulkPayInFlight = false;
         logger.error('Error bulk paying invoices:', error);
         if (!res.headersSent) {
             return res.status(500).json({ success: false, message: 'Gagal melakukan pelunasan massal', error: error.message });
@@ -10952,7 +11384,7 @@ router.get('/payments', getAppSettings, async (req, res) => {
         const tenantId = resolveBillingTenantId(req);
         const period = resolveMonthYearRange(req.query);
         // Get filter parameters
-        const filters = {
+        const filters = applyAreaManagerCustomerFilter(req, {
             month: String(period.month),
             year: String(period.year),
             from: req.query.from || period.startDate,
@@ -10961,7 +11393,7 @@ router.get('/payments', getAppSettings, async (req, res) => {
             status: req.query.status || '',
             q: req.query.q || '',
             tenantId
-        };
+        });
         
         // Get payments with filters
         const payments = tenantId
@@ -10991,38 +11423,72 @@ router.get('/payments', getAppSettings, async (req, res) => {
     }
 });
 
+function allPaymentsMethodLabel(raw) {
+    const m = String(raw || '').trim().toLowerCase();
+    if (!m) return '—';
+    if (m === 'manual_admin' || m === 'admin kantor' || m === 'admin') return 'Admin Kantor';
+    if (m === 'cash' || m === 'tunai') return 'Tunai';
+    if (m.includes('transfer')) return 'Transfer';
+    if (m.includes('qris')) return 'QRIS';
+    if (m.includes('ewallet') || m.includes('e-wallet') || m.includes('e wallet')) return 'E-Wallet';
+    if (m === 'online' || m.includes('gateway')) return 'Online';
+    return String(raw).trim();
+}
+
+function allPaymentsNoteDisplay(notes) {
+    if (notes == null || notes === '') return '';
+    const s = String(notes).trim();
+    if (!s) return '';
+    if (/^collector\s+\d+(\s|$|\[)/i.test(s)) return '';
+    return s.replace(/\n/g, ' ');
+}
+
+function resolveAllPaymentsPageFilters(req) {
+    const tenantId = resolveBillingTenantId(req);
+    const period = resolveMonthYearRange(req.query);
+    const day = parseIsoDateOnly(req.query.date || req.query.day || '');
+    const fromQ = parseIsoDateOnly(req.query.from);
+    const toQ = parseIsoDateOnly(req.query.to);
+    let from = period.startDate;
+    let to = period.endDate;
+    let month = String(period.month);
+    let year = String(period.year);
+    if (fromQ || toQ) {
+        if (fromQ) from = fromQ;
+        if (toQ) to = toQ;
+        if (from > to) {
+            const swap = from;
+            from = to;
+            to = swap;
+        }
+        const [y, m] = from.split('-');
+        month = String(parseInt(m, 10));
+        year = String(parseInt(y, 10));
+    } else if (day) {
+        from = day;
+        to = day;
+        const [y, m] = day.split('-');
+        month = String(parseInt(m, 10));
+        year = String(parseInt(y, 10));
+    }
+    return applyAreaManagerCustomerFilter(req, {
+        month,
+        year,
+        date: from === to ? from : '',
+        from,
+        to,
+        collector_id: req.query.collector_id || '',
+        payment_method: String(req.query.payment_method || '').trim(),
+        q: req.query.q || '',
+        tenantId
+    });
+}
+
 // All Payments - Admin and Collector
 router.get('/all-payments', getAppSettings, async (req, res) => {
     try {
-        const tenantId = resolveBillingTenantId(req);
-        const period = resolveMonthYearRange(req.query);
-        const day = parseIsoDateOnly(req.query.date || req.query.day || '');
-        let from = period.startDate;
-        let to = period.endDate;
-        let month = String(period.month);
-        let year = String(period.year);
-        if (day) {
-            from = day;
-            to = day;
-            const [y, m] = day.split('-');
-            month = String(parseInt(m, 10));
-            year = String(parseInt(y, 10));
-        } else {
-            const fromQ = parseIsoDateOnly(req.query.from);
-            const toQ = parseIsoDateOnly(req.query.to);
-            if (fromQ) from = fromQ;
-            if (toQ) to = toQ;
-        }
-        const filters = {
-            month,
-            year,
-            date: day,
-            from,
-            to,
-            collector_id: req.query.collector_id || '',
-            q: req.query.q || '',
-            tenantId
-        };
+        const filters = resolveAllPaymentsPageFilters(req);
+        const tenantId = filters.tenantId;
 
         const [payments, collectors, summary] = tenantId
             ? await Promise.all([
@@ -11055,6 +11521,71 @@ router.get('/all-payments', getAppSettings, async (req, res) => {
     }
 });
 
+router.get('/all-payments/export.xlsx', getAppSettings, async (req, res) => {
+    try {
+        const filters = resolveAllPaymentsPageFilters(req);
+        if (!filters.tenantId) {
+            return res.status(403).send('Tenant tidak dikenali');
+        }
+        const payments = await billingManager.getAllPaymentsHistory({ ...filters, limit: 2500 });
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = 'Kalimasada';
+        workbook.created = new Date();
+        const sheet = workbook.addWorksheet('Riwayat Pembayaran', { views: [{ state: 'frozen', ySplit: 1 }] });
+        sheet.columns = [
+            { header: 'Tanggal', key: 'tanggal', width: 20 },
+            { header: 'Invoice', key: 'invoice', width: 22 },
+            { header: 'Kolektor', key: 'kolektor', width: 22 },
+            { header: 'Pelanggan', key: 'pelanggan', width: 28 },
+            { header: 'Telepon', key: 'telepon', width: 16 },
+            { header: 'Tagihan', key: 'tagihan', width: 16 },
+            { header: 'Komisi', key: 'komisi', width: 14 },
+            { header: 'Diskon', key: 'diskon', width: 14 },
+            { header: 'Jumlah', key: 'jumlah', width: 16 },
+            { header: 'Metode', key: 'metode', width: 16 },
+            { header: 'Status', key: 'status', width: 12 },
+            { header: 'Catatan', key: 'catatan', width: 36 }
+        ];
+        const headerRow = sheet.getRow(1);
+        headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A5F' } };
+        headerRow.alignment = { vertical: 'middle' };
+        headerRow.height = 22;
+        const rpFmt = '"Rp" #,##0';
+        (payments || []).forEach((p) => {
+            const invSt = String(p.invoice_status || '').toLowerCase();
+            const row = sheet.addRow({
+                tanggal: p.payment_date || '',
+                invoice: p.invoice_number || ('#' + p.invoice_id),
+                kolektor: p.collector_name ? p.collector_name : 'Admin kantor',
+                pelanggan: p.customer_name || '',
+                telepon: p.customer_phone || '',
+                tagihan: Number(p.invoice_tagihan != null ? p.invoice_tagihan : p.invoice_amount || 0) || 0,
+                komisi: Number(p.commission_amount || 0) || 0,
+                diskon: Number(p.discount_amount || 0) || 0,
+                jumlah: Number(p.jumlah_setelah_diskon != null ? p.jumlah_setelah_diskon : 0) || 0,
+                metode: allPaymentsMethodLabel(p.payment_method),
+                status: invSt === 'paid' ? 'Lunas' : (invSt || ''),
+                catatan: allPaymentsNoteDisplay(p.notes)
+            });
+            ['tagihan', 'komisi', 'diskon', 'jumlah'].forEach((k) => {
+                row.getCell(k).numFmt = rpFmt;
+            });
+        });
+        sheet.autoFilter = { from: 'A1', to: 'L1' };
+        const fromPart = String(filters.from || '').replace(/-/g, '') || 'all';
+        const toPart = String(filters.to || '').replace(/-/g, '') || 'all';
+        const filename = `riwayat-pembayaran-${fromPart}-${toPart}.xlsx`;
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (error) {
+        logger.error('Error exporting all payments xlsx:', error);
+        res.status(500).send('Gagal mengekspor Excel');
+    }
+});
+
 /** Batalkan satu pembayaran (riwayat all-payments): hapus baris payment & kembalikan invoice ke unpaid bila perlu */
 router.post('/api/payments/:id/cancel', async (req, res) => {
     try {
@@ -11070,7 +11601,7 @@ router.post('/api/payments/:id/cancel', async (req, res) => {
                 message: 'Password konfirmasi wajib diisi.'
             });
         }
-        if (!verifySuperAdminPassword(confirmPassword, req)) {
+        if (!(await verifySuperAdminPassword(confirmPassword, req))) {
             return res.status(403).json({
                 success: false,
                 message: 'Password admin salah. Gunakan password login panel admin tenant ini.'
@@ -11231,7 +11762,7 @@ router.post('/payments', async (req, res) => {
 // Export customers to CSV
 router.get('/export/customers', getAppSettings, async (req, res) => {
     try {
-        const customers = await billingManager.getCustomers();
+        const customers = await loadVisibleCustomers(req);
         
         // Create CSV content
         let csvContent = 'ID,Username,Nama,Phone,Email,Address,Package,Status,Payment Status,Created At\n';
@@ -11948,7 +12479,7 @@ router.get('/api/mapping/export', async (req, res) => {
 
 router.get('/api/customers', adminAuth, async (req, res) => {
     try {
-        const customers = await billingManager.getCustomers();
+        const customers = await loadVisibleCustomers(req);
         res.json({
             success: true,
             customers: customers
@@ -12593,7 +13124,7 @@ router.post('/service-suspension/check-overdue', async (req, res) => {
 router.post('/service-suspension/check-paid', async (req, res) => {
     try {
         const serviceSuspension = require('../config/serviceSuspension');
-        const result = await serviceSuspension.checkAndRestorePaidCustomers();
+        const result = await serviceSuspension.checkAndRestorePaidCustomers({ includeManual: true });
         
         res.json({
             success: true,
@@ -12874,7 +13405,18 @@ router.post('/service-suspension/bulk-update-due-date-by-areas', adminAuth, asyn
             });
         }
 
-        const result = await billingManager.bulkUpdateDueDateByAreas({ area_ids, due_day: day });
+        const scoped = areaIdsAllowedForManager(req, area_ids);
+        if (!scoped.ok) {
+            return res.status(403).json({
+                success: false,
+                message: 'Wilayah di luar penugasan Manager Area.',
+                total: 0,
+                updated: 0,
+                failed: 0,
+                invoices_updated: 0
+            });
+        }
+        const result = await billingManager.bulkUpdateDueDateByAreas({ area_ids: scoped.ids, due_day: day });
         const { total, updated, failed, invoices_updated, need_retry } = result;
 
         let message = `Jatuh tempo diupdate: ${updated} dari ${total} pelanggan di wilayah terpilih.`;
@@ -12918,6 +13460,13 @@ router.get('/service-suspension/isolir-day-summary', adminAuth, async (req, res)
             area_ids = area_ids.split(',').map((s) => s.trim()).filter(Boolean);
         } else if (!Array.isArray(area_ids)) {
             area_ids = [];
+        }
+        if (isAreaManagerRequest(req)) {
+            const allowed = new Set((req.areaManagerAreaIds || []).map(Number));
+            const requested = area_ids.map((id) => Number(id)).filter((id) => Number.isFinite(id));
+            area_ids = requested.length
+                ? requested.filter((id) => allowed.has(id))
+                : [...allowed];
         }
 
         const summary = await billingManager.getAutoIsolirScheduleSummary(area_ids);
@@ -12987,7 +13536,17 @@ router.post('/service-suspension/bulk-update-auto-isolir-by-areas', adminAuth, a
             });
         }
 
-        const result = await billingManager.bulkUpdateAutoIsolirDayByAreas({ area_ids, auto_suspension_day: day });
+        const scoped = areaIdsAllowedForManager(req, area_ids);
+        if (!scoped.ok) {
+            return res.status(403).json({
+                success: false,
+                message: 'Wilayah di luar penugasan Manager Area.',
+                total: 0,
+                updated: 0,
+                failed: 0
+            });
+        }
+        const result = await billingManager.bulkUpdateAutoIsolirDayByAreas({ area_ids: scoped.ids, auto_suspension_day: day });
         const { total, updated, failed, need_retry } = result;
 
         let message = `Tanggal auto isolir diupdate: ${updated} dari ${total} pelanggan di wilayah terpilih.`;
@@ -13125,6 +13684,9 @@ router.post('/invoices/:id/isolir', async (req, res) => {
         if (!customer) return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
 
         const result = await serviceSuspension.suspendCustomerService(customer, reason);
+        if (result && result.skipped) {
+            return res.status(403).json({ success: false, message: result.error });
+        }
         return res.json({ success: !!result?.success, data: result, message: result?.success ? 'Isolir berhasil' : (result?.error || 'Gagal isolir') });
     } catch (error) {
         logger.error('Error manual isolir:', error);
@@ -13145,6 +13707,9 @@ router.post('/invoices/:id/restore', async (req, res) => {
         if (!customer) return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
 
         const result = await serviceSuspension.restoreCustomerService(customer, reason);
+        if (result && result.skipped) {
+            return res.status(403).json({ success: false, message: result.error });
+        }
         return res.json({ success: !!result?.success, data: result, message: result?.success ? 'Restore berhasil' : (result?.error || 'Gagal restore') });
     } catch (error) {
         logger.error('Error manual restore:', error);
@@ -13767,7 +14332,7 @@ router.get('/mapping', getAppSettings, async (req, res) => {
 router.get('/mobile/mapping', getAppSettings, async (req, res) => {
     try {
         // Get mapping data for mobile
-        const customers = await billingManager.getCustomers();
+        const customers = await loadVisibleCustomers(req);
         const customersWithCoords = customers.filter(c => c.latitude && c.longitude);
         
         // Calculate stats
@@ -13793,7 +14358,7 @@ router.get('/api/mapping/data', async (req, res) => {
         const MappingUtils = require('../utils/mappingUtils');
         
         // Ambil data customers dengan koordinat
-        const customers = await billingManager.getCustomers();
+        const customers = await loadVisibleCustomers(req);
         const customersWithCoords = customers.filter(c => c.latitude && c.longitude);
         
         // Validasi koordinat customer
@@ -13851,7 +14416,7 @@ router.get('/api/mapping/coverage', async (req, res) => {
         const MappingUtils = require('../utils/mappingUtils');
         
         // Ambil data customers
-        const customers = await billingManager.getCustomers();
+        const customers = await loadVisibleCustomers(req);
         const customersWithCoords = customers.filter(c => c.latitude && c.longitude);
         
         if (customersWithCoords.length < 3) {
@@ -14063,7 +14628,7 @@ router.get('/api/mapping/export', async (req, res) => {
         const { format = 'json' } = req.query;
         
         // Ambil data mapping
-        const customers = await billingManager.getCustomers();
+        const customers = await loadVisibleCustomers(req);
         const customersWithCoords = customers.filter(c => c.latitude && c.longitude);
         
         if (format === 'csv') {

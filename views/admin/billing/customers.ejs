@@ -595,6 +595,13 @@
                     </div>
                 </div>
 
+                <% if (typeof isMasterTenant !== 'undefined' && isMasterTenant) { %>
+                <div class="alert alert-info">
+                    <i class="bi bi-diagram-3 me-1"></i>
+                    Data pelanggan di sini untuk catatan manajemen. Perubahan tidak ditulis ke RADIUS atau ke tenant sumber.
+                </div>
+                <% } %>
+
                 <!-- Month/Year Filter -->
                 <form method="GET" action="/admin/billing/customers" class="mb-3 d-flex align-items-end gap-2" id="timeFilterForm">
                     <div>
@@ -707,7 +714,7 @@
                     const summaryMonth = typeof selectedMonth !== 'undefined' ? selectedMonth : '';
                     const summaryYear = typeof selectedYear !== 'undefined' ? selectedYear : '';
                     const summaryCards = [
-                        { title: 'Total Pelanggan', value: stat.total || 0, nominal: stat.total_nominal || 0, hint: 'semua pelanggan', icon: 'bi-people-fill', href: `/admin/billing/customers?month=${summaryMonth}&year=${summaryYear}` },
+                        { title: 'Total Pelanggan', value: stat.total || 0, nominal: stat.total_nominal || 0, hint: (typeof isAreaManager !== 'undefined' && isAreaManager) ? 'pelanggan wilayah Anda' : 'semua pelanggan', icon: 'bi-people-fill', href: `/admin/billing/customers?month=${summaryMonth}&year=${summaryYear}` },
                         { title: 'Pelanggan Aktif', value: stat.aktif || 0, nominal: stat.aktif_nominal || 0, hint: 'termasuk pelanggan isolir', icon: 'bi-person-check-fill', href: `/admin/billing/customers?customer_type=aktif&month=${summaryMonth}&year=${summaryYear}` },
                         { title: 'Pelanggan Nonaktif', value: stat.nonaktif || 0, nominal: stat.nonaktif_nominal || 0, hint: 'berhenti langganan', icon: 'bi-person-x-fill', href: `/admin/billing/customers?customer_type=nonaktif&month=${summaryMonth}&year=${summaryYear}` },
                         { title: 'Pelanggan Baru', value: stat.baru || 0, nominal: stat.baru_nominal || 0, hint: 'join bulan ini', icon: 'bi-person-plus-fill', href: `/admin/billing/customers?customer_type=baru&month=${summaryMonth}&year=${summaryYear}` },
@@ -979,6 +986,7 @@
                                                         <button type="button" class="btn btn-sm btn-info" onclick="viewCustomerDetail('<%= customer.phone %>')" title="Lihat detail pelanggan billing" aria-label="Lihat detail pelanggan">
                                                             <i class="bi bi-eye-fill"></i>
                                                         </button>
+                                                        <% if (String(customer.master_origin || '') !== 'copied') { %>
                                                         <button type="button" class="btn btn-sm btn-primary" onclick="editCustomer('<%= customer.phone %>')" title="Ubah data pelanggan" aria-label="Ubah pelanggan">
                                                             <i class="bi bi-pencil-fill"></i>
                                                         </button>
@@ -988,6 +996,7 @@
                                                         <button type="button" class="btn btn-sm btn-danger" onclick="deleteCustomer('<%= customer.id %>')" title="Hapus pelanggan dari sistem" aria-label="Hapus pelanggan">
                                                             <i class="bi bi-trash3-fill"></i>
                                                         </button>
+                                                        <% } %>
                                                     </div>
                                                 </td>
                                             </tr>

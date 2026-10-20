@@ -36,8 +36,7 @@
             margin-bottom: 24px;
         }
         .card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+            box-shadow: 0 8px 16px rgba(0,0,0,0.08);
         }
         .stats-card {
             position: relative;
@@ -160,6 +159,15 @@
             justify-content: center;
             padding: 2rem;
         }
+        .tr-kpi .card-text { font-size: 1.85rem; }
+        .tr-month-filter .form-select { min-width: 140px; }
+        .tr-progress-item { border-bottom: 1px solid var(--border, #eef2f6); padding: 12px 0; }
+        .tr-progress-item:last-child { border-bottom: 0; }
+        .tr-chart-wrap { height: 240px; }
+        .tr-unread-dot {
+            display: inline-block; width: 8px; height: 8px; border-radius: 99px;
+            background: #ef4444; margin-right: 6px;
+        }
         @media (max-width: 991.98px) {
             .sidebar {
                 position: fixed;
@@ -217,13 +225,26 @@
         <% } %>
         
         <main class="col-md-10 ms-sm-auto col-lg-10 px-md-4 main-content">
-            <% if (typeof isTechnicianView !== 'undefined' && isTechnicianView) { %>
+            <% 
+                const _isTech = typeof isTechnicianView !== 'undefined' && isTechnicianView;
+                const _listBase = _isTech ? '/technician/troubletickets' : '/admin/trouble';
+                const _detailBase = _isTech ? '/technician/troubletickets/detail' : '/admin/trouble/detail';
+                const _months = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+                const _selM = typeof selectedMonth !== 'undefined' ? Number(selectedMonth) : (new Date().getMonth() + 1);
+                const _selY = typeof selectedYear !== 'undefined' ? Number(selectedYear) : new Date().getFullYear();
+                const _curY = typeof currentYear !== 'undefined' ? Number(currentYear) : new Date().getFullYear();
+                const _monthLabel = typeof monthLabel !== 'undefined' ? monthLabel : (_months[_selM - 1] + ' ' + _selY);
+                const _carry = typeof carryOver !== 'undefined' && Array.isArray(carryOver) ? carryOver : [];
+                const _recent = typeof recentProgress !== 'undefined' && Array.isArray(recentProgress) ? recentProgress : [];
+                const _unreadBefore = typeof unreadBefore !== 'undefined' ? Number(unreadBefore) : 0;
+            %>
+            <% if (_isTech) { %>
                 <!-- Welcome Section for Technician -->
                 <div class="row mb-4">
                     <div class="col-12">
                         <div class="user-info">
                             <h4 class="mb-1">
-                                <i class="bi bi-exclamation-circle-fill me-2"></i>Laporan Gangguan
+                                <i class="bi bi-exclamation-circle-fill me-2"></i>Dashboard Gangguan Bulanan
                             </h4>
                             <p class="mb-0 opacity-75">
                                 <i class="bi bi-person-circle me-1"></i>Teknisi: <%= technician.name %> | 
@@ -234,35 +255,84 @@
                 </div>
             <% } else { %>
                 <!-- Admin Header -->
-                <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-4">
+                <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 gap-3">
                     <div>
-                        <h1 class="page-title"><%= title || 'Manajemen Laporan Gangguan' %></h1>
-                        <p class="text-muted">Kelola dan pantau semua laporan gangguan dari pelanggan</p>
+                        <h1 class="page-title">Dashboard Gangguan Bulanan</h1>
+                        <p class="text-muted mb-0">Rekap laporan, progress pengerjaan, dan tiket periode <strong><%= _monthLabel %></strong></p>
                     </div>
-                    <div>
-                        <button class="btn btn-success rounded-pill me-2" data-bs-toggle="modal" data-bs-target="#createTicketModal">
+                    <div class="d-flex flex-wrap gap-2">
+                        <button class="btn btn-success rounded-pill" data-bs-toggle="modal" data-bs-target="#createTicketModal">
                             <i class="bi bi-plus-circle me-2"></i> Buat Tiket
-                        </button>
-                        <button class="btn btn-primary rounded-pill">
-                            <i class="bi bi-file-earmark-text me-2"></i> Export Laporan
                         </button>
                     </div>
                 </div>
             <% } %>
+
+            <form method="GET" action="<%= _listBase %>" class="card filter-card mb-4 tr-month-filter">
+                <div class="card-body py-3">
+                    <%
+                        let _prevM = _selM - 1, _prevY = _selY;
+                        if (_prevM < 1) { _prevM = 12; _prevY -= 1; }
+                        let _nextM = _selM + 1, _nextY = _selY;
+                        if (_nextM > 12) { _nextM = 1; _nextY += 1; }
+                    %>
+                    <div class="row g-3 align-items-end">
+                        <div class="col-auto">
+                            <a class="btn btn-outline-secondary" href="<%= _listBase %>?month=<%= _prevM %>&year=<%= _prevY %>" title="Bulan sebelumnya">
+                                <i class="bi bi-chevron-left"></i>
+                            </a>
+                        </div>
+                        <div class="col-6 col-md-3 col-lg-2">
+                            <label class="form-label small fw-bold text-muted mb-1"><i class="bi bi-calendar3 me-1"></i>Bulan</label>
+                            <select name="month" class="form-select" onchange="this.form.submit()">
+                                <% for (let i = 1; i <= 12; i++) { %>
+                                    <option value="<%= i %>" <%= _selM === i ? 'selected' : '' %>><%= _months[i-1] %></option>
+                                <% } %>
+                            </select>
+                        </div>
+                        <div class="col-6 col-md-3 col-lg-2">
+                            <label class="form-label small fw-bold text-muted mb-1">Tahun</label>
+                            <select name="year" class="form-select" onchange="this.form.submit()">
+                                <% for (let y = _curY - 3; y <= _curY + 1; y++) { %>
+                                    <option value="<%= y %>" <%= _selY === y ? 'selected' : '' %>><%= y %></option>
+                                <% } %>
+                            </select>
+                        </div>
+                        <div class="col-auto">
+                            <a class="btn btn-outline-secondary" href="<%= _listBase %>?month=<%= _nextM %>&year=<%= _nextY %>" title="Bulan berikutnya">
+                                <i class="bi bi-chevron-right"></i>
+                            </a>
+                        </div>
+                        <div class="col-12 col-lg d-flex flex-wrap gap-2 align-items-center">
+                            <span class="badge bg-primary rounded-pill px-3 py-2"><%= _monthLabel %></span>
+                            <% if (_unreadBefore > 0 && !_isTech) { %>
+                                <span class="badge bg-danger rounded-pill px-3 py-2">
+                                    <i class="bi bi-bell-fill me-1"></i><%= _unreadBefore %> update progress baru
+                                </span>
+                            <% } %>
+                            <% if (_carry.length > 0) { %>
+                                <span class="badge bg-warning text-dark rounded-pill px-3 py-2">
+                                    <%= _carry.length %> tiket bulan lalu masih berjalan
+                                </span>
+                            <% } %>
+                        </div>
+                    </div>
+                </div>
+            </form>
             
-            <!-- Statistik Laporan -->
-            <div class="row mb-4">
-                <div class="col-md-6 col-6 mb-3">
-                    <div class="card stats-card text-white bg-primary">
+            <!-- Statistik Laporan bulan terpilih -->
+            <div class="row mb-4 tr-kpi">
+                <div class="col-6 col-lg-3 mb-3">
+                    <div class="card stats-card text-white bg-primary h-100">
                         <div class="card-body">
                             <div class="stats-icon"><i class="bi bi-clipboard-data"></i></div>
-                            <h5 class="card-title">Total Laporan</h5>
+                            <h5 class="card-title">Tiket Bulan Ini</h5>
                             <h2 class="card-text"><%= stats.total %></h2>
                         </div>
                     </div>
                 </div>
-                <div class="col-md-6 col-6 mb-3">
-                    <div class="card stats-card text-white bg-danger">
+                <div class="col-6 col-lg-3 mb-3">
+                    <div class="card stats-card text-white bg-danger h-100">
                         <div class="card-body">
                             <div class="stats-icon"><i class="bi bi-exclamation-circle"></i></div>
                             <h5 class="card-title">Belum Ditangani</h5>
@@ -270,24 +340,64 @@
                         </div>
                     </div>
                 </div>
-            </div>
-            
-            <div class="row mb-4">
-                <div class="col-md-6 col-6 mb-3">
-                    <div class="card stats-card text-dark bg-warning">
+                <div class="col-6 col-lg-3 mb-3">
+                    <div class="card stats-card text-dark bg-warning h-100">
                         <div class="card-body">
                             <div class="stats-icon"><i class="bi bi-gear"></i></div>
-                            <h5 class="card-title">Sedang Ditangani</h5>
+                            <h5 class="card-title">Sedang Dikerjakan</h5>
                             <h2 class="card-text"><%= stats.inProgress %></h2>
                         </div>
                     </div>
                 </div>
-                <div class="col-md-6 col-6 mb-3">
-                    <div class="card stats-card text-white bg-success">
+                <div class="col-6 col-lg-3 mb-3">
+                    <div class="card stats-card text-white bg-success h-100">
                         <div class="card-body">
                             <div class="stats-icon"><i class="bi bi-check-circle"></i></div>
-                            <h5 class="card-title">Terselesaikan</h5>
-                            <h2 class="card-text"><%= stats.resolved + stats.closed %></h2>
+                            <h5 class="card-title">Selesai / Ditutup</h5>
+                            <h2 class="card-text"><%= (stats.resolved || 0) + (stats.closed || 0) %></h2>
+                            <small class="opacity-75"><%= stats.resolutionRate || 0 %>% tuntas periode ini</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row mb-4">
+                <div class="col-lg-7 mb-3">
+                    <div class="card h-100">
+                        <div class="card-body">
+                            <h5 class="card-title mb-3"><i class="bi bi-graph-up me-2"></i>Tren harian <%= _monthLabel %></h5>
+                            <div class="tr-chart-wrap">
+                                <canvas id="troubleMonthChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-5 mb-3">
+                    <div class="card h-100">
+                        <div class="card-body">
+                            <h5 class="card-title mb-3"><i class="bi bi-activity me-2"></i>Update progress pengerjaan</h5>
+                            <% if (_recent.length > 0) { %>
+                                <div class="tr-progress-feed" style="max-height: 260px; overflow-y: auto;">
+                                    <% _recent.forEach(function(item) { %>
+                                        <a href="<%= _detailBase %>/<%= item.reportId %>" class="tr-progress-item d-block text-decoration-none text-reset">
+                                            <div class="d-flex justify-content-between gap-2">
+                                                <div>
+                                                    <% if (item.unread) { %><span class="tr-unread-dot"></span><% } %>
+                                                    <strong>#<%= item.reportId %></strong>
+                                                    <span class="text-muted">· <%= item.name %></span>
+                                                </div>
+                                                <small class="text-muted text-nowrap"><%= item.timestamp ? new Date(item.timestamp).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' }) : '' %></small>
+                                            </div>
+                                            <div class="small mt-1"><%= item.content %></div>
+                                        </a>
+                                    <% }); %>
+                                </div>
+                            <% } else { %>
+                                <div class="text-center text-muted py-4">
+                                    <i class="bi bi-journal-check" style="font-size: 2rem;"></i>
+                                    <p class="mt-2 mb-0">Belum ada update progress di bulan ini</p>
+                                </div>
+                            <% } %>
                         </div>
                     </div>
                 </div>
@@ -337,8 +447,8 @@
             <div class="card">
                 <div class="card-body p-0">
                     <div class="d-flex justify-content-between align-items-center p-3 border-bottom">
-                        <h5 class="card-title mb-0"><i class="bi bi-list-ul me-2"></i>Daftar Laporan Gangguan</h5>
-                        <span class="badge bg-primary rounded-pill"><%= reports ? reports.length : 0 %> Laporan</span>
+                        <h5 class="card-title mb-0"><i class="bi bi-list-ul me-2"></i>Tiket <%= _monthLabel %></h5>
+                        <span class="badge bg-primary rounded-pill"><%= reports ? reports.length : 0 %> Tiket</span>
                     </div>
                     <div class="table-responsive">
                         <table class="table table-hover mb-0">
@@ -486,6 +596,52 @@
                     </div>
                 </div>
             </div>
+
+            <% if (_carry.length > 0) { %>
+            <div class="card mb-4">
+                <div class="card-body p-0">
+                    <div class="d-flex justify-content-between align-items-center p-3 border-bottom">
+                        <h5 class="card-title mb-0"><i class="bi bi-hourglass-split me-2 text-warning"></i>Tiket bulan lalu masih berjalan</h5>
+                        <span class="badge bg-warning text-dark rounded-pill"><%= _carry.length %> Tiket</span>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead>
+                                <tr>
+                                    <th class="ps-4">ID Tiket</th>
+                                    <th>Pelanggan</th>
+                                    <th>Status</th>
+                                    <th>Tanggal Laporan</th>
+                                    <th class="text-end pe-4">Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <% _carry.forEach(function(report) { %>
+                                    <tr>
+                                        <td class="ps-4"><span class="fw-bold">#<%= report.id %></span></td>
+                                        <td>
+                                            <div class="fw-medium"><%= report.name %></div>
+                                            <div class="text-muted small"><%= report.phone %></div>
+                                        </td>
+                                        <td>
+                                            <span class="badge <%= report.status === 'open' ? 'bg-danger' : 'bg-warning text-dark' %> rounded-pill">
+                                                <%= report.status === 'open' ? 'Belum Ditangani' : 'Sedang Ditangani' %>
+                                            </span>
+                                        </td>
+                                        <td><%= report.created_at ? new Date(report.created_at).toLocaleDateString('id-ID') : '-' %></td>
+                                        <td class="text-end pe-4">
+                                            <a href="<%= _detailBase %>/<%= report.id %>" class="btn btn-sm btn-primary" title="Lihat detail">
+                                                <i class="bi bi-eye"></i>
+                                            </a>
+                                        </td>
+                                    </tr>
+                                <% }); %>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <% } %>
         </main>
     </div>
 </div>
@@ -602,8 +758,8 @@
                     <input type="hidden" name="customerId" id="selectedCustomerId" value="">
                     <div class="mb-3 position-relative">
                         <label class="form-label">Cari Pelanggan</label>
-                        <input type="text" class="form-control" id="searchCustomer" placeholder="Ketik nama atau nomor HP (min 3 huruf)..." autocomplete="off">
-                        <div id="customerSearchResults" class="list-group position-absolute w-100 mt-1 shadow" style="display:none; z-index:1000; max-height: 200px; overflow-y: auto;"></div>
+                        <input type="text" class="form-control" id="searchCustomer" placeholder="Cari nama, username, no. hp, alamat..." autocomplete="off">
+                        <div id="customerSearchResults" class="list-group position-absolute w-100 mt-1 shadow" style="display:none; z-index:1000; max-height: 320px; overflow-y: auto;"></div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Nama Pelapor <span class="text-danger">*</span></label>
@@ -658,6 +814,45 @@
 <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
+    (function initTroubleMonthChart() {
+        const dailyCreated = <%- JSON.stringify(typeof dailyCreated !== 'undefined' ? dailyCreated : []) %>;
+        const dailyResolved = <%- JSON.stringify(typeof dailyResolved !== 'undefined' ? dailyResolved : []) %>;
+        const chartCanvas = document.getElementById('troubleMonthChart');
+        if (!chartCanvas || !window.Chart) return;
+        const labels = (dailyCreated.length ? dailyCreated : [0]).map((_, i) => String(i + 1));
+        new Chart(chartCanvas.getContext('2d'), {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    {
+                        label: 'Tiket masuk',
+                        data: dailyCreated.length ? dailyCreated : [0],
+                        borderColor: '#2563eb',
+                        backgroundColor: 'rgba(37,99,235,0.12)',
+                        tension: 0.3,
+                        fill: true
+                    },
+                    {
+                        label: 'Terselesaikan',
+                        data: dailyResolved.length ? dailyResolved : [0],
+                        borderColor: '#16a34a',
+                        backgroundColor: 'rgba(22,163,74,0.08)',
+                        tension: 0.3,
+                        fill: true
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: 'bottom' } },
+                scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
+            }
+        });
+    })();
+</script>
+<script>
     document.addEventListener('DOMContentLoaded', function() {
         const quickAction = new URLSearchParams(window.location.search).get('quickAction');
         if (quickAction === 'create-ticket') {
@@ -677,22 +872,37 @@
         if (searchInputCustomer) {
             searchInputCustomer.addEventListener('input', function() {
                 clearTimeout(searchTimeout);
-                const q = this.value;
-                if (q.length < 3) {
+                const q = this.value.trim();
+                if (q.length < 1) {
                     searchResultsCustomer.style.display = 'none';
                     return;
                 }
                 searchTimeout = setTimeout(async () => {
                     try {
-                        const res = await fetch('/admin/trouble/customers/search?q=' + encodeURIComponent(q));
+                        const res = await fetch('/admin/trouble/customers/search?q=' + encodeURIComponent(q), {
+                            credentials: 'same-origin',
+                            headers: { 'Accept': 'application/json' }
+                        });
                         const json = await res.json();
-                        if (json.success && json.data.length > 0) {
-                            searchResultsCustomer.innerHTML = '';
+                        searchResultsCustomer.innerHTML = '';
+                        if (json.success && json.data && json.data.length > 0) {
                             json.data.forEach(c => {
                                 const a = document.createElement('a');
                                 a.href = '#';
                                 a.className = 'list-group-item list-group-item-action';
-                                a.innerHTML = `<strong>${c.name}</strong> - ${c.phone}<br><small>${c.address || ''}</small>`;
+                                const title = document.createElement('strong');
+                                title.textContent = c.name || '-';
+                                a.appendChild(title);
+                                a.appendChild(document.createTextNode(' - ' + (c.phone || '-')));
+                                const small = document.createElement('br');
+                                a.appendChild(small);
+                                const meta = document.createElement('small');
+                                const bits = [];
+                                if (c.username) bits.push(c.username);
+                                if (c.customer_id) bits.push('ID ' + c.customer_id);
+                                if (c.address) bits.push(c.address);
+                                meta.textContent = bits.join(' · ');
+                                a.appendChild(meta);
                                 a.onclick = (e) => {
                                     e.preventDefault();
                                     document.getElementById('ticketName').value = c.name;
@@ -713,7 +923,7 @@
                     } catch (e) {
                         console.error('Search error', e);
                     }
-                }, 300);
+                }, 250);
             });
 
             document.addEventListener('click', function(e) {

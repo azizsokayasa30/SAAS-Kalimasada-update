@@ -86,3 +86,11 @@ INSERT OR IGNORE INTO platform_finance_categories (id, name, type) VALUES
 (4, 'Operasional', 'expense'),
 (5, 'Gaji', 'expense'),
 (6, 'Lainnya', 'expense');
+
+ALTER TABLE platform_tenant_invoices ADD COLUMN pokok_amount REAL NOT NULL DEFAULT 0;
+ALTER TABLE platform_tenant_invoices ADD COLUMN bhp_amount REAL NOT NULL DEFAULT 0;
+ALTER TABLE platform_tenant_invoices ADD COLUMN uso_amount REAL NOT NULL DEFAULT 0;
+ALTER TABLE platform_tenant_invoices ADD COLUMN total_amount REAL NOT NULL DEFAULT 0;
+ALTER TABLE platform_tenant_invoices ADD COLUMN source TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE platform_tenant_invoice_items ADD COLUMN qty REAL NOT NULL DEFAULT 1;
+ALTER TABLE platform_tenant_invoice_items ADD COLUMN unit_price REAL NOT NULL DEFAULT 0;

@@ -65,9 +65,8 @@ function formatMikrotikConnectError(host, port, err) {
     if (sockCode === 'ECONNRESET' || lower.includes('econnreset') || lower.includes('connection reset')) {
         return (
             `TCP ke ${host}:${port} terbuka tapi di-reset saat handshake API RouterOS (ECONNRESET). ` +
-            `nc -zv sukses TIDAK berarti API jalan. Biasanya /ip service api address=... tidak mengizinkan IP VPS, ` +
-            `atau filter firewall MikroTik. Solusi: pakai Tunnel IP VPN (10.10.0.x) sebagai NAS IP, ` +
-            `atau di MikroTik: /ip service set api address=0.0.0.0/0 (atau izinkan IP VPS) + pastikan firewall allow TCP ${port}.`
+            `nc -zv sukses TIDAK berarti API jalan. Jangan buka API ke 0.0.0.0/0 — port 8728/8729 yang terbuka ke internet sering discan dan diretas. ` +
+            `Pakai Tunnel IP VPN sebagai NAS IP, lalu batasi /ip service api address= hanya ke IP server billing.`
         );
     }
     if (lower.includes('timeout') || lower.includes('etimedout') || lower.includes('timed out') || sockCode === 'ETIMEDOUT') {
@@ -11820,6 +11819,7 @@ module.exports = {
     resolvePppoeProfileHintToRadiusGroup,
     getUserAuthModeAsync,
     getRadiusStatistics,
+    addPPPoEUserRadius,
     getPPPoEUsersRadius,
     getActivePPPoEConnectionsRadius,
     getActivePppoeLoginNamesSet,

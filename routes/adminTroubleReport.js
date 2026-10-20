@@ -4,13 +4,15 @@ const billingManager = require('../config/billing');
 const { attachTenantAppSettings } = require('../config/platform/tenantAppSettings');
 const { adminAuth } = require('./adminAuth');
 const { 
-  getAllTroubleReports, 
   getTroubleReportById, 
   updateTroubleReportStatus,
   updateTroubleReportAssignment,
   createTroubleReport,
   deleteTroubleReport,
-  extractTechnicianCompletion
+  extractTechnicianCompletion,
+  getMonthlyTroubleDashboard,
+  countUnreadTroubleProgress,
+  markTroubleProgressSeen
 } = require('../config/troubleReport');
 
 function tAnd(alias = '') {
@@ -23,30 +25,96 @@ function tAnd(alias = '') {
 router.use(adminAuth);
 router.use(attachTenantAppSettings);
 
-// GET: Halaman daftar semua laporan gangguan
+// GET: Dashboard bulanan laporan gangguan
 router.get('/', async (req, res) => {
   try {
-    // Dapatkan semua laporan gangguan
-    const reports = await getAllTroubleReports();
-    
-    // Hitung jumlah laporan berdasarkan status
-    const stats = {
-      total: reports.length,
-      open: reports.filter(r => r.status === 'open').length,
-      inProgress: reports.filter(r => r.status === 'in_progress').length,
-      resolved: reports.filter(r => r.status === 'resolved').length,
-      closed: reports.filter(r => r.status === 'closed').length
-    };
-    
-    // Render halaman admin laporan gangguan
+    const dash = await getMonthlyTroubleDashboard(req.query.month, req.query.year);
+
+    // Manager Area: filter laporan ke pelanggan di wilayah yang ditugaskan
+    if (req.isAreaManager || (req.session && req.session.isAreaManager)) {
+      const areaIds = req.areaManagerAreaIds || [];
+      const phoneOk = new Set();
+      if (areaIds.length) {
+        const match = billingManager._sqlCustomerInAreaIds('c', areaIds);
+        const rows = await new Promise((resolve) => {
+          billingManager.db.all(
+            `SELECT phone FROM customers c WHERE ${match.clause}`,
+            match.params,
+            (err, r) => resolve(err ? [] : r || [])
+          );
+        });
+        rows.forEach((r) => {
+          if (r.phone) phoneOk.add(String(r.phone).trim());
+        });
+      }
+      const inScope = (r) => phoneOk.has(String(r.phone || '').trim());
+      dash.reports = (dash.reports || []).filter(inScope);
+      dash.carryOver = (dash.carryOver || []).filter(inScope);
+      dash.recentProgress = (dash.recentProgress || []).filter(inScope);
+      const doneCount = dash.reports.filter((r) =>
+        ['resolved', 'closed'].includes(String(r.status || '').toLowerCase())
+      ).length;
+      dash.stats = {
+        ...dash.stats,
+        total: dash.reports.length,
+        open: dash.reports.filter((r) => String(r.status || '').toLowerCase() === 'open').length,
+        inProgress: dash.reports.filter((r) => String(r.status || '').toLowerCase() === 'in_progress').length,
+        resolved: dash.reports.filter((r) => String(r.status || '').toLowerCase() === 'resolved').length,
+        closed: dash.reports.filter((r) => String(r.status || '').toLowerCase() === 'closed').length,
+        carryOver: dash.carryOver.length,
+        doneCount,
+        resolutionRate: dash.reports.length ? Math.round((doneCount / dash.reports.length) * 100) : 0
+      };
+    }
+
+    const unreadBefore = dash.stats.unreadProgress || 0;
+    if (typeof req.query.keepUnread === 'undefined') {
+      await markTroubleProgressSeen(null);
+      dash.stats.unreadProgress = 0;
+    }
+
+    const monthNames = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+    const monthLabel = `${monthNames[dash.period.month - 1]} ${dash.period.year}`;
+
     res.render('admin/trouble-reports', {
-      reports,
-      stats,
-      title: 'Manajemen Laporan Gangguan'
+      reports: dash.reports,
+      carryOver: dash.carryOver,
+      recentProgress: dash.recentProgress,
+      dailyCreated: dash.dailyCreated,
+      dailyResolved: dash.dailyResolved,
+      daysInMonth: dash.daysInMonth,
+      stats: dash.stats,
+      selectedMonth: dash.period.month,
+      selectedYear: dash.period.year,
+      currentMonth: dash.period.currentMonth,
+      currentYear: dash.period.currentYear,
+      monthLabel,
+      unreadBefore,
+      title: 'Dashboard Gangguan Bulanan'
     });
   } catch (error) {
     console.error('Error loading trouble reports:', error);
     res.status(500).send('Internal Server Error: ' + error.message);
+  }
+});
+
+router.get('/api/progress-badge', async (req, res) => {
+  try {
+    const count = await countUnreadTroubleProgress();
+    res.json({ success: true, count });
+  } catch (error) {
+    res.status(500).json({ success: false, count: 0, message: error.message });
+  }
+});
+
+router.post('/api/mark-seen', async (req, res) => {
+  try {
+    const reportId = (req.body && req.body.reportId) || req.query.reportId || null;
+    const changed = await markTroubleProgressSeen(reportId);
+    const count = await countUnreadTroubleProgress();
+    res.json({ success: true, changed, count });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
@@ -63,6 +131,8 @@ router.get('/detail/:id', async (req, res) => {
       req.flash('error', 'Laporan gangguan tidak ditemukan');
       return res.redirect('/admin/trouble');
     }
+
+    markTroubleProgressSeen(reportId).catch(() => {});
     
     const appPublicBase = (process.env.PUBLIC_APP_BASE_URL || '').replace(/\/$/, '');
     // Render halaman detail laporan
@@ -107,6 +177,8 @@ router.post('/update-status/:id', async (req, res) => {
       message: 'Gagal mengupdate status laporan'
     });
   }
+
+  markTroubleProgressSeen(reportId).catch(() => {});
   
   res.json({
     success: true,
@@ -139,6 +211,8 @@ router.post('/add-note/:id', async (req, res) => {
       message: 'Gagal menambahkan catatan'
     });
   }
+
+  markTroubleProgressSeen(reportId).catch(() => {});
   
   res.json({
     success: true,
@@ -164,22 +238,42 @@ router.delete('/delete/:id', async (req, res) => {
   }
 });
 
-// GET: Cari pelanggan (untuk auto fill di form buat tiket)
+// GET: Cari pelanggan (untuk auto fill di form buat tiket) — sama dengan Kelola Pelanggan
+function resolveTroubleTenantId(req) {
+  const raw = req?.tenantId ?? req?.tenant?.id ?? req?.session?.tenantId ?? null;
+  const id = parseInt(raw, 10);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
 router.get('/customers/search', async (req, res) => {
   try {
-    const q = req.query.q;
-    if (!q || q.length < 3) return res.json({ success: true, data: [] });
-    
-    const dbPath = require('path').join(__dirname, '../data/billing.db');
-    const sqlite3 = require('sqlite3').verbose();
-    const db = new sqlite3.Database(dbPath);
-    
-    db.all(`SELECT * FROM customers WHERE (name LIKE ? OR phone LIKE ?)${tAnd('')} LIMIT 10`, ['%'+q+'%', '%'+q+'%'], (err, rows) => {
-      db.close();
-      if (err) return res.status(500).json({ success: false, message: 'Database error' });
-      res.json({ success: true, data: rows });
-    });
+    const q = String(req.query.q || '').trim();
+    if (!q) return res.json({ success: true, data: [] });
+
+    const tenantId = resolveTroubleTenantId(req);
+    const searchOpts = {
+      tenantId: tenantId || undefined,
+      limit: 100
+    };
+    let rows = await billingManager.searchCustomers(q, searchOpts);
+    if (req.isAreaManager || (req.session && req.session.isAreaManager)) {
+      const areaIds = req.areaManagerAreaIds || [];
+      const allowed = new Set(areaIds.map(Number));
+      rows = (rows || []).filter((c) => c.area_id != null && allowed.has(Number(c.area_id)));
+    }
+    const data = (rows || []).map((c) => ({
+      id: c.id,
+      name: c.name,
+      phone: c.phone,
+      address: c.address || '',
+      username: c.username || c.pppoe_username || '',
+      pppoe_username: c.pppoe_username || '',
+      customer_id: c.customer_id || '',
+      status: c.status || ''
+    }));
+    res.json({ success: true, data });
   } catch (error) {
+    console.error('Error search customers for trouble ticket:', error);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
@@ -190,6 +284,7 @@ router.get('/technicians/list', async (req, res) => {
     const dbPath = require('path').join(__dirname, '../data/billing.db');
     const sqlite3 = require('sqlite3').verbose();
     const db = new sqlite3.Database(dbPath);
+    db.run('PRAGMA busy_timeout = 8000');
     
     db.all(`SELECT id, name, role FROM technicians WHERE is_active = 1${tAnd('')}`, [], (err, rows) => {
       db.close();
@@ -264,6 +359,10 @@ router.post('/create', async (req, res) => {
       customerId
     });
 
+    if (newReport && newReport.id) {
+      markTroubleProgressSeen(newReport.id).catch(() => {});
+    }
+
     const assignTid = newReport.assigned_technician_id || newReport.assignedTechnicianId;
     try {
       const fieldNotif = require('../config/technicianFieldNotifications');
@@ -275,6 +374,7 @@ router.post('/create', async (req, res) => {
         const dbPath = require('path').join(__dirname, '../data/billing.db');
         const sqlite3 = require('sqlite3').verbose();
         const db = new sqlite3.Database(dbPath);
+        db.run('PRAGMA busy_timeout = 8000');
         const techRows = await new Promise((resolve, reject) => {
           db.all(
             `SELECT id FROM technicians

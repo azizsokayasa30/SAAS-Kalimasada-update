@@ -782,6 +782,8 @@ warehouseSync.start();
 // Inisialisasi aplikasi Express
 const app = express();
 app.set('trust proxy', true);
+const { applyLaunchSecurity, installSecurityErrorHandler } = require('./middleware/launchSecurity');
+applyLaunchSecurity(app);
 
 // Import route adminAuth
 const { router: adminAuthRouter, adminAuth } = require('./routes/adminAuth');
@@ -812,6 +814,7 @@ const tenantStore = require('./config/platform/tenantStore');
 
 // Import middleware untuk access control (harus diimport sebelum digunakan)
 const { blockTechnicianAccess } = require('./middleware/technicianAccessControl');
+const { blockSettingsForAreaManager } = require('./middleware/areaManagerAccess');
 
 // Middleware dasar - Optimized
 app.use(compression({
@@ -826,9 +829,17 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Enable CORS for mobile app access - Enhanced for Web Development
 app.use(cors({
-  origin: '*',
+  origin(origin, callback) {
+    if (!origin) return callback(null, true);
+    const allowed = String(process.env.CORS_ORIGINS || '')
+      .split(/[\s,]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (!allowed.length || allowed.includes('*') || allowed.includes(origin)) return callback(null, true);
+    return callback(null, false);
+  },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant']
 }));
 
 // Static files dengan cache
@@ -866,7 +877,7 @@ app.use(session({
   saveUninitialized: false,
   rolling: true,
   cookie: {
-    secure: false,
+    secure: 'auto',
     maxAge: getAdminSessionTimeoutMs(),
     httpOnly: true,
     sameSite: 'lax'
@@ -882,7 +893,7 @@ app.use((req, res, next) => {
     res.locals.adminSessionTimeoutMinutes = DEFAULT_ADMIN_SESSION_TIMEOUT_MINUTES;
   }
 
-  if (!req.session?.isAdmin) {
+  if (!req.session?.isAdmin && !req.session?.isAreaManager) {
     return next();
   }
 
@@ -972,11 +983,6 @@ app.get('/admin/login/mobile', (req, res) => {
     }
 });
 
-// Test route untuk debugging
-app.get('/admin/test', (req, res) => {
-    res.json({ message: 'Admin routes working!', timestamp: new Date().toISOString() });
-});
-
 // POST untuk login mobile
 app.post('/admin/login/mobile', async (req, res) => {
     try {
@@ -997,8 +1003,9 @@ app.post('/admin/login/mobile', async (req, res) => {
             }
         }
         
-        const { username, password, remember } = req.body;
-        const { getSetting } = require('./config/settingsManager');
+        const { username, password } = req.body;
+        const { getSetting, setSetting } = require('./config/settingsManager');
+        const { isBcryptHash, verifyAdminPassword, hashAdminPassword } = require('./utils/adminPassword');
         
         const credentials = {
             username: getSetting('admin_username', 'admin'),
@@ -1013,14 +1020,14 @@ app.post('/admin/login/mobile', async (req, res) => {
             });
         }
 
-        if (username === credentials.username && password === credentials.password) {
+        if (username === credentials.username && await verifyAdminPassword(password, credentials.password)) {
+            if (!isBcryptHash(credentials.password)) {
+                hashAdminPassword(password).then((hashed) => setSetting('admin_password', hashed))
+                    .catch((err) => console.warn('[SECURITY] gagal menyimpan hash password admin:', err.message));
+            }
             req.session.isAdmin = true;
             req.session.adminUsername = username;
             req.session.lastActivityAt = Date.now();
-
-            if (remember) {
-                req.session.cookie.maxAge = getAdminSessionTimeoutMs();
-            }
 
             return req.session.save((saveErr) => {
                 if (saveErr) {
@@ -1109,6 +1116,9 @@ app.use('/admin/hotspot', blockTechnicianAccess, adminHotspotRouter);
 const adminMemberRouter = require('./routes/adminMember');
 app.use('/admin/member', blockTechnicianAccess, adminMemberRouter);
 
+// Blokir Manager Area dari Settingan / payment-settings / restart (global di /admin)
+app.use('/admin', blockSettingsForAreaManager);
+
 // Import dan gunakan route adminSetting
 const { router: adminSettingRouter } = require('./routes/adminSetting');
 app.use('/admin/settings', blockTechnicianAccess, adminAuth, adminSettingRouter);
@@ -1170,6 +1180,13 @@ app.use('/admin', blockTechnicianAccess, adminAuth, adminOltManagementRouter);
 // Import dan gunakan route adminCollectors
 const adminCollectorsRouter = require('./routes/adminCollectors');
 app.use('/admin/collectors', blockTechnicianAccess, adminCollectorsRouter);
+
+// Import dan gunakan route adminAreaManagers (hanya admin utama)
+const adminAreaManagersRouter = require('./routes/adminAreaManagers');
+app.use('/admin/area-managers', blockTechnicianAccess, adminAuth, adminAreaManagersRouter);
+
+const adminMasterExecutivesRouter = require('./routes/adminMasterExecutives');
+app.use('/admin/master-executives', blockTechnicianAccess, adminAuth, adminMasterExecutivesRouter);
 
 // Import dan gunakan route cache management
 const cacheManagementRouter = require('./routes/cacheManagement');
@@ -1932,7 +1949,8 @@ function startServer(portToUse) {
     // Coba listen, dengan retry setelah kill proses lama
     function doListen(isRetry) {
         try {
-            const server = app.listen(port, '0.0.0.0', () => {
+            const listenHost = process.env.LISTEN_HOST || '0.0.0.0';
+            const server = app.listen(port, listenHost, () => {
                 logger.info(`✅ Server berhasil berjalan pada port ${port}`);
                 logger.info(`🌐 Akses lokal: http://localhost:${port}`);
                 logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
@@ -2002,6 +2020,8 @@ tenantStore.initPlatform().catch((err) => {
     logger.error('[platform] initPlatform failed:', err.message);
 });
 
+installSecurityErrorHandler(app);
+
 // Mulai server dengan port dari konfigurasi
 console.log(`🚀 [BOOTSTRAP] Final port selected: ${port}`);
 startServer(port);
@@ -2057,7 +2077,8 @@ function startIsolirPortal(portToUse) {
     isolirApp.get(['/isolir/t/:tenantId', '/isolir/tenant/:tenantId', '/t/:tenantId'], renderIsolirPage);
     isolirApp.get('*', renderIsolirPage);
 
-    isolirApp.listen(isolirPort, '0.0.0.0', () => {
+    const isolirListenHost = process.env.LISTEN_HOST || '0.0.0.0';
+    isolirApp.listen(isolirPort, isolirListenHost, () => {
         logger.info(`✅ Portal isolir aktif di http://0.0.0.0:${isolirPort}/isolir`);
     }).on('error', (err) => {
         logger.warn(`[ISOLIR] Gagal membuka port ${isolirPort}: ${err.message}`);

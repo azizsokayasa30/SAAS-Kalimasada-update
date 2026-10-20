@@ -86,12 +86,379 @@
         .all-payments-compact .f-stat-desc { margin-top: 0.15rem !important; font-size: 0.7rem !important; }
         .all-payments-compact .f-stat-value { font-size: 1.15rem !important; line-height: 1.2 !important; }
         .all-payments-compact .all-payments-filter-card { margin-bottom: 0.65rem !important; }
-        .all-payments-compact .all-payments-filter-card .f-card-body { padding: 0.65rem 0.85rem !important; }
+        .all-payments-compact .all-payments-filter-card .f-card-body { padding: 0.85rem 1rem !important; }
         .all-payments-compact .all-payments-filter-card .f-label { margin-bottom: 0.2rem !important; font-size: 0.65rem !important; }
-        .all-payments-compact .all-payments-table-card { margin-bottom: 0.5rem !important; }
+        .all-payments-compact .all-payments-table-card { margin-bottom: 0.5rem !important; overflow: hidden; }
         .all-payments-compact .all-payments-table-card .table { font-size: 0.875rem; }
         .all-payments-compact .all-payments-table-card .table > :not(caption) > * > * { padding-top: 0.45rem; padding-bottom: 0.45rem; }
         .all-payments-compact .all-payments-footer { margin-top: 0.35rem !important; margin-bottom: 0.75rem !important; }
+
+        .all-payments-header {
+            border-bottom-color: var(--f-border) !important;
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.35) 0%, transparent 100%);
+        }
+        html[data-theme="light"] .all-payments-header {
+            background: linear-gradient(180deg, rgba(241, 245, 249, 0.9) 0%, transparent 100%);
+        }
+        .all-pay-btn--export {
+            background: linear-gradient(180deg, #217346 0%, #185c38 100%);
+            box-shadow: 0 1px 2px rgba(24, 92, 56, 0.4);
+        }
+
+        .all-pay-filter-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.55rem;
+            border-bottom: 1px solid var(--f-border);
+        }
+        .all-pay-filter-title {
+            font-size: 0.8rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            color: var(--f-foreground);
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+        .all-pay-filter-title i { color: #60a5fa; }
+        .all-pay-filter-period {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--f-muted-foreground);
+            background: var(--f-accent);
+            border: 1px solid var(--f-border);
+            border-radius: 999px;
+            padding: 0.2rem 0.65rem;
+        }
+        .all-pay-filter-grid {
+            display: grid;
+            grid-template-columns: minmax(7rem, 0.9fr) minmax(6rem, 0.7fr) minmax(14rem, 1.5fr) minmax(9rem, 1.1fr) minmax(8rem, 1fr);
+            gap: 0.65rem 0.75rem;
+            align-items: end;
+        }
+        .all-pay-filter-search { grid-column: 1 / span 3; }
+        .all-pay-filter-actions {
+            grid-column: 4 / span 2;
+            display: flex;
+            gap: 0.5rem;
+            align-items: stretch;
+        }
+        .all-pay-filter-btn {
+            flex: 1 1 0;
+            min-height: 2.6rem;
+            height: 2.6rem;
+            border-radius: 10px;
+            font-weight: 700;
+            font-size: 0.82rem;
+            letter-spacing: 0.01em;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+            text-decoration: none !important;
+            border: none;
+            cursor: pointer;
+            transition: transform 0.12s ease, filter 0.15s ease, box-shadow 0.15s ease;
+            white-space: nowrap;
+        }
+        .all-pay-filter-btn:hover { transform: translateY(-1px); }
+        .all-pay-filter-btn:active { transform: scale(0.98); }
+        .all-pay-filter-btn--apply {
+            background: linear-gradient(180deg, #3b82f6 0%, #1d4ed8 100%);
+            color: #fff !important;
+            box-shadow: 0 6px 14px -6px rgba(37, 99, 235, 0.65);
+        }
+        .all-pay-filter-btn--apply:hover { filter: brightness(1.06); color: #fff !important; }
+        .all-pay-filter-btn--reset {
+            background: transparent;
+            color: var(--f-foreground) !important;
+            border: 1px solid var(--f-border);
+            box-shadow: none;
+        }
+        .all-pay-filter-btn--reset:hover {
+            background: var(--f-accent);
+            border-color: #64748b;
+            color: var(--f-foreground) !important;
+        }
+        .all-pay-today-btn {
+            min-height: 2.5rem;
+            height: 2.5rem;
+            padding: 0 0.75rem;
+            border-radius: 8px;
+            font-weight: 650;
+            font-size: 0.75rem;
+            border: 1px solid rgba(59, 130, 246, 0.45);
+            background: rgba(59, 130, 246, 0.12);
+            color: #93c5fd !important;
+            white-space: nowrap;
+        }
+        html[data-theme="light"] .all-pay-today-btn {
+            color: #1d4ed8 !important;
+            background: #eff6ff;
+            border-color: #93c5fd;
+        }
+        @media (max-width: 991.98px) {
+            .all-pay-filter-grid { grid-template-columns: 1fr 1fr; }
+            .all-pay-filter-search,
+            .all-pay-filter-actions { grid-column: 1 / -1; }
+        }
+
+        .all-pay-table-toolbar {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem 0.55rem;
+            border-bottom: 1px solid var(--f-border);
+        }
+        .all-pay-table-title {
+            margin: 0;
+            font-size: 0.92rem;
+            font-weight: 700;
+            color: var(--f-foreground);
+        }
+        .all-pay-table-meta {
+            font-size: 0.75rem;
+            color: var(--f-muted-foreground);
+            font-weight: 500;
+        }
+        .all-payments-compact .all-payments-table-card .table {
+            font-size: 0.84rem;
+            color: var(--f-foreground);
+            --bs-table-bg: transparent;
+            --bs-table-color: var(--f-foreground);
+        }
+        .all-payments-compact .all-payments-table-card thead th {
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: var(--f-muted-foreground);
+            background: rgba(15, 23, 42, 0.55) !important;
+            border-bottom: 1px solid var(--f-border);
+            white-space: nowrap;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+        html[data-theme="light"] .all-payments-compact .all-payments-table-card thead th {
+            background: #f1f5f9 !important;
+            color: #475569;
+        }
+        .all-payments-compact .all-payments-table-card tbody td {
+            color: var(--f-foreground);
+            border-color: var(--f-border);
+            vertical-align: middle;
+        }
+        .all-payments-compact .all-payments-table-card tbody tr:hover td {
+            background: rgba(59, 130, 246, 0.08) !important;
+        }
+        .all-pay-customer-name {
+            display: block;
+            font-weight: 700;
+            font-size: 0.9rem;
+            letter-spacing: 0.01em;
+            color: #ffffff !important;
+            line-height: 1.25;
+        }
+        html[data-theme="light"] .all-pay-customer-name {
+            color: #0f172a !important;
+        }
+        .all-pay-customer-phone {
+            display: block;
+            margin-top: 0.12rem;
+            font-size: 0.72rem;
+            font-weight: 500;
+            color: #94a3b8 !important;
+        }
+        html[data-theme="light"] .all-pay-customer-phone { color: #64748b !important; }
+        .all-pay-invoice {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.75rem;
+            color: #cbd5e1 !important;
+        }
+        html[data-theme="light"] .all-pay-invoice { color: #475569 !important; }
+        .all-pay-amount {
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            color: #f8fafc !important;
+        }
+        html[data-theme="light"] .all-pay-amount { color: #0f172a !important; }
+        .pay-method {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.22rem 0.6rem;
+            border-radius: 999px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            line-height: 1.2;
+            white-space: nowrap;
+            border: 1px solid transparent;
+        }
+        .pay-method i { font-size: 0.85rem; }
+        .pay-method--cash { background: rgba(16, 185, 129, 0.16); color: #34d399; border-color: rgba(16, 185, 129, 0.28); }
+        .pay-method--transfer { background: rgba(59, 130, 246, 0.16); color: #60a5fa; border-color: rgba(59, 130, 246, 0.28); }
+        .pay-method--qris { background: rgba(168, 85, 247, 0.16); color: #c084fc; border-color: rgba(168, 85, 247, 0.28); }
+        .pay-method--online { background: rgba(14, 165, 233, 0.16); color: #38bdf8; border-color: rgba(14, 165, 233, 0.28); }
+        .pay-method--admin { background: rgba(148, 163, 184, 0.16); color: #cbd5e1; border-color: rgba(148, 163, 184, 0.28); }
+        .pay-method--ewallet { background: rgba(245, 158, 11, 0.16); color: #fbbf24; border-color: rgba(245, 158, 11, 0.28); }
+        .pay-method--other { background: rgba(100, 116, 139, 0.16); color: #94a3b8; border-color: rgba(100, 116, 139, 0.28); }
+        html[data-theme="light"] .pay-method--cash { background: #ecfdf5; color: #047857; }
+        html[data-theme="light"] .pay-method--transfer { background: #eff6ff; color: #1d4ed8; }
+        html[data-theme="light"] .pay-method--qris { background: #f5f3ff; color: #6d28d9; }
+        html[data-theme="light"] .pay-method--online { background: #f0f9ff; color: #0369a1; }
+        html[data-theme="light"] .pay-method--admin { background: #f1f5f9; color: #334155; }
+        html[data-theme="light"] .pay-method--ewallet { background: #fffbeb; color: #b45309; }
+        html[data-theme="light"] .pay-method--other { background: #f8fafc; color: #475569; }
+        .all-pay-empty {
+            padding: 2.5rem 1rem;
+            text-align: center;
+            color: var(--f-muted-foreground);
+        }
+        .all-pay-empty i { font-size: 1.6rem; display: block; margin-bottom: 0.4rem; opacity: 0.7; }
+        .btn-cancel-payment {
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.75rem;
+        }
+
+        @media (max-width: 767.98px) {
+            .all-pay-filter-btn span.btn-text-full { display: none; }
+        }
+
+        .all-pay-date-trigger {
+            flex: 1 1 auto;
+            min-width: 0;
+            height: 2.5rem;
+            min-height: 2.5rem;
+            padding: 0 0.65rem;
+            border-radius: var(--f-radius-sm);
+            border: 1px solid var(--f-input);
+            background-color: var(--f-background);
+            color: var(--f-foreground);
+            font-size: 0.8rem;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            text-align: left;
+            cursor: pointer;
+        }
+        .all-pay-date-trigger:hover,
+        .all-pay-date-trigger:focus {
+            border-color: var(--f-ring);
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.12);
+        }
+        .all-pay-date-trigger .bi-calendar3 { flex-shrink: 0; opacity: 0.8; }
+        .all-pay-date-trigger #filterDateLabel {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .all-pay-date-clear {
+            flex-shrink: 0;
+            width: 1.35rem;
+            height: 1.35rem;
+            padding: 0;
+            border: none;
+            border-radius: 999px;
+            background: transparent;
+            color: var(--f-muted-foreground);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+        }
+        .all-pay-date-trigger.is-custom-range .all-pay-date-clear { display: inline-flex; }
+        .all-pay-date-clear:hover { background: var(--f-accent); color: var(--f-foreground); }
+
+        #filterDateModal .modal-dialog { max-width: 22rem; }
+        #filterDateModal .modal-content {
+            background: var(--f-card);
+            color: var(--f-foreground);
+            border: 1px solid var(--f-border);
+        }
+        #filterDateModal .modal-header,
+        #filterDateModal .modal-footer { border-color: var(--f-border); }
+        .cal-nav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+            margin-bottom: 0.75rem;
+        }
+        .cal-nav-title { font-weight: 600; font-size: 0.95rem; }
+        .cal-nav-btn {
+            width: 2.25rem;
+            height: 2.25rem;
+            border: 1px solid var(--f-border);
+            border-radius: 8px;
+            background: transparent;
+            color: inherit;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .cal-nav-btn:hover { background: var(--f-accent); }
+        .cal-weekdays,
+        .cal-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 0.2rem;
+        }
+        .cal-weekdays span {
+            text-align: center;
+            font-size: 0.68rem;
+            font-weight: 600;
+            color: var(--f-muted-foreground);
+            padding: 0.2rem 0 0.45rem;
+        }
+        .cal-day {
+            aspect-ratio: 1;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            color: inherit;
+            font-size: 0.8rem;
+            font-weight: 500;
+            padding: 0;
+        }
+        .cal-day:hover:not(:disabled) { background: var(--f-accent); }
+        .cal-day.is-muted { color: var(--f-muted-foreground); opacity: 0.45; }
+        .cal-day.is-today { box-shadow: inset 0 0 0 1px #3b82f6; }
+        .cal-day.is-in-range { background: rgba(59, 130, 246, 0.22); border-radius: 0; }
+        .cal-day.is-range-start,
+        .cal-day.is-range-end,
+        .cal-day.is-selected { background: #3b82f6; color: #fff; }
+        .cal-day.is-range-start { border-radius: 8px 0 0 8px; }
+        .cal-day.is-range-end { border-radius: 0 8px 8px 0; }
+        .cal-day.is-range-start.is-range-end,
+        .cal-day.is-selected:not(.is-in-range) { border-radius: 8px; }
+        .cal-day.is-selected:hover,
+        .cal-day.is-range-start:hover,
+        .cal-day.is-range-end:hover { background: #2563eb; color: #fff; }
+        .cal-hint {
+            font-size: 0.75rem;
+            color: var(--f-muted-foreground);
+            margin: 0.55rem 0 0.35rem;
+        }
+        .cal-presets {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+            margin-bottom: 0.15rem;
+        }
+        .cal-presets .btn { font-size: 0.75rem; }
+        [data-theme="dark"] #filterDateModal .btn-close {
+            filter: invert(1) grayscale(100%) brightness(200%);
+        }
     </style>
     <% } %>
 
@@ -109,14 +476,83 @@
         border: 1px solid #dee2e6 !important;
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15) !important;
       }
+
+      html[data-theme="light"] #filterDateModal .modal-content,
+      html[data-theme="light"] #filterDateModal .modal-header,
+      html[data-theme="light"] #filterDateModal .modal-body,
+      html[data-theme="light"] #filterDateModal .modal-footer {
+        background-color: #ffffff !important;
+        color: #0f172a !important;
+      }
     </style>
 </head>
 <body class="<%= isAllPayments ? 'finance-content-area' : '' %>">
 <% 
   var currentMonth = new Date().getMonth() + 1;
   var currentYear = new Date().getFullYear();
-  var filters = (typeof filters !== 'undefined') ? filters : { month: String(currentMonth), year: String(currentYear), date: '', from: '', to: '', collector_id: '', status: '', q: '' };
+  var filters = (typeof filters !== 'undefined') ? filters : { month: String(currentMonth), year: String(currentYear), date: '', from: '', to: '', collector_id: '', payment_method: '', status: '', q: '' };
+  function paymentMethodLabel(raw) {
+    var m = String(raw || '').trim().toLowerCase();
+    if (!m) return '—';
+    if (m === 'manual_admin' || m === 'admin kantor' || m === 'admin') return 'Admin Kantor';
+    if (m === 'cash' || m === 'tunai') return 'Tunai';
+    if (m.indexOf('transfer') !== -1) return 'Transfer';
+    if (m.indexOf('qris') !== -1) return 'QRIS';
+    if (m.indexOf('ewallet') !== -1 || m.indexOf('e-wallet') !== -1 || m.indexOf('e wallet') !== -1) return 'E-Wallet';
+    if (m === 'online' || m.indexOf('gateway') !== -1) return 'Online';
+    return String(raw).trim();
+  }
+  function paymentMethodMeta(raw) {
+    var label = paymentMethodLabel(raw);
+    var m = String(raw || '').trim().toLowerCase();
+    var icon = 'bi-credit-card-2-front';
+    var kind = 'other';
+    if (!m) { icon = 'bi-dash-circle'; kind = 'other'; }
+    else if (m === 'cash' || m === 'tunai' || (m.indexOf('cash') !== -1 && m.indexOf('transfer') === -1)) { icon = 'bi-cash-stack'; kind = 'cash'; }
+    else if (m.indexOf('transfer') !== -1) { icon = 'bi-bank'; kind = 'transfer'; }
+    else if (m.indexOf('qris') !== -1) { icon = 'bi-qr-code-scan'; kind = 'qris'; }
+    else if (m.indexOf('ewallet') !== -1 || m.indexOf('e-wallet') !== -1 || m.indexOf('e wallet') !== -1) { icon = 'bi-wallet2'; kind = 'ewallet'; }
+    else if (m === 'online' || m.indexOf('gateway') !== -1) { icon = 'bi-globe2'; kind = 'online'; }
+    else if (m === 'manual_admin' || m === 'admin kantor' || m === 'admin') { icon = 'bi-building'; kind = 'admin'; }
+    else if (m === 'other' || m === 'lainnya') { icon = 'bi-three-dots'; kind = 'other'; }
+    return { label: label, icon: icon, kind: kind };
+  }
   var todayStr = (typeof today !== 'undefined' && today) ? String(today) : new Date().toISOString().slice(0, 10);
+  var monthsIdAll = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+  var monthsIdShort = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+  function pad2(n) { return String(n).padStart(2, '0'); }
+  function isoFromParts(y, m, d) { return String(y) + '-' + pad2(m) + '-' + pad2(d); }
+  function lastDayOfMonth(y, m) { return new Date(y, m, 0).getDate(); }
+  function monthBounds(y, m) {
+    return { from: isoFromParts(y, m, 1), to: isoFromParts(y, m, lastDayOfMonth(y, m)) };
+  }
+  function parseFilterIso(iso) {
+    var s = String(iso || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+    return { y: parseInt(s.slice(0, 4), 10), m: parseInt(s.slice(5, 7), 10), d: parseInt(s.slice(8, 10), 10) };
+  }
+  function formatRangeLabel(fromIso, toIso) {
+    var a = parseFilterIso(fromIso);
+    var b = parseFilterIso(toIso) || a;
+    if (!a) return '';
+    if (!b || (a.y === b.y && a.m === b.m && a.d === b.d)) {
+      return a.d + ' ' + monthsIdAll[a.m - 1] + ' ' + a.y;
+    }
+    if (a.y === b.y && a.m === b.m) {
+      return a.d + '-' + b.d + ' ' + monthsIdAll[a.m - 1] + ' ' + a.y;
+    }
+    if (a.y === b.y) {
+      return a.d + ' ' + monthsIdShort[a.m - 1] + ' – ' + b.d + ' ' + monthsIdShort[b.m - 1] + ' ' + a.y;
+    }
+    return a.d + ' ' + monthsIdShort[a.m - 1] + ' ' + a.y + ' – ' + b.d + ' ' + monthsIdShort[b.m - 1] + ' ' + b.y;
+  }
+  var monthNum = parseInt(String(filters.month || currentMonth), 10) || currentMonth;
+  var yearNum = parseInt(String(filters.year || currentYear), 10) || currentYear;
+  var monthBound = monthBounds(yearNum, monthNum);
+  var filterFromIso = String(filters.from || monthBound.from).trim() || monthBound.from;
+  var filterToIso = String(filters.to || monthBound.to).trim() || monthBound.to;
+  var isFullMonthRange = filterFromIso === monthBound.from && filterToIso === monthBound.to;
+  var filterDateLabelText = formatRangeLabel(filterFromIso, filterToIso);
   var payments = (typeof payments !== 'undefined') ? payments : [];
   var collectors = (typeof collectors !== 'undefined') ? collectors : [];
   var paySummary = (typeof summary !== 'undefined' && summary) ? summary : { transaction_count: 0, total_amount: 0, total_tagihan: 0, total_commission: 0, total_net: 0, total_discount: 0 };
@@ -149,8 +585,8 @@
                     <button type="button" class="all-pay-btn all-pay-btn--input" id="openPaymentModalBtn" title="Input pembayaran">
                         <i class="bi bi-cash-coin"></i>Input pembayaran
                     </button>
-                    <button type="button" class="all-pay-btn all-pay-btn--export" id="exportPayments" title="Export CSV">
-                        <i class="bi bi-filetype-csv"></i>Export CSV
+                    <button type="button" class="all-pay-btn all-pay-btn--export" id="exportPayments" title="Export Excel">
+                        <i class="bi bi-file-earmark-excel"></i>Export Excel
                     </button>
                     <button type="button" class="all-pay-btn all-pay-btn--refresh" onclick="window.location.reload()" title="Refresh">
                         <i class="bi bi-arrow-clockwise"></i>Refresh
@@ -166,7 +602,7 @@
                             <div class="f-stat-icon-wrapper bg-primary-glow"><i class="bi bi-list-check"></i></div>
                         </div>
                         <div class="f-stat-value f-premium-text"><%= (paySummary.transaction_count || 0).toLocaleString('id-ID') %></div>
-                        <div class="f-stat-desc"><%= filters.date ? ('Tanggal ' + filters.date) : 'Sesuai filter periode' %></div>
+                        <div class="f-stat-desc"><%= filterDateLabelText %></div>
                     </div>
                     <div class="f-stat-card animate-in" style="animation-delay: 0.2s;">
                         <div class="f-stat-header">
@@ -196,8 +632,12 @@
 
                 <div class="f-card all-payments-filter-card mb-2">
                     <div class="f-card-body">
-                        <form method="GET" action="/admin/billing/all-payments" id="allPaymentsFilterForm" class="row g-2 align-items-end" data-today="<%= todayStr %>">
-                            <div class="col-6 col-md-2">
+                        <div class="all-pay-filter-head">
+                            <span class="all-pay-filter-title"><i class="bi bi-sliders"></i> Filter transaksi</span>
+                            <span class="all-pay-filter-period"><%= filterDateLabelText %></span>
+                        </div>
+                        <form method="GET" action="/admin/billing/all-payments" id="allPaymentsFilterForm" class="all-pay-filter-grid" data-today="<%= todayStr %>">
+                            <div>
                                 <label class="f-label">BULAN</label>
                                 <select class="f-select" name="month" id="filterMonth">
                                     <% const monthsAll = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember']; %>
@@ -206,7 +646,7 @@
                                     <% } %>
                                 </select>
                             </div>
-                            <div class="col-6 col-md-2">
+                            <div>
                                 <label class="f-label">TAHUN</label>
                                 <select class="f-select" name="year" id="filterYear">
                                     <% for (let y = currentYear - 3; y <= currentYear + 1; y++) { %>
@@ -214,14 +654,20 @@
                                     <% } %>
                                 </select>
                             </div>
-                            <div class="col-12 col-md-3">
-                                <label class="f-label">TANGGAL (HARIAN)</label>
+                            <div>
+                                <label class="f-label">TANGGAL</label>
                                 <div class="d-flex gap-1">
-                                    <input type="date" class="f-input" name="date" id="filterDate" value="<%= filters.date || '' %>" title="Kosongkan untuk filter per bulan">
-                                    <button type="button" class="f-btn f-btn-outline" id="filterTodayBtn" title="Filter hari ini" style="white-space:nowrap; min-height:2.5rem;">Hari ini</button>
+                                    <input type="hidden" name="from" id="filterFrom" value="<%= filterFromIso %>">
+                                    <input type="hidden" name="to" id="filterTo" value="<%= filterToIso %>">
+                                    <button type="button" class="all-pay-date-trigger <%= isFullMonthRange ? '' : 'is-custom-range' %>" id="filterDateTrigger" title="Pilih rentang tanggal">
+                                        <i class="bi bi-calendar3"></i>
+                                        <span id="filterDateLabel"><%= filterDateLabelText %></span>
+                                        <span class="all-pay-date-clear" id="filterDateClear" title="Kembali ke 1 bulan" role="button" tabindex="-1"><i class="bi bi-x"></i></span>
+                                    </button>
+                                    <button type="button" class="all-pay-today-btn" id="filterTodayBtn" title="Filter hari ini">Hari ini</button>
                                 </div>
                             </div>
-                            <div class="col-12 col-md-3">
+                            <div>
                                 <label class="f-label">KOLEKTOR</label>
                                 <select class="f-select" name="collector_id">
                                     <option value="">Semua kolektor</option>
@@ -231,27 +677,45 @@
                                     <% }); %>
                                 </select>
                             </div>
-                            <div class="col-12 col-md-2">
-                                <button type="submit" class="f-btn f-btn-primary w-100">
-                                    <i class="bi bi-filter"></i>Terapkan
+                            <div>
+                                <label class="f-label">METODE</label>
+                                <select class="f-select" name="payment_method" id="filterPaymentMethod">
+                                    <% var methodFilter = String(filters.payment_method || ''); %>
+                                    <option value="" <%= methodFilter === '' ? 'selected' : '' %>>Semua metode</option>
+                                    <option value="cash" <%= methodFilter === 'cash' ? 'selected' : '' %>>Tunai / Cash</option>
+                                    <option value="transfer" <%= methodFilter === 'transfer' ? 'selected' : '' %>>Transfer</option>
+                                    <option value="qris" <%= methodFilter === 'qris' ? 'selected' : '' %>>QRIS</option>
+                                    <option value="online" <%= methodFilter === 'online' ? 'selected' : '' %>>Online / Gateway</option>
+                                    <option value="manual_admin" <%= methodFilter === 'manual_admin' ? 'selected' : '' %>>Admin Kantor</option>
+                                    <option value="ewallet" <%= methodFilter === 'ewallet' ? 'selected' : '' %>>E-Wallet</option>
+                                    <option value="other" <%= methodFilter === 'other' ? 'selected' : '' %>>Lainnya</option>
+                                </select>
+                            </div>
+                            <div class="all-pay-filter-search">
+                                <label class="f-label">CARI</label>
+                                <input type="text" class="f-input" name="q" value="<%= filters.q %>" placeholder="Nama, telepon, invoice, atau catatan…" autocomplete="off">
+                            </div>
+                            <div class="all-pay-filter-actions">
+                                <button type="submit" class="all-pay-filter-btn all-pay-filter-btn--apply">
+                                    <i class="bi bi-funnel-fill"></i><span class="btn-text-full">Terapkan filter</span>
                                 </button>
-                            </div>
-                            <div class="col-12 col-md-9">
-                                <label class="f-label">Cari (nama / telepon / invoice / catatan)</label>
-                                <input type="text" class="f-input" name="q" value="<%= filters.q %>" placeholder="Opsional…" autocomplete="off">
-                            </div>
-                            <div class="col-12 col-md-3 d-flex align-items-end">
-                                <a href="/admin/billing/all-payments" class="f-btn f-btn-outline w-100 text-center text-decoration-none">Reset filter</a>
+                                <a href="/admin/billing/all-payments" class="all-pay-filter-btn all-pay-filter-btn--reset">
+                                    <i class="bi bi-arrow-counterclockwise"></i><span class="btn-text-full">Reset</span>
+                                </a>
                             </div>
                         </form>
                     </div>
                 </div>
 
                 <div class="f-card all-payments-table-card mb-2">
+                    <div class="all-pay-table-toolbar">
+                        <h2 class="all-pay-table-title">Daftar transaksi</h2>
+                        <div class="all-pay-table-meta"><%= (payments || []).length.toLocaleString('id-ID') %> pembayaran · <%= filterDateLabelText %></div>
+                    </div>
                     <div class="f-card-body p-0">
                         <div class="table-responsive">
                             <table class="table table-hover table-sm mb-0 align-middle">
-                                <thead class="table-light">
+                                <thead>
                                     <tr>
                                         <th>Tanggal</th>
                                         <th>Invoice</th>
@@ -268,6 +732,16 @@
                                     </tr>
                                 </thead>
                                 <tbody>
+                                <% if (!(payments || []).length) { %>
+                                    <tr>
+                                        <td colspan="12">
+                                            <div class="all-pay-empty">
+                                                <i class="bi bi-inbox"></i>
+                                                Tidak ada transaksi pada periode ini
+                                            </div>
+                                        </td>
+                                    </tr>
+                                <% } %>
                                 <% (payments || []).forEach(function (p) {
                                     var invSt = String(p.invoice_status || '').toLowerCase();
                                     var statusLabel = invSt === 'paid' ? 'Lunas' : (invSt ? invSt : '—');
@@ -282,19 +756,25 @@
                                         var ts = rawPayDate.length >= 19 ? rawPayDate.slice(11, 16) : '';
                                         payDateLabel = ds[2] + '/' + ds[1] + '/' + ds[0] + (ts ? (' ' + ts) : '');
                                     }
-                                    var methodRaw = String(p.payment_method || '').trim();
-                                    var methodLabel = methodRaw === 'manual_admin' ? 'Admin Kantor' : methodRaw;
+                                    var methodMeta = paymentMethodMeta(p.payment_method);
                                 %>
                                     <tr>
                                         <td style="white-space:nowrap;"><%= payDateLabel %></td>
-                                        <td><small class="text-muted"><%= p.invoice_number || ('#' + p.invoice_id) %></small></td>
+                                        <td><span class="all-pay-invoice"><%= p.invoice_number || ('#' + p.invoice_id) %></span></td>
                                         <td><%= p.collector_name ? p.collector_name : 'Admin kantor' %></td>
-                                        <td><%= p.customer_name %> <% if (p.customer_phone) { %><small class="text-muted d-block"><%= p.customer_phone %></small><% } %></td>
+                                        <td>
+                                            <span class="all-pay-customer-name"><%= p.customer_name %></span>
+                                            <% if (p.customer_phone) { %><span class="all-pay-customer-phone"><%= p.customer_phone %></span><% } %>
+                                        </td>
                                         <td>Rp <%= tagInv.toLocaleString('id-ID') %></td>
                                         <td>Rp <%= Number(p.commission_amount || 0).toLocaleString('id-ID') %></td>
                                         <td><% var dDisc = Number(p.discount_amount || 0); %><%= dDisc > 0 ? ('Rp ' + dDisc.toLocaleString('id-ID')) : '—' %></td>
-                                        <td class="fw-semibold">Rp <%= jmlSet.toLocaleString('id-ID') %></td>
-                                        <td><%= methodLabel %></td>
+                                        <td class="all-pay-amount">Rp <%= jmlSet.toLocaleString('id-ID') %></td>
+                                        <td>
+                                            <span class="pay-method pay-method--<%= methodMeta.kind %>">
+                                                <i class="bi <%= methodMeta.icon %>"></i><%= methodMeta.label %>
+                                            </span>
+                                        </td>
                                         <td><span class="badge bg-<%= statusClass %>"><%= statusLabel %></span></td>
                                         <td class="text-muted small"><%= displayPaymentNote(p.notes) %></td>
                                         <td class="text-end">
@@ -312,13 +792,6 @@
                             </table>
                         </div>
                     </div>
-                </div>
-
-                <div class="all-payments-footer">
-                    <small class="text-muted" style="font-size: 0.8rem;">
-                        Menampilkan <%= payments.length %> pembayaran
-                        <% if (filters.date) { %>(tanggal <%= filters.date %>)<% } else if (filters.month || filters.year || filters.collector_id || filters.q) { %>(difilter)<% } %>
-                    </small>
                 </div>
             </div>
     </div>
@@ -344,6 +817,37 @@
                     <button type="submit" class="btn btn-danger" id="cancelPaymentConfirmBtn">Batalkan pembayaran</button>
                 </div>
                 </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="filterDateModal" tabindex="-1" aria-labelledby="filterDateModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header py-2">
+                    <h5 class="modal-title" id="filterDateModalLabel"><i class="bi bi-calendar-range me-1"></i>Pilih rentang tanggal</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+                </div>
+                <div class="modal-body pt-2">
+                    <div class="cal-nav">
+                        <button type="button" class="cal-nav-btn" id="calPrevBtn" title="Bulan sebelumnya"><i class="bi bi-chevron-left"></i></button>
+                        <div class="cal-nav-title" id="calMonthYear"></div>
+                        <button type="button" class="cal-nav-btn" id="calNextBtn" title="Bulan berikutnya"><i class="bi bi-chevron-right"></i></button>
+                    </div>
+                    <div class="cal-weekdays">
+                        <span>Sen</span><span>Sel</span><span>Rab</span><span>Kam</span><span>Jum</span><span>Sab</span><span>Min</span>
+                    </div>
+                    <div class="cal-grid" id="calGrid"></div>
+                    <p class="cal-hint mb-2" id="calHint">Klik tanggal mulai, lalu tanggal akhir.</p>
+                    <div class="cal-presets">
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="calTodayPickBtn">Hari ini</button>
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="cal7dBtn">7 hari</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="calMonthBtn">1 bulan</button>
+                    </div>
+                </div>
+                <div class="modal-footer py-2">
+                    <button type="button" class="btn btn-sm btn-primary" id="calApplyBtn">Terapkan</button>
+                </div>
             </div>
         </div>
     </div>
@@ -460,9 +964,9 @@
         <div class="modal-body">
           <div class="mb-3 position-relative">
             <label class="form-label">Nama Pelanggan</label>
-            <input type="text" class="form-control" id="customerSearchInput" placeholder="Ketik nama/telepon pelanggan..." autocomplete="off" required>
+            <input type="text" class="form-control" id="customerSearchInput" placeholder="Cari nama, username, no. hp, alamat..." autocomplete="off" required>
             <input type="hidden" id="selectedCustomerId" required>
-            <div id="customerSuggestions" class="list-group position-absolute w-100" style="z-index:1060; max-height:220px; overflow:auto; display:none;"></div>
+            <div id="customerSuggestions" class="list-group position-absolute w-100" style="z-index:1060; max-height:320px; overflow:auto; display:none;"></div>
           </div>
 
           <div class="mb-3">
@@ -530,51 +1034,30 @@
         }
 
         document.getElementById('exportPayments').addEventListener('click', function () {
-            const paymentsData = <%- JSON.stringify(payments || []) %>;
-            let headers;
-            let rows;
             if (isAllPaymentsPage) {
-                headers = ['Tanggal', 'Invoice', 'Kolektor', 'Pelanggan', 'Telepon', 'Tagihan', 'Komisi', 'Diskon', 'Jumlah', 'Metode', 'Status', 'Catatan'];
-                rows = paymentsData.map(function (p) {
-                    const invSt = String(p.invoice_status || '').toLowerCase();
-                    const statusLabel = invSt === 'paid' ? 'Lunas' : (invSt || '');
-                    const dDisc = Number(p.discount_amount || 0) || 0;
-                    const tagInv = Number(p.invoice_tagihan != null ? p.invoice_tagihan : p.invoice_amount || 0);
-                    const jmlSet = Number(p.jumlah_setelah_diskon != null ? p.jumlah_setelah_diskon : 0);
-                    const methodRaw = String(p.payment_method || '').trim();
-                    const methodLabel = methodRaw === 'manual_admin' ? 'Admin Kantor' : methodRaw;
-                    return [
-                        p.payment_date || '',
-                        p.invoice_number || ('#' + p.invoice_id),
-                        p.collector_name ? p.collector_name : 'Admin kantor',
-                        p.customer_name || '',
-                        p.customer_phone || '',
-                        tagInv,
-                        p.commission_amount || 0,
-                        dDisc,
-                        jmlSet,
-                        methodLabel,
-                        statusLabel,
-                        csvNoteDisplay(p.notes)
-                    ];
-                });
-            } else {
-                headers = ['Date', 'Collector', 'Customer', 'Phone', 'Amount', 'Commission', 'Method', 'Status', 'Remittance', 'Notes'];
-                rows = paymentsData.map(function (p) {
-                    return [
-                        p.payment_date || '',
-                        p.collector_name || 'Admin',
-                        p.customer_name || '',
-                        p.customer_phone || '',
-                        p.amount || 0,
-                        p.commission_amount || 0,
-                        p.payment_method || '',
-                        'completed',
-                        p.remittance_status || (!p.collector_id ? 'N/A (Admin)' : 'pending'),
-                        csvNoteDisplay(p.notes)
-                    ];
-                });
+                const form = document.getElementById('allPaymentsFilterForm');
+                const params = form
+                    ? new URLSearchParams(new FormData(form))
+                    : new URLSearchParams(window.location.search);
+                window.location.href = '/admin/billing/all-payments/export.xlsx?' + params.toString();
+                return;
             }
+            const paymentsData = <%- JSON.stringify(payments || []) %>;
+            const headers = ['Date', 'Collector', 'Customer', 'Phone', 'Amount', 'Commission', 'Method', 'Status', 'Remittance', 'Notes'];
+            const rows = paymentsData.map(function (p) {
+                return [
+                    p.payment_date || '',
+                    p.collector_name || 'Admin',
+                    p.customer_name || '',
+                    p.customer_phone || '',
+                    p.amount || 0,
+                    p.commission_amount || 0,
+                    p.payment_method || '',
+                    'completed',
+                    p.remittance_status || (!p.collector_id ? 'N/A (Admin)' : 'pending'),
+                    csvNoteDisplay(p.notes)
+                ];
+            });
             const csv = [headers].concat(rows).map(function (r) {
                 return r.map(function (x) { return '"' + String(x).replace(/"/g, '""') + '"'; }).join(',');
             }).join('\n');
@@ -582,7 +1065,7 @@
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = isAllPaymentsPage ? 'riwayat-pembayaran.csv' : 'payments.csv';
+            a.download = 'payments.csv';
             a.click();
             URL.revokeObjectURL(url);
         });
@@ -598,37 +1081,294 @@
             const cancelSummaryEl = document.getElementById('cancelPaymentSummary');
             const cancelConfirmBtn = document.getElementById('cancelPaymentConfirmBtn');
             const filterForm = document.getElementById('allPaymentsFilterForm');
-            const filterDate = document.getElementById('filterDate');
+            const filterFrom = document.getElementById('filterFrom');
+            const filterTo = document.getElementById('filterTo');
             const filterMonth = document.getElementById('filterMonth');
             const filterYear = document.getElementById('filterYear');
             const filterTodayBtn = document.getElementById('filterTodayBtn');
+            const filterDateTrigger = document.getElementById('filterDateTrigger');
+            const filterDateLabel = document.getElementById('filterDateLabel');
+            const filterDateClear = document.getElementById('filterDateClear');
+            const filterDateModalEl = document.getElementById('filterDateModal');
+            const calGrid = document.getElementById('calGrid');
+            const calMonthYear = document.getElementById('calMonthYear');
+            const calHint = document.getElementById('calHint');
+            const calPrevBtn = document.getElementById('calPrevBtn');
+            const calNextBtn = document.getElementById('calNextBtn');
+            const calTodayPickBtn = document.getElementById('calTodayPickBtn');
+            const cal7dBtn = document.getElementById('cal7dBtn');
+            const calMonthBtn = document.getElementById('calMonthBtn');
+            const calApplyBtn = document.getElementById('calApplyBtn');
+            const ID_MONTHS = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+            const ID_MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
             let syncingDateToMonth = false;
+            let calViewYear = 0;
+            let calViewMonth = 0;
+            let calFromIso = '';
+            let calToIso = '';
+            let filterDateModalInstance = null;
 
-            if (filterDate && filterMonth && filterYear) {
-                filterDate.addEventListener('change', function () {
-                    if (!this.value) return;
-                    const parts = this.value.split('-');
-                    if (parts.length !== 3) return;
-                    syncingDateToMonth = true;
-                    filterYear.value = String(Number(parts[0]));
-                    filterMonth.value = String(Number(parts[1]));
-                    syncingDateToMonth = false;
+            function todayIso() {
+                return (filterForm && filterForm.getAttribute('data-today')) || new Date().toISOString().slice(0, 10);
+            }
+
+            function parseIsoDate(iso) {
+                const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+                if (!m) return null;
+                return { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) };
+            }
+
+            function toIso(y, m, d) {
+                return String(y) + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+            }
+
+            function addDaysIso(iso, days) {
+                const p = parseIsoDate(iso);
+                if (!p) return iso;
+                const dt = new Date(p.y, p.m - 1, p.d + days);
+                return toIso(dt.getFullYear(), dt.getMonth() + 1, dt.getDate());
+            }
+
+            function monthBounds(y, m) {
+                const last = new Date(y, m, 0).getDate();
+                return { from: toIso(y, m, 1), to: toIso(y, m, last) };
+            }
+
+            function selectedMonthBounds() {
+                const y = parseInt(filterYear && filterYear.value, 10) || new Date().getFullYear();
+                const m = parseInt(filterMonth && filterMonth.value, 10) || (new Date().getMonth() + 1);
+                return monthBounds(y, m);
+            }
+
+            function formatRangeLabel(fromIso, toIso) {
+                const a = parseIsoDate(fromIso);
+                const b = parseIsoDate(toIso) || a;
+                if (!a) return '';
+                if (!b || fromIso === toIso) return a.d + ' ' + ID_MONTHS[a.m - 1] + ' ' + a.y;
+                if (a.y === b.y && a.m === b.m) return a.d + '-' + b.d + ' ' + ID_MONTHS[a.m - 1] + ' ' + a.y;
+                if (a.y === b.y) return a.d + ' ' + ID_MONTHS_SHORT[a.m - 1] + ' – ' + b.d + ' ' + ID_MONTHS_SHORT[b.m - 1] + ' ' + a.y;
+                return a.d + ' ' + ID_MONTHS_SHORT[a.m - 1] + ' ' + a.y + ' – ' + b.d + ' ' + ID_MONTHS_SHORT[b.m - 1] + ' ' + b.y;
+            }
+
+            function syncMonthYearFromIso(iso) {
+                const p = parseIsoDate(iso);
+                if (!p || !filterMonth || !filterYear) return;
+                syncingDateToMonth = true;
+                filterYear.value = String(p.y);
+                filterMonth.value = String(p.m);
+                syncingDateToMonth = false;
+            }
+
+            function isFullMonthRange(fromIso, toIso) {
+                const p = parseIsoDate(fromIso);
+                if (!p) return false;
+                const b = monthBounds(p.y, p.m);
+                return fromIso === b.from && toIso === b.to;
+            }
+
+            function updateDateTrigger() {
+                const fromIso = filterFrom ? String(filterFrom.value || '').trim() : '';
+                const toIsoVal = filterTo ? String(filterTo.value || '').trim() : '';
+                const label = formatRangeLabel(fromIso, toIsoVal);
+                if (filterDateLabel) filterDateLabel.textContent = label;
+                if (filterDateTrigger) {
+                    if (isFullMonthRange(fromIso, toIsoVal)) filterDateTrigger.classList.remove('is-custom-range');
+                    else filterDateTrigger.classList.add('is-custom-range');
+                }
+            }
+
+            function applyFilterRange(fromIso, toIso, submit) {
+                let fromVal = fromIso || '';
+                let toVal = toIso || fromVal;
+                if (fromVal && toVal && fromVal > toVal) {
+                    const swap = fromVal;
+                    fromVal = toVal;
+                    toVal = swap;
+                }
+                if (filterFrom) filterFrom.value = fromVal;
+                if (filterTo) filterTo.value = toVal;
+                if (fromVal) syncMonthYearFromIso(fromVal);
+                updateDateTrigger();
+                if (submit && filterForm) filterForm.submit();
+            }
+
+            function applyFullSelectedMonth(submit) {
+                const b = selectedMonthBounds();
+                applyFilterRange(b.from, b.to, submit);
+            }
+
+            function updateCalHint() {
+                if (!calHint) return;
+                if (calFromIso && !calToIso) calHint.textContent = 'Pilih tanggal akhir.';
+                else if (calFromIso && calToIso) calHint.textContent = formatRangeLabel(calFromIso, calToIso);
+                else calHint.textContent = 'Klik tanggal mulai, lalu tanggal akhir.';
+            }
+
+            function renderCalendar() {
+                if (!calGrid || !calMonthYear) return;
+                const today = parseIsoDate(todayIso());
+                let startIso = calFromIso;
+                let endIso = calToIso || calFromIso;
+                if (startIso && endIso && startIso > endIso) {
+                    const swap = startIso;
+                    startIso = endIso;
+                    endIso = swap;
+                }
+                calMonthYear.textContent = ID_MONTHS[calViewMonth - 1] + ' ' + calViewYear;
+                const first = new Date(calViewYear, calViewMonth - 1, 1);
+                const startOffset = (first.getDay() + 6) % 7;
+                const daysInMonth = new Date(calViewYear, calViewMonth, 0).getDate();
+                const prevMonthDays = new Date(calViewYear, calViewMonth - 1, 0).getDate();
+                const cells = [];
+                for (let i = 0; i < 42; i++) {
+                    let y = calViewYear;
+                    let m = calViewMonth;
+                    let d = i - startOffset + 1;
+                    let muted = false;
+                    if (d < 1) {
+                        m -= 1;
+                        if (m < 1) { m = 12; y -= 1; }
+                        d = prevMonthDays + d;
+                        muted = true;
+                    } else if (d > daysInMonth) {
+                        d = d - daysInMonth;
+                        m += 1;
+                        if (m > 12) { m = 1; y += 1; }
+                        muted = true;
+                    }
+                    const iso = toIso(y, m, d);
+                    const isToday = today && today.y === y && today.m === m && today.d === d;
+                    const isStart = startIso && iso === startIso;
+                    const isEnd = endIso && iso === endIso;
+                    const inRange = startIso && endIso && iso >= startIso && iso <= endIso && startIso !== endIso;
+                    cells.push(
+                        '<button type="button" class="cal-day'
+                        + (muted ? ' is-muted' : '')
+                        + (isToday ? ' is-today' : '')
+                        + (inRange ? ' is-in-range' : '')
+                        + (isStart ? ' is-range-start is-selected' : '')
+                        + (isEnd ? ' is-range-end is-selected' : '')
+                        + '" data-iso="' + iso + '">' + d + '</button>'
+                    );
+                }
+                calGrid.innerHTML = cells.join('');
+                updateCalHint();
+            }
+
+            function openDateModal() {
+                const fromIso = filterFrom ? String(filterFrom.value || '').trim() : '';
+                const toIsoVal = filterTo ? String(filterTo.value || '').trim() : '';
+                const current = parseIsoDate(fromIso) || parseIsoDate(todayIso()) || {
+                    y: new Date().getFullYear(),
+                    m: new Date().getMonth() + 1,
+                    d: 1
+                };
+                calViewYear = current.y;
+                calViewMonth = current.m;
+                calFromIso = fromIso;
+                calToIso = toIsoVal;
+                renderCalendar();
+                if (!filterDateModalInstance && filterDateModalEl && window.bootstrap && bootstrap.Modal) {
+                    filterDateModalInstance = new bootstrap.Modal(filterDateModalEl);
+                }
+                if (filterDateModalInstance) filterDateModalInstance.show();
+            }
+
+            if (filterDateTrigger) {
+                filterDateTrigger.addEventListener('click', function (ev) {
+                    if (ev.target && ev.target.closest && ev.target.closest('#filterDateClear')) return;
+                    openDateModal();
                 });
-                filterMonth.addEventListener('change', function () {
-                    if (!syncingDateToMonth) filterDate.value = '';
+            }
+            if (filterDateClear) {
+                filterDateClear.addEventListener('click', function (ev) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    applyFullSelectedMonth(true);
                 });
-                filterYear.addEventListener('change', function () {
-                    if (!syncingDateToMonth) filterDate.value = '';
+            }
+            if (calGrid) {
+                calGrid.addEventListener('click', function (ev) {
+                    const btn = ev.target && ev.target.closest ? ev.target.closest('.cal-day') : null;
+                    if (!btn) return;
+                    const iso = btn.getAttribute('data-iso') || '';
+                    if (!iso) return;
+                    if (!calFromIso || (calFromIso && calToIso)) {
+                        calFromIso = iso;
+                        calToIso = '';
+                        renderCalendar();
+                        return;
+                    }
+                    calToIso = iso;
+                    if (calToIso < calFromIso) {
+                        const swap = calFromIso;
+                        calFromIso = calToIso;
+                        calToIso = swap;
+                    }
+                    renderCalendar();
+                    if (filterDateModalInstance) filterDateModalInstance.hide();
+                    applyFilterRange(calFromIso, calToIso, true);
                 });
+            }
+            if (calPrevBtn) {
+                calPrevBtn.addEventListener('click', function () {
+                    calViewMonth -= 1;
+                    if (calViewMonth < 1) { calViewMonth = 12; calViewYear -= 1; }
+                    renderCalendar();
+                });
+            }
+            if (calNextBtn) {
+                calNextBtn.addEventListener('click', function () {
+                    calViewMonth += 1;
+                    if (calViewMonth > 12) { calViewMonth = 1; calViewYear += 1; }
+                    renderCalendar();
+                });
+            }
+            if (calTodayPickBtn) {
+                calTodayPickBtn.addEventListener('click', function () {
+                    const iso = todayIso();
+                    if (filterDateModalInstance) filterDateModalInstance.hide();
+                    applyFilterRange(iso, iso, true);
+                });
+            }
+            if (cal7dBtn) {
+                cal7dBtn.addEventListener('click', function () {
+                    const toVal = todayIso();
+                    const fromVal = addDaysIso(toVal, -6);
+                    if (filterDateModalInstance) filterDateModalInstance.hide();
+                    applyFilterRange(fromVal, toVal, true);
+                });
+            }
+            if (calMonthBtn) {
+                calMonthBtn.addEventListener('click', function () {
+                    const b = monthBounds(calViewYear, calViewMonth);
+                    if (filterDateModalInstance) filterDateModalInstance.hide();
+                    applyFilterRange(b.from, b.to, true);
+                });
+            }
+            if (calApplyBtn) {
+                calApplyBtn.addEventListener('click', function () {
+                    if (!calFromIso) return;
+                    if (filterDateModalInstance) filterDateModalInstance.hide();
+                    applyFilterRange(calFromIso, calToIso || calFromIso, true);
+                });
+            }
+
+            if (filterMonth && filterYear) {
+                function onMonthYearChange() {
+                    if (syncingDateToMonth) return;
+                    const b = selectedMonthBounds();
+                    if (filterFrom) filterFrom.value = b.from;
+                    if (filterTo) filterTo.value = b.to;
+                    updateDateTrigger();
+                }
+                filterMonth.addEventListener('change', onMonthYearChange);
+                filterYear.addEventListener('change', onMonthYearChange);
             }
             if (filterTodayBtn && filterForm) {
                 filterTodayBtn.addEventListener('click', function () {
-                    const todayVal = filterForm.getAttribute('data-today') || new Date().toISOString().slice(0, 10);
-                    if (filterDate) {
-                        filterDate.value = todayVal;
-                        filterDate.dispatchEvent(new Event('change'));
-                    }
-                    filterForm.submit();
+                    const iso = todayIso();
+                    applyFilterRange(iso, iso, true);
                 });
             }
 
@@ -784,7 +1524,7 @@
         async function searchCustomersForPayment(keyword) {
             const q = String(keyword || '').trim();
             const seq = ++customerSearchSeq;
-            if (q.length < 2) {
+            if (q.length < 1) {
                 customersCache = [];
                 renderCustomerSuggestions('');
                 return;
@@ -799,15 +1539,23 @@
             renderCustomerSuggestions(q);
         }
 
+        function escapeHtmlAttr(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/"/g, '&quot;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+
         function renderCustomerSuggestions(keyword) {
             const box = document.getElementById('customerSuggestions');
-            const q = String(keyword || '').toLowerCase().trim();
-            if (q.length < 2) {
+            const q = String(keyword || '').trim();
+            if (q.length < 1) {
                 box.style.display = 'none';
                 box.innerHTML = '';
                 return;
             }
-            const matches = customersCache.slice(0, 8);
+            const matches = customersCache;
 
             if (!matches.length) {
                 box.innerHTML = '<div class="list-group-item text-muted">Pelanggan tidak ditemukan</div>';
@@ -816,8 +1564,8 @@
             }
 
             box.innerHTML = matches.map(c => (
-                `<button type="button" class="list-group-item list-group-item-action customer-suggestion" data-id="${c.id}" data-name="${String(c.name || '').replace(/"/g, '&quot;')}" data-phone="${String(c.phone || '').replace(/"/g, '&quot;')}">` +
-                `<strong>${c.name || '-'}</strong><br><small>${c.phone || '-'} | ${c.username || '-'}</small>` +
+                `<button type="button" class="list-group-item list-group-item-action customer-suggestion" data-id="${c.id}" data-name="${escapeHtmlAttr(c.name)}" data-phone="${escapeHtmlAttr(c.phone)}">` +
+                `<strong>${escapeHtmlAttr(c.name || '-')}</strong><br><small>${escapeHtmlAttr(c.phone || '-')} | ${escapeHtmlAttr(c.username || c.pppoe_username || '-')} ${c.customer_id ? '| ID ' + escapeHtmlAttr(c.customer_id) : ''}</small>` +
                 `</button>`
             )).join('');
             box.style.display = 'block';

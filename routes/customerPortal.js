@@ -2,7 +2,6 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-const multer = require('multer');
 const { findDeviceByTag } = require('../config/addWAN');
 const { findDeviceByPPPoE } = require('../config/genieacs');
 const { sendMessage } = require('../config/sendMessage');
@@ -10,38 +9,16 @@ const { getSettingsWithCache, getSetting } = require('../config/settingsManager'
 const billingManager = require('../config/billing');
 const router = express.Router();
 
-// Configure multer for customer photo uploads
-const customerPhotoStorage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        const uploadDir = path.join(__dirname, '../public/uploads/customers');
-        // Create directory if it doesn't exist
-        if (!fs.existsSync(uploadDir)) {
-            fs.mkdirSync(uploadDir, { recursive: true });
-        }
-        cb(null, uploadDir);
-    },
-    filename: function (req, file, cb) {
-        // Generate unique filename: customer-{phone}-{type}-{timestamp}.{ext}
-        const phone = req.body.phone ? req.body.phone.replace(/\D/g, '') : Date.now();
+const { createSafeImageUpload } = require('../utils/safeImageUpload');
+
+const customerPhotoUpload = createSafeImageUpload({
+    destination: path.join(__dirname, '../public/uploads/customers'),
+    maxBytes: 5 * 1024 * 1024,
+    filename: function (req, file, ext, cb) {
+        const phone = req.body.phone ? String(req.body.phone).replace(/\D/g, '') : String(Date.now());
         const type = file.fieldname === 'ktp_photo' ? 'ktp' : 'house';
-        const ext = path.extname(file.originalname) || '.jpg';
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
         cb(null, `customer-${phone}-${type}-${uniqueSuffix}${ext}`);
-    }
-});
-
-const customerPhotoUpload = multer({ 
-    storage: customerPhotoStorage,
-    limits: {
-        fileSize: 20 * 1024 * 1024 // 20MB limit
-    },
-    fileFilter: function (req, file, cb) {
-        // Accept only image files
-        if (file.mimetype.startsWith('image/')) {
-            cb(null, true);
-        } else {
-            cb(new Error('Hanya file gambar yang diizinkan (JPG, PNG, GIF)'));
-        }
     }
 });
 

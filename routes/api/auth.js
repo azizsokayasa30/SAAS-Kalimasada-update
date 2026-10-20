@@ -12,12 +12,13 @@ const billingManager = require('../../config/billing');
 const AgentManager = require('../../config/agentManager');
 const { sendMessage } = require('../../config/sendMessage');
 const { resolveEmployeePhotoPath, buildPhotoUrl } = require('../../utils/technicianEmployeePhoto');
+const { isBcryptHash, verifyAdminPassword, hashAdminPassword } = require('../../utils/adminPassword');
 
 const agentManager = new AgentManager();
 const dbPath = path.join(__dirname, '../../data/billing.db');
 const db = new sqlite3.Database(dbPath);
 
-const JWT_SECRET = getSetting('jwt_secret', 'alijaya-billing-secret-2025');
+const JWT_SECRET = process.env.JWT_SECRET || getSetting('jwt_secret', 'alijaya-billing-secret-2025');
 
 // OTP Store for mobile API
 const otpStore = {};
@@ -148,9 +149,7 @@ router.post('/request-otp', async (req, res) => {
         }
 
         const otp = generateOTP(normPhone);
-        
-        // Always log OTP in development/testing for visibility
-        logger.info(`[LOGIN-OTP] Generated OTP for ${normPhone}: ${otp}`);
+        logger.info(`[LOGIN-OTP] OTP dibuat untuk ${normPhone}`);
 
         if (sendMessage) {
             const message = `*KODE OTP LOGIN*\n\nKode OTP Anda adalah: *${otp}*\nJangan berikan kode ini kepada siapapun.\n\nBerlaku selama 5 menit.`;
@@ -159,8 +158,7 @@ router.post('/request-otp', async (req, res) => {
         } else {
             return res.json({ 
                 success: true, 
-                message: 'OTP generated (Dev mode)', 
-                otp: process.env.NODE_ENV === 'development' ? otp : undefined 
+                message: 'OTP generated (Dev mode)'
             });
         }
     } catch (error) {
@@ -190,7 +188,16 @@ router.post('/login', async (req, res) => {
         const inputUser = String(username || '').trim();
         const inputPass = String(password || '').trim();
 
-        if (inputUser === adminUsername && inputPass === adminPassword) {
+        if (inputUser === adminUsername && await verifyAdminPassword(inputPass, adminPassword)) {
+            if (!isBcryptHash(adminPassword) && tenant?.id) {
+                hashAdminPassword(inputPass).then((hashed) => {
+                    const tenantStore = require('../../config/platform/tenantStore');
+                    return tenantStore.updateTenantAdminCredentials(tenant.id, {
+                        admin_username: adminUsername,
+                        admin_password: hashed,
+                    });
+                }).catch((err) => logger.warn(`[SECURITY] gagal menyimpan hash password admin: ${err.message}`));
+            }
             const claims = tenantClaims(tenant);
             const tokenPayload = {
                 id: 'admin',
@@ -210,6 +217,88 @@ router.post('/login', async (req, res) => {
                     tenantId: tenant.id,
                 },
             });
+        }
+    }
+
+    // 1a. Jabatan pimpinan master tenant — token dan role sama dengan admin utama
+    if ((!role || role === 'admin') && (tenant.is_master === 1 || tenant.is_master === true)) {
+        try {
+            const executive = await billingManager.authenticateMasterExecutive(
+                username || phone,
+                password,
+                tenant.id
+            );
+            if (executive) {
+                const claims = tenantClaims(tenant);
+                const tokenPayload = {
+                    id: 'admin',
+                    username: executive.username,
+                    name: executive.name,
+                    role: 'admin',
+                    jabatan: executive.jabatan,
+                    executive_id: executive.id,
+                    ...claims,
+                };
+                const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '24h' });
+                return res.json({
+                    success: true,
+                    token,
+                    user: {
+                        id: 'admin',
+                        username: executive.username,
+                        name: executive.name,
+                        role: 'admin',
+                        jabatan: executive.jabatan,
+                        phone: executive.phone || null,
+                        email: executive.email || null,
+                        tenant: tenant.subdomain || null,
+                        tenantId: tenant.id,
+                    },
+                });
+            }
+        } catch (exErr) {
+            console.error('Master executive login error:', exErr.message);
+        }
+    }
+
+    // 1b. Manager Area — akses mirip admin, di-scope ke area yang ditugaskan
+    if (!role || role === 'admin' || role === 'area_manager') {
+        try {
+            const billingManager = require('../../config/billing');
+            const manager = await billingManager.authenticateAreaManager(
+                username || phone,
+                password,
+                tenant.id
+            );
+            if (manager) {
+                const claims = tenantClaims(tenant);
+                const tokenPayload = {
+                    id: manager.id,
+                    username: manager.username,
+                    name: manager.name,
+                    role: 'area_manager',
+                    area_ids: manager.area_ids || [],
+                    ...claims,
+                };
+                const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '24h' });
+                return res.json({
+                    success: true,
+                    token,
+                    user: {
+                        id: manager.id,
+                        username: manager.username,
+                        name: manager.name,
+                        role: 'area_manager',
+                        area_ids: manager.area_ids || [],
+                        phone: manager.phone || null,
+                        email: manager.email || null,
+                        tenant: tenant.subdomain || null,
+                        tenantId: tenant.id,
+                    },
+                });
+            }
+        } catch (amErr) {
+            console.error('Area manager login error:', amErr.message);
         }
     }
 
@@ -505,7 +594,8 @@ router.get('/status', verifyToken, (req, res) => {
 router.get('/roles', (req, res) => {
     const roles = [
         { id: 'collector', name: 'Collector' },
-        { id: 'technician', name: 'Technician' }
+        { id: 'technician', name: 'Technician' },
+        { id: 'area_manager', name: 'Manager Area' }
     ];
     res.json({ success: true, data: roles });
 });

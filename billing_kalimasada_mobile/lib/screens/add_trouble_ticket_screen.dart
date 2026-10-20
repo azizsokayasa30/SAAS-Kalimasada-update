@@ -104,7 +104,7 @@ class _AddTroubleTicketScreenState extends State<AddTroubleTicketScreen> {
   void _onSearchChanged(String value) {
     _selectedCustomerId = null;
     _searchDebounce?.cancel();
-    if (value.trim().length < 3) {
+    if (value.trim().length < 1) {
       setState(() => _customers = []);
       return;
     }

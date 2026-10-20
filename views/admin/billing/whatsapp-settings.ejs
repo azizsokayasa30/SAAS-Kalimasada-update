@@ -2345,12 +2345,12 @@
             const data = await response.json();
             
             if (data.success) {
-                const settings = data.settings;
-                document.getElementById('maxMessagesPerBatch').value = settings.maxMessagesPerBatch || 10;
-                document.getElementById('delayBetweenBatches').value = settings.delayBetweenBatches || 30;
-                document.getElementById('delayBetweenMessages').value = settings.delayBetweenMessages || 2;
-                document.getElementById('maxRetries').value = settings.maxRetries || 2;
-                document.getElementById('dailyMessageLimit').value = settings.dailyMessageLimit || 0;
+                const settings = data.settings || {};
+                document.getElementById('maxMessagesPerBatch').value = settings.maxMessagesPerBatch ?? 10;
+                document.getElementById('delayBetweenBatches').value = settings.delayBetweenBatches ?? 30;
+                document.getElementById('delayBetweenMessages').value = settings.delayBetweenMessages ?? 2;
+                document.getElementById('maxRetries').value = settings.maxRetries ?? 2;
+                document.getElementById('dailyMessageLimit').value = settings.dailyMessageLimit ?? 0;
                 document.getElementById('enableRateLimit').checked = settings.enabled !== false;
             }
         } catch (error) {
@@ -2408,6 +2408,14 @@
             const data = await response.json();
             
             if (data.success) {
+                if (data.settings) {
+                    document.getElementById('maxMessagesPerBatch').value = data.settings.maxMessagesPerBatch ?? 10;
+                    document.getElementById('delayBetweenBatches').value = data.settings.delayBetweenBatches ?? 30;
+                    document.getElementById('delayBetweenMessages').value = data.settings.delayBetweenMessages ?? 2;
+                    document.getElementById('maxRetries').value = data.settings.maxRetries ?? 2;
+                    document.getElementById('dailyMessageLimit').value = data.settings.dailyMessageLimit ?? 0;
+                    document.getElementById('enableRateLimit').checked = data.settings.enabled !== false;
+                }
                 showAlert('Pengaturan rate limiting berhasil disimpan!', 'success');
             } else {
                 showAlert('Error menyimpan pengaturan: ' + data.message, 'danger');

@@ -7,7 +7,9 @@
     const { getCompanyHeader } = require('./message-templates');
     const { getSetting, getLocalTimestamp } = require('./settingsManager');
     const { getTenantId, hasTenantContext } = require('./platform/tenantContext');
-    const { ensureOltSchema } = require('../services/olt/oltSchema');
+const masterRecordGuard = require('./platform/masterRecordGuard');
+const { ensureOltSchema } = require('../services/olt/oltSchema');
+const { deleteCustomerRecord } = require('../utils/customerDelete');
 
     /** Diskon dari catatan admin: "… | Diskon: Rp 50.000 | …" (format id-ID) */
     function parseDiscountFromPaymentNotes(notes) {
@@ -66,6 +68,37 @@
     function sqlPaymentMethodIsTransfer(alias = 'p') {
         const pm = `LOWER(TRIM(COALESCE(${alias}.payment_method, '')))`;
         return `(${pm} IN ('transfer', 'transfer bank', 'transfer_bank') OR ${pm} LIKE '%transfer%')`;
+    }
+
+    /** Filter grup metode (cash/transfer/qris/…) — nilai DB tidak seragam. */
+    function sqlPaymentMethodGroup(alias = 'p', group) {
+        const g = String(group || '').trim().toLowerCase();
+        if (!g) return '';
+        const pm = `LOWER(TRIM(COALESCE(${alias}.payment_method, '')))`;
+        const cashExpr = `(${pm} IN ('', 'cash', 'tunai') OR ${pm} LIKE '%cash%' OR ${pm} LIKE '%tunai%')`;
+        const qrisExpr = `${pm} LIKE '%qris%'`;
+        const onlineExpr = `(${pm} IN ('online', 'gateway') OR ${pm} LIKE '%online%' OR ${pm} LIKE '%gateway%')`;
+        const adminExpr = `(${pm} IN ('manual_admin', 'admin kantor', 'admin') OR ${pm} LIKE '%manual_admin%')`;
+        const ewalletExpr = `(${pm} LIKE '%ewallet%' OR ${pm} LIKE '%e-wallet%' OR ${pm} LIKE '%e_wallet%' OR ${pm} LIKE '%e wallet%')`;
+        const transferExpr = sqlPaymentMethodIsTransfer(alias);
+        switch (g) {
+            case 'cash':
+                return ` AND ${cashExpr} AND NOT ${transferExpr}`;
+            case 'transfer':
+                return ` AND ${transferExpr}`;
+            case 'qris':
+                return ` AND ${qrisExpr}`;
+            case 'online':
+                return ` AND ${onlineExpr}`;
+            case 'manual_admin':
+                return ` AND ${adminExpr}`;
+            case 'ewallet':
+                return ` AND ${ewalletExpr}`;
+            case 'other':
+                return ` AND NOT (${cashExpr} OR ${transferExpr} OR ${qrisExpr} OR ${onlineExpr} OR ${adminExpr} OR ${ewalletExpr})`;
+            default:
+                return '';
+        }
     }
 
     function sqlCollectorCashRemittancePending(alias = 'p') {
@@ -578,6 +611,13 @@
          */
         async _autoSyncStatusToRadius(customer, oldStatus, newStatus) {
             try {
+                if (
+                    masterRecordGuard.isCurrentTenantMaster()
+                    || masterRecordGuard.isCopiedOrigin(customer)
+                    || masterRecordGuard.isDummyOrigin(customer)
+                ) {
+                    return;
+                }
                 const norm = (s) => String(s || '').toLowerCase();
                 const from = norm(oldStatus);
                 const to = norm(newStatus);
@@ -685,7 +725,12 @@
         }
 
         async setSuspendReasonById(id, suspendReason) {
-            return new Promise((resolve, reject) => {
+            return new Promise(async (resolve, reject) => {
+                try {
+                    await masterRecordGuard.assertCustomerWritable(this.db, id);
+                } catch (guardErr) {
+                    return reject(guardErr);
+                }
                 this.db.run(
                     `UPDATE customers SET suspend_reason = ? WHERE id = ?`,
                     [suspendReason || null, id],
@@ -699,8 +744,18 @@
                 try {
                     const existing = await this.getCustomerById(id);
                     if (!existing) return reject(new Error('Customer not found'));
+                    if (!options.allowMasterSync) {
+                        try {
+                            await masterRecordGuard.assertCustomerWritable(this.db, id, options);
+                        } catch (guardErr) {
+                            return reject(guardErr);
+                        }
+                    }
                     const oldStatus = existing.status;
-                    const skipRadiusSync = Boolean(options && (options.skipRadiusSync || options.skipExternalSync));
+                    const skipRadiusSync = Boolean(options && (options.skipRadiusSync || options.skipExternalSync))
+                        || masterRecordGuard.isCurrentTenantMaster()
+                        || masterRecordGuard.isDummyOrigin(existing)
+                        || masterRecordGuard.isCopiedOrigin(existing);
                     const st = String(status || '').toLowerCase();
                     const clearSuspendReason = st === 'active' || st === 'inactive' || st === 'register';
                     const sql = clearSuspendReason
@@ -782,6 +837,7 @@
                 try {
                     const oldCustomer = await this.getCustomerById(id);
                     if (!oldCustomer) return reject(new Error('Customer not found'));
+                    await masterRecordGuard.assertCustomerWritable(this.db, id);
 
                     const normBillingDay = Math.min(Math.max(parseInt(billing_day !== undefined ? billing_day : (oldCustomer?.billing_day ?? 15), 10) || 15, 1), 28);
                     
@@ -1469,6 +1525,14 @@
                 }
             });
 
+            this.db.run("ALTER TABLE customers ADD COLUMN master_origin TEXT", () => {});
+            this.db.run("ALTER TABLE customers ADD COLUMN source_tenant_id INTEGER", () => {});
+            this.db.run("ALTER TABLE customers ADD COLUMN source_customer_id INTEGER", () => {});
+            this.db.run("ALTER TABLE customers ADD COLUMN source_tenant_name TEXT", () => {});
+            this.db.run("ALTER TABLE invoices ADD COLUMN source_invoice_id INTEGER", () => {});
+            this.db.run("ALTER TABLE invoices ADD COLUMN source_missing INTEGER NOT NULL DEFAULT 0", () => {});
+            this.db.run("ALTER TABLE payments ADD COLUMN source_payment_id INTEGER", () => {});
+
         // Tambahkan kolom tax_rate ke packages jika belum ada
         this.db.run("ALTER TABLE packages ADD COLUMN tax_rate DECIMAL(5,2) DEFAULT 11.00", (err) => {
             if (err && !err.message.includes('duplicate column name')) {
@@ -1687,6 +1751,8 @@
             'ALTER TABLE trouble_reports ADD COLUMN odp TEXT',
             'ALTER TABLE trouble_reports ADD COLUMN sn TEXT',
             'ALTER TABLE trouble_reports ADD COLUMN signal_level TEXT',
+            'ALTER TABLE trouble_reports ADD COLUMN progress_updated_at TEXT',
+            'ALTER TABLE trouble_reports ADD COLUMN admin_seen_at TEXT',
         ].forEach((sql) => {
             this.db.run(sql, (err) => {
                 if (err && !/duplicate column/i.test(String(err.message || ''))) {
@@ -1927,6 +1993,16 @@
         // Skema lama collector_areas memakai area_name; kode baru memakai area.
         this._ensureCollectorAreasAreaColumn().catch((err) => {
             console.error('Error ensuring collector_areas.area column:', err);
+        });
+
+        // Manager Area (multi-wilayah, akses mirip admin minus Settingan)
+        this.ensureAreaManagersTables().catch((err) => {
+            console.error('Error ensuring area_managers tables:', err);
+        });
+
+        // Jabatan pimpinan master tenant (Komisaris, Direktur, Wakil Direktur)
+        this.ensureMasterExecutivesTable().catch((err) => {
+            console.error('Error ensuring master_executives table:', err);
         });
 
         // customer_id + invoice_id nullable di collector_payments (pembayaran app kolektor)
@@ -2542,9 +2618,12 @@
             
             // Simpan reference database untuk digunakan di callback
             const db = this.db;
-            const skipExternalSync = Boolean(customerData && customerData.__skip_external_sync);
+            const isMasterCtx = masterRecordGuard.isCurrentTenantMaster();
+            let skipExternalSync = Boolean(customerData && customerData.__skip_external_sync) || isMasterCtx;
             const skipGenieacsSync = skipExternalSync || Boolean(customerData && customerData.__skip_genieacs_sync);
             const skipRadiusSync = skipExternalSync || Boolean(customerData && customerData.__skip_radius_sync);
+            const masterOrigin = customerData.master_origin
+                || (isMasterCtx ? 'dummy' : null);
             
             const { name, username, password, phone, pppoe_username, email, address, area, area_id, package_id, odp_id, pppoe_profile, status, auto_suspension, auto_suspension_day, billing_day, renewal_type, fix_date, static_ip, assigned_ip, mac_address, latitude, longitude, cable_type, cable_length, port_number, cable_status, cable_notes, ktp_photo_path, house_photo_path } = customerData;
 
@@ -2666,7 +2745,7 @@
                 { name: 'odp_id', value: () => customerData.odp_id || null },
                 { name: 'pppoe_profile', value: () => resolvedPppoeProfile },
                 { name: 'status', value: () => finalStatus },
-                { name: 'auto_suspension', value: () => (auto_suspension !== undefined ? auto_suspension : 1) },
+                { name: 'auto_suspension', value: () => (isMasterCtx ? 0 : (auto_suspension !== undefined ? auto_suspension : 1)) },
                 { name: 'auto_suspension_day', value: () => normAutoSuspensionDay },
                 { name: 'billing_day', value: () => (normRenewalType === 'fix_date' ? (normFixDate || normBillingDay) : normBillingDay) },
                 { name: 'renewal_type', value: () => normRenewalType },
@@ -2694,7 +2773,11 @@
                 { name: 'house_photo_path', value: () => house_photo_path || null },
                 { name: 'join_date', value: () => joinDateStored },
                 { name: 'created_at', value: () => joinDateStored },
-                { name: 'tenant_id', value: () => tenantIdForRow }
+                { name: 'tenant_id', value: () => tenantIdForRow },
+                { name: 'master_origin', value: () => masterOrigin },
+                { name: 'source_tenant_id', value: () => customerData.source_tenant_id || null },
+                { name: 'source_customer_id', value: () => customerData.source_customer_id || null },
+                { name: 'source_tenant_name', value: () => customerData.source_tenant_name || null }
             ];
 
             let insertFields;
@@ -2756,7 +2839,7 @@
             const customer = { id: lastID, ...customerData, username: finalUsername };
                     
                     // Jika ada data ODP, buat cable route otomatis
-                    if (odp_id) {
+                    if (odp_id && !isMasterCtx) {
                         console.log(`🔧 Creating cable route for new customer ${finalUsername}, odp_id: ${odp_id}, cable_type: ${cable_type}`);
                         try {
                             // Insert cable route langsung ke database
@@ -2876,6 +2959,262 @@
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='areas'",
                 [],
                 (err, rows) => resolve(!err && rows && rows.length > 0)
+            );
+        });
+    }
+
+    /**
+     * Pastikan tabel area_managers + area_manager_areas ada (Manager Area multi-wilayah).
+     */
+    async ensureAreaManagersTables() {
+        if (this._areaManagersTablesEnsured) return;
+        if (this._areaManagersTablesPromise) return this._areaManagersTablesPromise;
+
+        this._areaManagersTablesPromise = new Promise((resolve) => {
+            this.db.serialize(() => {
+                this.db.run(
+                    `CREATE TABLE IF NOT EXISTS area_managers (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        username TEXT NOT NULL,
+                        phone TEXT,
+                        email TEXT,
+                        password TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'inactive', 'suspended')),
+                        tenant_id INTEGER NOT NULL DEFAULT 1,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )`,
+                    () => {
+                        this.db.run(
+                            `CREATE TABLE IF NOT EXISTS area_manager_areas (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                area_manager_id INTEGER NOT NULL,
+                                area_id INTEGER NOT NULL,
+                                tenant_id INTEGER NOT NULL DEFAULT 1,
+                                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                                UNIQUE(area_manager_id, area_id),
+                                FOREIGN KEY (area_manager_id) REFERENCES area_managers(id) ON DELETE CASCADE,
+                                FOREIGN KEY (area_id) REFERENCES areas(id) ON DELETE CASCADE
+                            )`,
+                            () => {
+                                this.db.run(
+                                    `CREATE UNIQUE INDEX IF NOT EXISTS idx_area_managers_tenant_username
+                                     ON area_managers(tenant_id, LOWER(TRIM(username)))`,
+                                    () => {
+                                        this.db.run(
+                                            `CREATE INDEX IF NOT EXISTS idx_area_manager_areas_manager
+                                             ON area_manager_areas(area_manager_id)`,
+                                            () => {
+                                                this._areaManagersTablesEnsured = true;
+                                                resolve();
+                                            }
+                                        );
+                                    }
+                                );
+                            }
+                        );
+                    }
+                );
+            });
+        });
+
+        return this._areaManagersTablesPromise;
+    }
+
+    /**
+     * Daftar area_id yang ditugaskan ke Manager Area.
+     */
+    async getAreaManagerAreaIds(managerId, tenantId = null) {
+        await this.ensureAreaManagersTables();
+        const mid = parseInt(managerId, 10);
+        if (!Number.isFinite(mid) || mid <= 0) return [];
+        return new Promise((resolve) => {
+            const params = [mid];
+            let sql = 'SELECT area_id FROM area_manager_areas WHERE area_manager_id = ?';
+            if (tenantId != null && Number.isFinite(Number(tenantId))) {
+                sql += ' AND tenant_id = ?';
+                params.push(Number(tenantId));
+            }
+            this.db.all(sql, params, (err, rows) => {
+                if (err) {
+                    console.error('getAreaManagerAreaIds:', err.message);
+                    return resolve([]);
+                }
+                resolve((rows || []).map((r) => Number(r.area_id)).filter((id) => Number.isFinite(id)));
+            });
+        });
+    }
+
+    /**
+     * SQL boolean: pelanggan berada di salah satu area_id Manager Area.
+     * Cocokkan via c.area_id langsung atau teks c.area ↔ areas.nama_area/kode_area.
+     * @returns {{ clause: string, params: any[] }}
+     */
+    _sqlCustomerInAreaIds(customerAlias = 'c', areaIds = []) {
+        const ids = (areaIds || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0);
+        if (!ids.length) {
+            return { clause: '1=0', params: [] };
+        }
+        const ph = ids.map(() => '?').join(',');
+        const c = customerAlias;
+        return {
+            clause: `(
+                ${c}.area_id IN (${ph})
+                OR (
+                    TRIM(IFNULL(${c}.area, '')) != ''
+                    AND EXISTS (
+                        SELECT 1 FROM areas ar
+                        WHERE ar.id IN (${ph})
+                          AND ar.tenant_id = ${c}.tenant_id
+                          AND (
+                              LOWER(TRIM(IFNULL(ar.nama_area, ''))) = LOWER(TRIM(${c}.area))
+                              OR (
+                                  TRIM(IFNULL(ar.kode_area, '')) != ''
+                                  AND LOWER(TRIM(ar.kode_area)) = LOWER(TRIM(${c}.area))
+                              )
+                          )
+                    )
+                )
+            )`,
+            params: [...ids, ...ids],
+        };
+    }
+
+    /**
+     * Cek apakah customerId masuk scope area manager (untuk validasi tulis).
+     */
+    async isCustomerInAreaManagerAreas(customerId, areaIds, tenantId = null) {
+        const ids = (areaIds || []).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0);
+        const cid = parseInt(customerId, 10);
+        if (!ids.length || !Number.isFinite(cid) || cid <= 0) return false;
+        const match = this._sqlCustomerInAreaIds('c', ids);
+        return new Promise((resolve) => {
+            const params = [cid, ...match.params];
+            let sql = `SELECT 1 AS ok FROM customers c WHERE c.id = ? AND ${match.clause}`;
+            if (tenantId != null && Number.isFinite(Number(tenantId))) {
+                sql += ' AND c.tenant_id = ?';
+                params.push(Number(tenantId));
+            }
+            sql += ' LIMIT 1';
+            this.db.get(sql, params, (err, row) => {
+                if (err) {
+                    console.error('isCustomerInAreaManagerAreas:', err.message);
+                    return resolve(false);
+                }
+                resolve(!!row);
+            });
+        });
+    }
+
+    async authenticateAreaManager(username, password, tenantId) {
+        await this.ensureAreaManagersTables();
+        const user = String(username || '').trim();
+        const pass = String(password || '');
+        const tid = parseInt(tenantId, 10);
+        if (!user || !pass || !Number.isFinite(tid) || tid <= 0) return null;
+
+        const bcrypt = require('bcrypt');
+        return new Promise((resolve) => {
+            this.db.get(
+                `SELECT * FROM area_managers
+                 WHERE LOWER(TRIM(username)) = LOWER(TRIM(?))
+                   AND tenant_id = ?
+                   AND status = 'active'`,
+                [user, tid],
+                async (err, row) => {
+                    if (err || !row || !row.password) return resolve(null);
+                    let ok = false;
+                    try {
+                        ok = bcrypt.compareSync(pass, row.password);
+                    } catch (_) {
+                        ok = false;
+                    }
+                    if (!ok) return resolve(null);
+                    const areaIds = await this.getAreaManagerAreaIds(row.id, tid);
+                    resolve({ ...row, area_ids: areaIds });
+                }
+            );
+        });
+    }
+
+    /**
+     * Tabel akun jabatan pimpinan master tenant.
+     * Komisaris, Direktur, dan Wakil Direktur login dengan akses admin utama.
+     */
+    async ensureMasterExecutivesTable() {
+        if (this._masterExecutivesEnsured) return;
+        if (this._masterExecutivesPromise) return this._masterExecutivesPromise;
+
+        this._masterExecutivesPromise = new Promise((resolve) => {
+            this.db.serialize(() => {
+                this.db.run(
+                    `CREATE TABLE IF NOT EXISTS master_executives (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        username TEXT NOT NULL,
+                        phone TEXT,
+                        email TEXT,
+                        password TEXT NOT NULL,
+                        jabatan TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'inactive', 'suspended')),
+                        tenant_id INTEGER NOT NULL,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )`,
+                    () => {
+                        this.db.run(
+                            `CREATE UNIQUE INDEX IF NOT EXISTS idx_master_executives_tenant_username
+                             ON master_executives(tenant_id, LOWER(TRIM(username)))`,
+                            () => {
+                                this._masterExecutivesEnsured = true;
+                                resolve();
+                            }
+                        );
+                    }
+                );
+            });
+        });
+
+        return this._masterExecutivesPromise;
+    }
+
+    async authenticateMasterExecutive(username, password, tenantId) {
+        await this.ensureMasterExecutivesTable();
+        const user = String(username || '').trim();
+        const pass = String(password || '');
+        const tid = parseInt(tenantId, 10);
+        if (!user || !pass || !Number.isFinite(tid) || tid <= 0) return null;
+
+        const bcrypt = require('bcrypt');
+        return new Promise((resolve) => {
+            this.db.get(
+                `SELECT id, name, username, phone, email, password, jabatan, status, tenant_id
+                 FROM master_executives
+                 WHERE LOWER(TRIM(username)) = LOWER(TRIM(?))
+                   AND tenant_id = ?
+                   AND status = 'active'`,
+                [user, tid],
+                (err, row) => {
+                    if (err || !row || !row.password) return resolve(null);
+                    let ok = false;
+                    try {
+                        ok = bcrypt.compareSync(pass, row.password);
+                    } catch (_) {
+                        ok = false;
+                    }
+                    if (!ok) return resolve(null);
+                    resolve({
+                        id: row.id,
+                        name: row.name,
+                        username: row.username,
+                        phone: row.phone || null,
+                        email: row.email || null,
+                        jabatan: row.jabatan,
+                        status: row.status,
+                        tenant_id: row.tenant_id,
+                    });
+                }
             );
         });
     }
@@ -3065,6 +3404,7 @@
 
     _invoiceListNeedsCustomerJoin(filters = {}) {
         if (String(filters.search || filters.customer_username || '').trim()) return true;
+        if (Object.prototype.hasOwnProperty.call(filters, 'area_ids')) return true;
         return filters.type === 'monthly' || filters.type === 'fix_date';
     }
 
@@ -3125,6 +3465,13 @@
             }
         }
 
+        // Manager Area: invoice hanya untuk pelanggan di area yang ditugaskan
+        if (Object.prototype.hasOwnProperty.call(filters, 'area_ids')) {
+            const areaScope = this._sqlCustomerInAreaIds('c', filters.area_ids || []);
+            sql += ` AND i.customer_id IS NOT NULL AND ${areaScope.clause}`;
+            params.push(...areaScope.params);
+        }
+
         return { sql, params };
     }
 
@@ -3176,27 +3523,24 @@
 
     /** Pencarian invoice-list: nama, username, PPPoE, HP, kode pelanggan, no invoice. */
     _appendInvoiceCustomerSearchFilter(sql, params, filters, options = {}) {
-        const q = String(filters.search || filters.customer_username || '').trim();
+        const q = this._normalizeCustomerSearchQuery(filters.search || filters.customer_username);
         if (!q) return { sql: sql || '', params: [...params] };
-        const term = `%${q}%`;
-        const hasCustomerId = Boolean(options.hasCustomerId);
-        const parts = [
-            'c.name LIKE ?',
-            'c.username LIKE ?',
-            "IFNULL(c.pppoe_username, '') LIKE ?",
-            "IFNULL(c.phone, '') LIKE ?",
-            'i.invoice_number LIKE ?'
-        ];
-        const searchParams = [term, term, term, term, term];
-        if (hasCustomerId) {
-            parts.push("IFNULL(c.customer_id, '') LIKE ?");
-            searchParams.push(term);
-        }
+        const keyword = this._buildCustomerKeywordSearch(q, 'c');
+        const like = `%${this._escapeLikePattern(q)}%`;
+        const extraParts = [`i.invoice_number LIKE ? ESCAPE '\\' COLLATE NOCASE`];
+        const extraParams = [like];
         if (options.includeMembers) {
-            parts.push('m.name LIKE ?', 'IFNULL(m.hotspot_username, \'\') LIKE ?', 'm.username LIKE ?');
-            searchParams.push(term, term, term);
+            extraParts.push(
+                `IFNULL(m.name, '') LIKE ? ESCAPE '\\' COLLATE NOCASE`,
+                `IFNULL(m.hotspot_username, '') LIKE ? ESCAPE '\\' COLLATE NOCASE`,
+                `IFNULL(m.username, '') LIKE ? ESCAPE '\\' COLLATE NOCASE`
+            );
+            extraParams.push(like, like, like);
         }
-        return { sql: `${sql} AND (${parts.join(' OR ')})`, params: [...params, ...searchParams] };
+        const combined = keyword.sql
+            ? `(${keyword.sql} OR ${extraParts.join(' OR ')})`
+            : `(${extraParts.join(' OR ')})`;
+        return { sql: `${sql} AND ${combined}`, params: [...params, ...keyword.params, ...extraParams] };
     }
 
     /**
@@ -3226,6 +3570,13 @@
         });
         const voucherExcl = this._sqlInvoiceExcludeVoucher(hasInvoiceType);
         let poolSql = '';
+        let areaSql = '';
+        let areaParams = [];
+        if (Array.isArray(options.areaIds)) {
+            const areaScope = this._sqlCustomerInAreaIds('cust', options.areaIds);
+            areaSql = ` AND ${areaScope.clause}`;
+            areaParams = areaScope.params;
+        }
         if (scope === 'collector_territory') {
             const areaMatch = this._sqlCustomerMatchesCollectorAreaRow(hasAreas, 'ca', 'cust');
             poolSql = `AND (
@@ -3253,9 +3604,12 @@
                   AND i.status IN ('paid', 'unpaid')
                   ${tenantSql}
                   ${poolSql}
+                  ${areaSql}
             ) sub
         `;
-        const tagihanParams = _tScope ? [startDate, endDate, _tId] : [startDate, endDate];
+        const tagihanParams = _tScope
+            ? [startDate, endDate, _tId, ...areaParams]
+            : [startDate, endDate, ...areaParams];
         return new Promise((resolve, reject) => {
             this.db.get(sql, tagihanParams, (err, row) => {
                 if (err) reject(err);
@@ -3289,12 +3643,21 @@
         // Isolasi multi-tenant: filter piutang per tenant aktif.
         const _tScope = _tId != null;
         const tenantSql = _tScope ? ' AND i.tenant_id = ?' : '';
+        let areaJoin = '';
+        let areaSql = '';
+        let areaParams = [];
+        if (Array.isArray(options.areaIds)) {
+            const areaScope = this._sqlCustomerInAreaIds('c', options.areaIds);
+            areaJoin = ' INNER JOIN customers c ON c.id = i.customer_id';
+            areaSql = ` AND ${areaScope.clause}`;
+            areaParams = areaScope.params;
+        }
         const sql = `
-            SELECT COUNT(*) AS count_unpaid, COALESCE(SUM(amount), 0) AS total_unpaid
-            FROM invoices i
-            WHERE i.status = 'unpaid' AND ${voucherExcl}${tenantSql}
+            SELECT COUNT(*) AS count_unpaid, COALESCE(SUM(i.amount), 0) AS total_unpaid
+            FROM invoices i${areaJoin}
+            WHERE i.status = 'unpaid' AND ${voucherExcl}${tenantSql}${areaSql}
         `;
-        const outstandingParams = _tScope ? [_tId] : [];
+        const outstandingParams = _tScope ? [_tId, ...areaParams] : [...areaParams];
         return new Promise((resolve, reject) => {
             this.db.get(sql, outstandingParams, (err, row) => {
                 if (err) reject(err);
@@ -3472,6 +3835,7 @@ ${lifetimePaymentStatusSql}
                         if (authMode === 'radius') {
                             const radiusConn = await getRadiusConnection();
                             const pppUsers = processedRows
+                                .filter(c => String(c.master_origin || '') !== 'copied' && String(c.master_origin || '') !== 'dummy')
                                 .map(c => (c.pppoe_username && String(c.pppoe_username).trim()) || (c.username && String(c.username).trim()))
                                 .filter(u => u && u.length > 0);
                             
@@ -3487,6 +3851,9 @@ ${lifetimePaymentStatusSql}
                                 radProfiles.forEach(rp => { profileMap[rp.username] = rp.profile; });
                                 
                                 processedRows = processedRows.map(c => {
+                                    if (String(c.master_origin || '') === 'copied' || String(c.master_origin || '') === 'dummy') {
+                                        return c;
+                                    }
                                     const user = (c.pppoe_username && String(c.pppoe_username).trim()) || (c.username && String(c.username).trim());
                                     if (user && profileMap[user]) c.pppoe_profile = profileMap[user];
                                     return c;
@@ -3527,6 +3894,15 @@ ${lifetimePaymentStatusSql}
             if (_t.sql) {
                 whereClause = whereClause ? whereClause + _t.sql : ' WHERE c.tenant_id = ?';
                 params.push(..._t.params);
+            }
+
+            const scopedAreaIds = options.area_ids ?? options.areaIds;
+            if (scopedAreaIds !== undefined) {
+                const areaScope = this._sqlCustomerInAreaIds('c', scopedAreaIds || []);
+                whereClause = whereClause
+                    ? `${whereClause} AND ${areaScope.clause}`
+                    : ` WHERE ${areaScope.clause}`;
+                params.push(...areaScope.params);
             }
 
             const sql = `
@@ -3577,6 +3953,7 @@ ${lifetimePaymentStatusSql}
                             
                             // Kumpulkan semua pppoe_username yang valid
                             const pppUsers = processedRows
+                                .filter(c => String(c.master_origin || '') !== 'copied' && String(c.master_origin || '') !== 'dummy')
                                 .map(c => (c.pppoe_username && String(c.pppoe_username).trim()) || (c.username && String(c.username).trim()))
                                 .filter(u => u && u.length > 0);
                             
@@ -3599,6 +3976,9 @@ ${lifetimePaymentStatusSql}
                                 
                                 // Update profil untuk setiap customer
                                 processedRows.forEach(customer => {
+                                    if (String(customer.master_origin || '') === 'copied' || String(customer.master_origin || '') === 'dummy') {
+                                        return;
+                                    }
                                     const pppUser = (customer.pppoe_username && String(customer.pppoe_username).trim()) || 
                                                    (customer.username && String(customer.username).trim());
                                     
@@ -3647,9 +4027,11 @@ ${lifetimePaymentStatusSql}
         const filterParams = [];
 
         if (filters.search) {
-            baseWhere += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.pppoe_username LIKE ?)';
-            const searchTerm = `%${filters.search}%`;
-            filterParams.push(searchTerm, searchTerm, searchTerm);
+            const keyword = this._buildCustomerKeywordSearch(filters.search, 'c');
+            if (keyword.sql) {
+                baseWhere += ` AND ${keyword.sql}`;
+                filterParams.push(...keyword.params);
+            }
         }
         if (filters.package_id) {
             baseWhere += ' AND c.package_id = ?';
@@ -3659,6 +4041,11 @@ ${lifetimePaymentStatusSql}
             const areaFilter = this._sqlCustomerMatchesAreaFilter('c', filters.area);
             baseWhere += ` AND ${areaFilter.clause}`;
             filterParams.push(...areaFilter.params);
+        }
+        if (Object.prototype.hasOwnProperty.call(filters, 'area_ids')) {
+            const areaScope = this._sqlCustomerInAreaIds('c', filters.area_ids || []);
+            baseWhere += ` AND ${areaScope.clause}`;
+            filterParams.push(...areaScope.params);
         }
 
         // Filter kolektor dibangun per-alias (bukan regex rename) supaya JOIN & WHERE-nya
@@ -3838,6 +4225,136 @@ ${lifetimePaymentStatusSql}
         });
     }
 
+    /** Escape wildcard LIKE agar keyword pengguna tidak jadi pola SQL. */
+    _escapeLikePattern(value) {
+        return String(value ?? '').replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+    }
+
+    /**
+     * Pencarian pelanggan seragam (Kelola Pelanggan, input pembayaran, tiket, invoice).
+     * Nama, username, PPPoE, HP (termasuk varian 08/62), kode pelanggan, alamat, email.
+     * Beberapa kata diperlakukan AND supaya "budi santoso" tetap ketemu walau spasi di DB berbeda.
+     */
+    _normalizeCustomerSearchQuery(searchTerm) {
+        return String(searchTerm || '')
+            .trim()
+            .replace(/[.,;|/+\-_]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    _buildCustomerKeywordSearch(searchTerm, alias = 'c') {
+        const normalized = this._normalizeCustomerSearchQuery(searchTerm);
+        const tokens = normalized.split(/\s+/).filter(Boolean).slice(0, 8);
+        if (!tokens.length) return { sql: '', params: [] };
+
+        const a = alias || 'c';
+        const clauses = [];
+        const params = [];
+        const likeCol = (expr) => `${expr} LIKE ? ESCAPE '\\' COLLATE NOCASE`;
+
+        for (const token of tokens) {
+            const like = `%${this._escapeLikePattern(token)}%`;
+            const parts = [
+                likeCol(`${a}.name`),
+                likeCol(`IFNULL(${a}.username, '')`),
+                likeCol(`IFNULL(${a}.pppoe_username, '')`),
+                likeCol(`IFNULL(${a}.phone, '')`),
+                likeCol(`CAST(${a}.customer_id AS TEXT)`),
+                likeCol(`CAST(${a}.id AS TEXT)`),
+                likeCol(`IFNULL(${a}.address, '')`),
+                likeCol(`IFNULL(${a}.email, '')`),
+                likeCol(`IFNULL(${a}.area, '')`)
+            ];
+            const tokenParams = [like, like, like, like, like, like, like, like, like];
+
+            const digits = String(token).replace(/\D/g, '');
+            if (digits.length >= 3) {
+                const variants = new Set(this.getIndonesianPhoneLookupVariants(token));
+                variants.add(digits);
+                for (const variant of variants) {
+                    const vLike = `%${this._escapeLikePattern(variant)}%`;
+                    parts.push(likeCol(`IFNULL(${a}.phone, '')`));
+                    tokenParams.push(vLike);
+                }
+                parts.push(
+                    likeCol(`REPLACE(REPLACE(REPLACE(REPLACE(IFNULL(${a}.phone,''), '+', ''), '-', ''), ' ', ''), '.', '')`)
+                );
+                tokenParams.push(`%${this._escapeLikePattern(digits)}%`);
+            }
+
+            clauses.push(`(${parts.join(' OR ')})`);
+            params.push(...tokenParams);
+        }
+
+        return { sql: `(${clauses.join(' AND ')})`, params };
+    }
+
+    _customerKeywordRankOrderSql(searchTerm, alias = 'c') {
+        const q = this._normalizeCustomerSearchQuery(searchTerm);
+        const a = alias || 'c';
+        if (!q) {
+            return { sql: `${a}.name COLLATE NOCASE ASC`, params: [] };
+        }
+        const starts = `${this._escapeLikePattern(q)}%`;
+        const contains = `%${this._escapeLikePattern(q)}%`;
+        return {
+            sql: `CASE
+                    WHEN LOWER(IFNULL(${a}.name,'')) = LOWER(?) THEN 0
+                    WHEN LOWER(IFNULL(${a}.username,'')) = LOWER(?) THEN 0
+                    WHEN LOWER(IFNULL(${a}.pppoe_username,'')) = LOWER(?) THEN 0
+                    WHEN IFNULL(${a}.phone,'') = ? THEN 0
+                    WHEN CAST(${a}.customer_id AS TEXT) = ? THEN 0
+                    WHEN CAST(${a}.id AS TEXT) = ? THEN 0
+                    WHEN LOWER(IFNULL(${a}.name,'')) LIKE LOWER(?) ESCAPE '\\' THEN 1
+                    WHEN LOWER(IFNULL(${a}.username,'')) LIKE LOWER(?) ESCAPE '\\' THEN 1
+                    WHEN LOWER(IFNULL(${a}.pppoe_username,'')) LIKE LOWER(?) ESCAPE '\\' THEN 1
+                    WHEN LOWER(IFNULL(${a}.name,'')) LIKE LOWER(?) ESCAPE '\\' THEN 2
+                    WHEN LOWER(IFNULL(${a}.username,'')) LIKE LOWER(?) ESCAPE '\\' THEN 2
+                    WHEN LOWER(IFNULL(${a}.pppoe_username,'')) LIKE LOWER(?) ESCAPE '\\' THEN 2
+                    WHEN IFNULL(${a}.phone,'') LIKE ? ESCAPE '\\' THEN 2
+                    WHEN CAST(${a}.customer_id AS TEXT) LIKE ? ESCAPE '\\' THEN 2
+                    ELSE 3
+                  END ASC, ${a}.name COLLATE NOCASE ASC`,
+            params: [q, q, q, q, q, q, starts, starts, starts, contains, contains, contains, contains, contains]
+        };
+    }
+
+    /** Fallback in-memory — sama token + varian HP seperti pencarian SQL Kelola Pelanggan. */
+    customerRowMatchesKeyword(customer, searchTerm) {
+        const tokens = this._normalizeCustomerSearchQuery(searchTerm).split(/\s+/).filter(Boolean).slice(0, 8);
+        if (!tokens.length) return true;
+        const c = customer || {};
+        const haystacks = [
+            String(c.name || ''),
+            String(c.username || ''),
+            String(c.pppoe_username || ''),
+            String(c.phone || ''),
+            String(c.customer_id || ''),
+            String(c.id || ''),
+            String(c.address || ''),
+            String(c.email || ''),
+            String(c.area || '')
+        ].map((s) => s.toLowerCase());
+        const phoneDigits = String(c.phone || '').replace(/\D/g, '');
+
+        return tokens.every((token) => {
+            const t = token.toLowerCase();
+            if (haystacks.some((h) => h.includes(t))) return true;
+            const digits = token.replace(/\D/g, '');
+            if (digits.length >= 3) {
+                const variants = this.getIndonesianPhoneLookupVariants(token);
+                if (variants.some((v) => {
+                    const vd = String(v).replace(/\D/g, '');
+                    return (vd && phoneDigits.includes(vd)) || String(c.phone || '').includes(v);
+                })) {
+                    return true;
+                }
+            }
+            return false;
+        });
+    }
+
     /** WHERE + params untuk daftar/export pelanggan (selaras filter bulan di admin). */
     _buildCustomersListWhereClause(filters = {}) {
         let whereClause = '';
@@ -3864,9 +4381,11 @@ ${lifetimePaymentStatusSql}
         }
 
         if (filters.search) {
-            whereClause += ' AND (c.name LIKE ? OR c.phone LIKE ? OR c.pppoe_username LIKE ?)';
-            const searchTerm = `%${filters.search}%`;
-            params.push(searchTerm, searchTerm, searchTerm);
+            const keyword = this._buildCustomerKeywordSearch(filters.search, 'c');
+            if (keyword.sql) {
+                whereClause += ` AND ${keyword.sql}`;
+                params.push(...keyword.params);
+            }
         }
 
         if (filters.package_id) {
@@ -3878,6 +4397,13 @@ ${lifetimePaymentStatusSql}
             const areaFilter = this._sqlCustomerMatchesAreaFilter('c', filters.area);
             whereClause += ` AND ${areaFilter.clause}`;
             params.push(...areaFilter.params);
+        }
+
+        // Manager Area: batasi ke daftar area_id yang ditugaskan
+        if (Object.prototype.hasOwnProperty.call(filters, 'area_ids')) {
+            const areaScope = this._sqlCustomerInAreaIds('c', filters.area_ids || []);
+            whereClause += ` AND ${areaScope.clause}`;
+            params.push(...areaScope.params);
         }
 
         if (filters.collector_id) {
@@ -4048,6 +4574,7 @@ ${lifetimePaymentStatusSql}
             if (authMode === 'radius') {
                 const radiusConn = await getRadiusConnection();
                 const pppUsers = processedRows
+                    .filter((c) => String(c.master_origin || '') !== 'copied' && String(c.master_origin || '') !== 'dummy')
                     .map((c) => (c.pppoe_username && String(c.pppoe_username).trim()) || (c.username && String(c.username).trim()))
                     .filter((u) => u && u.length > 0);
 
@@ -4064,6 +4591,9 @@ ${lifetimePaymentStatusSql}
                         }
                     }
                     processedRows.forEach((customer) => {
+                        if (String(customer.master_origin || '') === 'copied' || String(customer.master_origin || '') === 'dummy') {
+                            return;
+                        }
                         const pppUser = (customer.pppoe_username && String(customer.pppoe_username).trim())
                             || (customer.username && String(customer.username).trim());
                         if (pppUser && profileMap.has(pppUser)) {
@@ -4177,31 +4707,43 @@ ${lifetimePaymentStatusSql}
         });
     }
 
-    // Search customers by name, phone, username, PPPoE, atau ID pelanggan (6 digit)
+    // Search customers by name, phone, username, PPPoE, ID, alamat — sama dengan Kelola Pelanggan
     async searchCustomers(searchTerm, options = {}) {
         const tenantId = this._resolveTenantIdForRead(options.tenantId);
         const _t = tenantId != null
             ? this._tenantWhereExplicit(tenantId, 'c')
             : this._tenantWhere('c');
-        return new Promise((resolve, reject) => {
-            const searchPattern = `%${searchTerm}%`;
+        const q = this._normalizeCustomerSearchQuery(searchTerm);
+        const keyword = this._buildCustomerKeywordSearch(q, 'c');
+        if (!keyword.sql) return [];
+        const limitRaw = parseInt(options.limit, 10);
+        const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 100;
+        const rank = this._customerKeywordRankOrderSql(q, 'c');
+        const scopedAreaIds = options.area_ids ?? options.areaIds;
+        let areaSql = '';
+        let areaParams = [];
+        if (scopedAreaIds !== undefined) {
+            const areaScope = this._sqlCustomerInAreaIds('c', scopedAreaIds || []);
+            areaSql = ` AND ${areaScope.clause}`;
+            areaParams = areaScope.params;
+        }
 
-            // Skema customers memakai join_date (bukan created_at/updated_at)
+        return new Promise((resolve, reject) => {
             const sql = `
                 SELECT c.id, c.customer_id, c.username, c.name, c.phone, c.email, c.address,
-                       c.pppoe_username, c.package_id, c.status, c.join_date,
+                       c.pppoe_username, c.package_id, c.status, c.join_date, c.area, c.area_id,
+                       c.latitude, c.longitude,
                        p.name AS package_name
                 FROM customers c
                 LEFT JOIN packages p ON c.package_id = p.id AND p.tenant_id = c.tenant_id
-                WHERE (c.name LIKE ? OR c.phone LIKE ? OR c.username LIKE ? OR c.pppoe_username LIKE ?
-                   OR (c.customer_id IS NOT NULL AND TRIM(CAST(c.customer_id AS TEXT)) != '' AND CAST(c.customer_id AS TEXT) LIKE ?))${_t.sql}
-                ORDER BY c.name ASC
-                LIMIT 20
+                WHERE ${keyword.sql}${_t.sql}${areaSql}
+                ORDER BY ${rank.sql}
+                LIMIT ?
             `;
 
             this.db.all(
                 sql,
-                [searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, ..._t.params],
+                [...keyword.params, ..._t.params, ...areaParams, ...rank.params, limit],
                 (err, rows) => {
                     if (err) {
                         reject(err);
@@ -4214,35 +4756,17 @@ ${lifetimePaymentStatusSql}
     }
 
     /**
-     * Autocomplete input pembayaran — wajib tenant_id eksplisit, tanpa password.
-     * Fail-closed: tanpa tenant atau query < 2 karakter → [].
+     * Autocomplete input pembayaran / tiket / invoice — wajib tenant_id eksplisit, tanpa password.
+     * Fail-closed: tanpa tenant atau query kosong → [].
      */
-    async listCustomersForPaymentPicker(tenantId, searchTerm) {
+    async listCustomersForPaymentPicker(tenantId, searchTerm, options = {}) {
         const tid = parseInt(tenantId, 10);
-        const q = String(searchTerm || '').trim();
-        if (!Number.isFinite(tid) || tid <= 0 || q.length < 2) return [];
-        const pattern = `%${q}%`;
-        return new Promise((resolve, reject) => {
-            this.db.all(
-                `SELECT c.id, c.name, c.phone, c.username, c.pppoe_username
-                 FROM customers c
-                 WHERE c.tenant_id = ?
-                   AND (
-                        c.name LIKE ?
-                        OR c.phone LIKE ?
-                        OR IFNULL(c.username, '') LIKE ?
-                        OR IFNULL(c.pppoe_username, '') LIKE ?
-                        OR CAST(c.customer_id AS TEXT) LIKE ?
-                   )
-                 ORDER BY c.name ASC
-                 LIMIT 20`,
-                [tid, pattern, pattern, pattern, pattern, pattern],
-                (err, rows) => {
-                    if (err) reject(err);
-                    else resolve(rows || []);
-                }
-            );
-        });
+        const q = this._normalizeCustomerSearchQuery(searchTerm);
+        if (!Number.isFinite(tid) || tid <= 0 || q.length < 1) return [];
+        const searchOpts = { tenantId: tid, limit: 100 };
+        const scopedAreaIds = options.area_ids ?? options.areaIds;
+        if (scopedAreaIds !== undefined) searchOpts.areaIds = scopedAreaIds;
+        return this.searchCustomers(q, searchOpts);
     }
 
     async getUnpaidInvoicesForCustomer(customerId, tenantId) {
@@ -4371,121 +4895,12 @@ ${lifetimePaymentStatusSql}
     }
 
     async getCustomerByNameOrPhone(searchTerm) {
-        return new Promise((resolve, reject) => {
-            // Bersihkan nomor telefon (hapus karakter non-digit)
-            const cleanPhone = searchTerm.replace(/\D/g, '');
-            
-            const sql = `
-                SELECT c.*, p.name as package_name, p.price as package_price, p.speed as package_speed, p.tax_rate,
-                       CASE 
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid'
-                           ) THEN 'unpaid'
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'paid'
-                           ) THEN 'paid'
-                           ELSE 'no_invoice'
-                       END as payment_status
-                FROM customers c 
-                LEFT JOIN packages p ON c.package_id = p.id 
-                WHERE c.phone = ? 
-                   OR c.name LIKE ? 
-                   OR c.username LIKE ?
-                ORDER BY 
-                    CASE 
-                        WHEN c.phone = ? THEN 1
-                        WHEN c.name = ? THEN 2
-                        WHEN c.name LIKE ? THEN 3
-                        WHEN c.username LIKE ? THEN 4
-                        ELSE 5
-                    END
-                LIMIT 1
-            `;
-            
-            const likeTerm = `%${searchTerm}%`;
-            const params = [
-                cleanPhone,           // Exact phone match
-                likeTerm,            // Name LIKE
-                likeTerm,            // Username LIKE
-                cleanPhone,          // ORDER BY phone exact
-                searchTerm,          // ORDER BY name exact
-                `${searchTerm}%`,    // ORDER BY name starts with
-                likeTerm             // ORDER BY username LIKE
-            ];
-            
-            this.db.get(sql, params, (err, row) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    if (row && row.package_price && row.tax_rate !== null) {
-                        // Calculate price with tax for customer display
-                        row.package_price = this.calculatePriceWithTax(row.package_price, row.tax_rate);
-                    }
-                    resolve(row);
-                }
-            });
-        });
+        const rows = await this.searchCustomers(searchTerm, { limit: 1 });
+        return rows[0] || null;
     }
 
     async findCustomersByNameOrPhone(searchTerm) {
-        return new Promise((resolve, reject) => {
-            // Bersihkan nomor telefon (hapus karakter non-digit) 
-            const cleanPhone = searchTerm.replace(/\D/g, '');
-            
-            const sql = `
-                SELECT c.*, p.name as package_name, p.price as package_price, p.speed as package_speed,
-                       CASE 
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'unpaid'
-                           ) THEN 'unpaid'
-                           WHEN EXISTS (
-                               SELECT 1 FROM invoices i 
-                               WHERE i.customer_id = c.id 
-                               AND i.status = 'paid'
-                           ) THEN 'paid'
-                           ELSE 'no_invoice'
-                       END as payment_status
-                FROM customers c 
-                LEFT JOIN packages p ON c.package_id = p.id 
-                WHERE c.phone = ? 
-                   OR c.name LIKE ? 
-                   OR c.username LIKE ?
-                ORDER BY 
-                    CASE 
-                        WHEN c.phone = ? THEN 1
-                        WHEN c.name = ? THEN 2
-                        WHEN c.name LIKE ? THEN 3
-                        WHEN c.username LIKE ? THEN 4
-                        ELSE 5
-                    END
-                LIMIT 5
-            `;
-            
-            const likeTerm = `%${searchTerm}%`;
-            const params = [
-                cleanPhone,           // Exact phone match
-                likeTerm,            // Name LIKE
-                likeTerm,            // Username LIKE
-                cleanPhone,          // ORDER BY phone exact
-                searchTerm,          // ORDER BY name exact
-                `${searchTerm}%`,    // ORDER BY name starts with
-                likeTerm             // ORDER BY username LIKE
-            ];
-            
-            this.db.all(sql, params, (err, rows) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(rows || []);
-                }
-            });
-        });
+        return this.searchCustomers(searchTerm, { limit: 20 });
     }
 
     async updateCustomer(phone, customerData) {
@@ -4521,6 +4936,7 @@ ${lifetimePaymentStatusSql}
                 if (!oldCustomer) {
                     return reject(new Error('Pelanggan tidak ditemukan'));
                 }
+                await masterRecordGuard.assertCustomerWritable(this.db, oldCustomer.id);
 
                 const nextPhone = String(phone || oldPhone || '').trim();
                 if (
@@ -4781,219 +5197,97 @@ ${lifetimePaymentStatusSql}
     }
 
     async deleteCustomer(phone) {
-        return new Promise(async (resolve, reject) => {
-            try {
-                // Dapatkan data customer sebelum dihapus
-                const customer = await this.getCustomerByPhone(phone);
-                if (!customer) {
-                    reject(new Error('Pelanggan tidak ditemukan'));
-                    return;
-                }
-
-                const db = this.db;
-                const customerId = customer.id;
-
-                const runQuery = (sql, params = []) => {
-                    return new Promise((res) => {
-                        db.run(sql, params, function(err) {
-                            if (err) console.warn(`⚠️ Error executing clean up query for customer ${customer.username}:`, err.message);
-                            res();
-                        });
-                    });
-                };
-
-                // Hapus semua data terkait untuk menghindari FOREIGN KEY constraint error
-                await runQuery(`DELETE FROM invoices WHERE customer_id = ?`, [customerId]);
-                await runQuery(`DELETE FROM cable_routes WHERE customer_id = ?`, [customerId]);
-                await runQuery(`DELETE FROM trouble_reports WHERE phone = ?`, [customer.phone]);
-                await runQuery(`DELETE FROM collector_assignments WHERE customer_id = ?`, [customerId]);
-                await runQuery(`DELETE FROM collector_transactions WHERE customer_id = ?`, [customerId]);
-                await runQuery(`DELETE FROM agent_customers WHERE customer_id = ?`, [customerId]);
-                await runQuery(`DELETE FROM agent_transactions WHERE customer_id = ?`, [customerId]);
-                await runQuery(`DELETE FROM installation_jobs WHERE customer_id = ?`, [customerId]);
-
-                // Hapus customer
-                db.run(`DELETE FROM customers WHERE phone = ?`, [phone], async function(err) {
-                    if (err) {
-                        return reject(err);
-                    }
-                    
-                    // Hapus tag dari GenieACS jika ada nomor telepon
-                    if (customer.phone) {
-                        try {
-                            const genieacs = require('./genieacs');
-                            const pppoeToUse = customer.pppoe_username || customer.username;
-                            const device = await genieacs.findDeviceByPPPoE(pppoeToUse);
-                            if (device) {
-                                await genieacs.removeTagFromDevice(device._id, customer.phone);
-                                console.log(`Removed phone tag ${customer.phone} from GenieACS device ${device._id}`);
-                            }
-                        } catch (genieacsError) {
-                            console.warn(`GenieACS cleanup skipped for ${customer.username}:`, genieacsError.message);
-                        }
-                    }
-                    
-                    // Hapus user PPPoE dari Mikrotik/RADIUS — skip jika masih dipakai pelanggan lain
-                    try {
-                        const { deletePPPoEUser } = require('./mikrotik');
-                        const pppoeToUse = customer.pppoe_username || customer.username;
-                        if (pppoeToUse) {
-                            const shared = await new Promise((res) => {
-                                db.get(
-                                    `SELECT id FROM customers WHERE id != ? AND (pppoe_username = ? OR username = ?) LIMIT 1`,
-                                    [customerId, pppoeToUse, pppoeToUse],
-                                    (e, row) => res(row || null)
-                                );
-                            });
-                            if (shared) {
-                                console.warn(`⚠️ Skip hapus PPPoE ${pppoeToUse}: masih dipakai customer id=${shared.id}`);
-                            } else {
-                                await deletePPPoEUser(pppoeToUse);
-                                console.log(`✅ Deleted PPPoE user ${pppoeToUse} for customer ${customer.username}`);
-                            }
-                        }
-                    } catch (pppoeError) {
-                        console.warn(`⚠️ PPPoE deletion failed or skipped for ${customer.username}:`, pppoeError.message);
-                    }
-
-                    // Static IP: hapus queue + sync pool (unused kembali blocked)
-                    try {
-                        const hasStatic =
-                            customer.connection_type === 'static_ip' ||
-                            ((customer.static_ip || customer.assigned_ip) && !String(customer.pppoe_username || '').trim());
-                        if (hasStatic) {
-                            const { removeStaticIPQueue } = require('./staticIPProvisioning');
-                            await removeStaticIPQueue(customer);
-                            const mapRow = await new Promise((res) => {
-                                db.get(
-                                    `SELECT router_id FROM customer_router_map WHERE customer_id = ?`,
-                                    [customer.id],
-                                    (e, row) => res(row || null)
-                                );
-                            });
-                            if (mapRow && mapRow.router_id) {
-                                const { syncPoolsForRouter } = require('./staticIpPoolSync');
-                                await syncPoolsForRouter(mapRow.router_id);
-                            }
-                        }
-                    } catch (staticErr) {
-                        console.warn(`Static IP cleanup skipped: ${staticErr.message}`);
-                    }
-                    
-                    resolve({ username: customer.username, deleted: true });
-                });
-            } catch (error) {
-                reject(error);
-            }
-        });
+        const customer = await this.getCustomerByPhone(phone);
+        if (!customer) {
+            throw new Error('Pelanggan tidak ditemukan');
+        }
+        return this._deleteCustomerRecord(customer);
     }
 
     async deleteCustomerById(id) {
-        return new Promise(async (resolve, reject) => {
-            try {
-                // Dapatkan data customer sebelum dihapus
-                const customer = await this.getCustomerById(id);
-                if (!customer) {
-                    reject(new Error('Pelanggan tidak ditemukan'));
-                    return;
-                }
+        const customer = await this.getCustomerById(id);
+        if (!customer) {
+            throw new Error('Pelanggan tidak ditemukan');
+        }
+        return this._deleteCustomerRecord(customer);
+    }
 
-                const db = this.db;
-                const customerId = customer.id;
+    async _deleteCustomerRecord(customer) {
+        await masterRecordGuard.assertCustomerWritable(this.db, customer.id);
+        const skipNetworkCleanup = masterRecordGuard.isDummyOrigin(customer)
+            || masterRecordGuard.isCurrentTenantMaster();
 
-                const runQuery = (sql, params = []) => {
-                    return new Promise((res) => {
-                        db.run(sql, params, function(err) {
-                            if (err) console.warn(`⚠️ Error executing clean up query for customer ${customer.username}:`, err.message);
-                            res();
-                        });
-                    });
-                };
-
-                // Hapus semua data terkait untuk menghindari FOREIGN KEY constraint error
-                await runQuery(`DELETE FROM invoices WHERE customer_id = ?`, [customerId]);
-                await runQuery(`DELETE FROM cable_routes WHERE customer_id = ?`, [customerId]);
-                await runQuery(`DELETE FROM trouble_reports WHERE phone = ?`, [customer.phone]);
-                await runQuery(`DELETE FROM collector_assignments WHERE customer_id = ?`, [customerId]);
-                await runQuery(`DELETE FROM collector_transactions WHERE customer_id = ?`, [customerId]);
-                await runQuery(`DELETE FROM agent_customers WHERE customer_id = ?`, [customerId]);
-                await runQuery(`DELETE FROM agent_transactions WHERE customer_id = ?`, [customerId]);
-                await runQuery(`DELETE FROM installation_jobs WHERE customer_id = ?`, [customerId]);
-
-                // Hapus customer
-                db.run(`DELETE FROM customers WHERE id = ?`, [id], async function(err) {
-                    if (err) {
-                        return reject(err);
-                    }
-                    
-                    // Hapus tag dari GenieACS jika ada nomor telepon
-                    if (customer.phone) {
-                        try {
-                            const genieacs = require('./genieacs');
-                            const pppoeToUse = customer.pppoe_username || customer.username;
-                            const device = await genieacs.findDeviceByPPPoE(pppoeToUse);
-                            if (device) {
-                                await genieacs.removeTagFromDevice(device._id, customer.phone);
-                                console.log(`Removed phone tag ${customer.phone} from GenieACS device ${device._id}`);
-                            }
-                        } catch (genieacsError) {
-                            console.warn(`GenieACS cleanup skipped for ${customer.username}:`, genieacsError.message);
-                        }
-                    }
-                    
-                    // Hapus user PPPoE dari Mikrotik/RADIUS — skip jika masih dipakai pelanggan lain
-                    try {
-                        const { deletePPPoEUser } = require('./mikrotik');
-                        const pppoeToUse = customer.pppoe_username || customer.username;
-                        if (pppoeToUse) {
-                            const shared = await new Promise((res) => {
-                                db.get(
-                                    `SELECT id FROM customers WHERE id != ? AND (pppoe_username = ? OR username = ?) LIMIT 1`,
-                                    [customerId, pppoeToUse, pppoeToUse],
-                                    (e, row) => res(row || null)
-                                );
-                            });
-                            if (shared) {
-                                console.warn(`⚠️ Skip hapus PPPoE ${pppoeToUse}: masih dipakai customer id=${shared.id}`);
-                            } else {
-                                await deletePPPoEUser(pppoeToUse);
-                                console.log(`✅ Deleted PPPoE user ${pppoeToUse} for customer ${customer.username}`);
-                            }
-                        }
-                    } catch (pppoeError) {
-                        console.warn(`⚠️ PPPoE deletion failed or skipped for ${customer.username}:`, pppoeError.message);
-                    }
-
-                    // Static IP: hapus queue + sync pool (unused kembali blocked)
-                    try {
-                        const hasStatic =
-                            customer.connection_type === 'static_ip' ||
-                            ((customer.static_ip || customer.assigned_ip) && !String(customer.pppoe_username || '').trim());
-                        if (hasStatic) {
-                            const { removeStaticIPQueue } = require('./staticIPProvisioning');
-                            await removeStaticIPQueue(customer);
-                            const mapRow = await new Promise((res) => {
-                                db.get(
-                                    `SELECT router_id FROM customer_router_map WHERE customer_id = ?`,
-                                    [customer.id],
-                                    (e, row) => res(row || null)
-                                );
-                            });
-                            if (mapRow && mapRow.router_id) {
-                                const { syncPoolsForRouter } = require('./staticIpPoolSync');
-                                await syncPoolsForRouter(mapRow.router_id);
-                            }
-                        }
-                    } catch (staticErr) {
-                        console.warn(`Static IP cleanup skipped: ${staticErr.message}`);
-                    }
-                    
-                    resolve({ username: customer.username, deleted: true });
-                });
-            } catch (error) {
-                reject(error);
-            }
+        const mappedRouterId = await new Promise((resolve) => {
+            this.db.get(
+                'SELECT router_id FROM customer_router_map WHERE customer_id = ?',
+                [customer.id],
+                (err, row) => resolve(row && row.router_id ? row.router_id : null)
+            );
         });
+
+        await deleteCustomerRecord(this.dbPath, customer);
+        if (skipNetworkCleanup) {
+            return { username: customer.username, deleted: true };
+        }
+        await this._cleanupDeletedCustomerNetwork(customer, mappedRouterId);
+        return { username: customer.username, deleted: true };
+    }
+
+    async _cleanupDeletedCustomerNetwork(customer, mappedRouterId) {
+        const db = this.db;
+        const customerId = customer.id;
+
+        if (customer.phone) {
+            try {
+                const genieacs = require('./genieacs');
+                const pppoeToUse = customer.pppoe_username || customer.username;
+                const device = await genieacs.findDeviceByPPPoE(pppoeToUse);
+                if (device) {
+                    await genieacs.removeTagFromDevice(device._id, customer.phone);
+                    console.log(`Removed phone tag ${customer.phone} from GenieACS device ${device._id}`);
+                }
+            } catch (genieacsError) {
+                console.warn(`GenieACS cleanup skipped for ${customer.username}:`, genieacsError.message);
+            }
+        }
+
+        try {
+            const { deletePPPoEUser } = require('./mikrotik');
+            const pppoeToUse = customer.pppoe_username || customer.username;
+            if (pppoeToUse) {
+                const shared = await new Promise((res) => {
+                    db.get(
+                        `SELECT id FROM customers WHERE id != ? AND (pppoe_username = ? OR username = ?) LIMIT 1`,
+                        [customerId, pppoeToUse, pppoeToUse],
+                        (e, row) => res(row || null)
+                    );
+                });
+                if (shared) {
+                    console.warn(`⚠️ Skip hapus PPPoE ${pppoeToUse}: masih dipakai customer id=${shared.id}`);
+                } else {
+                    await deletePPPoEUser(pppoeToUse);
+                    console.log(`✅ Deleted PPPoE user ${pppoeToUse} for customer ${customer.username}`);
+                }
+            }
+        } catch (pppoeError) {
+            console.warn(`⚠️ PPPoE deletion failed or skipped for ${customer.username}:`, pppoeError.message);
+        }
+
+        try {
+            const hasStatic =
+                customer.connection_type === 'static_ip' ||
+                ((customer.static_ip || customer.assigned_ip) && !String(customer.pppoe_username || '').trim());
+            if (hasStatic) {
+                const { removeStaticIPQueue } = require('./staticIPProvisioning');
+                await removeStaticIPQueue(customer);
+                if (mappedRouterId) {
+                    const { syncPoolsForRouter } = require('./staticIpPoolSync');
+                    await syncPoolsForRouter(mappedRouterId);
+                }
+            }
+        } catch (staticErr) {
+            console.warn(`Static IP cleanup skipped: ${staticErr.message}`);
+        }
     }
 
     /**
@@ -5074,6 +5368,9 @@ ${lifetimePaymentStatusSql}
             }
             if (cust.tenant_id != null && Number.isFinite(Number(cust.tenant_id))) {
                 ownerTenantId = parseInt(cust.tenant_id, 10);
+            }
+            if (!invoiceData.__master_sync) {
+                await masterRecordGuard.assertCustomerWritable(this.db, invoiceData.customer_id);
             }
         } else if (invoiceData && invoiceData.member_id) {
             const mem = await new Promise((resolve, reject) => {
@@ -5732,7 +6029,8 @@ ${lifetimePaymentStatusSql}
                 SELECT c.id, c.username, c.status, c.package_id, c.billing_day, c.renewal_type, c.fix_date, c.tenant_id
                 FROM customers c
                 INNER JOIN packages p ON p.id = c.package_id AND CAST(p.price AS REAL) > 0
-                WHERE c.status = 'active' AND c.package_id IS NOT NULL${tenantSql}
+                WHERE c.status = 'active' AND c.package_id IS NOT NULL
+                  AND IFNULL(c.master_origin, '') != 'copied'${tenantSql}
                 ORDER BY c.id ASC
             `;
             this.db.all(sql, [..._t.params], (err, rows) => {
@@ -5843,6 +6141,7 @@ ${lifetimePaymentStatusSql}
                 let sql = `
                     SELECT i.*, 
                         c.username as customer_username, c.name as customer_name, c.phone as customer_phone, c.address as customer_address,
+                        c.status as customer_status, c.master_origin as customer_master_origin, c.source_tenant_name,
                         m.hotspot_username as member_username, m.name as member_name, m.phone as member_phone, m.address as member_address,
                         COALESCE(p.name, mp.name) as package_name, 
                         COALESCE(p.speed, mp.speed) as package_speed
@@ -5897,6 +6196,7 @@ ${lifetimePaymentStatusSql}
     async updateInvoiceStatus(id, status, paymentMethod = null) {
         return new Promise(async (resolve, reject) => {
             try {
+                await masterRecordGuard.assertInvoiceWritable(this.db, id);
                 let prevInv = null;
                 try {
                     prevInv = await this.getInvoiceById(id);
@@ -5997,6 +6297,7 @@ ${lifetimePaymentStatusSql}
     }
 
     async updateInvoice(id, invoiceData) {
+        await masterRecordGuard.assertInvoiceWritable(this.db, id);
         return new Promise((resolve, reject) => {
             const { customer_id, package_id, amount, due_date, notes } = invoiceData;
             const sql = `UPDATE invoices SET customer_id = ?, package_id = ?, amount = ?, due_date = ?, notes = ? WHERE id = ?`;
@@ -6016,9 +6317,15 @@ ${lifetimePaymentStatusSql}
     async deleteInvoice(id) {
         return new Promise((resolve, reject) => {
             // First get the invoice details before deleting
-            this.getInvoiceById(id).then(invoice => {
+            this.getInvoiceById(id).then(async (invoice) => {
                 if (!invoice) {
                     reject(new Error('Invoice not found'));
+                    return;
+                }
+                try {
+                    await masterRecordGuard.assertInvoiceWritable(this.db, id);
+                } catch (guardErr) {
+                    reject(guardErr);
                     return;
                 }
 
@@ -6106,6 +6413,9 @@ ${lifetimePaymentStatusSql}
     // Payment Management
     async recordPayment(paymentData) {
         const { hasTenantContext } = require('./platform/tenantContext');
+        if (paymentData && paymentData.invoice_id && !paymentData.__master_sync) {
+            await masterRecordGuard.assertInvoiceWritable(this.db, paymentData.invoice_id);
+        }
         let tenantIdForRow = this._resolveTenantIdForInsert(paymentData && paymentData.tenant_id);
         // Fallback: wariskan tenant dari invoice bila tanpa konteks ALS.
         if (
@@ -6161,6 +6471,9 @@ ${lifetimePaymentStatusSql}
     }
 
     async recordCollectorPayment(paymentData) {
+        if (paymentData && paymentData.invoice_id) {
+            await masterRecordGuard.assertInvoiceWritable(this.db, paymentData.invoice_id);
+        }
         await this._ensurePaymentsDiscountColumn();
         await this._ensureCollectorPaymentColumns();
         await this._migrateCollectorCommissionExpenseCategory();
@@ -7301,6 +7614,12 @@ ${lifetimePaymentStatusSql}
                 const searchTerm = `%${filters.q}%`;
                 params.push(searchTerm, searchTerm, searchTerm, searchTerm);
             }
+
+            if (Object.prototype.hasOwnProperty.call(filters, 'area_ids')) {
+                const areaScope = this._sqlCustomerInAreaIds('c', filters.area_ids || []);
+                sql += ` AND ${areaScope.clause}`;
+                params.push(...areaScope.params);
+            }
             
             sql += ` ORDER BY datetime(p.payment_date) DESC, p.id DESC`;
             
@@ -7363,6 +7682,13 @@ ${lifetimePaymentStatusSql}
                 OR COALESCE(col.name, '') LIKE ?
             )`;
             params.push(term, term, term, term, term, term, term);
+        }
+        const methodGroupSql = sqlPaymentMethodGroup('p', filters.payment_method);
+        if (methodGroupSql) sql += methodGroupSql;
+        if (Object.prototype.hasOwnProperty.call(filters, 'area_ids')) {
+            const areaScope = this._sqlCustomerInAreaIds('c', filters.area_ids || []);
+            sql += ` AND i.customer_id IS NOT NULL AND ${areaScope.clause}`;
+            params.push(...areaScope.params);
         }
         return { sql, params };
     }
@@ -8130,9 +8456,31 @@ ${lifetimePaymentStatusSql}
                                 }
                                 try {
                                     const mNum = currentMonth + 1;
+                                    const areaOpt = Array.isArray(options.areaIds) ? { areaIds: options.areaIds } : {};
+                                    if (Array.isArray(options.areaIds)) {
+                                        const areaScope = this._sqlCustomerInAreaIds('c', options.areaIds);
+                                        const tenantSql = _tScope ? ' AND c.tenant_id = ?' : '';
+                                        const countParams = _tScope ? [...areaScope.params, _tId] : [...areaScope.params];
+                                        const counts = await new Promise((resolveCount, rejectCount) => {
+                                            this.db.get(
+                                                `SELECT COUNT(*) AS total_customers,
+                                                        SUM(CASE WHEN c.status IN ('active', 'suspended', 'isolir') THEN 1 ELSE 0 END) AS active_customers
+                                                 FROM customers c
+                                                 WHERE ${areaScope.clause}${tenantSql}`,
+                                                countParams,
+                                                (countErr, countRow) => {
+                                                    if (countErr) rejectCount(countErr);
+                                                    else resolveCount(countRow || {});
+                                                }
+                                            );
+                                        });
+                                        stats.total_customers = parseInt(counts.total_customers, 10) || 0;
+                                        stats.active_customers = parseInt(counts.active_customers, 10) || 0;
+                                    }
                                     const mt = await this.getMonthlyTagihanTotals(mNum, currentYear, {
                                         scope: 'all',
-                                        tenantId: _tId
+                                        tenantId: _tId,
+                                        ...areaOpt
                                     });
                                     stats.monthly_total_tagihan = mt.total_tagihan;
                                     stats.monthly_invoice_count_canonical = mt.count_total;
@@ -8143,7 +8491,7 @@ ${lifetimePaymentStatusSql}
                                     /** Selaras kartu dashboard: unpaid bulan ini (bukan seluruh piutang). */
                                     stats.monthly_unpaid = mt.total_belum_lunas;
                                     stats.unpaid_monthly_invoices = mt.count_belum_lunas;
-                                    const piutang = await this.getOutstandingUnpaidTotals({ tenantId: _tId });
+                                    const piutang = await this.getOutstandingUnpaidTotals({ tenantId: _tId, ...areaOpt });
                                     stats.outstanding_unpaid_total = piutang.total_unpaid;
                                     stats.outstanding_unpaid_count = piutang.count_unpaid;
                                 } catch (tagErr) {
@@ -8223,6 +8571,12 @@ ${lifetimePaymentStatusSql}
             monthSql = ` AND strftime('%Y-%m', i.created_at) = ?`;
             params.push(options.month);
         }
+        let areaSql = '';
+        if (Object.prototype.hasOwnProperty.call(options, 'area_ids')) {
+            const areaScope = this._sqlCustomerInAreaIds('c', options.area_ids || []);
+            areaSql = ` AND i.customer_id IS NOT NULL AND ${areaScope.clause}`;
+            params.push(...areaScope.params);
+        }
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT i.*, c.username as customer_username, c.name as customer_name, c.phone as customer_phone, c.address as customer_address,
@@ -8230,7 +8584,7 @@ ${lifetimePaymentStatusSql}
                 FROM invoices i
                 LEFT JOIN customers c ON i.customer_id = c.id AND c.tenant_id = i.tenant_id
                 LEFT JOIN packages p ON i.package_id = p.id AND p.tenant_id = i.tenant_id
-                WHERE i.invoice_type = ?${_t.sql}${monthSql}
+                WHERE i.invoice_type = ?${_t.sql}${monthSql}${areaSql}
                 ORDER BY i.created_at DESC
             `;
             
@@ -8246,24 +8600,32 @@ ${lifetimePaymentStatusSql}
 
     // Fungsi untuk mendapatkan statistik berdasarkan invoice type
     async getInvoiceStatsByType(invoiceType = 'monthly', options = {}) {
-        const _t = this._tenantWhere();
+        const _t = this._tenantWhere('i');
         let monthSql = '';
         const params = [invoiceType, ..._t.params];
         if (options.month) {
-            monthSql = ` AND strftime('%Y-%m', created_at) = ?`;
+            monthSql = ` AND strftime('%Y-%m', i.created_at) = ?`;
             params.push(options.month);
+        }
+        let areaJoin = '';
+        let areaSql = '';
+        if (Object.prototype.hasOwnProperty.call(options, 'area_ids')) {
+            const areaScope = this._sqlCustomerInAreaIds('c', options.area_ids || []);
+            areaJoin = ' INNER JOIN customers c ON c.id = i.customer_id';
+            areaSql = ` AND ${areaScope.clause}`;
+            params.push(...areaScope.params);
         }
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT 
                     COUNT(*) as total_invoices,
-                    COUNT(CASE WHEN status = 'paid' THEN 1 END) as paid_invoices,
-                    COUNT(CASE WHEN status = 'unpaid' THEN 1 END) as unpaid_invoices,
-                    COALESCE(SUM(amount), 0) as total_amount,
-                    COALESCE(SUM(CASE WHEN status = 'paid' THEN amount ELSE 0 END), 0) as total_revenue,
-                    COALESCE(SUM(CASE WHEN status = 'unpaid' THEN amount ELSE 0 END), 0) as total_unpaid
-                FROM invoices 
-                WHERE invoice_type = ?${_t.sql}${monthSql}
+                    COUNT(CASE WHEN i.status = 'paid' THEN 1 END) as paid_invoices,
+                    COUNT(CASE WHEN i.status = 'unpaid' THEN 1 END) as unpaid_invoices,
+                    COALESCE(SUM(i.amount), 0) as total_amount,
+                    COALESCE(SUM(CASE WHEN i.status = 'paid' THEN i.amount ELSE 0 END), 0) as total_revenue,
+                    COALESCE(SUM(CASE WHEN i.status = 'unpaid' THEN i.amount ELSE 0 END), 0) as total_unpaid
+                FROM invoices i${areaJoin}
+                WHERE i.invoice_type = ?${_t.sql}${monthSql}${areaSql}
             `;
             
             this.db.get(sql, params, (err, row) => {
@@ -9279,7 +9641,8 @@ ${lifetimePaymentStatusSql}
                 LEFT JOIN members m ON i.member_id = m.id
                 LEFT JOIN packages p ON i.package_id = p.id
                 LEFT JOIN member_packages mp ON i.package_id = mp.id
-                WHERE i.status = 'unpaid'${_t.sql}
+                WHERE i.status = 'unpaid'
+                  AND IFNULL(c.master_origin, '') != 'copied'${_t.sql}
                 ORDER BY i.due_date ASC
             `;
 

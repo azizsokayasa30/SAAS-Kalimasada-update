@@ -4,7 +4,7 @@
   <div class="km-topbar">
     <div>
       <h2>Setup Master Tenant</h2>
-      <p class="km-subtitle">Buat satu tenant parent untuk memantau semua tenant child (read-only)</p>
+      <p class="km-subtitle">Buat tenant manajemen di billing.kalimasada-app.com. Pelanggan tenant tidak masuk otomatis — salin satu per satu.</p>
     </div>
   </div>
 
@@ -31,7 +31,9 @@
         <input type="text" name="owner_phone" class="form-control" required>
       </div>
       <p class="km-subtitle small mb-3">
-        Master tenant tidak digunakan untuk login billing. Semua tenant operasional otomatis menjadi child.
+        Setelah dibuat, buka <code>billing.kalimasada-app.com</code> dengan username admin <code>admin</code>
+        (password di-generate otomatis, bisa diubah dari pengaturan tenant master).
+        Salin pelanggan dari daftar tenant di halaman Master Tenant. Data tenant sumber tidak diubah.
       </p>
       <button type="submit" class="btn btn-km-primary">Buat Master Tenant</button>
     </form>

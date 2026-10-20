@@ -303,7 +303,7 @@ router.get('/customers', collectorAuth, async (req, res) => {
         const allMappedCustomers = await billingManager.getCollectorCustomers(collector.id);
         const statusFilter = (req.query.status || '').toString().toLowerCase();
         const validFilters = new Set(['paid', 'unpaid', 'overdue', 'no_invoice', 'isolir', 'baru', 'nonaktif', 'inactive', 'aktif', 'total']);
-        const q = (req.query.q || '').toString().trim().toLowerCase();
+        const q = (req.query.q || '').toString().trim();
 
         let customers = allMappedCustomers || [];
         if (statusFilter === 'isolir') {
@@ -330,14 +330,7 @@ router.get('/customers', collectorAuth, async (req, res) => {
         }
 
         if (q) {
-            customers = customers.filter(c => {
-                const name = (c.name || '').toLowerCase();
-                const idStr = String(c.id || '');
-                const phone = (c.phone || '').toLowerCase();
-                const ppp = (c.pppoe_username || '').toString().toLowerCase();
-                const user = (c.username || '').toString().toLowerCase();
-                return name.includes(q) || idStr.includes(q) || phone.includes(q) || ppp.includes(q) || user.includes(q);
-            });
+            customers = customers.filter(c => billingManager.customerRowMatchesKeyword(c, q));
         }
 
         const appSettings = await getAppSettings();

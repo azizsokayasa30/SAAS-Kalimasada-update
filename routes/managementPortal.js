@@ -596,13 +596,27 @@ router.get('/master-tenant', async (req, res) => {
         if (!master) {
             return res.redirect('/management/master-tenant/setup');
         }
-        const overview = await masterTenantService.getMasterOverview();
+        const period = tenantStore.resolveStatsPeriod({
+            month: req.query.month,
+            year: req.query.year,
+        });
+        const overview = await masterTenantService.getMasterOverview({
+            month: period.month,
+            year: period.year,
+        });
         res.render('platform/master-tenant/index', {
             title: 'Master Tenant',
             master,
             overview,
+            filters: {
+                month: period.month,
+                year: period.year,
+                label: period.label,
+                isFullYear: period.isFullYear,
+            },
             adminName: req.session.platformAdminName,
             flash: req.query,
+            ...tenantUrlContext(master.subdomain),
         });
     } catch (err) {
         console.error('[platform] master tenant:', err);
@@ -649,6 +663,40 @@ router.post('/master-tenant/setup', async (req, res) => {
     }
 });
 
+function parseCustomerPageLimit(raw) {
+    return parseInt(raw, 10) === 100 ? 100 : 50;
+}
+
+function parseCustomerIds(body) {
+    const raw = body?.customer_ids ?? body?.['customer_ids[]'] ?? [];
+    const arr = Array.isArray(raw) ? raw : [raw];
+    return [...new Set(arr.map((id) => parseInt(id, 10)).filter((id) => Number.isFinite(id) && id > 0))].slice(0, 100);
+}
+
+const CUSTOMER_LIST_STATE_KEYS = ['sort', 'dir', 'copy_status', 'area', 'package', 'status'];
+
+function customerListState(req) {
+    const state = {};
+    CUSTOMER_LIST_STATE_KEYS.forEach((key) => {
+        const value = req.body?.[key] ?? req.query?.[key];
+        if (value != null && value !== '') state[key] = String(value);
+    });
+    return state;
+}
+
+function childCustomersListUrl(childId, query = {}) {
+    const params = new URLSearchParams({ tab: 'customers' });
+    const page = parseInt(query.page, 10);
+    const limit = parseCustomerPageLimit(query.limit);
+    if (Number.isFinite(page) && page > 1) params.set('page', String(page));
+    params.set('limit', String(limit));
+    Object.entries(query).forEach(([key, value]) => {
+        if (value == null || value === '' || key === 'tab' || key === 'page' || key === 'limit') return;
+        params.set(key, String(value));
+    });
+    return `/management/master-tenant/children/${childId}?${params.toString()}`;
+}
+
 router.get('/master-tenant/children/:id', async (req, res) => {
     try {
         const master = await tenantStore.getMasterTenant();
@@ -659,14 +707,26 @@ router.get('/master-tenant/children/:id', async (req, res) => {
         if (!child) return res.status(404).send('Tenant child tidak ditemukan');
 
         const page = req.query.page || 1;
+        const limit = parseCustomerPageLimit(req.query.limit);
         const tab = req.query.tab === 'invoices' ? 'invoices' : 'customers';
-        const usage = await tenantStore.getTenantStats(child.id);
+        const period = tenantStore.resolveStatsPeriod({
+            month: req.query.month,
+            year: req.query.year,
+        });
+        const usage = await tenantStore.getTenantStats(child.id, {
+            month: period.month,
+            year: period.year,
+            periodFilter: true,
+        });
         const customers = tab === 'customers'
-            ? await masterTenantService.getChildCustomers(child.id, { page })
+            ? await masterTenantService.getChildCustomers(child.id, { page, limit, query: req.query })
             : null;
         const invoices = tab === 'invoices'
             ? await masterTenantService.getChildInvoices(child.id, { page })
             : null;
+        const copyStats = customers
+            ? { copied: customers.copiedTotal }
+            : await masterTenantService.getChildCopyStats(child.id);
 
         res.render('platform/master-tenant/child', {
             title: `${child.name} — Master Tenant`,
@@ -676,12 +736,147 @@ router.get('/master-tenant/children/:id', async (req, res) => {
             tab,
             customers,
             invoices,
+            copyStats,
+            flash: req.query,
+            listLimit: limit,
+            period,
             ...tenantUrlContext(child.subdomain),
             adminName: req.session.platformAdminName,
         });
     } catch (err) {
         console.error('[platform] master tenant child:', err);
         res.status(500).send('Error loading child tenant');
+    }
+});
+
+router.post('/master-tenant/children/:id/customers/:customerId/copy', async (req, res) => {
+    const childId = parseInt(req.params.id, 10);
+    const customerId = parseInt(req.params.customerId, 10);
+    const wantsJson = String(req.get('Accept') || '').includes('application/json')
+        || req.xhr
+        || req.query.format === 'json';
+
+    const fail = (status, message, extra = {}) => {
+        if (wantsJson) {
+            return res.status(status).json({ success: false, message, ...extra });
+        }
+        return res.redirect(childCustomersListUrl(childId, {
+            ...customerListState(req),
+            error: message,
+            limit: req.query.limit || req.body?.limit,
+            page: req.query.page || req.body?.page,
+        }));
+    };
+
+    try {
+        const master = await tenantStore.getMasterTenant();
+        if (!master) {
+            return fail(400, 'Master tenant belum dibuat.');
+        }
+        if (!Number.isFinite(childId) || !Number.isFinite(customerId)) {
+            return fail(400, 'Parameter tidak valid.');
+        }
+        const child = await masterTenantService.getChildTenantById(childId);
+        if (!child) return fail(404, 'Tenant child tidak ditemukan.');
+
+        const copyService = require('../config/platform/masterCustomerCopyService');
+        const result = await copyService.copyCustomerFromTenant(childId, customerId, {
+            actorType: 'SuperAdmin',
+            actorId: req.session.platformAdminId,
+        });
+        await tenantStore.auditLog({
+            tenantId: master.id,
+            actorType: 'SuperAdmin',
+            actorId: req.session.platformAdminId,
+            action: 'master_customer_copied',
+            details: result,
+            ip: req.ip,
+        });
+        masterTenantService.bustOverviewCache();
+
+        if (wantsJson) {
+            return res.json({
+                success: true,
+                message: 'Pelanggan berhasil disalin ke master tenant.',
+                data: result,
+            });
+        }
+        return res.redirect(childCustomersListUrl(childId, {
+            ...customerListState(req),
+            copied: 1,
+            limit: req.query.limit || req.body?.limit,
+            page: req.query.page || req.body?.page,
+        }));
+    } catch (err) {
+        if (err.code === 'ALREADY_COPIED') {
+            return fail(409, err.message, { code: err.code });
+        }
+        console.error('[platform] copy customer to master:', err);
+        return fail(500, err.message || 'Gagal menyalin pelanggan.');
+    }
+});
+
+router.post('/master-tenant/children/:id/customers/copy-selected', async (req, res) => {
+    const childId = parseInt(req.params.id, 10);
+    const ids = parseCustomerIds(req.body);
+    const limit = parseCustomerPageLimit(req.body?.limit || req.query.limit);
+    const page = req.body?.page || req.query.page;
+    const listState = customerListState(req);
+
+    const fail = (message) => {
+        return res.redirect(childCustomersListUrl(childId, { ...listState, error: message, limit, page }));
+    };
+
+    try {
+        const master = await tenantStore.getMasterTenant();
+        if (!master) return fail('Master tenant belum dibuat.');
+        if (!Number.isFinite(childId)) return fail('Parameter tidak valid.');
+        if (!ids.length) return fail('Pilih minimal satu pelanggan untuk di-copy.');
+
+        const child = await masterTenantService.getChildTenantById(childId);
+        if (!child) return fail('Tenant child tidak ditemukan.');
+
+        const copyService = require('../config/platform/masterCustomerCopyService');
+        let copied = 0;
+        let skipped = 0;
+        let failed = 0;
+        const errors = [];
+
+        for (const customerId of ids) {
+            try {
+                const result = await copyService.copyCustomerFromTenant(childId, customerId, {
+                    actorType: 'SuperAdmin',
+                    actorId: req.session.platformAdminId,
+                });
+                copied += 1;
+                await tenantStore.auditLog({
+                    tenantId: master.id,
+                    actorType: 'SuperAdmin',
+                    actorId: req.session.platformAdminId,
+                    action: 'master_customer_copied',
+                    details: result,
+                    ip: req.ip,
+                });
+            } catch (err) {
+                if (err.code === 'ALREADY_COPIED') {
+                    skipped += 1;
+                } else {
+                    failed += 1;
+                    errors.push(`#${customerId}: ${err.message}`);
+                    console.error('[platform] bulk copy customer:', err);
+                }
+            }
+        }
+
+        masterTenantService.bustOverviewCache();
+        const flash = { ...listState, copied, skipped, failed, limit, page };
+        if (failed && errors.length) {
+            flash.error = errors.slice(0, 3).join(' | ');
+        }
+        return res.redirect(childCustomersListUrl(childId, flash));
+    } catch (err) {
+        console.error('[platform] bulk copy to master:', err);
+        return fail(err.message || 'Gagal menyalin pelanggan.');
     }
 });
 

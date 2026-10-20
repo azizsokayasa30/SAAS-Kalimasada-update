@@ -452,7 +452,7 @@
                     suggestionBox.style.display = 'none';
                     return;
                 }
-                list.slice(0, 20).forEach(c => {
+                list.forEach(c => {
                     const a = document.createElement('a');
                     a.href = 'javascript:void(0)';
                     a.className = 'list-group-item list-group-item-action';
@@ -477,12 +477,31 @@
 
             function filterCustomers(query) {
                 if (!query) return customers;
-                const q = query.toLowerCase();
+                const tokens = String(query).trim().toLowerCase().replace(/[.,;|/+\-_]+/g, ' ').split(/\s+/).filter(Boolean);
+                if (!tokens.length) return customers;
                 return customers.filter(c => {
                     const name = String(c.name || '').toLowerCase();
                     const phone = String(c.phone || '').toLowerCase();
                     const username = String(c.username || '').toLowerCase();
-                    return name.includes(q) || phone.includes(q) || username.includes(q);
+                    const pppoe = String(c.pppoe_username || '').toLowerCase();
+                    const address = String(c.address || '').toLowerCase();
+                    const cid = String(c.customer_id || '').toLowerCase();
+                    const idStr = String(c.id || '');
+                    const phoneDigits = String(c.phone || '').replace(/\D/g, '');
+                    return tokens.every((t) => {
+                        if (name.includes(t) || phone.includes(t) || username.includes(t) || pppoe.includes(t) || address.includes(t) || cid.includes(t) || idStr.includes(t)) {
+                            return true;
+                        }
+                        const digits = t.replace(/\D/g, '');
+                        if (digits.length >= 3) {
+                            const variants = [digits];
+                            if (digits.startsWith('62')) variants.push('0' + digits.slice(2));
+                            if (digits.startsWith('0')) variants.push('62' + digits.slice(1));
+                            if (/^8[1-9]/.test(digits)) variants.push('62' + digits, '0' + digits);
+                            return variants.some((v) => phone.includes(v) || phoneDigits.includes(v));
+                        }
+                        return false;
+                    });
                 });
             }
 

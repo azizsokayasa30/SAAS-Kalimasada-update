@@ -15,6 +15,7 @@ const { getSetting } = require('./settingsManager');
 const { getTenantSetting } = require('./platform/tenantSettings');
 const staticIPSuspension = require('./staticIPSuspension');
 const { getRadiusConfigValue } = require('./radiusConfig');
+const masterRecordGuard = require('./platform/masterRecordGuard');
 
 // Helper untuk get user_auth_mode (prioritaskan database)
 async function getUserAuthMode() {
@@ -239,7 +240,38 @@ class ServiceSuspensionManager {
     async suspendCustomerService(customer, reason = 'Telat bayar', options = {}) {
         try {
             const { skipBillingStatus = false, awaitWhatsApp = false } = options || {};
+            if (masterRecordGuard.isCopiedOrigin(customer)) {
+                return {
+                    success: false,
+                    error: masterRecordGuard.COPIED_READONLY_MESSAGE,
+                    skipped: true
+                };
+            }
+            const skipNetwork = masterRecordGuard.isCurrentTenantMaster()
+                || masterRecordGuard.isDummyOrigin(customer);
             logger.info(`Suspending service for customer: ${customer.username} (${reason})`);
+
+            if (skipNetwork) {
+                const results = {
+                    mikrotik: false,
+                    genieacs: false,
+                    olt: false,
+                    billing: false,
+                    suspension_type: 'dummy',
+                    skipped_network: true
+                };
+                if (!skipBillingStatus && customer.id) {
+                    try {
+                        await billingManager.setCustomerStatusById(customer.id, 'suspended', { skipRadiusSync: true });
+                        await billingManager.setSuspendReasonById(customer.id, classifySuspendReason(reason));
+                        results.billing = true;
+                    } catch (billingError) {
+                        logger.error(`Master dummy suspend billing update failed: ${billingError.message}`);
+                        return { success: false, error: billingError.message };
+                    }
+                }
+                return { success: true, ...results };
+            }
 
             const results = {
                 mikrotik: false,
@@ -525,7 +557,23 @@ class ServiceSuspensionManager {
      */
     async restoreCustomerService(customer, reason = 'Manual restore') {
         try {
+            if (masterRecordGuard.isCopiedOrigin(customer)) {
+                return {
+                    success: false,
+                    error: masterRecordGuard.COPIED_READONLY_MESSAGE,
+                    skipped: true
+                };
+            }
+            const skipNetwork = masterRecordGuard.isCurrentTenantMaster()
+                || masterRecordGuard.isDummyOrigin(customer);
             logger.info(`Restoring service for customer: ${customer.username} (${reason})`);
+
+            if (skipNetwork) {
+                if (customer.id) {
+                    await billingManager.setCustomerStatusById(customer.id, 'active', { skipRadiusSync: true });
+                }
+                return { success: true, skipped_network: true, billing: true };
+            }
 
             const results = {
                 mikrotik: false,
@@ -818,6 +866,11 @@ class ServiceSuspensionManager {
 
         try {
             logger.info(`Starting automatic service suspension check (${runKey})...`);
+
+            if (masterRecordGuard.isCurrentTenantMaster()) {
+                logger.info('Skip auto suspension for master tenant');
+                return { checked: 0, suspended: 0, errors: 0, details: [], skipped: 'master' };
+            }
 
             const autoSuspensionEnabled = isAutoSuspensionEnabledFlag();
             const defaultSuspensionDay = getAutoSuspensionDay();
@@ -1286,11 +1339,20 @@ class ServiceSuspensionManager {
     }
 
     /**
-     * Check dan restore pelanggan yang sudah bayar
+     * Check dan restore pelanggan yang sudah bayar.
+     * @param {object} [options]
+     * @param {boolean} [options.includeManual] — true untuk tombol admin "Restore Pelanggan Bayar":
+     *   pelanggan isolir manual yang tagihannya sudah lunas ikut diaktifkan.
+     *   Scheduler harian tetap melewati isolir manual.
      */
-    async checkAndRestorePaidCustomers() {
+    async checkAndRestorePaidCustomers(options = {}) {
+        const includeManual = Boolean(options && options.includeManual);
         try {
-            logger.info('Starting automatic service restoration check...');
+            logger.info(
+                includeManual
+                    ? 'Starting paid-customer restoration (admin, termasuk isolir manual yang sudah lunas)...'
+                    : 'Starting automatic service restoration check...'
+            );
 
             // Ambil semua customer yang suspended
             const customers = await billingManager.getCustomers();
@@ -1300,13 +1362,14 @@ class ServiceSuspensionManager {
                 checked: suspendedCustomers.length,
                 restored: 0,
                 skipped_manual: 0,
+                still_unpaid: 0,
                 errors: 0,
                 details: []
             };
 
             for (const customer of suspendedCustomers) {
                 try {
-                    if (!shouldAutoRestoreCustomer(customer)) {
+                    if (!includeManual && !shouldAutoRestoreCustomer(customer)) {
                         results.skipped_manual++;
                         logger.info(
                             `Customer ${customer.username} isolir manual (suspend_reason=${customer.suspend_reason || 'legacy'}) — skip auto-restore`
@@ -1338,6 +1401,7 @@ class ServiceSuspensionManager {
                             logger.error(`Failed to restore service for ${customer.username}`);
                         }
                     } else {
+                        results.still_unpaid++;
                         logger.info(`Customer ${customer.username} still has ${unpaidInvoices.length} unpaid invoices - keeping suspended`);
                     }
 
@@ -1347,7 +1411,9 @@ class ServiceSuspensionManager {
                 }
             }
 
-            logger.info(`Service restoration check completed. Checked: ${results.checked}, Restored: ${results.restored}, Errors: ${results.errors}`);
+            logger.info(
+                `Service restoration check completed. Checked: ${results.checked}, Restored: ${results.restored}, Still unpaid: ${results.still_unpaid}, Skipped manual: ${results.skipped_manual}, Errors: ${results.errors}`
+            );
             return results;
 
         } catch (error) {

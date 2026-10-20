@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const billingManager = require('../config/billing');
 const AgentManager = require('../config/agentManager');
 const { getSettingsWithCache } = require('../config/settingsManager');
 const logger = require('../config/logger');
@@ -553,33 +554,29 @@ router.get('/api/search-customer', requireAgentAuth, async (req, res) => {
     try {
         const q = (req.query.q || '').trim();
         if (!q) return res.json({ success: false, customers: [] });
+        const found = await billingManager.searchCustomers(q, { limit: 50 });
         const sqlite3 = require('sqlite3').verbose();
         const db = new sqlite3.Database('./data/billing.db');
-        const likeQ = `%${q}%`;
-        let sql, params;
-        if (/^\d+$/.test(q)) {
-            sql = `SELECT c.id, c.name, c.phone, c.address, c.status, 
-                   (SELECT status FROM invoices WHERE customer_id = c.id ORDER BY created_at DESC LIMIT 1) as payment_status,
-                   (SELECT amount FROM invoices WHERE customer_id = c.id ORDER BY created_at DESC LIMIT 1) as last_invoice_amount,
-                   (SELECT id FROM invoices WHERE customer_id = c.id AND status = 'unpaid' ORDER BY due_date ASC LIMIT 1) as unpaid_invoice_id,
-                   (SELECT amount FROM invoices WHERE customer_id = c.id AND status = 'unpaid' ORDER BY due_date ASC LIMIT 1) as unpaid_invoice_amount
-                   FROM customers c WHERE c.id = ? OR c.phone LIKE ? OR c.name LIKE ? LIMIT 10`;
-            params = [parseInt(q), likeQ, likeQ];
-        } else {
-            sql = `SELECT c.id, c.name, c.phone, c.address, c.status,
-                   (SELECT status FROM invoices WHERE customer_id = c.id ORDER BY created_at DESC LIMIT 1) as payment_status,
-                   (SELECT amount FROM invoices WHERE customer_id = c.id ORDER BY created_at DESC LIMIT 1) as last_invoice_amount,
-                   (SELECT id FROM invoices WHERE customer_id = c.id AND status = 'unpaid' ORDER BY due_date ASC LIMIT 1) as unpaid_invoice_id,
-                   (SELECT amount FROM invoices WHERE customer_id = c.id AND status = 'unpaid' ORDER BY due_date ASC LIMIT 1) as unpaid_invoice_amount
-                   FROM customers c WHERE c.name LIKE ? OR c.phone LIKE ? LIMIT 10`;
-            params = [likeQ, likeQ];
+        const ids = (found || []).map((c) => c.id).filter((id) => Number.isFinite(Number(id)));
+        if (!ids.length) {
+            db.close();
+            return res.json({ success: true, customers: [] });
         }
-        db.all(sql, params, (err, rows) => {
+        const placeholders = ids.map(() => '?').join(',');
+        const sql = `SELECT c.id, c.name, c.phone, c.address, c.status,
+                   (SELECT status FROM invoices WHERE customer_id = c.id ORDER BY created_at DESC LIMIT 1) as payment_status,
+                   (SELECT amount FROM invoices WHERE customer_id = c.id ORDER BY created_at DESC LIMIT 1) as last_invoice_amount,
+                   (SELECT id FROM invoices WHERE customer_id = c.id AND status = 'unpaid' ORDER BY due_date ASC LIMIT 1) as unpaid_invoice_id,
+                   (SELECT amount FROM invoices WHERE customer_id = c.id AND status = 'unpaid' ORDER BY due_date ASC LIMIT 1) as unpaid_invoice_amount
+                   FROM customers c WHERE c.id IN (${placeholders})`;
+        db.all(sql, ids, (err, rows) => {
             db.close();
             if (err) {
                 return res.json({ success: false, customers: [] });
             }
-            res.json({ success: true, customers: rows });
+            const order = new Map(ids.map((id, i) => [Number(id), i]));
+            const sorted = (rows || []).slice().sort((a, b) => (order.get(Number(a.id)) ?? 0) - (order.get(Number(b.id)) ?? 0));
+            res.json({ success: true, customers: sorted });
         });
     } catch (e) {
         res.json({ success: false, customers: [] });

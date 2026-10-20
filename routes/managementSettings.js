@@ -13,49 +13,76 @@ const managementMasterPackagesRouter = require('./managementMasterPackages');
 const managementNginxRouter = require('./managementNginx');
 const billing = require('../config/billing');
 const {
-    createBillingDbBackup,
     restoreBillingDbFromFile,
     listBackupDbFiles,
     getBackupDir,
-    DEFAULT_KEEP_COUNT,
     isValidSqliteHeader
 } = require('../utils/billingDbBackup');
+const {
+    createPlatformFullBackup,
+    restorePlatformFullBackup,
+    listFullBackups,
+    getFullBackupDir,
+    getAutoBackupSettings,
+    saveAutoBackupSettings,
+    isFullArchiveName,
+} = require('../utils/platformFullBackup');
 
 const router = express.Router();
 
 const platformBackupDir = getBackupDir();
+const platformFullBackupDir = getFullBackupDir();
 fs.mkdirSync(platformBackupDir, { recursive: true });
+fs.mkdirSync(platformFullBackupDir, { recursive: true });
 
 const platformDbUpload = multer({
     storage: multer.diskStorage({
-        destination: (_req, _file, cb) => cb(null, platformBackupDir),
+        destination: (_req, file, cb) => {
+            const name = String(file.originalname || '').toLowerCase();
+            const dir = name.endsWith('.tar.gz') ? platformFullBackupDir : platformBackupDir;
+            fs.mkdirSync(dir, { recursive: true });
+            cb(null, dir);
+        },
         filename: (_req, file, cb) => {
-            const safe = path.basename(file.originalname || 'upload.db').replace(/[^\w.\-]+/g, '_');
+            const raw = path.basename(file.originalname || 'upload.bin').replace(/[^\w.\-]+/g, '_');
             const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const lower = raw.toLowerCase();
+            let safe = raw;
+            if (lower.endsWith('.tar.gz')) {
+                safe = raw.slice(0, -7).replace(/\.+$/, '') + '.tar.gz';
+            } else if (!lower.endsWith('.db')) {
+                safe = `${raw}.db`;
+            }
             cb(null, `uploaded_${stamp}_${safe}`);
         }
     }),
-    limits: { fileSize: 1024 * 1024 * 1024 },
+    limits: { fileSize: 4 * 1024 * 1024 * 1024 },
     fileFilter: (_req, file, cb) => {
         const name = String(file.originalname || '').toLowerCase();
-        if (name.endsWith('.db') || name.endsWith('.sqlite') || name.endsWith('.sqlite3')) {
+        if (name.endsWith('.tar.gz') || name.endsWith('.db') || name.endsWith('.sqlite') || name.endsWith('.sqlite3')) {
             return cb(null, true);
         }
-        cb(new Error('Hanya file .db / .sqlite / .sqlite3 yang diizinkan'));
+        cb(new Error('Hanya file .tar.gz atau .db yang diizinkan'));
     }
 });
 
+function resolveInside(dir, filename) {
+    const full = path.resolve(dir, filename);
+    const root = path.resolve(dir);
+    if (full !== root && !full.startsWith(root + path.sep)) return null;
+    if (!fs.existsSync(full)) return null;
+    return full;
+}
+
 function resolvePlatformBackupFile(filename) {
     const safe = path.basename(String(filename || ''));
-    if (!safe || !safe.endsWith('.db')) return null;
-    const full = path.join(platformBackupDir, safe);
-    const resolved = path.resolve(full);
-    const root = path.resolve(platformBackupDir);
-    if (resolved !== root && !resolved.startsWith(root + path.sep)) {
-        return null;
+    if (!safe) return null;
+    if (safe.endsWith('.tar.gz')) {
+        if (!isFullArchiveName(safe)) return null;
+        return resolveInside(platformFullBackupDir, safe);
     }
-    if (!fs.existsSync(resolved)) return null;
-    return resolved;
+    if (!safe.endsWith('.db')) return null;
+    return resolveInside(platformBackupDir, safe);
 }
 
 router.use(platformAuth);
@@ -274,16 +301,20 @@ router.get('/activity-logs/:id', async (req, res) => {
     }
 });
 
-// ── Backup & Restore (full billing.db) ──
+// ── Backup & Restore (arsip penuh platform) ──
 router.get('/backup-restore', async (req, res) => {
     try {
-        const backups = listBackupDbFiles(platformBackupDir);
+        const backups = listFullBackups(platformFullBackupDir);
+        const legacyBackups = listBackupDbFiles(platformBackupDir);
+        const autoBackup = await getAutoBackupSettings();
         res.render('platform/settings/backup-restore', {
             title: 'Backup & Restore',
             active: 'settings-backup',
             settingsSection: 'backup',
             backups,
-            keepCount: DEFAULT_KEEP_COUNT,
+            legacyBackups,
+            autoBackup,
+            keepCount: autoBackup.keep_count,
             adminName: req.session.platformAdminName,
             flash: req.query
         });
@@ -293,21 +324,49 @@ router.get('/backup-restore', async (req, res) => {
     }
 });
 
-router.post('/backup-restore/create', async (req, res) => {
+router.post('/backup-restore/auto', async (req, res) => {
     try {
-        const result = await createBillingDbBackup(path.join(__dirname, '../data/billing.db'), {
-            db: billing.db,
-            prefix: 'billing_backup'
+        const saved = await saveAutoBackupSettings({
+            enabled: req.body.enabled,
+            interval_days: req.body.interval_days,
+            keep_count: req.body.keep_count,
         });
         await tenantStore.auditLog({
             actorType: 'SuperAdmin',
             actorId: req.session.platformAdminId,
-            action: 'platform_billing_backup_created',
-            details: { filename: result.filename, method: result.method },
+            action: 'platform_full_backup_settings',
+            details: {
+                enabled: saved.enabled,
+                interval_days: saved.interval_days,
+                keep_count: saved.keep_count,
+            },
             ip: req.ip
         });
+        res.redirect('/management/settings/backup-restore?success=auto');
+    } catch (err) {
+        res.redirect(`/management/settings/backup-restore?error=${encodeURIComponent(err.message)}`);
+    }
+});
+
+router.post('/backup-restore/create', async (req, res) => {
+    try {
+        const result = await createPlatformFullBackup({
+            db: billing.db,
+            sourceDbPath: path.join(__dirname, '../data/billing.db'),
+            trigger: 'manual',
+        });
+        await tenantStore.auditLog({
+            actorType: 'SuperAdmin',
+            actorId: req.session.platformAdminId,
+            action: 'platform_full_backup_created',
+            details: { filename: result.filename, method: result.method, warnings: result.warnings },
+            ip: req.ip
+        });
+        const warn = result.warnings && result.warnings.length
+            ? `&warnings=${encodeURIComponent(result.warnings.join(' | '))}`
+            : '';
         res.redirect(
-            `/management/settings/backup-restore?success=created&filename=${encodeURIComponent(result.filename)}`
+            `/management/settings/backup-restore?success=created&filename=${encodeURIComponent(result.filename)}${warn}`
         );
     } catch (err) {
         res.redirect(`/management/settings/backup-restore?error=${encodeURIComponent(err.message)}`);
@@ -323,7 +382,13 @@ router.post('/backup-restore/upload', (req, res) => {
             if (!req.file || !req.file.path) {
                 throw new Error('File backup tidak ditemukan');
             }
-            if (!isValidSqliteHeader(req.file.path)) {
+            const uploadedName = path.basename(req.file.filename || '');
+            const isArchive = uploadedName.toLowerCase().endsWith('.tar.gz');
+            if (isArchive) {
+                if (!isFullArchiveName(uploadedName)) {
+                    throw new Error('Nama file arsip tidak valid');
+                }
+            } else if (!isValidSqliteHeader(req.file.path)) {
                 try {
                     fs.unlinkSync(req.file.path);
                 } catch (_) {
@@ -334,7 +399,7 @@ router.post('/backup-restore/upload', (req, res) => {
             await tenantStore.auditLog({
                 actorType: 'SuperAdmin',
                 actorId: req.session.platformAdminId,
-                action: 'platform_billing_backup_uploaded',
+                action: isArchive ? 'platform_full_backup_uploaded' : 'platform_billing_backup_uploaded',
                 details: { filename: req.file.filename },
                 ip: req.ip
             });
@@ -357,18 +422,31 @@ router.post('/backup-restore/restore/:filename', async (req, res) => {
     try {
         const full = resolvePlatformBackupFile(req.params.filename);
         if (!full) throw new Error('File backup tidak ditemukan');
-        await restoreBillingDbFromFile(full, {
-            db: billing.db,
-            dbPath: path.join(__dirname, '../data/billing.db')
-        });
+        const dbPath = path.join(__dirname, '../data/billing.db');
+        let warnings = [];
+        if (full.endsWith('.tar.gz')) {
+            const result = await restorePlatformFullBackup(full, {
+                db: billing.db,
+                dbPath,
+            });
+            warnings = result.warnings || [];
+        } else {
+            await restoreBillingDbFromFile(full, {
+                db: billing.db,
+                dbPath,
+            });
+        }
         await tenantStore.auditLog({
             actorType: 'SuperAdmin',
             actorId: req.session.platformAdminId,
-            action: 'platform_billing_backup_restored',
-            details: { filename: path.basename(full) },
+            action: full.endsWith('.tar.gz') ? 'platform_full_backup_restored' : 'platform_billing_backup_restored',
+            details: { filename: path.basename(full), warnings },
             ip: req.ip
         });
-        res.redirect('/management/settings/backup-restore?success=restored');
+        const warn = warnings.length
+            ? `&warnings=${encodeURIComponent(warnings.join(' | '))}`
+            : '';
+        res.redirect(`/management/settings/backup-restore?success=restored${warn}`);
     } catch (err) {
         res.redirect(`/management/settings/backup-restore?error=${encodeURIComponent(err.message)}`);
     }

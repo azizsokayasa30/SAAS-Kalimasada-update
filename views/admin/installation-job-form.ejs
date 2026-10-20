@@ -359,8 +359,8 @@
             showToast('Mohon masukkan kata kunci pencarian', 'warning');
             return;
         }
-        if (searchTerm.length < 2) {
-            showToast('Minimal 2 karakter untuk pencarian', 'warning');
+        if (searchTerm.length < 1) {
+            showToast('Masukkan kata kunci pencarian', 'warning');
             return;
         }
         runCustomerSearch(searchTerm);
@@ -804,7 +804,7 @@
         const searchTerm = this.value.trim();
         clearTimeout(searchTimeout);
         const resultDiv = document.getElementById('customerSearchResult');
-        if (searchTerm.length < 2) {
+        if (searchTerm.length < 1) {
             resultDiv.style.display = 'none';
             resultDiv.innerHTML = '';
             return;

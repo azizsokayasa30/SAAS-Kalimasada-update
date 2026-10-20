@@ -218,6 +218,22 @@ function setSetting(key, value) {
   }
 }
 
+/** Satu tulis untuk beberapa key — hindari lost-update dari setSetting berulang. */
+function setSettings(patch) {
+  try {
+    if (!patch || typeof patch !== 'object') return false;
+    const settings = readSettingsFromDisk();
+    Object.keys(patch).forEach((key) => {
+      settings[key] = patch[key];
+    });
+    persistSettings(settings);
+    return true;
+  } catch (e) {
+    console.error(`[settings] setSettings gagal: ${e.message}`);
+    return false;
+  }
+}
+
 function deleteSetting(key) {
     try {
         const settings = readSettingsFromDisk();
@@ -314,6 +330,7 @@ module.exports = {
   getSettingsWithCache, 
   getSetting, 
   setSetting, 
+  setSettings,
   clearSettingsCache,
   deleteSetting,
   ensureSettingsFile,

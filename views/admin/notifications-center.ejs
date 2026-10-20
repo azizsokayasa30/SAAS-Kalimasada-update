@@ -211,9 +211,17 @@
     } catch (e) {}
   }, { capture: true });
 
+  var pulseInFlight = false;
   async function pulse() {
+    if (pulseInFlight || document.hidden) return;
+    pulseInFlight = true;
+    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 8000) : null;
     try {
-      var res = await fetch('/admin/dashboard/api/notifications/pulse', { credentials: 'same-origin' });
+      var res = await fetch('/admin/dashboard/api/notifications/pulse', {
+        credentials: 'same-origin',
+        signal: ctrl ? ctrl.signal : undefined
+      });
       var data = await res.json();
       if (!data.success) return;
       var n = parseInt(data.badge, 10) || 0;
@@ -233,9 +241,16 @@
         window.location.reload();
       }
     } catch (e) {}
+    finally {
+      if (timer) clearTimeout(timer);
+      pulseInFlight = false;
+    }
   }
   pulse();
-  setInterval(pulse, 2500);
+  setInterval(pulse, 20000);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) pulse();
+  });
   if (typeof EventSource !== 'undefined') {
     try {
       var es = new EventSource('/admin/dashboard/api/notifications/stream');

@@ -213,6 +213,22 @@ class InvoiceScheduler {
         
         logger.info('Voucher cleanup scheduler initialized - will run every 6 hours');
 
+        cron.schedule('*/15 * * * *', async () => {
+            try {
+                const copyService = require('./platform/masterCustomerCopyService');
+                const result = await copyService.syncAllMirroredCustomers();
+                if (result && result.total) {
+                    logger.info(`[master-copy] synced ${result.synced}/${result.total} mirrored customers`);
+                }
+            } catch (error) {
+                logger.error('Error syncing master tenant copies:', error);
+            }
+        }, {
+            scheduled: true,
+            timezone: getServerTimezone()
+        });
+        logger.info('Master tenant copy sync scheduler initialized - every 15 minutes');
+
         // Schedule monthly summary generation on 1st of every month at 23:59
         cron.schedule('59 23 1 * *', async () => {
             try {
@@ -448,6 +464,40 @@ class InvoiceScheduler {
         });
         
         logger.info('RADIUS Auto Backup scheduler initialized - will run daily at 02:00 AM');
+
+        cron.schedule('5 2 * * *', async () => {
+            try {
+                const { runPlatformFullAutoBackupIfEnabled } = require('../utils/platformFullBackup');
+                const tenantStore = require('./platform/tenantStore');
+                const result = await runPlatformFullAutoBackupIfEnabled();
+                if (!result.ran) {
+                    logger.debug(`[platform-full-backup] Auto backup dilewati (${result.reason}).`);
+                    return;
+                }
+                logger.info(`[platform-full-backup] Auto backup selesai: ${result.filename}`);
+                try {
+                    await tenantStore.auditLog({
+                        actorType: 'system',
+                        actorId: null,
+                        action: 'platform_full_backup_auto',
+                        details: {
+                            filename: result.filename,
+                            warnings: result.warnings || [],
+                            interval_days: result.interval,
+                        },
+                    });
+                } catch (logErr) {
+                    logger.warn(`[platform-full-backup] Gagal catat audit: ${logErr.message}`);
+                }
+            } catch (error) {
+                logger.error(`[platform-full-backup] Auto backup gagal: ${error.message}`);
+            }
+        }, {
+            scheduled: true,
+            timezone: getServerTimezone()
+        });
+
+        logger.info('Platform full backup scheduler initialized - will check daily at 02:05 AM');
 
         // Schedule voucher cleanup every 6 hours (00:00, 06:00, 12:00, 18:00)
         cron.schedule('0 0,6,12,18 * * *', async () => {
@@ -746,6 +796,11 @@ class InvoiceScheduler {
                         logger.warn(
                             `[auto-invoice] skip customer #${customer.id} — tenant_id=${customer.tenant_id} != context ${tenantId}`
                         );
+                        continue;
+                    }
+                    if (String(customer.master_origin || '').toLowerCase() === 'copied') {
+                        stats.customers_skipped++;
+                        stats.skipped++;
                         continue;
                     }
 

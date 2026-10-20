@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <%- include('../partials/hard-reload') %>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manager Area - <%= appSettings.companyHeader || 'Admin' %></title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+    <link href="/css/theme.css" rel="stylesheet">
+    <link href="/css/responsive-admin.css" rel="stylesheet">
+    <link href="/css/admin-mobile.css" rel="stylesheet">
+    <%- include('../partials/theme-head') %>
+    <style>
+        .am-page { font-family: 'Inter', system-ui, sans-serif; padding-bottom: 2rem; }
+        @media (min-width: 768px) {
+            main.am-page {
+                margin-left: 16.666667% !important;
+                width: 83.333333% !important;
+                max-width: 83.333333% !important;
+                flex: 0 0 83.333333%;
+            }
+        }
+        .am-page .page-header {
+            display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+            gap: 1rem; margin: 1rem 0 1.25rem; padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color, #dde1e6);
+            position: relative; z-index: 5;
+        }
+        #btnAddManager { position: relative; z-index: 6; pointer-events: auto; }
+        #managerModal { z-index: 2000; }
+        .am-page .page-header h1 { font-size: 1.35rem; font-weight: 700; margin: 0; }
+        .am-page .page-header p { margin: 0.25rem 0 0; font-size: 0.9rem; color: var(--text-tertiary, #64748b); }
+        .am-card {
+            background: var(--panel-bg, #fff);
+            border: 1px solid var(--border-color, #dde1e6);
+            border-radius: 10px; padding: 1rem 1.1rem; height: 100%;
+            display: flex; flex-direction: column;
+        }
+        .am-card .am-name { font-weight: 700; font-size: 1.05rem; margin: 0; }
+        .am-card .am-user { font-size: 0.85rem; color: var(--text-tertiary, #64748b); }
+        .am-tags { margin-top: 0.75rem; flex: 1; }
+        .am-tag {
+            display: inline-block; background: #475569; color: #fff;
+            font-size: 0.72rem; padding: 0.22rem 0.5rem; border-radius: 4px;
+            margin: 0 0.3rem 0.3rem 0;
+        }
+        .am-actions { display: flex; gap: 0.5rem; margin-top: 0.85rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color, #dde1e6); }
+        .am-actions .btn { flex: 1; font-size: 0.84rem; font-weight: 600; }
+        .area-check-grid { max-height: 220px; overflow-y: auto; border: 1px solid var(--border-color, #dde1e6); border-radius: 8px; padding: 0.75rem; }
+        .area-check-grid .form-check { margin-bottom: 0.35rem; }
+    </style>
+</head>
+<body>
+<div class="container-fluid">
+    <div class="row">
+        <%- include('../partials/admin-responsive-sidebar', { page: 'area-managers', appSettings }) %>
+        <main class="main-content am-page">
+            <div class="page-header">
+                <div>
+                    <h1>Manager Area</h1>
+                    <p>Kelola akun Manager Area dan wilayah yang dapat mereka akses</p>
+                </div>
+                <button type="button" class="btn btn-primary" id="btnAddManager" data-bs-toggle="modal" data-bs-target="#managerModal">
+                    <i class="bi bi-plus-lg"></i> Tambah Manager Area
+                </button>
+            </div>
+
+            <div class="row g-3" id="managerList">
+                <% if (!managers || managers.length === 0) { %>
+                <div class="col-12">
+                    <div class="alert alert-light border">Belum ada Manager Area. Klik tombol Tambah untuk membuat akun.</div>
+                </div>
+                <% } %>
+                <% (managers || []).forEach(function(m) { %>
+                <div class="col-md-6 col-xl-4">
+                    <div class="am-card" data-id="<%= m.id %>"
+                         data-name="<%= m.name %>"
+                         data-username="<%= m.username %>"
+                         data-phone="<%= m.phone || '' %>"
+                         data-email="<%= m.email || '' %>"
+                         data-status="<%= m.status %>"
+                         data-areas="<%= (m.assigned_areas || '') %>">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <p class="am-name"><%= m.name %></p>
+                                <div class="am-user"><i class="bi bi-person"></i> <%= m.username %></div>
+                            </div>
+                            <% if (m.status === 'active') { %>
+                            <span class="badge bg-success">Aktif</span>
+                            <% } else if (m.status === 'suspended') { %>
+                            <span class="badge bg-warning text-dark">Suspend</span>
+                            <% } else { %>
+                            <span class="badge bg-secondary">Nonaktif</span>
+                            <% } %>
+                        </div>
+                        <div class="am-tags">
+                            <% if (m.assigned_areas) { %>
+                                <% String(m.assigned_areas).split(',').forEach(function(a) { %>
+                                <span class="am-tag"><%= a.trim() %></span>
+                                <% }); %>
+                            <% } else { %>
+                                <span class="text-muted fst-italic small">Belum ada area</span>
+                            <% } %>
+                        </div>
+                        <div class="am-actions">
+                            <button type="button" class="btn btn-outline-primary btn-edit">Edit</button>
+                            <button type="button" class="btn btn-outline-danger btn-delete">Hapus</button>
+                        </div>
+                    </div>
+                </div>
+                <% }); %>
+            </div>
+        </main>
+    </div>
+</div>
+
+<!-- Modal -->
+<div class="modal fade" id="managerModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="managerModalTitle">Tambah Manager Area</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="mgrId" value="">
+                <div class="mb-3">
+                    <label class="form-label">Nama</label>
+                    <input type="text" class="form-control" id="mgrName" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Username (login)</label>
+                    <input type="text" class="form-control" id="mgrUsername" required autocomplete="off">
+                </div>
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">Telepon</label>
+                        <input type="text" class="form-control" id="mgrPhone">
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">Email</label>
+                        <input type="email" class="form-control" id="mgrEmail">
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Password <span class="text-muted small" id="pwdHint">(wajib)</span></label>
+                    <input type="password" class="form-control" id="mgrPassword" autocomplete="new-password">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Status</label>
+                    <select class="form-select" id="mgrStatus">
+                        <option value="active">Aktif</option>
+                        <option value="inactive">Nonaktif</option>
+                        <option value="suspended">Suspend</option>
+                    </select>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Area yang dikelola <span class="text-danger">*</span></label>
+                    <div class="area-check-grid" id="areaCheckGrid">
+                        <% (areas || []).forEach(function(a) { %>
+                        <div class="form-check">
+                            <input class="form-check-input area-cb" type="checkbox" value="<%= a.id %>" id="area_<%= a.id %>">
+                            <label class="form-check-label" for="area_<%= a.id %>">
+                                <%= a.nama_area %><% if (a.kode_area) { %> <small class="text-muted">(<%= a.kode_area %>)</small><% } %>
+                            </label>
+                        </div>
+                        <% }); %>
+                        <% if (!areas || areas.length === 0) { %>
+                        <div class="text-muted small">Belum ada master area. Buat area di menu Area terlebih dahulu.</div>
+                        <% } %>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+                <button type="button" class="btn btn-primary" id="btnSaveManager">Simpan</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script>
+(function () {
+    const modalEl = document.getElementById('managerModal');
+    const addBtn = document.getElementById('btnAddManager');
+    if (!modalEl || !addBtn || typeof bootstrap === 'undefined') return;
+    const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+
+    function resetForm() {
+        document.getElementById('mgrId').value = '';
+        document.getElementById('mgrName').value = '';
+        document.getElementById('mgrUsername').value = '';
+        document.getElementById('mgrPhone').value = '';
+        document.getElementById('mgrEmail').value = '';
+        document.getElementById('mgrPassword').value = '';
+        document.getElementById('mgrStatus').value = 'active';
+        document.getElementById('pwdHint').textContent = '(wajib)';
+        document.querySelectorAll('.area-cb').forEach(cb => { cb.checked = false; });
+    }
+
+    function selectedAreaIds() {
+        return Array.from(document.querySelectorAll('.area-cb:checked')).map(cb => parseInt(cb.value, 10));
+    }
+
+    addBtn.addEventListener('click', () => {
+        resetForm();
+        document.getElementById('managerModalTitle').textContent = 'Tambah Manager Area';
+    });
+
+    document.getElementById('managerList').addEventListener('click', (e) => {
+        const card = e.target.closest('.am-card');
+        if (!card) return;
+        if (e.target.classList.contains('btn-edit')) {
+            resetForm();
+            document.getElementById('managerModalTitle').textContent = 'Edit Manager Area';
+            document.getElementById('mgrId').value = card.dataset.id;
+            document.getElementById('mgrName').value = card.dataset.name || '';
+            document.getElementById('mgrUsername').value = card.dataset.username || '';
+            document.getElementById('mgrPhone').value = card.dataset.phone || '';
+            document.getElementById('mgrEmail').value = card.dataset.email || '';
+            document.getElementById('mgrStatus').value = card.dataset.status || 'active';
+            document.getElementById('pwdHint').textContent = '(kosongkan jika tidak diubah)';
+            const names = (card.dataset.areas || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+            document.querySelectorAll('.area-cb').forEach(cb => {
+                const label = cb.nextElementSibling ? cb.nextElementSibling.textContent.trim().toLowerCase() : '';
+                const namaOnly = label.split('(')[0].trim();
+                cb.checked = names.includes(namaOnly) || names.some(n => label.startsWith(n));
+            });
+            // Prefer fetch area ids from API for accuracy
+            fetch('/admin/area-managers/api/list')
+                .then(r => r.json())
+                .then(j => {
+                    if (!j.success) return;
+                    const m = (j.data || []).find(x => String(x.id) === String(card.dataset.id));
+                    if (!m || !m.area_ids) return;
+                    document.querySelectorAll('.area-cb').forEach(cb => {
+                        cb.checked = m.area_ids.map(Number).includes(parseInt(cb.value, 10));
+                    });
+                }).catch(() => {});
+            modal.show();
+        }
+        if (e.target.classList.contains('btn-delete')) {
+            if (!confirm('Hapus Manager Area ini?')) return;
+            fetch('/admin/area-managers/' + card.dataset.id, { method: 'DELETE' })
+                .then(r => r.json())
+                .then(j => {
+                    alert(j.message || (j.success ? 'Berhasil' : 'Gagal'));
+                    if (j.success) location.reload();
+                })
+                .catch(err => alert(err.message));
+        }
+    });
+
+    document.getElementById('btnSaveManager').addEventListener('click', () => {
+        const id = document.getElementById('mgrId').value;
+        const payload = {
+            name: document.getElementById('mgrName').value.trim(),
+            username: document.getElementById('mgrUsername').value.trim(),
+            phone: document.getElementById('mgrPhone').value.trim(),
+            email: document.getElementById('mgrEmail').value.trim(),
+            status: document.getElementById('mgrStatus').value,
+            password: document.getElementById('mgrPassword').value,
+            area_ids: selectedAreaIds()
+        };
+        if (!payload.name || !payload.username) {
+            alert('Nama dan username wajib diisi');
+            return;
+        }
+        if (!id && (!payload.password || payload.password.length < 6)) {
+            alert('Password minimal 6 karakter');
+            return;
+        }
+        if (!payload.area_ids.length) {
+            alert('Pilih minimal satu area');
+            return;
+        }
+        const url = id ? '/admin/area-managers/' + id : '/admin/area-managers';
+        const method = id ? 'PUT' : 'POST';
+        fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+            .then(r => r.json())
+            .then(j => {
+                alert(j.message || (j.success ? 'Berhasil' : 'Gagal'));
+                if (j.success) location.reload();
+            })
+            .catch(err => alert(err.message));
+    });
+})();
+</script>
+</body>
+</html>

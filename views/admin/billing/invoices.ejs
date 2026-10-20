@@ -93,9 +93,9 @@
                                     </div>
                                     <div class="mb-3 position-relative" id="customer_select_group">
                                         <label for="customerSearchInput" class="form-label">Pelanggan</label>
-                                        <input type="text" class="form-control" id="customerSearchInput" placeholder="Ketik min. 3 huruf nama/telepon/username…" autocomplete="off">
+                                        <input type="text" class="form-control" id="customerSearchInput" placeholder="Cari nama, username, no. hp, alamat..." autocomplete="off">
                                         <input type="hidden" id="customer_id" name="customer_id" value="">
-                                        <div id="customerSuggestions" class="list-group position-absolute w-100" style="z-index:1060; max-height:220px; overflow:auto; display:none;"></div>
+                                        <div id="customerSuggestions" class="list-group position-absolute w-100" style="z-index:1060; max-height:320px; overflow:auto; display:none;"></div>
                                         <div class="form-text">Dropdown rekomendasi muncul setelah mengetik minimal 3 huruf.</div>
                                     </div>
                                     <div class="mb-3" id="member_select_group" style="display: none;">
@@ -236,15 +236,8 @@
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script>
         $(document).ready(function() {
-            const invoiceCustomerOptions = <%- JSON.stringify((customers || []).map(function(c) {
-                return {
-                    id: c.id,
-                    name: c.name || '',
-                    phone: c.phone || '',
-                    username: c.username || '',
-                    package_id: c.package_id || null
-                };
-            })) %>;
+            const invoiceCustomerSearchSeq = { n: 0 };
+            let invoiceCustomerTimer = null;
 
             function formatRupiah(value) {
                 const num = Number(value);
@@ -299,46 +292,70 @@
                 updateInvoicePreview();
             }
 
-            function renderInvoiceCustomerSuggestions(keyword) {
+            function escapeInvoiceHtml(value) {
+                return String(value || '')
+                    .replace(/&/g, '&amp;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;');
+            }
+
+            function renderInvoiceCustomerSuggestions(customers) {
                 const box = document.getElementById('customerSuggestions');
                 if (!box) return;
-                const q = String(keyword || '').toLowerCase().trim();
-                if (q.length < 3) {
-                    box.style.display = 'none';
-                    box.innerHTML = '';
-                    return;
-                }
-                const matches = invoiceCustomerOptions.filter(function(c) {
-                    return String(c.name || '').toLowerCase().includes(q)
-                        || String(c.phone || '').toLowerCase().includes(q)
-                        || String(c.username || '').toLowerCase().includes(q);
-                }).slice(0, 12);
-
-                if (!matches.length) {
+                const list = Array.isArray(customers) ? customers : [];
+                if (!list.length) {
                     box.innerHTML = '<div class="list-group-item text-muted">Pelanggan tidak ditemukan</div>';
                     box.style.display = 'block';
                     return;
                 }
 
-                box.innerHTML = matches.map(function(c) {
-                    const labelName = String(c.name || '-').replace(/"/g, '&quot;');
-                    const labelPhone = String(c.phone || '-').replace(/"/g, '&quot;');
+                box.innerHTML = list.map(function(c) {
+                    const labelName = escapeInvoiceHtml(c.name);
+                    const labelPhone = escapeInvoiceHtml(c.phone);
                     const pkgId = c.package_id != null ? String(c.package_id) : '';
+                    const username = escapeInvoiceHtml(c.username || c.pppoe_username || '-');
+                    const cid = c.customer_id ? ' | ID ' + escapeInvoiceHtml(c.customer_id) : '';
                     return '<button type="button" class="list-group-item list-group-item-action invoice-customer-suggestion"'
                         + ' data-id="' + c.id + '"'
                         + ' data-name="' + labelName + '"'
                         + ' data-phone="' + labelPhone + '"'
                         + ' data-package-id="' + pkgId + '">'
-                        + '<strong>' + (c.name || '-') + '</strong><br>'
-                        + '<small>' + (c.phone || '-') + ' | ' + (c.username || '-') + '</small>'
+                        + '<strong>' + (labelName || '-') + '</strong><br>'
+                        + '<small>' + (labelPhone || '-') + ' | ' + username + cid + '</small>'
                         + '</button>';
                 }).join('');
                 box.style.display = 'block';
             }
 
+            async function searchInvoiceCustomers(keyword) {
+                const q = String(keyword || '').trim();
+                const seq = ++invoiceCustomerSearchSeq.n;
+                const box = document.getElementById('customerSuggestions');
+                if (!box) return;
+                if (q.length < 1) {
+                    box.style.display = 'none';
+                    box.innerHTML = '';
+                    return;
+                }
+                const resp = await fetch('/admin/billing/customers/list?q=' + encodeURIComponent(q), {
+                    credentials: 'same-origin',
+                    headers: { 'Accept': 'application/json' }
+                });
+                const data = await resp.json().catch(function () { return {}; });
+                if (seq !== invoiceCustomerSearchSeq.n) return;
+                renderInvoiceCustomerSuggestions(Array.isArray(data && data.customers) ? data.customers : []);
+            }
+
             $('#customerSearchInput').on('input', function() {
                 $('#customer_id').val('');
-                renderInvoiceCustomerSuggestions(this.value);
+                const value = this.value;
+                if (invoiceCustomerTimer) clearTimeout(invoiceCustomerTimer);
+                invoiceCustomerTimer = setTimeout(function () {
+                    searchInvoiceCustomers(value).catch(function () {
+                        renderInvoiceCustomerSuggestions([]);
+                    });
+                }, 250);
                 updateInvoicePreview();
             });
 
@@ -469,7 +486,7 @@
 
             const invoiceType = $('#invoice_type_select').val();
             if (invoiceType === 'customer' && !$('#customer_id').val()) {
-                alert('Pilih pelanggan dari rekomendasi (ketik min. 3 huruf lalu klik hasilnya).');
+                alert('Pilih pelanggan dari hasil pencarian (ketik nama/HP/username lalu klik hasilnya).');
                 $('#customerSearchInput').focus();
                 return;
             }

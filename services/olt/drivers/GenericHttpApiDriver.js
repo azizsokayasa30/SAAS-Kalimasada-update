@@ -198,12 +198,26 @@ class GenericHttpApiDriver extends OltDriverInterface {
         return this.callEndpoint('rebootOnu', { onuId: onu.onu_id || onu.id, onuIndex: onu.onu_index || onu.id }, { onu });
     }
 
+    hasEndpoint(name) {
+        const endpoint = this.endpoints[name];
+        return !!(endpoint && endpoint.path);
+    }
+
+    fallbackSystemInfo() {
+        return {
+            hostname: this.olt.name,
+            vendor: this.olt.vendor,
+            model: this.olt.model,
+            note: 'systemInfo endpoint not configured for this OLT profile'
+        };
+    }
+
     async syncData() {
-        const [systemInfo, ponPorts, onuList] = await Promise.all([
-            this.getSystemInfo(),
-            this.getPonPorts(),
-            this.getOnuList()
-        ]);
+        const systemInfo = this.hasEndpoint('systemInfo')
+            ? await this.getSystemInfo()
+            : this.fallbackSystemInfo();
+        const ponPorts = this.hasEndpoint('ponPorts') ? await this.getPonPorts() : [];
+        const onuList = this.hasEndpoint('onuList') ? await this.getOnuList() : [];
         return { systemInfo, ponPorts, onuList };
     }
 }

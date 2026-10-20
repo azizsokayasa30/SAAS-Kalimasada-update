@@ -48,14 +48,22 @@ function dbAll(db, sql, params = []) {
     });
 }
 
-async function loadMappingDbData(db, tenantId = null) {
+async function loadMappingDbData(db, tenantId = null, areaIds = null) {
     const _tId = resolveMappingTenantId(tenantId);
     const tCust = _tId != null ? ' AND c.tenant_id = ?' : '';
     const tOdp = _tId != null ? ' WHERE tenant_id = ?' : '';
     const tCable = _tId != null ? ' AND c.tenant_id = ?' : '';
-    const custParams = _tId != null ? [_tId] : [];
+    let areaSql = '';
+    let areaParams = [];
+    if (Array.isArray(areaIds)) {
+        const billingManager = require('../config/billing');
+        const areaScope = billingManager._sqlCustomerInAreaIds('c', areaIds);
+        areaSql = ` AND ${areaScope.clause}`;
+        areaParams = areaScope.params;
+    }
+    const custParams = [...(_tId != null ? [_tId] : []), ...areaParams];
     const odpParams = _tId != null ? [_tId] : [];
-    const cableParams = _tId != null ? [_tId] : [];
+    const cableParams = [...(_tId != null ? [_tId] : []), ...areaParams];
 
     const [customers, odps, cables, backboneCables] = await Promise.all([
         dbAll(db, `
@@ -66,7 +74,7 @@ async function loadMappingDbData(db, tenantId = null) {
             FROM customers c
             LEFT JOIN packages p ON c.package_id = p.id
             LEFT JOIN odps o ON c.odp_id = o.id
-            WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL${tCust}
+            WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL${tCust}${areaSql}
             ORDER BY c.name
         `, custParams),
         dbAll(db, `
@@ -86,7 +94,7 @@ async function loadMappingDbData(db, tenantId = null) {
             LEFT JOIN customers c ON cr.customer_id = c.id
             LEFT JOIN odps o ON cr.odp_id = o.id
             WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL
-              AND o.latitude IS NOT NULL AND o.longitude IS NOT NULL${tCable}
+              AND o.latitude IS NOT NULL AND o.longitude IS NOT NULL${tCable}${areaSql}
             ORDER BY cr.id
         `, cableParams),
         dbAll(db, `

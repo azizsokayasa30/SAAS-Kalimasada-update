@@ -4,7 +4,6 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const multer = require('multer');
 const billingManager = require('../config/billing');
 const { tenantIdForInsert, tenantSqlFromRequest } = require('../config/platform/tenantSqlHelpers');
 const { attachTenantAppSettings } = require('../config/platform/tenantAppSettings');
@@ -110,21 +109,15 @@ function pushLeaveDecisionToTechnician(leaveRow, leaveDbId, approved) {
     });
 }
 
-// Multer setup for employee photos
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        const dir = './public/uploads/employees';
-        if (!fs.existsSync(dir)){
-            fs.mkdirSync(dir, { recursive: true });
-        }
-        cb(null, dir);
-    },
-    filename: function (req, file, cb) {
+const { createSafeImageUpload } = require('../utils/safeImageUpload');
+const upload = createSafeImageUpload({
+    destination: path.join(__dirname, '../public/uploads/employees'),
+    maxBytes: 5 * 1024 * 1024,
+    filename: function (req, file, ext, cb) {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, 'emp-' + uniqueSuffix + path.extname(file.originalname));
+        cb(null, 'emp-' + uniqueSuffix + ext);
     }
 });
-const upload = multer({ storage: storage });
 
 function genEmployeePublicCode() {
     return `EMP${crypto.randomBytes(8).toString('hex').toUpperCase()}`;
@@ -441,8 +434,88 @@ router.delete('/api/data/:id', (req, res) => {
 // API ROUTES - ATTENDANCE
 // ==========================================
 
+function jakartaAttendanceYmd() {
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Jakarta',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).format(new Date());
+}
+
+function isEmployeeAttended(row) {
+    const status = String((row && row.status) || '').trim().toLowerCase();
+    const checkIn = String((row && row.check_in) || '').trim();
+    return Boolean(checkIn) || status === 'hadir';
+}
+
+router.get('/api/attendance/daily', (req, res) => {
+    const dateRaw = String(req.query.date || '').trim();
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(dateRaw) ? dateRaw : jakartaAttendanceYmd();
+
+    const query = `
+        SELECT
+            e.id AS employee_id,
+            e.nama_lengkap,
+            e.nik,
+            e.jabatan,
+            e.foto_path,
+            e.shift_id,
+            s.shift_name,
+            s.check_in_time AS shift_check_in_time,
+            s.check_out_time AS shift_check_out_time,
+            a.id,
+            COALESCE(a.date, ?) AS date,
+            a.check_in,
+            a.check_out,
+            a.status,
+            a.notes
+        FROM employees e
+        LEFT JOIN attendance_shifts s ON e.shift_id = s.id AND s.tenant_id = e.tenant_id
+        LEFT JOIN employee_attendance a
+            ON a.employee_id = e.id
+            AND date(a.date) = date(?)
+            AND a.tenant_id = e.tenant_id
+        WHERE (e.status IS NULL OR LOWER(TRIM(e.status)) = 'aktif')${tAnd('e')}
+        ORDER BY e.nama_lengkap COLLATE NOCASE ASC
+    `;
+
+    db.all(query, [date, date], (err, rows) => {
+        if (err) return res.status(500).json({ success: false, error: err.message });
+        const data = rows || [];
+        let attended = 0;
+        let notAttended = 0;
+        let izin = 0;
+        let sakit = 0;
+        data.forEach((row) => {
+            const status = String(row.status || '').trim().toLowerCase();
+            if (status === 'izin' || status === 'cuti') {
+                izin += 1;
+            } else if (status === 'sakit') {
+                sakit += 1;
+            } else if (isEmployeeAttended(row)) {
+                attended += 1;
+            } else {
+                notAttended += 1;
+            }
+        });
+        res.json({
+            success: true,
+            date,
+            summary: {
+                total: data.length,
+                attended,
+                not_attended: notAttended,
+                izin,
+                sakit
+            },
+            data
+        });
+    });
+});
+
 router.get('/api/attendance', (req, res) => {
-    const { month, year } = req.query;
+    const { month, year, date } = req.query;
     
     let query = `
         SELECT a.*, e.nama_lengkap, e.nik, e.shift_id, s.check_in_time AS shift_check_in_time, s.shift_name
@@ -453,10 +526,16 @@ router.get('/api/attendance', (req, res) => {
     `;
     
     let values = [];
-    if (month && year) {
+    if (date && /^\d{4}-\d{2}-\d{2}$/.test(String(date))) {
+        query += ` AND date(a.date) = date(?) `;
+        values.push(date);
+    } else if (month && year) {
         query += ` AND strftime('%Y-%m', a.date) = ? `;
-        const monthStr = month.padStart(2, '0');
+        const monthStr = String(month).padStart(2, '0');
         values.push(`${year}-${monthStr}`);
+    } else if (year) {
+        query += ` AND strftime('%Y', a.date) = ? `;
+        values.push(String(year));
     }
     query += ` ORDER BY a.date DESC, e.nama_lengkap ASC`;
     

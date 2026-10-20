@@ -615,6 +615,10 @@
                                         alert('Centang minimal 1 invoice belum lunas terlebih dahulu');
                                         return false;
                                     }
+                                    if (state.selected > 500) {
+                                        alert('Maksimal 500 invoice per batch. Saat ini terpilih ' + state.selected + '. Kurangi pilihan (atau proses bertahap) lalu ulangi.');
+                                        return false;
+                                    }
                                     window.__pendingBulkPayIds = state.ids.slice();
                                     window.__pendingBulkPayRows = state.rows.slice();
                                     var countEl = document.getElementById('bulkPayCountText');
@@ -671,9 +675,10 @@
                                     }
 
                                     var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+                                    var timeoutMs = Math.min(120000, Math.max(30000, (ids.length || 1) * 200));
                                     var timeoutId = setTimeout(function () {
                                         if (controller) controller.abort();
-                                    }, 25000);
+                                    }, timeoutMs);
 
                                     fetch('/admin/billing/invoices/bulk-pay', {
                                         method: 'POST',
@@ -982,6 +987,7 @@
                         <div class="alert alert-success">
                             <div class="fw-semibold" id="bulkPayCountText">0 invoice akan ditandai lunas</div>
                             <div class="small" id="bulkPayAmountText">Total: Rp 0</div>
+                            <div class="small text-muted mt-1">Maks. <strong>500</strong> invoice/batch (bisa “Pilih semua” di halaman). WA/email/PDF/restore MikroTik sementara <strong>nonaktif</strong> — hanya update database.</div>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Invoice terpilih</label>
@@ -1445,9 +1451,10 @@
                 showToast('info', 'Memproses...', 'Melunasi ' + ids.length + ' invoice terpilih');
 
                 var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+                var timeoutMs = Math.min(120000, Math.max(30000, (ids.length || 1) * 200));
                 var timeoutId = setTimeout(function() {
                     if (controller) controller.abort();
-                }, 45000);
+                }, timeoutMs);
 
                 fetch('/admin/billing/invoices/bulk-pay', {
                     method: 'POST',

@@ -71,7 +71,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     _fetchStatus();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (context.read<AuthProvider>().role == 'admin') {
+      final role = context.read<AuthProvider>().role;
+      if (role == 'admin' || role == 'area_manager') {
         _fetchAdminAttendanceToday();
       }
     });
@@ -90,7 +91,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     });
     _statusRefreshTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       _fetchStatus(silent: true, keepLoading: false);
-      if (mounted && context.read<AuthProvider>().role == 'admin') {
+      if (!mounted) return;
+      final role = context.read<AuthProvider>().role;
+      if (role == 'admin' || role == 'area_manager') {
         _fetchAdminAttendanceToday(silent: true);
       }
     });
@@ -882,7 +885,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isAdmin = context.watch<AuthProvider>().role == 'admin';
+    final authRole = context.watch<AuthProvider>().role;
+    final isAdmin = authRole == 'admin' || authRole == 'area_manager';
     final statusText = _status == 'awaiting'
         ? 'Belum masuk'
         : _status == 'checked_in'

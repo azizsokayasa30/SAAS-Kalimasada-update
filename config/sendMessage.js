@@ -157,7 +157,11 @@ async function sendMessage(number, message) {
         }
         
         logger.info(`📱 Sending message to ${jid} via sock (fallback)...`);
-        const result = await sock.sendMessage(jid, formattedMessage);
+        if (formattedMessage && typeof formattedMessage === 'object' && formattedMessage.text && formattedMessage.linkPreview === undefined) {
+            formattedMessage.linkPreview = null;
+        }
+        const { sendStableMessage } = require('./baileys-session-heal');
+        const result = await sendStableMessage(sock, jid, formattedMessage);
         logger.info(`✅ WhatsApp message sent successfully to ${number} via sock`);
         
         // Handle response dari Baileys (bisa memiliki key.id)

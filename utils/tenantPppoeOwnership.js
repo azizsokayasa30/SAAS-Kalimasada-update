@@ -218,7 +218,7 @@ async function markOrphanMigrated(db) {
  * null = tidak ada konteks tenant (jangan filter / perilaku platform).
  * [] = tenant punya 0 user (WAJIB tampil kosong, jangan load semua RADIUS).
  */
-async function getTenantAllowedPppoeUsernames() {
+async function getTenantAllowedPppoeUsernames(options = {}) {
     await ensureTenantPppoeUsersTable();
     await migrateOrphanRadiusUsersOnce().catch(() => {});
 
@@ -228,16 +228,28 @@ async function getTenantAllowedPppoeUsernames() {
     const db = getBillingDb();
     const names = new Set();
 
+    const areaIds = Array.isArray(options.areaIds) ? options.areaIds : null;
+    let areaSql = '';
+    const areaParams = [];
+    if (areaIds) {
+        const scope = require('../config/billing')._sqlCustomerInAreaIds('c', areaIds);
+        areaSql = ` AND ${scope.clause}`;
+        areaParams.push(...scope.params);
+    }
+
     const customerRows = await dbAll(
         db,
-        `SELECT DISTINCT TRIM(pppoe_username) AS u FROM customers
-         WHERE tenant_id = ?
-           AND pppoe_username IS NOT NULL AND TRIM(pppoe_username) != ''`,
-        [tenantId]
+        `SELECT DISTINCT TRIM(c.pppoe_username) AS u FROM customers c
+         WHERE c.tenant_id = ?
+           AND c.pppoe_username IS NOT NULL AND TRIM(c.pppoe_username) != ''${areaSql}`,
+        [tenantId, ...areaParams]
     );
     for (const r of customerRows) {
         if (r.u) names.add(normalizeUsername(r.u));
     }
+
+    // Manager Area hanya memonitor pelanggan wilayahnya, bukan user manual seluruh tenant.
+    if (areaIds) return Array.from(names);
 
     const ownedRows = await dbAll(
         db,

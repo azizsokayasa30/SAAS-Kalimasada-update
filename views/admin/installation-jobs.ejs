@@ -3,7 +3,7 @@
 <head>
     <%- include('../partials/hard-reload') %>
     <meta charset="UTF-8">
-    <title>Manajemen Jadwal Instalasi - Admin Panel</title>
+    <title>Dashboard Instalasi Bulanan - Admin Panel</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
     <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
@@ -58,6 +58,9 @@
         .installation-item.in_progress { border-left-color: #007bff; }
         .installation-item.completed { border-left-color: #28a745; }
         .installation-item.cancelled { border-left-color: #dc3545; }
+        .installation-item.has-unread {
+            box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.35), 0 4px 12px rgba(239, 68, 68, 0.12);
+        }
         
         .stats-card {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -76,6 +79,123 @@
         .stats-label {
             font-size: 0.9rem;
             opacity: 0.9;
+        }
+
+        .install-dash-header {
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.85rem 0 0.65rem;
+            margin-bottom: 1rem;
+            border-bottom: 1px solid var(--border, #e2e8f0);
+        }
+        .install-period-bar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: end;
+            gap: 0.5rem;
+        }
+        .install-period-bar .form-select {
+            min-width: 8.5rem;
+        }
+        .install-cal {
+            display: grid;
+            grid-template-columns: repeat(7, minmax(0, 1fr));
+            gap: 4px;
+        }
+        .install-cal-head {
+            text-align: center;
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #6c757d;
+            padding: 0.25rem 0;
+        }
+        .install-cal-day {
+            min-height: 64px;
+            border: 1px solid var(--border, #e2e8f0);
+            border-radius: 8px;
+            padding: 4px 6px;
+            text-decoration: none;
+            color: inherit;
+            background: var(--panel-bg, #fff);
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .install-cal-day.empty {
+            border: 0;
+            background: transparent;
+            min-height: 24px;
+            pointer-events: none;
+        }
+        .install-cal-day:hover { border-color: #667eea; }
+        .install-cal-day.today { box-shadow: inset 0 0 0 2px #667eea; }
+        .install-cal-day.selected {
+            background: #eef2ff;
+            border-color: #4f46e5;
+        }
+        .install-cal-num { font-size: 0.78rem; font-weight: 700; }
+        .install-cal-count { font-size: 0.72rem; font-weight: 600; color: #4f46e5; }
+        .install-cal-dots { display: flex; flex-wrap: wrap; gap: 3px; margin-top: auto; }
+        .install-cal-dot {
+            width: 7px; height: 7px; border-radius: 99px; display: inline-block;
+        }
+        .progress-row {
+            display: flex;
+            gap: 0.65rem;
+            padding: 0.55rem 0;
+            border-bottom: 1px solid rgba(0,0,0,0.06);
+            text-decoration: none;
+            color: inherit;
+        }
+        .progress-row:last-child { border-bottom: 0; }
+        .progress-row.unread { background: rgba(239, 68, 68, 0.06); margin: 0 -0.75rem; padding-left: 0.75rem; padding-right: 0.75rem; border-radius: 6px; }
+        .install-cal-progress-row {
+            align-items: stretch;
+        }
+        .install-cal-progress-row > [class*="col-"] {
+            display: flex;
+        }
+        .install-cal-progress-row .installation-card {
+            width: 100%;
+            margin-bottom: 0;
+            display: flex;
+            flex-direction: column;
+        }
+        .install-cal-progress-row .installation-card:hover {
+            transform: none;
+        }
+        .install-cal-progress-row .installation-card .card-body {
+            flex: 1 1 auto;
+        }
+        .install-progress-card .card-body {
+            min-height: 0;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            padding-bottom: 0.5rem;
+        }
+        .install-progress-body {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+        @media (min-width: 992px) {
+            .install-cal-progress-row > .col-lg-5 {
+                position: relative;
+            }
+            .install-progress-card {
+                position: absolute;
+                inset: 0;
+            }
+        }
+        @media (max-width: 991.98px) {
+            .install-progress-body { max-height: 280px; }
         }
         
         .quick-actions {
@@ -114,30 +234,249 @@
             margin: 0.5rem;
             min-width: 150px;
         }
+        @media (max-width: 768px) {
+            .install-dash-header { display: flex !important; }
+            .install-cal-day { min-height: 48px; padding: 3px; }
+        }
     </style>
 
     <%- include('../partials/theme-head') %>
 </head>
 <body>
+<%
+const monthNamesDash = (typeof monthNames !== 'undefined' && monthNames && monthNames.length)
+    ? monthNames
+    : ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+const selMonth = typeof selectedMonth !== 'undefined' ? Number(selectedMonth) : (new Date().getMonth() + 1);
+const selYear = typeof selectedYear !== 'undefined' ? Number(selectedYear) : new Date().getFullYear();
+const selDay = (typeof selectedDay !== 'undefined' && selectedDay) ? Number(selectedDay) : null;
+const unreadSet = new Set((typeof unreadJobIds !== 'undefined' && unreadJobIds) ? unreadJobIds.map(Number) : []);
+const p = typeof period !== 'undefined' ? period : {
+    prevMonth: selMonth, prevYear: selYear, nextMonth: selMonth, nextYear: selYear,
+    daysInMonth: 30, now: { day: 0, month: 0, year: 0 }, isCurrentMonth: false
+};
+const yOpts = (typeof yearOptions !== 'undefined' && yearOptions && yearOptions.length)
+    ? yearOptions
+    : [selYear - 2, selYear - 1, selYear, selYear + 1];
+function dashQ(extra) {
+    extra = extra || {};
+    const params = [];
+    params.push('month=' + encodeURIComponent(extra.month != null ? extra.month : selMonth));
+    params.push('year=' + encodeURIComponent(extra.year != null ? extra.year : selYear));
+    const dayVal = Object.prototype.hasOwnProperty.call(extra, 'day') ? extra.day : selDay;
+    if (dayVal) params.push('day=' + encodeURIComponent(dayVal));
+    const st = Object.prototype.hasOwnProperty.call(extra, 'status') ? extra.status : (typeof status !== 'undefined' ? status : '');
+    const sr = Object.prototype.hasOwnProperty.call(extra, 'search') ? extra.search : (typeof search !== 'undefined' ? search : '');
+    const tc = Object.prototype.hasOwnProperty.call(extra, 'technician') ? extra.technician : (typeof selectedTechnician !== 'undefined' ? selectedTechnician : '');
+    if (st) params.push('status=' + encodeURIComponent(st));
+    if (sr) params.push('search=' + encodeURIComponent(sr));
+    if (tc) params.push('technician=' + encodeURIComponent(tc));
+    if (extra.page) params.push('page=' + encodeURIComponent(extra.page));
+    return params.join('&');
+}
+function statusLabel(s) {
+    const k = String(s || '').toLowerCase().trim();
+    if (k === 'scheduled') return 'Terjadwal';
+    if (k === 'assigned') return 'Ditugaskan';
+    if (k === 'in_progress') return 'Sedang Proses';
+    if (k === 'completed') return 'Selesai';
+    if (k === 'cancelled') return 'Dibatalkan';
+    return s || '—';
+}
+%>
 <div class="container-fluid">
     <div class="row">
         <!-- Include Admin Responsive Sidebar -->
         <%- include('../partials/admin-responsive-sidebar', { page: 'installations', settings: settings, versionInfo: versionInfo, versionBadge: versionBadge }) %>
         
         <main class="col-md-10 ms-sm-auto main-content">
-            <!-- Header -->
-            <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
-                <h1 class="h2">
-                    <i class="bi bi-tools me-2"></i>Manajemen Jadwal Instalasi
-                </h1>
-                <div class="btn-toolbar mb-2 mb-md-0">
-                    <div class="btn-group me-2">
+            <div class="install-dash-header">
+                <div>
+                    <h1 class="h3 mb-1">
+                        <i class="bi bi-calendar3 me-2"></i>Dashboard Instalasi
+                    </h1>
+                    <div class="text-muted small">
+                        <%= monthNamesDash[selMonth - 1] %> <%= selYear %>
+                        <% if (selDay) { %> · tanggal <%= selDay %><% } %>
+                    </div>
+                </div>
+                <div class="btn-toolbar">
+                    <div class="btn-group">
                         <a href="/admin/installations/create" class="btn btn-primary">
                             <i class="bi bi-plus-circle me-2"></i>Tambah Job Baru
                         </a>
                         <button type="button" class="btn btn-outline-secondary" onclick="refreshPage()">
                             <i class="bi bi-arrow-clockwise"></i> Segarkan
                         </button>
+                    </div>
+                </div>
+            </div>
+
+            <form method="GET" action="/admin/installations" class="card installation-card mb-3">
+                <div class="card-body py-3">
+                    <div class="install-period-bar">
+                        <a class="btn btn-outline-secondary" href="/admin/installations?<%= dashQ({ month: p.prevMonth, year: p.prevYear, day: null, page: null }) %>" title="Bulan sebelumnya">
+                            <i class="bi bi-chevron-left"></i>
+                        </a>
+                        <div>
+                            <label class="form-label mb-1 small">Bulan</label>
+                            <select class="form-select" name="month" onchange="this.form.submit()">
+                                <% for (let m = 1; m <= 12; m++) { %>
+                                    <option value="<%= m %>" <%= selMonth === m ? 'selected' : '' %>><%= monthNamesDash[m - 1] %></option>
+                                <% } %>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="form-label mb-1 small">Tahun</label>
+                            <select class="form-select" name="year" onchange="this.form.submit()">
+                                <% yOpts.forEach(function(y) { %>
+                                    <option value="<%= y %>" <%= selYear === y ? 'selected' : '' %>><%= y %></option>
+                                <% }); %>
+                            </select>
+                        </div>
+                        <a class="btn btn-outline-secondary" href="/admin/installations?<%= dashQ({ month: p.nextMonth, year: p.nextYear, day: null, page: null }) %>" title="Bulan berikutnya">
+                            <i class="bi bi-chevron-right"></i>
+                        </a>
+                        <% if (p.isCurrentMonth && selDay) { %>
+                            <a class="btn btn-outline-primary" href="/admin/installations?<%= dashQ({ day: null }) %>">Bulan ini</a>
+                        <% } else if (!p.isCurrentMonth) { %>
+                            <a class="btn btn-outline-primary" href="/admin/installations">Bulan ini</a>
+                        <% } %>
+                        <% if (selDay) { %>
+                            <a class="btn btn-outline-danger" href="/admin/installations?<%= dashQ({ day: null }) %>">
+                                Hapus filter tgl <%= selDay %>
+                            </a>
+                        <% } %>
+                        <% if (typeof search !== 'undefined' && search) { %>
+                            <input type="hidden" name="search" value="<%= search %>">
+                        <% } %>
+                        <% if (typeof status !== 'undefined' && status) { %>
+                            <input type="hidden" name="status" value="<%= status %>">
+                        <% } %>
+                        <% if (typeof selectedTechnician !== 'undefined' && selectedTechnician) { %>
+                            <input type="hidden" name="technician" value="<%= selectedTechnician %>">
+                        <% } %>
+                    </div>
+                </div>
+            </form>
+
+            <div class="row mb-3">
+                <div class="col-md-2 col-6 mb-3">
+                    <div class="stats-card text-center">
+                        <div class="stats-number"><%= typeof stats !== 'undefined' && stats.total ? stats.total : 0 %></div>
+                        <div class="stats-label">Total Job Bulan Ini</div>
+                    </div>
+                </div>
+                <div class="col-md-2 col-6 mb-3">
+                    <div class="stats-card text-center" style="background: linear-gradient(135deg, #ffc107 0%, #ff8c00 100%);">
+                        <div class="stats-number"><%= typeof stats !== 'undefined' && stats.scheduled ? stats.scheduled : 0 %></div>
+                        <div class="stats-label">Terjadwal</div>
+                    </div>
+                </div>
+                <div class="col-md-2 col-6 mb-3">
+                    <div class="stats-card text-center" style="background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);">
+                        <div class="stats-number"><%= typeof stats !== 'undefined' && stats.assigned ? stats.assigned : 0 %></div>
+                        <div class="stats-label">Ditugaskan</div>
+                    </div>
+                </div>
+                <div class="col-md-2 col-6 mb-3">
+                    <div class="stats-card text-center" style="background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);">
+                        <div class="stats-number"><%= typeof stats !== 'undefined' && stats.in_progress ? stats.in_progress : 0 %></div>
+                        <div class="stats-label">Sedang Proses</div>
+                    </div>
+                </div>
+                <div class="col-md-2 col-6 mb-3">
+                    <div class="stats-card text-center" style="background: linear-gradient(135deg, #28a745 0%, #1e7e34 100%);">
+                        <div class="stats-number"><%= typeof stats !== 'undefined' && stats.completed ? stats.completed : 0 %></div>
+                        <div class="stats-label">Selesai · <%= typeof completionRate !== 'undefined' ? completionRate : 0 %>%</div>
+                    </div>
+                </div>
+                <div class="col-md-2 col-6 mb-3">
+                    <div class="stats-card text-center" style="background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);">
+                        <div class="stats-number"><%= typeof stats !== 'undefined' && stats.cancelled ? stats.cancelled : 0 %></div>
+                        <div class="stats-label">Dibatalkan</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row install-cal-progress-row mb-3">
+                <div class="col-lg-7 mb-3 mb-lg-0">
+                    <div class="card installation-card">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0"><i class="bi bi-calendar-month me-2"></i>Kalender <%= monthNamesDash[selMonth - 1] %></h5>
+                            <span class="small text-muted"><%= typeof activeJobs !== 'undefined' ? activeJobs : 0 %> job aktif</span>
+                        </div>
+                        <div class="card-body">
+                            <div class="install-cal mb-1">
+                                <% (typeof weekdayNames !== 'undefined' && weekdayNames.length ? weekdayNames : ['Sen','Sel','Rab','Kam','Jum','Sab','Min']).forEach(function(w) { %>
+                                    <div class="install-cal-head"><%= w %></div>
+                                <% }); %>
+                            </div>
+                            <div class="install-cal">
+                                <% const cells = typeof calendarCells !== 'undefined' ? calendarCells : []; %>
+                                <% cells.forEach(function(cell) { %>
+                                    <% if (!cell) { %>
+                                        <div class="install-cal-day empty"></div>
+                                    <% } else {
+                                        const isToday = p.isCurrentMonth && p.now && Number(p.now.day) === Number(cell.day);
+                                        const isSelected = selDay && Number(selDay) === Number(cell.day);
+                                    %>
+                                        <a class="install-cal-day<%= isToday ? ' today' : '' %><%= isSelected ? ' selected' : '' %>"
+                                           href="/admin/installations?<%= dashQ({ day: isSelected ? null : cell.day }) %>"
+                                           title="<%= cell.total %> job">
+                                            <span class="install-cal-num"><%= cell.day %></span>
+                                            <% if (cell.total > 0) { %>
+                                                <span class="install-cal-count"><%= cell.total %></span>
+                                                <span class="install-cal-dots">
+                                                    <% if (cell.scheduled) { %><span class="install-cal-dot" style="background:#ffc107"></span><% } %>
+                                                    <% if (cell.assigned) { %><span class="install-cal-dot" style="background:#17a2b8"></span><% } %>
+                                                    <% if (cell.in_progress) { %><span class="install-cal-dot" style="background:#007bff"></span><% } %>
+                                                    <% if (cell.completed) { %><span class="install-cal-dot" style="background:#28a745"></span><% } %>
+                                                    <% if (cell.cancelled) { %><span class="install-cal-dot" style="background:#dc3545"></span><% } %>
+                                                </span>
+                                            <% } %>
+                                        </a>
+                                    <% } %>
+                                <% }); %>
+                            </div>
+                            <div class="small text-muted mt-2">
+                                Titik warna: terjadwal, ditugaskan, proses, selesai, batal. Klik tanggal untuk memfilter daftar.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-5">
+                    <div class="card installation-card install-progress-card">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0"><i class="bi bi-activity me-2"></i>Update Progress Teknisi</h5>
+                            <% const _progCount = (typeof recentProgress !== 'undefined' && recentProgress) ? recentProgress.length : 0; %>
+                            <span class="small text-muted"><%= _progCount %> update</span>
+                        </div>
+                        <div class="card-body py-2">
+                            <div class="install-progress-body">
+                            <% if (_progCount) { %>
+                                <% recentProgress.forEach(function(ev) { %>
+                                    <a class="progress-row<%= ev.is_unread ? ' unread' : '' %>" href="/admin/installations/view/<%= ev.job_id %>">
+                                        <div class="flex-grow-1">
+                                            <div class="fw-semibold">
+                                                <%= ev.job_number || ('#' + ev.job_id) %>
+                                                <% if (ev.is_unread) { %><span class="badge bg-danger ms-1">Baru</span><% } %>
+                                            </div>
+                                            <div class="small text-muted"><%= ev.customer_name || '—' %> · <%= ev.technician_name || 'Teknisi' %></div>
+                                            <div class="small">
+                                                <%= statusLabel(ev.old_status) %> → <strong><%= statusLabel(ev.new_status) %></strong>
+                                            </div>
+                                        </div>
+                                        <div class="small text-muted text-nowrap"><%= ev.created_at || '' %></div>
+                                    </a>
+                                <% }); %>
+                            <% } else { %>
+                                <div class="text-center text-muted py-4 small">
+                                    Belum ada update progress teknisi di bulan ini.
+                                </div>
+                            <% } %>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -164,58 +503,18 @@
                     <a href="/admin/installations/create" class="btn btn-primary quick-action-btn">
                         <i class="bi bi-plus-circle me-2"></i>Instalasi Baru
                     </a>
-                    <a href="/admin/installations?status=scheduled" class="btn btn-warning quick-action-btn">
+                    <a href="/admin/installations?<%= dashQ({ status: 'scheduled', day: selDay }) %>" class="btn btn-warning quick-action-btn">
                         <i class="bi bi-calendar me-2"></i>Lihat Terjadwal
                     </a>
-                    <a href="/admin/installations?status=in_progress" class="btn btn-info quick-action-btn">
+                    <a href="/admin/installations?<%= dashQ({ status: 'in_progress', day: selDay }) %>" class="btn btn-info quick-action-btn">
                         <i class="bi bi-play-circle me-2"></i>Sedang Proses
                     </a>
-                    <a href="/admin/installations?status=completed" class="btn btn-success quick-action-btn">
+                    <a href="/admin/installations?<%= dashQ({ status: 'completed', day: selDay }) %>" class="btn btn-success quick-action-btn">
                         <i class="bi bi-check-circle me-2"></i>Selesai
                     </a>
-                    <a href="/admin/installations?status=cancelled" class="btn btn-danger quick-action-btn">
+                    <a href="/admin/installations?<%= dashQ({ status: 'cancelled', day: selDay }) %>" class="btn btn-danger quick-action-btn">
                         <i class="bi bi-x-circle me-2"></i>Dibatalkan
                     </a>
-                </div>
-            </div>
-
-            <!-- Statistics Cards -->
-            <div class="row mb-4">
-                <div class="col-md-2 col-6 mb-3">
-                    <div class="stats-card text-center">
-                        <div class="stats-number"><%= typeof stats !== 'undefined' && stats.total ? stats.total : 0 %></div>
-                        <div class="stats-label">Total Job</div>
-                    </div>
-                </div>
-                <div class="col-md-2 col-6 mb-3">
-                    <div class="stats-card text-center" style="background: linear-gradient(135deg, #ffc107 0%, #ff8c00 100%);">
-                        <div class="stats-number"><%= typeof stats !== 'undefined' && stats.scheduled ? stats.scheduled : 0 %></div>
-                        <div class="stats-label">Terjadwal</div>
-                    </div>
-                </div>
-                <div class="col-md-2 col-6 mb-3">
-                    <div class="stats-card text-center" style="background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);">
-                        <div class="stats-number"><%= typeof stats !== 'undefined' && stats.assigned ? stats.assigned : 0 %></div>
-                        <div class="stats-label">Ditugaskan</div>
-                    </div>
-                </div>
-                <div class="col-md-2 col-6 mb-3">
-                    <div class="stats-card text-center" style="background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);">
-                        <div class="stats-number"><%= typeof stats !== 'undefined' && stats.in_progress ? stats.in_progress : 0 %></div>
-                        <div class="stats-label">Sedang Proses</div>
-                    </div>
-                </div>
-                <div class="col-md-2 col-6 mb-3">
-                    <div class="stats-card text-center" style="background: linear-gradient(135deg, #28a745 0%, #1e7e34 100%);">
-                        <div class="stats-number"><%= typeof stats !== 'undefined' && stats.completed ? stats.completed : 0 %></div>
-                        <div class="stats-label">Selesai</div>
-                    </div>
-                </div>
-                <div class="col-md-2 col-6 mb-3">
-                    <div class="stats-card text-center" style="background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);">
-                        <div class="stats-number"><%= typeof stats !== 'undefined' && stats.cancelled ? stats.cancelled : 0 %></div>
-                        <div class="stats-label">Dibatalkan</div>
-                    </div>
                 </div>
             </div>
 
@@ -223,6 +522,9 @@
             <div class="card installation-card mb-4">
                 <div class="card-body">
                     <form method="GET" class="row g-3">
+                        <input type="hidden" name="month" value="<%= selMonth %>">
+                        <input type="hidden" name="year" value="<%= selYear %>">
+                        <% if (selDay) { %><input type="hidden" name="day" value="<%= selDay %>"><% } %>
                         <div class="col-md-4">
                             <label for="search" class="form-label">Cari Job</label>
                             <input type="text" class="form-control" id="search" name="search" 
@@ -270,14 +572,14 @@
                 <div class="card-header">
                     <h5 class="mb-0">
                         <i class="bi bi-list-task me-2"></i>Daftar Job Instalasi
-                        <span class="badge bg-primary ms-2"><%= typeof installationJobs !== 'undefined' && installationJobs ? installationJobs.length : 0 %> job</span>
+                        <span class="badge bg-primary ms-2"><%= typeof pagination !== 'undefined' && pagination ? pagination.totalJobs : (typeof installationJobs !== 'undefined' && installationJobs ? installationJobs.length : 0) %> job</span>
                     </h5>
                 </div>
                 <div class="card-body">
                     <% if (typeof installationJobs !== 'undefined' && installationJobs && installationJobs.length > 0) { %>
                         <% installationJobs.forEach(job => { %>
                             <% const instStatus = String(job.status || '').toLowerCase().trim(); %>
-                            <div class="installation-item <%= instStatus.replace(/\s+/g, '_') %>" data-job-id="<%= job.id %>">
+                            <div class="installation-item <%= instStatus.replace(/\s+/g, '_') %><%= unreadSet.has(Number(job.id)) ? ' has-unread' : '' %>" data-job-id="<%= job.id %>">
                                 <div class="row align-items-center">
                                     <div class="col-md-1">
                                         <div class="form-check">
@@ -289,6 +591,7 @@
                                     <div class="col-md-2">
                                          <h6 class="mb-1">
                                              <i class="bi bi-tools me-2"></i><span class="job-number"><%= job.job_number || 'N/A' %></span>
+                                             <% if (unreadSet.has(Number(job.id))) { %><span class="badge bg-danger">Baru</span><% } %>
                                          </h6>
                                          <small class="text-muted">
                                              <i class="bi bi-calendar me-1"></i>
@@ -379,7 +682,7 @@
                                 <ul class="pagination justify-content-center">
                                     <% if (pagination.hasPrev) { %>
                                         <li class="page-item">
-                                            <a class="page-link" href="?page=<%= pagination.currentPage - 1 %><%= typeof search !== 'undefined' && search ? '&search=' + search : '' %><%= typeof status !== 'undefined' && status ? '&status=' + status : '' %><%= typeof selectedTechnician !== 'undefined' && selectedTechnician ? '&technician=' + selectedTechnician : '' %>">
+                                            <a class="page-link" href="?<%= dashQ({ page: pagination.currentPage - 1 }) %>">
                                                 <i class="bi bi-chevron-left"></i> Sebelumnya
                                             </a>
                                         </li>
@@ -387,13 +690,13 @@
                                     
                                     <% for (let i = 1; i <= pagination.totalPages; i++) { %>
                                         <li class="page-item <%= i === pagination.currentPage ? 'active' : '' %>">
-                                            <a class="page-link" href="?page=<%= i %><%= typeof search !== 'undefined' && search ? '&search=' + search : '' %><%= typeof status !== 'undefined' && status ? '&status=' + status : '' %><%= typeof selectedTechnician !== 'undefined' && selectedTechnician ? '&technician=' + selectedTechnician : '' %>"><%= i %></a>
+                                            <a class="page-link" href="?<%= dashQ({ page: i }) %>"><%= i %></a>
                                         </li>
                                     <% } %>
                                     
                                     <% if (pagination.hasNext) { %>
                                         <li class="page-item">
-                                            <a class="page-link" href="?page=<%= pagination.currentPage + 1 %><%= typeof search !== 'undefined' && search ? '&search=' + search : '' %><%= typeof status !== 'undefined' && status ? '&status=' + status : '' %><%= typeof selectedTechnician !== 'undefined' && selectedTechnician ? '&technician=' + selectedTechnician : '' %>">
+                                            <a class="page-link" href="?<%= dashQ({ page: pagination.currentPage + 1 }) %>">
                                                 Selanjutnya <i class="bi bi-chevron-right"></i>
                                             </a>
                                         </li>
@@ -406,11 +709,11 @@
                             <i class="bi bi-inbox text-muted" style="font-size: 3rem;"></i>
                             <h5 class="mt-3 text-muted">Tidak ada job instalasi ditemukan</h5>
                             <p class="text-muted">
-                                <% if ((typeof search !== 'undefined' && search) || (typeof status !== 'undefined' && status) || (typeof selectedTechnician !== 'undefined' && selectedTechnician)) { %>
+                                <% if ((typeof search !== 'undefined' && search) || (typeof status !== 'undefined' && status) || (typeof selectedTechnician !== 'undefined' && selectedTechnician) || selDay) { %>
                                     Tidak ada job yang cocok dengan filter yang dipilih.
-                                    <a href="/admin/installations" class="text-decoration-none">Hapus filter</a>
+                                    <a href="/admin/installations?month=<%= selMonth %>&year=<%= selYear %>" class="text-decoration-none">Hapus filter</a>
                                 <% } else { %>
-                                    Belum ada job instalasi yang dibuat.
+                                    Belum ada job instalasi di <%= monthNamesDash[selMonth - 1] %> <%= selYear %>.
                                     <a href="/admin/installations/create" class="text-decoration-none">Buat job pertama Anda</a>
                                 <% } %>
                             </p>
@@ -506,7 +809,7 @@
             'urgent': 'Urgent'
         }[priority];
         
-        let message = `ðŸ”§ *TUGAS INSTALASI BARU* ðŸ”§\n\n`;
+        let message = `🔧 *TUGAS INSTALASI BARU* 🔧\n\n`;
         message += `*Job Number:* ${jobData.job_number}\n`;
         message += `*Pelanggan:* ${jobData.customer_name}\n`;
         message += `*No. HP:* ${jobData.customer_phone}\n`;
@@ -520,8 +823,8 @@
         if (notes) {
             message += `*Catatan:* ${notes}\n`;
         }
-        message += `\nðŸ“± *Silakan konfirmasi penerimaan tugas ini*\n`;
-        message += `â° *Deadline:* ${jobData.installation_date}\n`;
+        message += `\n📱 *Silakan konfirmasi penerimaan tugas ini*\n`;
+        message += `⏰ *Deadline:* ${jobData.installation_date}\n`;
         message += `\n_Message otomatis dari sistem GEMBOK_`;
         
         return message;

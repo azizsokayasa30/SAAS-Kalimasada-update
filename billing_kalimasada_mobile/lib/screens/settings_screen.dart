@@ -62,8 +62,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       roleChipLabel = 'Kolektor';
     } else if (auth.role == 'agent') {
       roleChipLabel = 'Agen';
-    } else if (auth.role == 'admin') {
-      roleChipLabel = 'Admin';
+    } else if (auth.role == 'admin' || auth.role == 'area_manager') {
+      roleChipLabel = auth.role == 'area_manager' ? 'Manager Area' : 'Admin';
     } else {
       roleChipLabel = 'Akun';
     }

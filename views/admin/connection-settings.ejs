@@ -52,6 +52,23 @@
         <h4 class="mb-0"><i class="bi bi-plug me-2"></i>Setting Mikrotik</h4>
       </div>
 
+      <div class="card p-3 mb-4 border-primary">
+        <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+          <div>
+            <h6 class="mb-2"><i class="bi bi-globe2 me-1"></i> Tambah MikroTik pakai IP publik</h6>
+            <p class="small text-muted mb-2">Jika router punya IP publik yang bisa diakses dari VPS, daftarkan langsung tanpa VPN.</p>
+            <ol class="small mb-0 ps-3">
+              <li>Aktifkan <code>/ip service api</code> (port default 8728) sesuaikan dengan port API anda</li>
+              <li>Isi NAS IP dengan IP publik router, lalu user/password API.</li>
+              <li>Simpan dan tes koneksi API.</li>
+            </ol>
+          </div>
+          <button type="button" class="btn btn-primary" onclick="openAddNasModal('public')">
+            <i class="bi bi-plus"></i> Tambah MikroTik IP Publik
+          </button>
+        </div>
+      </div>
+
       <!-- Alur singkat -->
       <div class="card p-3 mb-4">
         <h6 class="mb-3">Cara menambah MikroTik lewat VPN</h6>
@@ -160,7 +177,11 @@
       <!-- NAS (Routers) Section -->
       <div class="d-flex justify-content-between align-items-center mb-3">
         <h5 class="mb-0">NAS (RADIUS)</h5>
-        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addRouterModal"><i class="bi bi-plus"></i> Tambah NAS</button>
+        <button class="btn btn-primary" type="button" onclick="openAddNasModal('vpn')"><i class="bi bi-plus"></i> Tambah NAS</button>
+      </div>
+      <div class="alert alert-warning py-2 small">
+        Port API MikroTik <strong>8728/8729</strong> yang terbuka ke internet sering discan dan diretas.
+        Pakai Tunnel IP VPN sebagai NAS IP. Jika NAS masih IP publik, tekan tombol gembok untuk membatasi login API hanya dari IP server ini. Winbox tidak diubah.
       </div>
           <div class="card p-3">
             <div class="table-responsive">
@@ -185,13 +206,16 @@
                     <tr>
                       <td><%= i+1 %></td>
                       <td><%= r.name %></td>
-                      <td><%= r.nas_ip %></td>
+                      <td>
+                        <%= r.nas_ip %>
+                        <% if (r.api_public) { %><br><span class="badge bg-danger">IP publik</span><% } %>
+                      </td>
                       <td><%= r.nas_identifier || '' %></td>
                       <td><%= r.location || '' %></td>
                       <td><%= r.pop || '' %></td>
                       <td><%= r.port || 8728 %></td>
                       <td><%= r.user || '' %></td>
-                      <td><%= r.password ? '***' : '' %></td>
+                      <td><%= r.has_password ? '***' : '' %></td>
                       <td>
                         <% if (r.genieacs_server_name) { %>
                           <span class="badge bg-info"><%= r.genieacs_server_name %></span><br>
@@ -204,6 +228,7 @@
                         <div class="admin-action-btns">
                           <button type="button" class="btn btn-sm btn-primary" onclick='openEditRouter(<%- JSON.stringify(r) %>)' title="Ubah data NAS / router" aria-label="Ubah NAS"><i class="bi bi-pencil"></i></button>
                           <button type="button" class="btn btn-sm btn-info" onclick='testRouter(<%= r.id %>)' title="Tes koneksi API MikroTik" aria-label="Tes koneksi MikroTik"><i class="bi bi-activity"></i></button>
+                          <button type="button" class="btn btn-sm btn-warning" onclick='lockMikrotikApi(<%= r.id %>)' title="Kunci port API hanya untuk IP server" aria-label="Kunci API MikroTik"><i class="bi bi-shield-lock"></i></button>
                           <button type="button" class="btn btn-sm btn-danger" onclick='deleteRouter(<%= r.id %>)' title="Hapus NAS dari daftar" aria-label="Hapus NAS"><i class="bi bi-trash"></i></button>
                         </div>
                       </td>
@@ -214,13 +239,43 @@
             </div>
           </div>
 
-      <%- include('../partials/isolir-script-generator', {
-        settings: settings || {},
-        routers: routers || [],
-        vpnTunnelIp: typeof vpnTunnelIp !== 'undefined' ? vpnTunnelIp : '',
-        isolirPagePort: typeof isolirPagePort !== 'undefined' ? isolirPagePort : '8899',
-        tenantId: typeof tenantId !== 'undefined' ? tenantId : null
-      }) %>
+      <div class="d-flex justify-content-between align-items-center mb-3 mt-4">
+        <h5 class="mb-0"><i class="bi bi-hdd-network me-1"></i> Status PPPoE per MikroTik</h5>
+        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="loadPppoeStats()">
+          <i class="bi bi-arrow-clockwise"></i> Muat ulang
+        </button>
+      </div>
+      <div class="card p-3 mb-4">
+        <p class="small text-muted mb-3">Jumlah secret <code>/ppp/secret</code> dan sesi aktif <code>/ppp/active</code> diambil langsung dari API tiap router. Cek PPPoE menampilkan secret yang belum ada di RADIUS.</p>
+        <div class="table-responsive">
+          <table class="table table-striped align-middle mb-0" id="pppoeStatsTable">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Nama</th>
+                <th>NAS IP</th>
+                <th>Secret PPPoE</th>
+                <th>Koneksi aktif</th>
+                <th>Status API</th>
+                <th>Aksi</th>
+              </tr>
+            </thead>
+            <tbody id="pppoeStatsBody">
+              <% if (!(routers||[]).length) { %>
+                <tr>
+                  <td colspan="7" class="text-center text-muted py-4">Belum ada NAS. Tambah MikroTik dulu.</td>
+                </tr>
+              <% } else { %>
+                <tr>
+                  <td colspan="7" class="text-center text-muted py-4">
+                    <span class="spinner-border spinner-border-sm me-2"></span>Memuat status PPPoE…
+                  </td>
+                </tr>
+              <% } %>
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <!-- Request VPN Modal -->
       <div class="modal fade" id="requestVpnModal" tabindex="-1">
@@ -262,9 +317,9 @@
       <div class="modal fade" id="addRouterModal" tabindex="-1">
         <div class="modal-dialog">
           <div class="modal-content">
-            <div class="modal-header"><h5 class="modal-title">Tambah NAS</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-header"><h5 class="modal-title" id="addRouterModalTitle">Tambah NAS</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
             <div class="modal-body">
-              <div class="alert alert-info py-2 small">
+              <div class="alert alert-info py-2 small" id="addRouterHint">
                 Isi <strong>NAS IP</strong> dengan Tunnel IP dari tabel VPN di atas
                 (salin dari kolom Tunnel IP setelah script MikroTik dijalankan).
               </div>
@@ -278,7 +333,7 @@
               <div class="mb-3">
                 <label class="form-label">NAS IP</label>
                 <input class="form-control" id="r_ip" maxlength="45" placeholder="Contoh: 10.10.0.5 (Tunnel IP VPN)" autocomplete="off" spellcheck="false">
-                <small class="form-text text-muted">IP saja — jangan sertakan port API</small>
+                <small class="form-text text-muted" id="r_ip_help">IP saja — jangan sertakan port API</small>
               </div>
               <div class="mb-3"><label class="form-label">NAS Identifier</label><input class="form-control" id="r_ident" placeholder="RouterA"></div>
               <div class="mb-3"><label class="form-label">Lokasi</label><input class="form-control" id="r_location" placeholder="Gedung/Alamat"></div>
@@ -326,7 +381,7 @@
               <div class="mb-3"><label class="form-label">POP</label><input class="form-control" id="er_pop"></div>
               <div class="mb-3"><label class="form-label">Port</label><input type="number" class="form-control" id="er_port" min="1" max="65535"></div>
               <div class="mb-3"><label class="form-label">User API</label><input class="form-control" id="er_user"></div>
-              <div class="mb-3"><label class="form-label">Password API</label><input class="form-control" id="er_password" type="password"></div>
+              <div class="mb-3"><label class="form-label">Password API</label><input class="form-control" id="er_password" type="password" autocomplete="new-password" placeholder="Kosongkan jika tidak diubah"></div>
               <div class="mb-3">
                 <label class="form-label">GenieACS Server</label>
                 <select class="form-control" id="er_genieacs_server_id">
@@ -343,14 +398,229 @@
         </div>
       </div>
 
+      <div class="modal fade" id="cekPppoeModal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title">Cek PPPoE vs RADIUS</h5>
+              <button class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+              <p class="small text-muted mb-2" id="cekPppoeSummary">Memuat…</p>
+              <div id="cekPppoeAlert" class="alert d-none py-2 small"></div>
+              <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th style="width:2rem;"><input type="checkbox" id="cekPppoeCheckAll"></th>
+                      <th>Username</th>
+                      <th>Profile</th>
+                      <th>Password</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="cekPppoeBody"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" data-bs-dismiss="modal">Tutup</button>
+              <button type="button" class="btn btn-primary" id="btnSyncSelectedPppoe" onclick="syncSelectedPppoe()">
+                Tambahkan yang tercentang ke RADIUS
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </main>
   </div>
 </div>
 
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script src="/js/mikrotik-api-lock.js"></script>
 <script>
 const TENANT_PREFIX = <%- JSON.stringify(tenantPrefix || 'tenant') %>;
+const HAS_ROUTERS = <%- JSON.stringify(!!(routers||[]).length) %>;
+let nasAddMode = 'vpn';
+let cekPppoeRouterId = null;
+let cekPppoeMissing = [];
+
+function openAddNasModal(mode) {
+  nasAddMode = mode === 'public' ? 'public' : 'vpn';
+  const title = document.getElementById('addRouterModalTitle');
+  const hint = document.getElementById('addRouterHint');
+  const ip = document.getElementById('r_ip');
+  const help = document.getElementById('r_ip_help');
+  if (nasAddMode === 'public') {
+    title.textContent = 'Tambah MikroTik IP Publik';
+    hint.innerHTML = 'Isi <strong>NAS IP</strong> dengan IP publik MikroTik yang bisa diakses dari VPS. Pastikan service API (default 8728) dan firewall mengizinkan IP server.';
+    ip.placeholder = 'Contoh: 103.xx.xx.xx (IP publik)';
+    help.textContent = 'IP publik saja — jangan sertakan port API';
+  } else {
+    title.textContent = 'Tambah NAS';
+    hint.innerHTML = 'Isi <strong>NAS IP</strong> dengan Tunnel IP dari tabel VPN di atas (salin dari kolom Tunnel IP setelah script MikroTik dijalankan).';
+    ip.placeholder = 'Contoh: 10.10.0.5 (Tunnel IP VPN)';
+    help.textContent = 'IP saja — jangan sertakan port API';
+  }
+  new bootstrap.Modal(document.getElementById('addRouterModal')).show();
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+async function loadPppoeStats() {
+  const body = document.getElementById('pppoeStatsBody');
+  if (!HAS_ROUTERS) return;
+  body.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4"><span class="spinner-border spinner-border-sm me-2"></span>Memuat status PPPoE…</td></tr>';
+  try {
+    const res = await fetch('/admin/connection-settings/mikrotik-pppoe-stats').then(function (r) { return r.json(); });
+    if (!res.success) throw new Error(res.message || 'Gagal memuat');
+    const rows = res.routers || [];
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Belum ada NAS.</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map(function (r, i) {
+      const status = r.ok
+        ? '<span class="badge bg-success">Online</span>'
+        : '<span class="badge bg-danger" title="' + escapeHtml(r.error || 'Gagal') + '">Gagal</span>';
+      const secrets = r.ok ? String(r.secret_count) : '—';
+      const active = r.ok ? String(r.active_count) : '—';
+      const errHint = r.ok ? '' : '<div class="small text-danger mt-1">' + escapeHtml(r.error || '') + '</div>';
+      return '<tr>' +
+        '<td>' + (i + 1) + '</td>' +
+        '<td class="fw-semibold">' + escapeHtml(r.name) + '</td>' +
+        '<td><code>' + escapeHtml(r.nas_ip) + '</code></td>' +
+        '<td>' + secrets + '</td>' +
+        '<td>' + active + '</td>' +
+        '<td>' + status + errHint + '</td>' +
+        '<td><button type="button" class="btn btn-sm btn-outline-primary" onclick="cekPppoe(' + r.id + ')">Cek PPPoE</button></td>' +
+        '</tr>';
+    }).join('');
+  } catch (e) {
+    body.innerHTML = '<tr><td colspan="7" class="text-center text-danger py-4">' + escapeHtml(e.message) + '</td></tr>';
+  }
+}
+
+function renderCekPppoeRows() {
+  const tbody = document.getElementById('cekPppoeBody');
+  if (!cekPppoeMissing.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">Semua secret sudah ada di RADIUS.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = cekPppoeMissing.map(function (u, idx) {
+    const pwd = u.password || '';
+    return '<tr data-idx="' + idx + '">' +
+      '<td><input type="checkbox" class="cek-pppoe-row" value="' + escapeHtml(u.name) + '" checked></td>' +
+      '<td><code>' + escapeHtml(u.name) + '</code></td>' +
+      '<td>' + escapeHtml(u.profile || '—') + '</td>' +
+      '<td><code class="cek-pwd" data-pwd="' + escapeHtml(pwd) + '">***</code></td>' +
+      '<td><button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleCekPwd(this)">Lihat</button> ' +
+      '<button type="button" class="btn btn-sm btn-primary sync-one-pppoe" data-username="' + escapeHtml(u.name) + '">Tambah</button></td>' +
+      '</tr>';
+  }).join('');
+}
+
+function toggleCekPwd(btn) {
+  const code = btn.closest('tr').querySelector('.cek-pwd');
+  if (!code) return;
+  if (code.textContent === '***') {
+    code.textContent = code.getAttribute('data-pwd') || '';
+    btn.textContent = 'Sembunyi';
+  } else {
+    code.textContent = '***';
+    btn.textContent = 'Lihat';
+  }
+}
+
+async function refreshCekPppoeList(id, options) {
+  const opts = options || {};
+  cekPppoeRouterId = id;
+  cekPppoeMissing = [];
+  document.getElementById('cekPppoeSummary').textContent = 'Memuat secret dari MikroTik…';
+  if (!opts.keepAlert) {
+    document.getElementById('cekPppoeAlert').className = 'alert d-none py-2 small';
+  }
+  document.getElementById('cekPppoeBody').innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">Memuat…</td></tr>';
+  try {
+    const res = await fetch('/admin/connection-settings/routers/' + id + '/pppoe-not-in-radius').then(function (r) { return r.json(); });
+    if (!res.success) throw new Error(res.message || 'Gagal cek PPPoE');
+    cekPppoeMissing = res.missing || [];
+    const r = res.router || {};
+    document.getElementById('cekPppoeSummary').textContent =
+      (r.name || 'MikroTik') + ' (' + (r.nas_ip || '') + '): ' +
+      (res.total_secrets || 0) + ' secret, ' + (res.missing_count || 0) + ' belum di RADIUS.';
+    renderCekPppoeRows();
+  } catch (e) {
+    document.getElementById('cekPppoeSummary').textContent = '';
+    const alertEl = document.getElementById('cekPppoeAlert');
+    alertEl.className = 'alert alert-danger py-2 small';
+    alertEl.textContent = e.message;
+    document.getElementById('cekPppoeBody').innerHTML = '';
+  }
+}
+
+async function cekPppoe(id) {
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('cekPppoeModal')).show();
+  await refreshCekPppoeList(id);
+}
+
+async function syncPppoeUsernames(usernames) {
+  if (!cekPppoeRouterId) return;
+  const btn = document.getElementById('btnSyncSelectedPppoe');
+  const old = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Menyimpan…';
+  const alertEl = document.getElementById('cekPppoeAlert');
+  try {
+    const res = await fetch('/admin/connection-settings/routers/' + cekPppoeRouterId + '/pppoe-sync-to-radius', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ usernames: usernames })
+    }).then(function (r) { return r.json(); });
+    const failed = (res.results || []).filter(function (x) { return !x.success; });
+    alertEl.className = failed.length ? 'alert alert-warning py-2 small' : 'alert alert-success py-2 small';
+    alertEl.textContent = res.message || 'Selesai';
+    if (failed.length) {
+      alertEl.textContent += '\n' + failed.map(function (x) { return x.username + ': ' + x.message; }).join('\n');
+    }
+    await refreshCekPppoeList(cekPppoeRouterId, { keepAlert: true });
+    loadPppoeStats();
+  } catch (e) {
+    alertEl.className = 'alert alert-danger py-2 small';
+    alertEl.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = old;
+  }
+}
+
+function syncSelectedPppoe() {
+  const names = Array.from(document.querySelectorAll('.cek-pppoe-row:checked')).map(function (el) { return el.value; });
+  if (!names.length) { alert('Pilih minimal satu secret'); return; }
+  if (!confirm('Tambahkan ' + names.length + ' secret ke RADIUS?')) return;
+  return syncPppoeUsernames(names);
+}
+
+$(document).on('click', '.sync-one-pppoe', function () {
+  const name = this.getAttribute('data-username') || '';
+  if (!name) return;
+  if (!confirm('Tambahkan "' + name + '" ke RADIUS?')) return;
+  return syncPppoeUsernames([name]);
+});
+
+$('#cekPppoeCheckAll').on('change', function () {
+  $('.cek-pppoe-row').prop('checked', this.checked);
+});
+
+if (HAS_ROUTERS) loadPppoeStats();
 
 function sanitizeRouterPart(value) {
   return String(value || '')
@@ -468,7 +738,7 @@ function openEditRouter(r){
   $('#er_pop').val(r.pop||''); 
   $('#er_port').val(r.port||8728); 
   $('#er_user').val(r.user||''); 
-  $('#er_password').val(r.password||''); 
+  $('#er_password').val(''); 
   $('#er_genieacs_server_id').val(r.genieacs_server_id || ''); 
   new bootstrap.Modal(document.getElementById('editRouterModal')).show(); 
 }
@@ -491,7 +761,7 @@ async function testRouter(id){
   try {
     const res = await fetch('/admin/routers/'+id+'/test', { method: 'POST', signal: controller.signal }).then(r => r.json());
     if (res.success) {
-      alert('Connected: '+(res.identity||'OK')+' @ '+(res.host||'')+(res.port? (':'+res.port):''));
+      alert('Connected: '+(res.identity||'OK')+' @ '+(res.host||'')+(res.port? (':'+res.port):'')+(res.warning ? ('\n\n'+res.warning) : ''));
     } else {
       alert('Gagal konek API MikroTik:\n'+(res.message||'Unknown')+'\n\nCatatan: nc/ping sukses ≠ API RouterOS jalan. Pakai Tunnel IP VPN (10.10.0.x), pastikan peer WireGuard handshake, service api enabled, dan address/firewall mengizinkan VPS.');
     }

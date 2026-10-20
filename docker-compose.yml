@@ -29,7 +29,7 @@ services:
     image: cloudflare/cloudflared:latest
     container_name: cloudflared-tunnel
     restart: unless-stopped
-    command: tunnel --no-autoupdate run --token eyJhIjoiYTQyYmFlZTg4MThjZTJjOTFkNmNiMTI3NDY5NDA0MWEiLCJ0IjoiZGZkOGJkNGQtOTc5My00ODMzLThmZmItOTgxYWYzOTgyMGZiIiwicyI6Ik0yRTBaRGMzWW1NdE1UZzBNeTAwTURsbExXRTJNalF0WmpOaU9XUTJZV1E1WmpjeCJ9
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     networks:
       - gembok-network
     depends_on:

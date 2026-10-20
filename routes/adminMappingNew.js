@@ -227,17 +227,21 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
     const started = Date.now();
     const phase = String(req.query.phase || 'full').toLowerCase();
     const tenantId = resolveRequestTenantId(req);
+    const areaIds = (req.isAreaManager || req.session?.isAreaManager)
+        ? (req.areaManagerAreaIds || [])
+        : null;
+    const areaCache = areaIds == null ? '' : `:am${req.areaManagerId || req.session?.areaManagerId || 0}`;
 
     try {
         if (phase === 'core') {
-            const coreKey = scopedMappingCacheKey(CACHE_KEYS.core, tenantId);
+            const coreKey = scopedMappingCacheKey(CACHE_KEYS.core, tenantId) + areaCache;
             const cached = cacheManager.get(coreKey);
             if (cached) {
                 return res.json({ success: true, data: cached, phase: 'core', cached: true, ms: Date.now() - started });
             }
 
             const db = openBillingDb();
-            const dbData = await loadMappingDbData(db, tenantId);
+            const dbData = await loadMappingDbData(db, tenantId, areaIds);
             db.close();
 
             const data = buildCorePayload(dbData);
@@ -247,17 +251,17 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
         }
 
         if (phase === 'live') {
-            const liveKey = scopedMappingCacheKey(CACHE_KEYS.live, tenantId);
+            const liveKey = scopedMappingCacheKey(CACHE_KEYS.live, tenantId) + areaCache;
             const cached = cacheManager.get(liveKey);
             if (cached) {
                 return res.json({ success: true, data: cached, phase: 'live', cached: true, ms: Date.now() - started });
             }
 
-            const coreKey = scopedMappingCacheKey(CACHE_KEYS.core, tenantId);
+            const coreKey = scopedMappingCacheKey(CACHE_KEYS.core, tenantId) + areaCache;
             let customers = cacheManager.get(coreKey)?.customers;
             if (!customers?.length) {
                 const db = openBillingDb();
-                const dbData = await loadMappingDbData(db, tenantId);
+                const dbData = await loadMappingDbData(db, tenantId, areaIds);
                 db.close();
                 customers = dbData.customers;
             } else {
@@ -292,7 +296,7 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
 
         console.log('🚀 New Mapping API - Loading full network data...');
         const db = openBillingDb();
-        const dbData = await loadMappingDbData(db, tenantId);
+        const dbData = await loadMappingDbData(db, tenantId, areaIds);
         db.close();
 
         const pppoeBatch = await getPppoeBatchCached(tenantId);

@@ -106,6 +106,7 @@
                 <a href="/admin/installations" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'installations' ? 'active' : '' %>">
                     <i class="bi bi-tools"></i>
                     <span class="sb-item-text">Installation Jobs</span>
+                    <span id="sbInstallProgressBadge" class="sb-count-badge d-none" aria-hidden="true">0</span>
                 </a>
                 <a href="/admin/technicians" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'technicians' ? 'active' : '' %>">
                     <i class="bi bi-people-fill"></i>
@@ -152,6 +153,7 @@
                 <a href="/admin/trouble" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'trouble' ? 'active' : '' %>">
                     <i class="bi bi-exclamation-triangle"></i>
                     <span class="sb-item-text">Trouble Report</span>
+                    <span id="sbTroubleProgressBadge" class="sb-count-badge d-none" aria-hidden="true">0</span>
                 </a>
                 <a href="/admin/settings" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'setting' ? 'active' : '' %>">
                     <i class="bi bi-gear"></i>

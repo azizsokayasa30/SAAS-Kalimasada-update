@@ -119,7 +119,7 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
     const errorColor = Color(0xFFBA1A1A);
 
     final topInset = MediaQuery.paddingOf(context).top;
-    final isAdmin = auth.role == 'admin';
+    final isAdmin = auth.role == 'admin' || auth.role == 'area_manager';
     final displayName =
         auth.user?['name'] ??
         auth.user?['username'] ??

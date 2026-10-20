@@ -5,7 +5,14 @@
 
 function classifySuspendReason(reason) {
     const r = String(reason || '').toLowerCase();
-    if (r.includes('telat bayar')) {
+    // Isolir jadwal ("Isolir otomatis tanggal N") harus overdue, supaya bisa di-restore setelah lunas.
+    if (
+        r.includes('telat bayar') ||
+        r.includes('isolir otomatis') ||
+        r.includes('auto suspension') ||
+        r.includes('nunggak') ||
+        r.includes('overdue')
+    ) {
         return 'overdue';
     }
     return 'manual';

@@ -189,7 +189,7 @@ class _NewTaskScreenState extends State<NewTaskScreen> {
 
   void _onSearchChanged(String value) {
     _searchDebounce?.cancel();
-    if (value.trim().length < 3) {
+    if (value.trim().length < 1) {
       setState(() => _customers = []);
       return;
     }

@@ -16,6 +16,7 @@ const cacheManager = require('../config/cacheManager');
 const { resolveRequestTenantId } = require('../config/platform/tenantCache');
 const { attachTenantAppSettings } = require('../config/platform/tenantAppSettings');
 const sqlite3 = require('sqlite3').verbose();
+const net = require('net');
 
 router.use(attachTenantAppSettings);
 
@@ -93,9 +94,24 @@ function resolveDashboardUserName(req, settings = {}) {
   return (fallback && String(fallback).trim()) ? String(fallback).trim() : 'Admin';
 }
 
+function areaIdsForDashboard(req) {
+  if (!(req.isAreaManager || req.session?.isAreaManager)) return null;
+  return Array.isArray(req.areaManagerAreaIds) ? req.areaManagerAreaIds : [];
+}
+
 function dashboardCacheKey(req, suffix) {
   const tenantId = resolveRequestTenantId(req) ?? 'global';
-  return `dash:${tenantId}:${suffix}`;
+  const areaIds = areaIdsForDashboard(req);
+  const scope = areaIds == null
+    ? 'all'
+    : `am:${req.areaManagerId || req.session?.areaManagerId || '0'}`;
+  return `dash:${tenantId}:${scope}:${suffix}`;
+}
+
+function customerAreaSql(alias, areaIds) {
+  if (!Array.isArray(areaIds)) return { sql: '', params: [] };
+  const scope = billingManager._sqlCustomerInAreaIds(alias, areaIds);
+  return { sql: ` AND ${scope.clause}`, params: scope.params };
 }
 
 function withTimeout(promise, ms, label = 'timeout') {
@@ -122,7 +138,7 @@ function scheduleReconcilePortalPackageRequests(tenantId = null) {
   });
 }
 
-function loadDashboardRecentData(tenantId = null) {
+function loadDashboardRecentData(tenantId = null, areaIds = null) {
   return new Promise((resolve) => {
     const dbPath = resolveBestBillingDbPath();
     const db = new sqlite3.Database(dbPath);
@@ -130,13 +146,27 @@ function loadDashboardRecentData(tenantId = null) {
     const monthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     // Isolasi multi-tenant untuk data pelanggan/invoice (kolom tenant_id).
     const tScope = tenantId != null;
+    const custArea = customerAreaSql('c', areaIds);
+    const invArea = Array.isArray(areaIds)
+      ? {
+          sql: ` AND EXISTS (SELECT 1 FROM customers c WHERE c.id = i.customer_id AND ${billingManager._sqlCustomerInAreaIds('c', areaIds).clause})`,
+          params: billingManager._sqlCustomerInAreaIds('c', areaIds).params,
+        }
+      : { sql: '', params: [] };
+    const jobArea = Array.isArray(areaIds)
+      ? {
+          sql: ` AND EXISTS (SELECT 1 FROM customers c WHERE c.id = installation_jobs.customer_id AND ${billingManager._sqlCustomerInAreaIds('c', areaIds).clause})`,
+          params: billingManager._sqlCustomerInAreaIds('c', areaIds).params,
+        }
+      : { sql: '', params: [] };
     const custTenantAnd = tScope ? ' AND c.tenant_id = ?' : '';
-    const custTenantWhere = tScope ? ' WHERE tenant_id = ?' : '';
     const invTenantAnd = tScope ? ' AND i.tenant_id = ?' : '';
     const result = {
       recentCustomers: [],
       recentPaidInvoices: [],
+      topAreas: [],
       newCustomersThisMonth: 0,
+      customerTrend: [],
       operationalStats: {
         pendingInstallations: 0,
         pendingTroubleTickets: 0,
@@ -149,16 +179,17 @@ function loadDashboardRecentData(tenantId = null) {
       resolve(result);
     };
 
-    let pending = 5;
+    let pending = 7;
     const done = () => {
       pending -= 1;
       if (pending <= 0) finish();
     };
 
     db.all(
-      `SELECT id, name, phone, area, status, join_date FROM customers${custTenantWhere}
-       ORDER BY datetime(COALESCE(join_date, '1970-01-01 00:00:00')) DESC, id DESC LIMIT 5`,
-      tScope ? [tenantId] : [],
+      `SELECT c.id, c.name, c.phone, c.area, c.status, c.join_date FROM customers c
+       WHERE 1=1${tScope ? ' AND c.tenant_id = ?' : ''}${custArea.sql}
+       ORDER BY datetime(COALESCE(c.join_date, '1970-01-01 00:00:00')) DESC, c.id DESC LIMIT 5`,
+      [...(tScope ? [tenantId] : []), ...custArea.params],
       (err, rows) => {
         result.recentCustomers = err ? [] : (rows || []);
         done();
@@ -169,10 +200,10 @@ function loadDashboardRecentData(tenantId = null) {
       `SELECT i.id, i.invoice_number, i.amount, i.payment_date, i.created_at,
               COALESCE(c.name, 'Pelanggan') as customer_name
        FROM invoices i LEFT JOIN customers c ON i.customer_id = c.id
-       WHERE i.status = 'paid'${invTenantAnd}
+       WHERE i.status = 'paid'${invTenantAnd}${invArea.sql}
        ORDER BY datetime(COALESCE(i.payment_date, i.created_at, '1970-01-01 00:00:00')) DESC, i.id DESC
        LIMIT 5`,
-      tScope ? [tenantId] : [],
+      [...(tScope ? [tenantId] : []), ...invArea.params],
       (err, rows) => {
         result.recentPaidInvoices = err ? [] : (rows || []);
         done();
@@ -181,9 +212,9 @@ function loadDashboardRecentData(tenantId = null) {
 
     db.get(
       `SELECT COUNT(*) as cnt FROM customers c
-       WHERE strftime('%Y-%m', COALESCE(join_date, created_at, datetime('now','localtime'))) = ?
-         AND date(COALESCE(join_date, created_at)) <= date('now','localtime')${custTenantAnd}`,
-      tScope ? [monthStr, tenantId] : [monthStr],
+       WHERE strftime('%Y-%m', COALESCE(c.join_date, c.created_at, datetime('now','localtime'))) = ?
+         AND date(COALESCE(c.join_date, c.created_at)) <= date('now','localtime')${custTenantAnd}${custArea.sql}`,
+      [monthStr, ...(tScope ? [tenantId] : []), ...custArea.params],
       (err, row) => {
         result.newCustomersThisMonth = (!err && row) ? (row.cnt || 0) : 0;
         done();
@@ -195,10 +226,72 @@ function loadDashboardRecentData(tenantId = null) {
 
     db.get(
       `SELECT COUNT(*) AS cnt FROM installation_jobs
-       WHERE LOWER(COALESCE(status, '')) IN ('scheduled', 'assigned', 'in_progress')${jobsTenantAnd}`,
-      tScope ? [tenantId] : [],
+       WHERE LOWER(COALESCE(status, '')) IN ('scheduled', 'assigned', 'in_progress')${jobsTenantAnd}${jobArea.sql}`,
+      [...(tScope ? [tenantId] : []), ...jobArea.params],
       (err, row) => {
         result.operationalStats.pendingInstallations = (!err && row) ? (row.cnt || 0) : 0;
+        done();
+      }
+    );
+
+    const areaInnerWhere = `WHERE 1=1${tScope ? ' AND c.tenant_id = ?' : ''}${custArea.sql}`;
+    db.all(
+      `SELECT area_name AS name, COUNT(*) AS count
+       FROM (
+         SELECT COALESCE(NULLIF(TRIM(ar.nama_area), ''), NULLIF(TRIM(c.area), '')) AS area_name
+         FROM customers c
+         LEFT JOIN areas ar ON ar.id = c.area_id
+         ${areaInnerWhere}
+       )
+       WHERE area_name IS NOT NULL AND TRIM(area_name) != ''
+       GROUP BY area_name COLLATE NOCASE
+       ORDER BY COUNT(*) DESC, area_name COLLATE NOCASE ASC
+       LIMIT 5`,
+      [...(tScope ? [tenantId] : []), ...custArea.params],
+      (err, rows) => {
+        result.topAreas = err ? [] : (rows || []).map((row) => ({
+          name: row.name,
+          count: Number(row.count) || 0,
+        }));
+        done();
+      }
+    );
+
+    const trendNow = new Date();
+    const trendKeys = [];
+    for (let i = 5; i >= 0; i -= 1) {
+      const d = new Date(trendNow.getFullYear(), trendNow.getMonth() - i, 1);
+      trendKeys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+    const trendLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+    db.all(
+      `SELECT strftime('%Y-%m', c.join_date) AS ym,
+              COUNT(*) AS added,
+              SUM(CASE WHEN COALESCE(c.status, '') NOT IN ('active', 'suspended', 'isolir') THEN 1 ELSE 0 END) AS inactive
+       FROM customers c
+       WHERE date(c.join_date) <= date('now', 'localtime')${tScope ? ' AND c.tenant_id = ?' : ''}${custArea.sql}
+       GROUP BY ym
+       ORDER BY ym ASC`,
+      [...(tScope ? [tenantId] : []), ...custArea.params],
+      (err, rows) => {
+        const ordered = err ? [] : (rows || []);
+        let runningTotal = 0;
+        let runningInactive = 0;
+        let index = 0;
+        result.customerTrend = err ? [] : trendKeys.map((key) => {
+          while (index < ordered.length && String(ordered[index].ym) <= key) {
+            runningTotal += Number(ordered[index].added) || 0;
+            runningInactive += Number(ordered[index].inactive) || 0;
+            index += 1;
+          }
+          const monthIndex = Number(key.slice(5, 7)) - 1;
+          return {
+            month: key,
+            label: trendLabels[monthIndex] || key,
+            total: runningTotal,
+            inactive: runningInactive,
+          };
+        });
         done();
       }
     );
@@ -215,22 +308,39 @@ function loadDashboardRecentData(tenantId = null) {
   });
 }
 
-function loadDashboardTroubleSummary() {
+function loadDashboardTroubleSummary(areaIds = null) {
   const _t = billingManager._tenantWhere();
+  const troubleArea = Array.isArray(areaIds)
+    ? {
+        sql: ` AND EXISTS (
+          SELECT 1 FROM customers c
+          WHERE ${billingManager._sqlCustomerInAreaIds('c', areaIds).clause}
+            AND (
+              c.id = trouble_reports.customer_id
+              OR (
+                trouble_reports.customer_id IS NULL
+                AND c.phone = trouble_reports.phone
+                AND c.tenant_id = trouble_reports.tenant_id
+              )
+            )
+        )`,
+        params: billingManager._sqlCustomerInAreaIds('c', areaIds).params,
+      }
+    : { sql: '', params: [] };
   return new Promise((resolve) => {
     const dbPath = resolveBestBillingDbPath();
     const db = new sqlite3.Database(dbPath);
     db.get(
       `SELECT COUNT(*) AS cnt FROM trouble_reports
-       WHERE LOWER(COALESCE(status, '')) IN ('open', 'pending', 'in_progress', 'baru')${_t.sql}`,
-      [..._t.params],
+       WHERE LOWER(COALESCE(status, '')) IN ('open', 'pending', 'in_progress', 'baru')${_t.sql}${troubleArea.sql}`,
+      [..._t.params, ...troubleArea.params],
       (err, countRow) => {
         const pending = (!err && countRow) ? (countRow.cnt || 0) : 0;
         db.all(
-          `SELECT id, name, customer_name, status, created_at FROM trouble_reports
-           WHERE 1=1${_t.sql}
+          `SELECT id, name, category, status, created_at FROM trouble_reports
+           WHERE 1=1${_t.sql}${troubleArea.sql}
            ORDER BY datetime(COALESCE(created_at, '1970-01-01 00:00:00')) DESC LIMIT 5`,
-          [..._t.params],
+          [..._t.params, ...troubleArea.params],
           (err2, rows) => {
             db.close();
             resolve({
@@ -264,16 +374,19 @@ function getLightSettingsForDashboard(req) {
 
 async function loadDashboardOverviewData(req) {
   const tenantId = resolveRequestTenantId(req);
+  const areaIds = areaIdsForDashboard(req);
+  const statsOpts = { tenantId };
+  if (areaIds != null) statsOpts.areaIds = areaIds;
   const [
     billingResult,
     portalReqResult,
     recentDataResult,
     troubleResult,
   ] = await Promise.allSettled([
-    getCachedDashboardData(req, 'billing-stats', () => withTimeout(billingManager.getBillingStats({ tenantId }), 12000, 'billing stats timeout')),
+    getCachedDashboardData(req, 'billing-stats', () => withTimeout(billingManager.getBillingStats(statsOpts), 12000, 'billing stats timeout')),
     withTimeout(billingManager.listPortalPackageRequestsPending(20, tenantId), 5000, 'portal requests timeout'),
-    getCachedDashboardData(req, 'recent-data', () => loadDashboardRecentData(tenantId), 30 * 1000),
-    loadDashboardTroubleSummary(),
+    getCachedDashboardData(req, 'recent-data', () => loadDashboardRecentData(tenantId, areaIds), 30 * 1000),
+    loadDashboardTroubleSummary(areaIds),
   ]);
 
   const billingStats = billingResult.status === 'fulfilled' ? billingResult.value : EMPTY_BILLING_STATS;
@@ -290,8 +403,10 @@ async function loadDashboardOverviewData(req) {
     portalPackageRequests: portalPackageRequests || [],
     recentCustomers: recentData.recentCustomers || [],
     recentPaidInvoices: recentData.recentPaidInvoices || [],
+    topAreas: recentData.topAreas || [],
     recentTickets: troubleData.recentTickets || [],
     newCustomersThisMonth: recentData.newCustomersThisMonth || 0,
+    customerTrend: recentData.customerTrend || [],
     operationalStats: {
       pendingInstallations: recentData.operationalStats?.pendingInstallations || 0,
       pendingTroubleTickets: troubleData.pendingTroubleTickets || 0,
@@ -362,6 +477,101 @@ router.get('/dashboard/api/baileys-status', adminAuth, async (req, res) => {
   } catch (err) {
     console.error('[DASHBOARD] baileys-status:', err);
     return res.status(500).json({ success: false, message: err.message || 'Gagal cek status Baileys' });
+  }
+});
+
+function probeTcp(host, port, timeoutMs) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+    socket.connect(port, host);
+  });
+}
+
+function paymentGatewayStatus(config) {
+  const activeName = config && config.active;
+  const gateway = activeName && config[activeName];
+  if (!gateway || !gateway.enabled) {
+    return { state: 'off', label: 'Nonaktif' };
+  }
+  const ready = Boolean(gateway.server_key || gateway.api_key || gateway.private_key);
+  if (!ready) return { state: 'unknown', label: 'Belum diatur' };
+  return { state: 'online', label: 'Aktif' };
+}
+
+async function radiusEngineStatus() {
+  try {
+    const { getRadiusConnection } = require('../config/radiusSQLite');
+    const conn = await Promise.race([
+      getRadiusConnection(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000)),
+    ]);
+    await conn.execute('SELECT 1 AS ok');
+    return { state: 'online', label: 'Online' };
+  } catch (err) {
+    return { state: 'off', label: 'Offline' };
+  }
+}
+
+function loadTenantRouters(tenantId) {
+  return new Promise((resolve) => {
+    const db = new sqlite3.Database(resolveBestBillingDbPath());
+    const sql = tenantId != null
+      ? 'SELECT nas_ip, port FROM routers WHERE tenant_id = ? AND TRIM(COALESCE(nas_ip, "")) != "" ORDER BY id LIMIT 8'
+      : 'SELECT nas_ip, port FROM routers WHERE TRIM(COALESCE(nas_ip, "")) != "" ORDER BY id LIMIT 8';
+    db.all(sql, tenantId != null ? [tenantId] : [], (err, rows) => {
+      db.close();
+      resolve(err ? [] : (rows || []));
+    });
+  });
+}
+
+async function mikrotikLinkStatus(tenantId) {
+  const routers = await loadTenantRouters(tenantId);
+  if (!routers.length) return { state: 'unknown', label: 'Tidak tersedia' };
+  const checks = await Promise.all(routers.map((router) => {
+    const port = parseInt(router.port, 10) || 8728;
+    return probeTcp(router.nas_ip, port, 1500);
+  }));
+  const up = checks.filter(Boolean).length;
+  if (up === routers.length) return { state: 'online', label: 'Online' };
+  if (up === 0) return { state: 'off', label: 'Offline' };
+  return { state: 'warn', label: `${up}/${routers.length}` };
+}
+
+router.get('/dashboard/api/system-status', adminAuth, async (req, res) => {
+  try {
+    const tenantId = resolveRequestTenantId(req);
+    const cacheKey = dashboardCacheKey(req, 'system-status');
+    const cached = cacheManager.get(cacheKey);
+    if (cached) return res.json({ success: true, cached: true, ...cached });
+
+    const { getPaymentGatewayConfig } = require('../config/paymentGatewayConfig');
+    const [paymentConfig, radius, mikrotik] = await Promise.all([
+      getPaymentGatewayConfig().catch(() => null),
+      radiusEngineStatus(),
+      mikrotikLinkStatus(tenantId),
+    ]);
+    const payload = {
+      payment: paymentGatewayStatus(paymentConfig),
+      radius,
+      mikrotik,
+    };
+    cacheManager.set(cacheKey, payload, 30 * 1000);
+    return res.json({ success: true, cached: false, ...payload });
+  } catch (err) {
+    console.error('[DASHBOARD] system-status:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Gagal cek status sistem' });
   }
 });
 

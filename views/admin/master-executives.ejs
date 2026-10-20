@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <%- include('../partials/hard-reload') %>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jabatan Pimpinan - <%= appSettings.companyHeader || 'Admin' %></title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+    <link href="/css/theme.css" rel="stylesheet">
+    <link href="/css/responsive-admin.css" rel="stylesheet">
+    <link href="/css/admin-mobile.css" rel="stylesheet">
+    <%- include('../partials/theme-head') %>
+    <style>
+        .ex-page { font-family: 'Inter', system-ui, sans-serif; padding-bottom: 2rem; }
+        .ex-page .page-header {
+            display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+            gap: 1rem; margin: 1rem 0 1.25rem; padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color, #dde1e6);
+        }
+        .ex-page .page-header h1 { font-size: 1.35rem; font-weight: 700; margin: 0; }
+        .ex-page .page-header p { margin: 0.25rem 0 0; font-size: 0.9rem; color: var(--text-tertiary, #64748b); }
+        .ex-card {
+            background: var(--panel-bg, #fff);
+            border: 1px solid var(--border-color, #dde1e6);
+            border-radius: 10px; padding: 1rem 1.1rem; height: 100%;
+            display: flex; flex-direction: column;
+        }
+        .ex-card .ex-name { font-weight: 700; font-size: 1.05rem; margin: 0; }
+        .ex-card .ex-user { font-size: 0.85rem; color: var(--text-tertiary, #64748b); }
+        .ex-jabatan {
+            display: inline-block; margin-top: 0.75rem;
+            background: #1d4ed8; color: #fff;
+            font-size: 0.75rem; font-weight: 600;
+            padding: 0.25rem 0.55rem; border-radius: 4px;
+        }
+        .ex-actions { display: flex; gap: 0.5rem; margin-top: 0.85rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color, #dde1e6); }
+        .ex-actions .btn { flex: 1; font-size: 0.84rem; font-weight: 600; }
+    </style>
+</head>
+<body>
+<div class="container-fluid">
+    <div class="row">
+        <%- include('../partials/admin-responsive-sidebar', { page: 'master-executives', appSettings }) %>
+        <main class="col-md-10 ms-sm-auto main-content ex-page">
+            <div class="page-header">
+                <div>
+                    <h1>Jabatan Pimpinan</h1>
+                    <p>Komisaris, Direktur, dan Wakil Direktur masuk dengan akses yang sama seperti admin utama master tenant.</p>
+                </div>
+                <button type="button" class="btn btn-primary" id="btnAdd">
+                    <i class="bi bi-plus-lg"></i> Tambah Jabatan
+                </button>
+            </div>
+
+            <div class="row g-3" id="execList">
+                <% if (!executives || executives.length === 0) { %>
+                <div class="col-12">
+                    <div class="alert alert-light border">Belum ada akun pimpinan. Klik tombol Tambah untuk membuat Komisaris, Direktur, atau Wakil Direktur.</div>
+                </div>
+                <% } %>
+                <% (executives || []).forEach(function(m) { %>
+                <div class="col-md-6 col-xl-4">
+                    <div class="ex-card" data-id="<%= m.id %>"
+                         data-name="<%= m.name %>"
+                         data-username="<%= m.username %>"
+                         data-phone="<%= m.phone || '' %>"
+                         data-email="<%= m.email || '' %>"
+                         data-jabatan="<%= m.jabatan %>"
+                         data-status="<%= m.status %>">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <p class="ex-name"><%= m.name %></p>
+                                <div class="ex-user"><i class="bi bi-person"></i> <%= m.username %></div>
+                            </div>
+                            <% if (m.status === 'active') { %>
+                            <span class="badge bg-success">Aktif</span>
+                            <% } else if (m.status === 'suspended') { %>
+                            <span class="badge bg-warning text-dark">Suspend</span>
+                            <% } else { %>
+                            <span class="badge bg-secondary">Nonaktif</span>
+                            <% } %>
+                        </div>
+                        <div><span class="ex-jabatan"><%= m.jabatan %></span></div>
+                        <% if (m.phone || m.email) { %>
+                        <div class="small text-muted mt-2">
+                            <% if (m.phone) { %><div><i class="bi bi-telephone"></i> <%= m.phone %></div><% } %>
+                            <% if (m.email) { %><div><i class="bi bi-envelope"></i> <%= m.email %></div><% } %>
+                        </div>
+                        <% } %>
+                        <div class="ex-actions">
+                            <button type="button" class="btn btn-outline-primary btn-edit">Edit</button>
+                            <button type="button" class="btn btn-outline-danger btn-delete">Hapus</button>
+                        </div>
+                    </div>
+                </div>
+                <% }); %>
+            </div>
+        </main>
+    </div>
+</div>
+
+<div class="modal fade" id="execModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="execModalTitle">Tambah Jabatan</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="exId" value="">
+                <div class="mb-3">
+                    <label class="form-label">Jabatan</label>
+                    <select class="form-select" id="exJabatan">
+                        <% (jabatanOptions || []).forEach(function(j) { %>
+                        <option value="<%= j %>"><%= j %></option>
+                        <% }); %>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Nama</label>
+                    <input type="text" class="form-control" id="exName" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Username (login)</label>
+                    <input type="text" class="form-control" id="exUsername" required autocomplete="off">
+                </div>
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">Telepon</label>
+                        <input type="text" class="form-control" id="exPhone">
+                    </div>
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label">Email</label>
+                        <input type="email" class="form-control" id="exEmail">
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Password <span class="text-muted small" id="pwdHint">(wajib)</span></label>
+                    <input type="password" class="form-control" id="exPassword" autocomplete="new-password">
+                </div>
+                <div class="mb-1">
+                    <label class="form-label">Status</label>
+                    <select class="form-select" id="exStatus">
+                        <option value="active">Aktif</option>
+                        <option value="inactive">Nonaktif</option>
+                        <option value="suspended">Suspend</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+                <button type="button" class="btn btn-primary" id="btnSave">Simpan</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="/vendor/bootstrap/js/bootstrap.bundle.min.js"></script>
+<script>
+(function () {
+    const modal = new bootstrap.Modal(document.getElementById('execModal'));
+
+    function resetForm() {
+        document.getElementById('exId').value = '';
+        document.getElementById('exJabatan').value = 'Komisaris';
+        document.getElementById('exName').value = '';
+        document.getElementById('exUsername').value = '';
+        document.getElementById('exPhone').value = '';
+        document.getElementById('exEmail').value = '';
+        document.getElementById('exPassword').value = '';
+        document.getElementById('exStatus').value = 'active';
+        document.getElementById('pwdHint').textContent = '(wajib)';
+    }
+
+    document.getElementById('btnAdd').addEventListener('click', () => {
+        resetForm();
+        document.getElementById('execModalTitle').textContent = 'Tambah Jabatan';
+        modal.show();
+    });
+
+    document.getElementById('execList').addEventListener('click', (e) => {
+        const card = e.target.closest('.ex-card');
+        if (!card) return;
+        if (e.target.classList.contains('btn-edit')) {
+            resetForm();
+            document.getElementById('execModalTitle').textContent = 'Edit Jabatan';
+            document.getElementById('exId').value = card.dataset.id;
+            document.getElementById('exJabatan').value = card.dataset.jabatan || 'Komisaris';
+            document.getElementById('exName').value = card.dataset.name || '';
+            document.getElementById('exUsername').value = card.dataset.username || '';
+            document.getElementById('exPhone').value = card.dataset.phone || '';
+            document.getElementById('exEmail').value = card.dataset.email || '';
+            document.getElementById('exStatus').value = card.dataset.status || 'active';
+            document.getElementById('pwdHint').textContent = '(kosongkan jika tidak diubah)';
+            modal.show();
+        }
+        if (e.target.classList.contains('btn-delete')) {
+            if (!confirm('Hapus akun jabatan ini?')) return;
+            fetch('/admin/master-executives/' + card.dataset.id, { method: 'DELETE' })
+                .then(r => r.json())
+                .then(j => {
+                    alert(j.message || (j.success ? 'Berhasil' : 'Gagal'));
+                    if (j.success) location.reload();
+                })
+                .catch(err => alert(err.message));
+        }
+    });
+
+    document.getElementById('btnSave').addEventListener('click', () => {
+        const id = document.getElementById('exId').value;
+        const payload = {
+            jabatan: document.getElementById('exJabatan').value,
+            name: document.getElementById('exName').value.trim(),
+            username: document.getElementById('exUsername').value.trim(),
+            phone: document.getElementById('exPhone').value.trim(),
+            email: document.getElementById('exEmail').value.trim(),
+            status: document.getElementById('exStatus').value,
+            password: document.getElementById('exPassword').value
+        };
+        if (!payload.name || !payload.username) {
+            alert('Nama dan username wajib diisi');
+            return;
+        }
+        if (!id && (!payload.password || payload.password.length < 6)) {
+            alert('Password minimal 6 karakter');
+            return;
+        }
+        const url = id ? '/admin/master-executives/' + id : '/admin/master-executives';
+        fetch(url, {
+            method: id ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+            .then(r => r.json())
+            .then(j => {
+                alert(j.message || (j.success ? 'Berhasil' : 'Gagal'));
+                if (j.success) location.reload();
+            })
+            .catch(err => alert(err.message));
+    });
+})();
+</script>
+</body>
+</html>

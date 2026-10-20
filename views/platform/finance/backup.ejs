@@ -1,0 +1,18 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active, adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Backup &amp; Restore</h2>
+      <p class="km-subtitle">Cadangkan invoice rekap, pengaturan fee, catatan pemasukan/pengeluaran, dan kategori platform</p>
+    </div>
+  </div>
+
+  <%- include('_nav', { financeSection }) %>
+
+  <% if (flash && flash.success === 'restored') { %><div class="alert alert-success">Backup finance berhasil di-restore<%= flash.count ? ' (' + flash.count + ' invoice)' : '' %>.</div><% } %>
+  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+
+  <%- include('_backup-restore') %>
+</main>
+<%- include('../partials/footer') %>

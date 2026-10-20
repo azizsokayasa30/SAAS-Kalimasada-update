@@ -8,31 +8,9 @@ const axios = require('axios');
 const { getSettingsWithCache } = require('../config/settingsManager')
 const { getVersionInfo, getVersionBadge } = require('../config/version-utils');
 
-// Test route untuk verifikasi router
-router.get('/test', (req, res) => {
-  res.json({ 
-    success: true, 
-    message: 'AdminGenieacs router is working!',
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Debug route tanpa authentication untuk testing
-router.get('/debug/mapping/devices', async (req, res) => {
-  try {
-    res.json({
-      success: true,
-      message: 'Debug route accessible',
-      timestamp: new Date().toISOString(),
-      router: 'adminGenieacs',
-      path: '/admin/debug/mapping/devices'
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
+// Test route untuk verifikasi router — tidak boleh publik
+router.get('/test', adminAuth, (req, res) => {
+  res.status(404).json({ success: false, message: 'Not found' });
 });
 
 // Helper function untuk menentukan status device
@@ -915,13 +893,28 @@ router.get('/api/mapping/devices', adminAuth, async (req, res) => {
     // Ambil data customers untuk response lengkap
     const customers = await new Promise((resolve, reject) => {
       const customerDb = new sqlite3.Database(dbPath);
+      const areaIds = (req.isAreaManager || req.session?.isAreaManager)
+        ? (req.areaManagerAreaIds || [])
+        : null;
+      const tenantId = req.tenantId || req.session?.tenantId || null;
+      let where = 'WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL';
+      const params = [];
+      if (tenantId != null && Number.isFinite(Number(tenantId))) {
+        where += ' AND c.tenant_id = ?';
+        params.push(Number(tenantId));
+      }
+      if (Array.isArray(areaIds)) {
+        const scope = billingManager._sqlCustomerInAreaIds('c', areaIds);
+        where += ` AND ${scope.clause}`;
+        params.push(...scope.params);
+      }
       customerDb.all(`
-        SELECT id, name, phone, pppoe_username, latitude, longitude, status, 
-               address, package_name, created_at
-        FROM customers 
-        WHERE latitude IS NOT NULL AND longitude IS NOT NULL
-        ORDER BY name
-      `, [], (err, rows) => {
+        SELECT c.id, c.name, c.phone, c.pppoe_username, c.latitude, c.longitude, c.status, 
+               c.address, c.package_name, c.created_at
+        FROM customers c
+        ${where}
+        ORDER BY c.name
+      `, params, (err, rows) => {
         if (err) {
           console.error('❌ Database error getting customers:', err);
           resolve([]);
@@ -933,21 +926,47 @@ router.get('/api/mapping/devices', adminAuth, async (req, res) => {
       });
     });
 
-    console.log(`📊 API Response - Customers: ${customers.length}, Devices: ${validDevicesWithCoords.length}, ODPs: ${odps.length}, Cable Routes: ${cableRoutes.length}, ODP Connections: ${odpConnections.length}`);
+    let devicesWithCoordsOut = validDevicesWithCoords;
+    let devicesWithoutCoordsOut = devicesWithoutCoords;
+    if (req.isAreaManager || req.session?.isAreaManager) {
+      const areaIds = req.areaManagerAreaIds || [];
+      const scope = billingManager._sqlCustomerInAreaIds('c', areaIds);
+      const tenantId = req.tenantId || req.session?.tenantId || null;
+      const tenantSql = tenantId != null && Number.isFinite(Number(tenantId)) ? ' AND c.tenant_id = ?' : '';
+      const allowedRows = await new Promise((resolve) => {
+        billingManager.db.all(
+          `SELECT c.id FROM customers c WHERE ${scope.clause}${tenantSql}`,
+          tenantSql ? [...scope.params, Number(tenantId)] : scope.params,
+          (err, rows) => resolve(err ? [] : (rows || []))
+        );
+      });
+      const allowed = new Set(allowedRows.map((row) => Number(row.id)));
+      const inArea = (device) => device && device.customerId != null && allowed.has(Number(device.customerId));
+      devicesWithCoordsOut = validDevicesWithCoords.filter(inArea);
+      devicesWithoutCoordsOut = devicesWithoutCoords.filter(inArea);
+    }
+
+    console.log(`📊 API Response - Customers: ${customers.length}, Devices: ${devicesWithCoordsOut.length}, ODPs: ${odps.length}, Cable Routes: ${cableRoutes.length}, ODP Connections: ${odpConnections.length}`);
     
     res.json({
       success: true,
       data: {
         customers: customers,
-        devicesWithCoords: validDevicesWithCoords,
-        devicesWithoutCoords: devicesWithoutCoords,
+        devicesWithCoords: devicesWithCoordsOut,
+        devicesWithoutCoords: devicesWithoutCoordsOut,
         odps: odps,
         cableRoutes: cableRoutes,
         odpConnections: odpConnections,
         statistics: {
-          totalDevices,
-          onlineDevices,
-          offlineDevices,
+          totalDevices: (req.isAreaManager || req.session?.isAreaManager)
+            ? devicesWithCoordsOut.length + devicesWithoutCoordsOut.length
+            : totalDevices,
+          onlineDevices: (req.isAreaManager || req.session?.isAreaManager)
+            ? devicesWithCoordsOut.filter((device) => device.status === 'Online').length
+            : onlineDevices,
+          offlineDevices: (req.isAreaManager || req.session?.isAreaManager)
+            ? devicesWithCoordsOut.filter((device) => device.status !== 'Online').length + devicesWithoutCoordsOut.length
+            : offlineDevices,
           totalCustomers: customers.length,
           totalODPs: odps.length,
           totalCableRoutes: cableRoutes.length,

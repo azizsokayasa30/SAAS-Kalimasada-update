@@ -598,7 +598,7 @@
             const q = this.value.trim();
             resultsBox.innerHTML = '';
             if (searchTimeout) clearTimeout(searchTimeout);
-            if (q.length < 2) return;
+            if (q.length < 1) return;
             searchTimeout = setTimeout(() => {
                 fetch(`/agent/api/search-customer?q=${encodeURIComponent(q)}`)
                     .then(res => res.json())

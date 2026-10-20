@@ -71,6 +71,58 @@
   </div>
 
   <div class="row g-3 mb-4">
+    <div class="col-12">
+      <div class="km-card km-dash-panel km-dash-health" id="serverHealthCard">
+        <div class="km-dash-panel-head">
+          <h5 class="mb-0"><i class="bi bi-heart-pulse me-2"></i>Kesehatan Server</h5>
+          <div class="km-dash-health-head-meta">
+            <span class="km-dash-health-host" id="healthHostname">—</span>
+            <span class="km-dash-health-badge is-pending" id="healthStatusBadge">Memuat</span>
+          </div>
+        </div>
+        <div class="km-dash-health-grid">
+          <div class="km-dash-health-metric">
+            <div class="km-dash-health-metric-top">
+              <span class="km-dash-health-metric-label"><i class="bi bi-cpu"></i> CPU</span>
+              <strong id="healthCpuValue">—</strong>
+            </div>
+            <div class="km-dash-bar"><div class="km-dash-bar-fill km-dash-bar-fill--cpu" id="healthCpuBar" style="width:0%"></div></div>
+            <p class="km-dash-health-metric-meta mb-0" id="healthCpuMeta">Memuat penggunaan prosesor…</p>
+          </div>
+          <div class="km-dash-health-metric">
+            <div class="km-dash-health-metric-top">
+              <span class="km-dash-health-metric-label"><i class="bi bi-memory"></i> RAM</span>
+              <strong id="healthRamValue">—</strong>
+            </div>
+            <div class="km-dash-bar"><div class="km-dash-bar-fill km-dash-bar-fill--ram" id="healthRamBar" style="width:0%"></div></div>
+            <p class="km-dash-health-metric-meta mb-0" id="healthRamMeta">Memuat penggunaan memori…</p>
+          </div>
+          <div class="km-dash-health-metric">
+            <div class="km-dash-health-metric-top">
+              <span class="km-dash-health-metric-label"><i class="bi bi-device-hdd"></i> Hardisk</span>
+              <strong id="healthDiskValue">—</strong>
+            </div>
+            <div class="km-dash-bar"><div class="km-dash-bar-fill km-dash-bar-fill--disk" id="healthDiskBar" style="width:0%"></div></div>
+            <p class="km-dash-health-metric-meta mb-0" id="healthDiskMeta">Memuat penggunaan disk…</p>
+          </div>
+          <div class="km-dash-health-metric km-dash-health-metric--task">
+            <div class="km-dash-health-metric-top">
+              <span class="km-dash-health-metric-label"><i class="bi bi-list-task"></i> Task</span>
+              <span class="km-dash-health-badge is-pending" id="healthTaskBadge">—</span>
+            </div>
+            <div class="km-dash-health-tasks" id="healthTaskList">
+              <span class="km-dash-health-chip is-pending">Billing</span>
+              <span class="km-dash-health-chip is-pending">Nginx</span>
+              <span class="km-dash-health-chip is-pending">FreeRADIUS</span>
+            </div>
+            <p class="km-dash-health-metric-meta mb-0" id="healthTaskMeta">Memuat status layanan…</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-4">
     <div class="col-lg-5">
       <div class="km-card km-dash-panel h-100">
         <div class="km-dash-panel-head">
@@ -190,5 +242,5 @@
     </div>
   </div>
 </main>
-<script src="/js/management-dashboard.js?v=2"></script>
+<script src="/js/management-dashboard.js?v=4"></script>
 <%- include('partials/footer') %>

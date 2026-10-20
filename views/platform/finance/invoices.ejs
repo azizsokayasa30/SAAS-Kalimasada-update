@@ -3,82 +3,334 @@
 <main class="km-main">
   <div class="km-topbar">
     <div>
-      <h2>Invoice Rekap Tenant</h2>
-      <p class="km-subtitle">Buat dan kelola invoice rekap keuangan ke pemilik tenant</p>
+      <h2>Invoice Tenant</h2>
+      <p class="km-subtitle">Buat invoice manual ke tenant: pilih tenant, isi item, lalu submit. Daftar di bawah menampilkan semua tenant dan status invoice periode ini.</p>
     </div>
   </div>
 
   <%- include('_nav', { financeSection }) %>
 
-  <% if (flash && flash.success === 'created') { %><div class="alert alert-success">Invoice rekap berhasil dibuat.</div><% } %>
+  <% if (flash && flash.success === 'created') { %><div class="alert alert-success">Invoice tenant berhasil dibuat dan tampil di daftar.</div><% } %>
   <% if (flash && flash.success === 'deleted') { %><div class="alert alert-success">Invoice draft dihapus.</div><% } %>
   <% if (flash && flash.success === 'restored') { %><div class="alert alert-success">Backup finance berhasil di-restore.</div><% } %>
   <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
 
-  <div class="km-card mb-4">
-    <h5 class="mb-3">Generate Invoice Baru</h5>
-    <form method="POST" action="/management/finance/invoices/generate" class="row g-2 align-items-end">
-      <div class="col-md-4">
-        <label class="form-label small">Tenant</label>
-        <select name="tenant_id" class="form-select form-select-sm" required>
-          <option value="">Pilih tenant...</option>
-          <% tenants.forEach(function(t) { %>
-            <option value="<%= t.id %>"><%= t.name %> (<%= t.owner_name %>)</option>
-          <% }); %>
+  <div class="km-card mb-4" id="invoiceCreateCard">
+    <h5 class="mb-3">Buat Invoice Manual</h5>
+    <form method="POST" action="/management/finance/invoices/create" id="manualInvoiceForm">
+      <div class="row g-2 align-items-end mb-3">
+        <div class="col-md-4">
+          <label class="form-label small">Tenant</label>
+          <select name="tenant_id" id="invoiceTenant" class="form-select form-select-sm" required>
+            <option value="">Pilih tenant...</option>
+            <% tenants.forEach(function(t) { %>
+              <option value="<%= t.id %>" <%= String(selectedTenantId) === String(t.id) ? 'selected' : '' %>><%= t.name %><%= t.owner_name ? ' — ' + t.owner_name : '' %></option>
+            <% }); %>
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">Periode Mulai</label>
+          <input type="date" name="period_start" class="form-control form-control-sm" value="<%= filters.startDate %>" required>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">Periode Akhir</label>
+          <input type="date" name="period_end" class="form-control form-control-sm" value="<%= filters.endDate %>" required>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label small">Catatan</label>
+          <input type="text" name="notes" class="form-control form-control-sm" placeholder="Opsional">
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-2 km-invoice-items-table" id="invoiceItemsTable">
+          <thead>
+            <tr>
+              <th style="min-width: 180px;">Item</th>
+              <th class="text-end" style="width: 140px;">Qty</th>
+              <th class="text-end" style="width: 160px;">Harga</th>
+              <th class="text-end" style="width: 170px;">Jumlah</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% itemTypes.forEach(function(item, idx) { %>
+              <tr class="km-invoice-item-row" data-calc="<%= item.calc %>" data-type="<%= item.type %>">
+                <td>
+                  <input type="hidden" name="items[<%= idx %>][item_type]" value="<%= item.type %>">
+                  <input type="text" name="items[<%= idx %>][description]" class="form-control form-control-sm" value="<%= item.type === 'pokok' ? '' : item.label %>" placeholder="<%= item.type === 'pokok' ? 'Nama item' : '' %>" <%= item.type !== 'pokok' ? 'readonly' : '' %>>
+                </td>
+                <% if (item.calc === 'percent_of_pokok') { %>
+                  <td>
+                    <div class="km-invoice-qty-wrap">
+                      <input type="text" name="items[<%= idx %>][qty]" class="form-control form-control-sm text-end js-item-qty" value="" inputmode="decimal" placeholder="12,75">
+                      <span class="km-invoice-qty-suffix">%</span>
+                    </div>
+                    <input type="hidden" name="items[<%= idx %>][unit_price]" class="js-item-price" value="">
+                  </td>
+                  <td class="small text-end" style="color: var(--text-muted)">% dari pokok</td>
+                <% } else { %>
+                  <td>
+                    <input type="text" name="items[<%= idx %>][qty]" class="form-control form-control-sm text-end js-item-qty" value="<%= item.type === 'pokok' ? '' : '1' %>" inputmode="decimal" <%= item.type === 'pokok' ? 'placeholder="1"' : '' %>>
+                  </td>
+                  <td>
+                    <input type="text" name="items[<%= idx %>][unit_price]" class="form-control form-control-sm text-end js-item-price" value="" inputmode="decimal" placeholder="0">
+                  </td>
+                <% } %>
+                <td>
+                  <input type="text" name="items[<%= idx %>][amount]" class="form-control form-control-sm text-end js-item-amount" value="" inputmode="decimal" placeholder="0" readonly>
+                </td>
+              </tr>
+              <% if (item.type === 'pokok') { %>
+                <tr class="km-invoice-add-row" id="invoiceAddItemRow">
+                  <td colspan="4">
+                    <button type="button" class="btn btn-outline-primary btn-sm km-invoice-add-btn" id="addInvoiceItem" title="Tambah kolom">
+                      <i class="bi bi-plus-lg"></i>
+                    </button>
+                  </td>
+                </tr>
+              <% } %>
+            <% }); %>
+          </tbody>
+          <tfoot>
+            <tr>
+              <th colspan="3" class="text-end">Total Tagihan</th>
+              <th class="text-end" id="invoiceItemsTotal">Rp 0</th>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <div class="d-flex justify-content-end">
+        <button type="submit" class="btn btn-km-primary btn-sm">
+          <i class="bi bi-plus-lg me-1"></i> Submit Invoice
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <div class="km-card mb-3">
+    <form method="GET" class="row g-2 align-items-end">
+      <div class="col-md-2">
+        <label class="form-label small">Bulan</label>
+        <select name="month" class="form-select form-select-sm">
+          <% const monthNames = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des']; %>
+          <% for (let m = 1; m <= 12; m++) { %>
+            <option value="<%= m %>" <%= Number(filters.month) === m ? 'selected' : '' %>><%= monthNames[m-1] %></option>
+          <% } %>
         </select>
       </div>
-      <div class="col-md-3">
-        <label class="form-label small">Periode Mulai</label>
-        <input type="date" name="period_start" class="form-control form-control-sm" value="<%= filters.startDate %>" required>
-      </div>
-      <div class="col-md-3">
-        <label class="form-label small">Periode Akhir</label>
-        <input type="date" name="period_end" class="form-control form-control-sm" value="<%= filters.endDate %>" required>
+      <div class="col-md-2">
+        <label class="form-label small">Tahun</label>
+        <% const cy = new Date().getFullYear(); %>
+        <select name="year" class="form-select form-select-sm">
+          <% for (let y = cy - 3; y <= cy + 1; y++) { %>
+            <option value="<%= y %>" <%= Number(filters.year) === y ? 'selected' : '' %>><%= y %></option>
+          <% } %>
+        </select>
       </div>
       <div class="col-md-2">
-        <button type="submit" class="btn btn-km-primary btn-sm w-100"><i class="bi bi-plus-lg me-1"></i> Generate</button>
+        <button type="submit" class="btn btn-km-primary btn-sm"><i class="bi bi-funnel me-1"></i> Filter Daftar</button>
+      </div>
+      <div class="col-md-6 text-md-end small" style="color: var(--text-muted)">
+        Sudah dibuat: <strong><%= totals.invoiced %></strong> · Belum: <strong><%= totals.pending %></strong>
       </div>
     </form>
   </div>
 
   <div class="km-card km-card--flush">
     <div class="table-responsive">
-      <table class="table table-hover align-middle mb-0 km-tenant-table">
+      <table class="table table-hover align-middle mb-0 km-tenant-table km-recap-table">
         <thead>
           <tr>
-            <th>No. Invoice</th>
-            <th>Tenant</th>
-            <th>Periode</th>
-            <th class="text-end">Gross</th>
-            <th class="text-end">Net</th>
-            <th>Status</th>
-            <th class="text-end">Aksi</th>
+            <th style="width: 56px;" class="text-center">Invoice</th>
+            <th>Nama Tenant</th>
+            <th class="text-end">Total Pokok</th>
+            <th class="text-end">Pajak</th>
+            <th class="text-end">Management Fee</th>
+            <th class="text-end">Total Tagihan</th>
           </tr>
         </thead>
         <tbody>
-          <% if (!invoices.length) { %>
-            <tr><td colspan="7" class="text-center py-4" style="color: var(--text-muted)">Belum ada invoice rekap.</td></tr>
+          <% if (!rows.length) { %>
+            <tr><td colspan="6" class="text-center py-4" style="color: var(--text-muted)">Tidak ada tenant.</td></tr>
           <% } %>
-          <% invoices.forEach(function(inv) { %>
+          <% rows.forEach(function(row) { %>
             <tr>
-              <td><code><%= inv.invoice_number %></code></td>
-              <td><%= inv.tenant_name %></td>
-              <td class="small"><%= inv.period_start %> — <%= inv.period_end %></td>
-              <td class="text-end"><%= formatRupiah(inv.gross_amount) %></td>
-              <td class="text-end fw-semibold"><%= formatRupiah(inv.net_amount) %></td>
+              <td class="text-center">
+                <% if (row.has_invoice) { %>
+                  <a href="/management/finance/invoices/<%= row.invoice_id %>" class="km-invoice-check km-invoice-check--yes" title="Sudah dibuatkan<%= row.invoice_number ? ' (' + row.invoice_number + ')' : '' %>">
+                    <i class="bi bi-check-circle-fill"></i>
+                  </a>
+                <% } else { %>
+                  <button type="button" class="km-invoice-check km-invoice-check--no js-pick-tenant" data-tenant-id="<%= row.tenant_id %>" title="Belum dibuatkan invoice">
+                    <i class="bi bi-circle"></i>
+                  </button>
+                <% } %>
+              </td>
               <td>
-                <span class="badge <%= inv.status === 'paid' ? 'bg-success' : inv.status === 'sent' ? 'bg-primary' : 'bg-secondary' %>"><%= inv.status %></span>
+                <div class="fw-semibold"><%= row.tenant_name %></div>
+                <% if (row.owner_name) { %><div class="small" style="color: var(--text-muted)"><%= row.owner_name %></div><% } %>
+                <% if (row.has_invoice) { %>
+                  <a href="/management/finance/invoices/<%= row.invoice_id %>" class="small"><%= row.invoice_number %></a>
+                <% } %>
               </td>
-              <td class="text-end">
-                <a href="/management/finance/invoices/<%= inv.id %>" class="btn btn-outline-primary btn-sm py-0">Lihat</a>
-              </td>
+              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(row.pokok_amount) %></td>
+              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(row.tax_amount) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--accent"><%= formatRupiah(row.management_fee_amount) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--success"><%= formatRupiah(row.total_amount) %></td>
             </tr>
           <% }); %>
         </tbody>
+        <% if (rows.length) { %>
+          <tfoot>
+            <tr class="km-recap-table__summary">
+              <td></td>
+              <td>Summary</td>
+              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(totals.pokok_amount) %></td>
+              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(totals.tax_amount) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--accent"><%= formatRupiah(totals.management_fee_amount) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--success"><%= formatRupiah(totals.total_amount) %></td>
+            </tr>
+          </tfoot>
+        <% } %>
       </table>
     </div>
   </div>
-
-  <%- include('_backup-restore') %>
 </main>
+<script>
+(function () {
+  function parseMoney(value) {
+    var raw = String(value || '').trim().replace(/[^\d,.-]/g, '');
+    if (!raw) return 0;
+    if (raw.indexOf(',') !== -1) return Number(raw.replace(/\./g, '').replace(',', '.')) || 0;
+    if (/^\d{1,3}(\.\d{3})+$/.test(raw)) return Number(raw.replace(/\./g, '')) || 0;
+    return Number(raw) || 0;
+  }
+
+  function parseDecimal(value) {
+    var raw = String(value || '').trim().replace(/[^\d,.-]/g, '');
+    if (!raw) return 0;
+    if (raw.indexOf(',') !== -1) return Number(raw.replace(/\./g, '').replace(',', '.')) || 0;
+    return Number(raw) || 0;
+  }
+
+  function formatRupiah(amount) {
+    var n = Math.round(Number(amount) || 0);
+    return 'Rp ' + n.toLocaleString('id-ID');
+  }
+
+  function recalc() {
+    var pokokTotal = 0;
+    var taxAmount = 0;
+    var feeAmount = 0;
+
+    document.querySelectorAll('#invoiceItemsTable .km-invoice-item-row').forEach(function (row) {
+      var calc = row.getAttribute('data-calc') || 'qty_price';
+      var qtyInput = row.querySelector('.js-item-qty');
+      var priceInput = row.querySelector('.js-item-price');
+      var amountInput = row.querySelector('.js-item-amount');
+      if (calc === 'qty_price') {
+        var qtyRaw = String(qtyInput.value || '').trim();
+        var qty = parseDecimal(qtyInput.value);
+        var price = parseMoney(priceInput.value);
+        if (!qtyRaw && price) qty = 1;
+        var amount = (qty || 0) * (price || 0);
+        amountInput.value = amount ? String(Math.round(amount)) : '';
+        if (row.getAttribute('data-type') === 'management_fee') feeAmount += amount;
+        else pokokTotal += amount;
+      }
+    });
+
+    document.querySelectorAll('#invoiceItemsTable .km-invoice-item-row').forEach(function (row) {
+      var calc = row.getAttribute('data-calc') || 'qty_price';
+      var qtyInput = row.querySelector('.js-item-qty');
+      var amountInput = row.querySelector('.js-item-amount');
+      if (calc === 'percent_of_pokok') {
+        var percent = parseDecimal(qtyInput.value);
+        var amount = pokokTotal * percent / 100;
+        amountInput.value = amount ? String(Math.round(amount)) : '';
+        taxAmount += amount;
+      }
+    });
+
+    var totalEl = document.getElementById('invoiceItemsTotal');
+    if (totalEl) totalEl.textContent = formatRupiah(pokokTotal + taxAmount + feeAmount);
+  }
+
+  var itemsTable = document.getElementById('invoiceItemsTable');
+  var nextItemIndex = itemsTable ? itemsTable.querySelectorAll('.km-invoice-item-row').length : 0;
+
+  function addEmptyItemRow() {
+    var addRow = document.getElementById('invoiceAddItemRow');
+    if (!itemsTable || !addRow) return;
+    var idx = nextItemIndex++;
+    var tr = document.createElement('tr');
+    tr.className = 'km-invoice-item-row km-invoice-item-row--custom';
+    tr.setAttribute('data-calc', 'qty_price');
+    tr.setAttribute('data-type', 'pokok');
+    tr.innerHTML =
+      '<td>' +
+        '<input type="hidden" name="items[' + idx + '][item_type]" value="pokok">' +
+        '<input type="text" name="items[' + idx + '][description]" class="form-control form-control-sm" value="" placeholder="Nama item">' +
+      '</td>' +
+      '<td>' +
+        '<input type="text" name="items[' + idx + '][qty]" class="form-control form-control-sm text-end js-item-qty" value="" inputmode="decimal" placeholder="1">' +
+      '</td>' +
+      '<td>' +
+        '<input type="text" name="items[' + idx + '][unit_price]" class="form-control form-control-sm text-end js-item-price" value="" inputmode="decimal" placeholder="0">' +
+      '</td>' +
+      '<td>' +
+        '<div class="km-invoice-amount-wrap">' +
+          '<input type="text" name="items[' + idx + '][amount]" class="form-control form-control-sm text-end js-item-amount" value="" inputmode="decimal" placeholder="0" readonly>' +
+          '<button type="button" class="km-invoice-remove-btn js-remove-item" title="Hapus kolom"><i class="bi bi-x-lg"></i></button>' +
+        '</div>' +
+      '</td>';
+    var customRows = itemsTable.querySelectorAll('.km-invoice-item-row--custom');
+    var anchor = customRows.length ? customRows[customRows.length - 1] : addRow;
+    anchor.insertAdjacentElement('afterend', tr);
+    var desc = tr.querySelector('input[name$="[description]"]');
+    if (desc) desc.focus();
+  }
+
+  if (itemsTable) {
+    itemsTable.addEventListener('input', function (event) {
+      if (event.target.matches('.js-item-qty, .js-item-price, .js-item-amount')) recalc();
+    });
+    itemsTable.addEventListener('focusout', function (event) {
+      if (event.target.matches('.js-item-qty, .js-item-price, .js-item-amount')) recalc();
+    });
+    itemsTable.addEventListener('click', function (event) {
+      var removeBtn = event.target.closest('.js-remove-item');
+      if (!removeBtn) return;
+      var row = removeBtn.closest('.km-invoice-item-row--custom');
+      if (row) row.remove();
+      recalc();
+    });
+  }
+
+  var addBtn = document.getElementById('addInvoiceItem');
+  if (addBtn) addBtn.addEventListener('click', addEmptyItemRow);
+
+  var invoiceForm = document.getElementById('manualInvoiceForm');
+  if (invoiceForm) {
+    invoiceForm.addEventListener('submit', function () {
+      document.querySelectorAll('#invoiceItemsTable .km-invoice-item-row').forEach(function (row, idx) {
+        row.querySelectorAll('[name]').forEach(function (input) {
+          input.name = input.name.replace(/items\[\d+\]/, 'items[' + idx + ']');
+        });
+      });
+    });
+  }
+  recalc();
+
+  document.querySelectorAll('.js-pick-tenant').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var select = document.getElementById('invoiceTenant');
+      if (select) select.value = btn.getAttribute('data-tenant-id') || '';
+      var card = document.getElementById('invoiceCreateCard');
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (select) select.focus();
+    });
+  });
+})();
+</script>
 <%- include('../partials/footer') %>

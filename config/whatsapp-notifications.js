@@ -537,50 +537,43 @@ class WhatsAppNotificationManager {
         });
     }
 
-    // Get rate limit settings
-    getRateLimitSettings() {
-        return {
-            maxMessagesPerBatch: getSetting('whatsapp_rate_limit.maxMessagesPerBatch', 10),
-            delayBetweenBatches: getSetting('whatsapp_rate_limit.delayBetweenBatches', 30),
-            delayBetweenMessages: getSetting('whatsapp_rate_limit.delayBetweenMessages', 2),
-            maxRetries: getSetting('whatsapp_rate_limit.maxRetries', 2),
-            dailyMessageLimit: getSetting('whatsapp_rate_limit.dailyMessageLimit', 0),
-            enabled: getSetting('whatsapp_rate_limit.enabled', true)
-        };
+    // Get rate limit settings for one tenant (tidak membaca settings.json bersama)
+    async getRateLimitSettings(tenantId = null) {
+        const { getRateLimit } = require('./whatsapp-rate-limit');
+        return getRateLimit(this._normalizeTenantId(tenantId));
     }
 
     // Check daily message limit
-    checkDailyMessageLimit() {
-        const settings = this.getRateLimitSettings();
-        if (settings.dailyMessageLimit <= 0) return true; // No limit
-        
-        const today = new Date().toISOString().split('T')[0];
-        const dailyCount = getSetting(`whatsapp_daily_count.${today}`, 0);
-        
+    async checkDailyMessageLimit(tenantId = null) {
+        const tid = this._normalizeTenantId(tenantId);
+        const settings = await this.getRateLimitSettings(tid);
+        if (settings.dailyMessageLimit <= 0) return true;
+
+        const { getDailyUsed } = require('./whatsapp-rate-limit');
+        const dailyCount = await getDailyUsed(tid);
         return dailyCount < settings.dailyMessageLimit;
     }
 
-    // Increment daily message count
-    incrementDailyMessageCount() {
-        const today = new Date().toISOString().split('T')[0];
-        const currentCount = getSetting(`whatsapp_daily_count.${today}`, 0);
-        setSetting(`whatsapp_daily_count.${today}`, currentCount + 1);
+    // Increment daily message count — file terpisah, bukan settings.json
+    async incrementDailyMessageCount(tenantId = null) {
+        const { incrementDailyUsed } = require('./whatsapp-rate-limit');
+        return incrementDailyUsed(this._normalizeTenantId(tenantId));
     }
 
     // Send notification (isi template saja, tanpa header/footer otomatis)
     async sendNotification(phoneNumber, message, options = {}) {
         try {
-            // Check rate limiting
-            const settings = this.getRateLimitSettings();
-            if (settings.enabled && !this.checkDailyMessageLimit()) {
-                logger.warn(`Daily message limit reached (${settings.dailyMessageLimit}), skipping notification to ${phoneNumber}`);
-                return { success: false, error: 'Daily message limit reached' };
-            }
-
             const formattedNumber = this.formatPhoneNumber(phoneNumber);
+            const sendTenantId = this._normalizeTenantId(options.tenantId);
 
             // Kirim isi template saja — tanpa header/footer tenant otomatis
             const fullMessage = message;
+
+            const rateSettings = await this.getRateLimitSettings(sendTenantId);
+            if (rateSettings.enabled && !(await this.checkDailyMessageLimit(sendTenantId))) {
+                logger.warn(`Daily message limit reached (${rateSettings.dailyMessageLimit}), skipping notification to ${phoneNumber}`);
+                return { success: false, error: 'Daily message limit reached' };
+            }
 
             const resolved = await this.resolveSendProvider(options.tenantId);
             const provider = resolved.provider;
@@ -604,7 +597,7 @@ class WhatsAppNotificationManager {
                             const result = await provider.sendMedia(formattedNumber, imagePath, fullMessage, options);
                             if (result.success) {
                                 logger.info(`✅ WhatsApp image notification sent to ${phoneNumber} with image via ${resolved.type || 'provider'}`);
-                                this.incrementDailyMessageCount();
+                                await this.incrementDailyMessageCount(sendTenantId);
                                 return { success: true, withImage: true };
                             } else {
                                 providerError = result.error || 'Provider media send failed';
@@ -623,7 +616,7 @@ class WhatsAppNotificationManager {
                 const result = await provider.sendMessage(formattedNumber, fullMessage, options);
                 if (result.success) {
                     logger.info(`✅ WhatsApp text notification sent to ${phoneNumber} via ${resolved.type || 'provider'}`);
-                    this.incrementDailyMessageCount();
+                    await this.incrementDailyMessageCount(sendTenantId);
                     return {
                         success: true,
                         withImage: false,
@@ -648,7 +641,6 @@ class WhatsAppNotificationManager {
 
             // Fallback ke sock langsung HANYA untuk mode legacy (tanpa tenant).
             // Dengan tenantId, jangan pernah kirim lewat sock bersama milik tenant lain.
-            const sendTenantId = this._normalizeTenantId(options.tenantId);
             if (sendTenantId) {
                 return {
                     success: false,
@@ -673,9 +665,10 @@ class WhatsAppNotificationManager {
                     logger.info(`📸 Mencoba mengirim dengan gambar (fallback): ${imagePath}`);
                     
                     if (fs.existsSync(imagePath)) {
-                        await this.sock.sendMessage(jid, { image: { url: imagePath }, caption: fullMessage });
+                        const { sendStableMessage } = require('./baileys-session-heal');
+                        await sendStableMessage(this.sock, jid, { image: { url: imagePath }, caption: fullMessage });
                         logger.info(`✅ WhatsApp image notification sent to ${phoneNumber} with image (fallback)`);
-                        this.incrementDailyMessageCount();
+                        await this.incrementDailyMessageCount(sendTenantId);
                         return { success: true, withImage: true };
                     }
                 } catch (imgErr) {
@@ -683,10 +676,11 @@ class WhatsAppNotificationManager {
                 }
             }
 
-            // Send as text message (fallback)
-            await this.sock.sendMessage(jid, { text: fullMessage }, options);
+            // Send as text message (fallback). Jangan teruskan options app (tenantId, imagePath).
+            const { sendStableMessage } = require('./baileys-session-heal');
+            await sendStableMessage(this.sock, jid, { text: fullMessage, linkPreview: null });
             logger.info(`✅ WhatsApp text notification sent to ${phoneNumber} (fallback)`);
-            this.incrementDailyMessageCount();
+            await this.incrementDailyMessageCount(sendTenantId);
             return { success: true, withImage: false };
         } catch (error) {
             logger.error(`Error sending WhatsApp notification to ${phoneNumber}:`, error);
@@ -697,7 +691,10 @@ class WhatsAppNotificationManager {
     // Send bulk notifications with rate limiting
     async sendBulkNotifications(notifications) {
         try {
-            const settings = this.getRateLimitSettings();
+            const bulkTenantId = this._normalizeTenantId(
+                notifications?.[0]?.options?.tenantId || notifications?.[0]?.tenantId
+            );
+            const settings = await this.getRateLimitSettings(bulkTenantId);
             
             if (!settings.enabled) {
                 logger.info('Rate limiting disabled, sending all notifications immediately');
@@ -720,7 +717,7 @@ class WhatsAppNotificationManager {
                 logger.info(`Processing batch ${Math.floor(i / settings.maxMessagesPerBatch) + 1}/${Math.ceil(notifications.length / settings.maxMessagesPerBatch)} (${batch.length} messages)`);
 
                 // Check daily limit before processing batch
-                if (!this.checkDailyMessageLimit()) {
+                if (!(await this.checkDailyMessageLimit(bulkTenantId))) {
                     logger.warn(`Daily message limit reached, skipping remaining ${notifications.length - i} notifications`);
                     results.skipped += notifications.length - i;
                     break;
@@ -731,7 +728,8 @@ class WhatsAppNotificationManager {
                     const notification = batch[j];
                     
                     // Check daily limit for each message
-                    if (!this.checkDailyMessageLimit()) {
+                    const msgTenantId = this._normalizeTenantId(notification.options?.tenantId || notification.tenantId) || bulkTenantId;
+                    if (!(await this.checkDailyMessageLimit(msgTenantId))) {
                         logger.warn(`Daily message limit reached, skipping remaining ${batch.length - j} messages in current batch`);
                         results.skipped += batch.length - j;
                         break;
@@ -864,7 +862,7 @@ class WhatsAppNotificationManager {
 
     // Send notification with retry logic
     async sendNotificationWithRetry(phoneNumber, message, options = {}, retryCount = 0) {
-        const settings = this.getRateLimitSettings();
+        const settings = await this.getRateLimitSettings(options.tenantId);
         const maxRetries = settings.maxRetries;
 
         try {
@@ -1506,7 +1504,7 @@ Internet Tanpa Batas`;
                         
                         if (result.success) {
                             logger.info(`✅ Payment notification with PDF sent to ${phone}`);
-                            this.incrementDailyMessageCount();
+                            await this.incrementDailyMessageCount(tenantId || tenantHint || invoice?.tenant_id);
                             
                             // Hapus temporary file setelah berhasil dikirim
                             try {
@@ -1702,7 +1700,7 @@ Internet Tanpa Batas`;
                     });
                     if (result.success) {
                         logger.info(`✅ Batch payment notification with PDF sent to ${phone}`);
-                        this.incrementDailyMessageCount();
+                        await this.incrementDailyMessageCount(tenantId || tenantHint || primary.invoice?.tenant_id);
                         try {
                             if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
                         } catch (_) {

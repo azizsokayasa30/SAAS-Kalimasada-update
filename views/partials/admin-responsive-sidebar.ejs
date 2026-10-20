@@ -24,7 +24,7 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
             <img src="/img/<%= sidebarLogo %>?ts=<%= Date.now() %>" alt="Logo" style="height: 28px; border-radius: 6px;">
             <div class="d-flex flex-column ms-2">
                 <span style="font-size: 14px; font-weight: 700; color: var(--sb-text);"><%= sidebarCompanyHeader %></span>
-                <small style="font-size: 10px; color: var(--sb-subtle);">Admin Panel</small>
+                <small style="font-size: 10px; color: var(--sb-subtle);"><%= (typeof executiveJabatan !== 'undefined' && executiveJabatan) ? executiveJabatan : ((typeof isAreaManager !== 'undefined' && isAreaManager) ? 'Manager Area' : 'Admin Panel') %></small>
             </div>
         </div>
     </div>
@@ -54,7 +54,7 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
         </div>
         <div class="sb-brand">
             <span class="sb-brand-name"><%= sidebarCompanyHeader %></span>
-            <span class="sb-brand-tag">Admin Panel</span>
+            <span class="sb-brand-tag"><%= (typeof executiveJabatan !== 'undefined' && executiveJabatan) ? executiveJabatan : ((typeof isAreaManager !== 'undefined' && isAreaManager) ? 'Manager Area' : 'Admin Panel') %></span>
         </div>
     </div>
     
@@ -69,7 +69,7 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
         </div>
         
         <!-- PELANGGAN BILLING -->
-        <% const billingCustomerPages = ['customers', 'packages', 'areas', 'collector-areas', 'service-suspension']; %>
+        <% const billingCustomerPages = ['customers', 'packages', 'areas', 'collector-areas', 'service-suspension', 'whatsapp-customers']; %>
         <% const billingCustomerExpanded = typeof page !== 'undefined' && billingCustomerPages.includes(page); %>
         <div class="sb-section">
             <div class="sb-section-title sb-collapsible"
@@ -102,6 +102,10 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
                 <a href="/admin/billing/service-suspension" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'service-suspension' ? 'active' : '' %>">
                     <i class="bi bi-pause-circle"></i>
                     <span class="sb-item-text">Penangguhan/Isolir</span>
+                </a>
+                <a href="/admin/billing/whatsapp-customers" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'whatsapp-customers' ? 'active' : '' %>">
+                    <i class="bi bi-whatsapp"></i>
+                    <span class="sb-item-text">WhatsApp Pelanggan</span>
                 </a>
             </div>
         </div>
@@ -269,10 +273,12 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
                 <i class="bi <%= financeExpanded ? 'bi-chevron-up' : 'bi-chevron-down' %> toggle-arrow sb-chevron"></i>
             </div>
             <div class="collapse <%= financeExpanded ? 'show' : '' %>" id="billingFinanceCollapse">
+                <% if (!(typeof isAreaManager !== 'undefined' && isAreaManager)) { %>
                 <a href="/admin/billing/payment-settings" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'payment-settings' ? 'active' : '' %>">
                     <i class="bi bi-gear"></i>
                     <span class="sb-item-text">Pengaturan Pembayaran</span>
                 </a>
+                <% } %>
                 <a href="/admin/billing/all-payments" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'all-payments' ? 'active' : '' %>">
                     <i class="bi bi-credit-card"></i>
                     <span class="sb-item-text">Riwayat Pembayaran</span>
@@ -384,8 +390,8 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
             </div>
         </div>
         
-        <!-- KARYAWAN -->
-        <% const karyawanPages = ['employees', 'employee-attendance', 'employee-attendance-settings', 'employee-leave-requests', 'employee-payroll', 'employee-reports']; %>
+        <!-- HRD -->
+        <% const karyawanPages = ['employees', 'employee-attendance', 'employee-attendance-settings', 'employee-leave-requests', 'employee-payroll', 'employee-reports', 'area-managers', 'master-executives']; %>
         <% const karyawanExpanded = typeof page !== 'undefined' && karyawanPages.includes(page); %>
         <div class="sb-section">
             <div class="sb-section-title sb-collapsible"
@@ -395,14 +401,26 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
                  aria-controls="karyawanCollapse"
                  role="button"
                  tabindex="0">
-                <span>Karyawan</span>
+                <span>HRD</span>
                 <i class="bi <%= karyawanExpanded ? 'bi-chevron-up' : 'bi-chevron-down' %> toggle-arrow sb-chevron"></i>
             </div>
             <div class="collapse <%= karyawanExpanded ? 'show' : '' %>" id="karyawanCollapse">
+                <% if (typeof isMasterTenant !== 'undefined' && isMasterTenant && !(typeof isAreaManager !== 'undefined' && isAreaManager)) { %>
+                <a href="/admin/master-executives" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'master-executives' ? 'active' : '' %>">
+                    <i class="bi bi-person-badge"></i>
+                    <span class="sb-item-text">Jabatan Pimpinan</span>
+                </a>
+                <% } %>
                 <a href="/admin/employees" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'employees' ? 'active' : '' %>">
                     <i class="bi bi-person-lines-fill"></i>
                     <span class="sb-item-text">Master Data</span>
                 </a>
+                <% if (!(typeof isAreaManager !== 'undefined' && isAreaManager)) { %>
+                <a href="/admin/area-managers" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'area-managers' ? 'active' : '' %>">
+                    <i class="bi bi-geo-alt"></i>
+                    <span class="sb-item-text">Manager Area</span>
+                </a>
+                <% } %>
                 <a href="/admin/employees/attendance" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'employee-attendance' ? 'active' : '' %>">
                     <i class="bi bi-calendar2-check"></i>
                     <span class="sb-item-text">Absensi</span>
@@ -438,7 +456,10 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
                  role="button"
                  tabindex="0">
                 <span>Teknisi</span>
-                <i class="bi <%= teknisiExpanded ? 'bi-chevron-up' : 'bi-chevron-down' %> toggle-arrow sb-chevron"></i>
+                <span class="d-flex align-items-center">
+                    <span id="sbInstallProgressSectionBadge" class="sb-count-badge d-none" aria-hidden="true">0</span>
+                    <i class="bi <%= teknisiExpanded ? 'bi-chevron-up' : 'bi-chevron-down' %> toggle-arrow sb-chevron"></i>
+                </span>
             </div>
             <div class="collapse <%= teknisiExpanded ? 'show' : '' %>" id="teknisiCollapse">
                 <a href="/admin/technicians" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'technicians' ? 'active' : '' %>">
@@ -448,10 +469,12 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
                 <a href="/admin/installations" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'installations' ? 'active' : '' %>">
                     <i class="bi bi-tools"></i>
                     <span class="sb-item-text">Installation Jobs</span>
+                    <span id="sbInstallProgressBadge" class="sb-count-badge d-none" aria-hidden="true">0</span>
                 </a>
-                <a href="/admin/trouble" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'trouble' ? 'active' : '' %>">
+                <a href="/admin/trouble" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'trouble' ? 'active' : '' %>" id="sbTroubleMenuItem">
                     <i class="bi bi-exclamation-triangle"></i>
                     <span class="sb-item-text">Trouble Report</span>
+                    <span id="sbTroubleProgressBadge" class="sb-count-badge d-none" aria-hidden="true">0</span>
                 </a>
             </div>
         </div>
@@ -494,7 +517,8 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
             </div>
         </div>
 
-        <!-- SETTINGAN -->
+        <!-- SETTINGAN (hanya Admin utama) -->
+        <% if (!(typeof isAreaManager !== 'undefined' && isAreaManager)) { %>
         <% const settingPages = ['setting', 'whatsapp-settings', 'whatsapp-monitoring', 'email-settings', 'setting-radius', 'setting-radius-clients', 'connection-settings', 'genieacs-setting', 'cache']; %>
         <% const settingExpanded = typeof page !== 'undefined' && settingPages.includes(page); %>
         <div class="sb-section">
@@ -543,6 +567,17 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
                 </a>
             </div>
         </div>
+        <% } else { %>
+        <div class="sb-section">
+            <div class="sb-section-title" style="opacity:0.85;">
+                <span>Manager Area</span>
+            </div>
+            <div class="sb-item sb-sub" style="pointer-events:none; opacity:0.9;">
+                <i class="bi bi-person-badge"></i>
+                <span class="sb-item-text"><%= typeof areaManagerName !== 'undefined' && areaManagerName ? areaManagerName : 'Wilayah terbatas' %></span>
+            </div>
+        </div>
+        <% } %>
 
     </div>
 
@@ -550,10 +585,12 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
     <div class="sb-footer">
         <%- include('./theme-toggle') %>
         <div class="sb-actions">
+            <% if (!(typeof isAreaManager !== 'undefined' && isAreaManager)) { %>
             <button id="btnRestartBilling" class="sb-action-btn" title="Restart System">
                 <i class="bi bi-arrow-repeat"></i>
                 <span class="sb-item-text">Restart</span>
             </button>
+            <% } %>
             <a href="/admin/logout" class="sb-action-btn sb-action-logout" title="Logout">
                 <i class="bi bi-box-arrow-right"></i>
                 <span class="sb-item-text">Logout</span>
@@ -943,6 +980,41 @@ document.addEventListener('DOMContentLoaded', function () {
 .sb-item.active i { opacity: 1; color: var(--sb-primary); }
 .sb-item.sb-sub { padding-left: 2.5rem; font-size: 12.5px; }
 
+.sb-count-badge {
+    margin-left: auto;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 99px;
+    background: #ef4444;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    flex-shrink: 0;
+}
+.sb-item.active .sb-count-badge {
+    background: #fff;
+    color: #dc2626;
+}
+.sb-section-title .sb-count-badge {
+    margin-left: 0;
+    margin-right: 6px;
+}
+.sb.collapsed .sb-count-badge {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    min-width: 16px;
+    height: 16px;
+    font-size: 9px;
+    padding: 0 4px;
+    margin: 0;
+}
+
 
 /* Footer */
 .sb-footer { padding: 8px; border-top: 1px solid var(--sb-border); margin-top: auto; }
@@ -1018,3 +1090,5 @@ document.addEventListener('DOMContentLoaded', function () {
   })() %>;
 </script>
 <script src="/js/admin-session-timeout.js?v=1" defer></script>
+<script src="/js/admin-trouble-badge.js?v=4" defer></script>
+<script src="/js/install-progress-badge.js?v=3" defer></script>

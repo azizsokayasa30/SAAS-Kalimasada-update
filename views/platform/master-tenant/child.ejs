@@ -1,16 +1,65 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active: 'master-tenant', adminName }) %>
+<%
+  const customersLimit = (typeof listLimit !== 'undefined' && listLimit) ? listLimit : ((typeof customers !== 'undefined' && customers && customers.limit) ? customers.limit : 50);
+  const flashCopied = (typeof flash !== 'undefined' && flash) ? (parseInt(flash.copied, 10) || 0) : 0;
+  const flashSkipped = (typeof flash !== 'undefined' && flash) ? (parseInt(flash.skipped, 10) || 0) : 0;
+  const flashFailed = (typeof flash !== 'undefined' && flash) ? (parseInt(flash.failed, 10) || 0) : 0;
+  const listQuery = (typeof customers !== 'undefined' && customers && customers.query) ? customers.query : {};
+  const emptyFilterValue = (typeof customers !== 'undefined' && customers && customers.emptyFilterValue) ? customers.emptyFilterValue : '__none__';
+  const listStateKeys = ['sort', 'dir', 'copy_status', 'area', 'package', 'status'];
+  const customersUrl = function (overrides) {
+    const params = new URLSearchParams({ tab: 'customers', limit: String(customersLimit) });
+    listStateKeys.forEach(function (key) { if (listQuery[key]) params.set(key, listQuery[key]); });
+    Object.keys(overrides || {}).forEach(function (key) {
+      const value = overrides[key];
+      if (value == null || value === '') params.delete(key); else params.set(key, String(value));
+    });
+    return '/management/master-tenant/children/' + child.id + '?' + params.toString();
+  };
+  const sortHref = function (key) {
+    const defaultDir = (key === 'id' || key === 'join_date' || key === 'copied') ? 'desc' : 'asc';
+    const dir = listQuery.sort === key ? (listQuery.dir === 'asc' ? 'desc' : 'asc') : defaultDir;
+    return customersUrl({ sort: key, dir: dir, page: null });
+  };
+  const sortIcon = function (key) {
+    if (listQuery.sort !== key) return 'bi-arrow-down-up opacity-50';
+    return listQuery.dir === 'asc' ? 'bi-sort-up' : 'bi-sort-down';
+  };
+  const hasActiveFilter = !!(listQuery.copy_status || listQuery.area || listQuery.package || listQuery.status);
+  const customersAllTotal = (typeof customers !== 'undefined' && customers && customers.allTotal != null) ? customers.allTotal : (usage.customers.total || 0);
+  const copiedTotal = (typeof copyStats !== 'undefined' && copyStats) ? (copyStats.copied || 0) : 0;
+  const notCopiedTotal = Math.max(0, customersAllTotal - copiedTotal);
+  const copiedPercent = customersAllTotal > 0 ? Math.round((copiedTotal / customersAllTotal) * 1000) / 10 : 0;
+%>
 <main class="km-main">
   <div class="km-topbar">
     <div>
       <h2><%= child.name %></h2>
       <p class="km-subtitle">
         Child tenant · <code><%= tenantHostname %></code>
-        · <span class="km-master-readonly-badge"><i class="bi bi-eye me-1"></i>Read-only</span>
-      </p>
+        · <span class="km-master-readonly-badge"><i class="bi bi-eye me-1"></i>Sumber tenant — tidak diubah</span>
+    </p>
     </div>
     <a href="/management/master-tenant" class="btn btn-outline-secondary btn-sm">← Master Tenant</a>
   </div>
+
+  <% if (flashCopied > 0) { %>
+    <div class="alert alert-success">
+      <% if (flashCopied === 1 && !flashSkipped && !flashFailed) { %>
+        Pelanggan berhasil disalin ke master tenant (view-only). Progress invoice/pembayaran/isolir akan mengikuti tenant sumber.
+      <% } else { %>
+        <%= flashCopied %> pelanggan berhasil disalin ke master tenant (view-only).
+        <% if (flashSkipped > 0) { %> <%= flashSkipped %> sudah ada di master.<% } %>
+        <% if (flashFailed > 0) { %> <%= flashFailed %> gagal.<% } %>
+      <% } %>
+    </div>
+  <% } else if (flashSkipped > 0 && flashFailed === 0) { %>
+    <div class="alert alert-info">Semua pelanggan yang dipilih sudah ada di master tenant.</div>
+  <% } %>
+  <% if (typeof flash !== 'undefined' && flash && flash.error) { %>
+    <div class="alert alert-danger"><%= flash.error %></div>
+  <% } %>
 
   <div class="row g-3 mb-4">
     <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pelanggan Total</div><div class="value"><%= usage.customers.total || 0 %></div></div></div>
@@ -20,15 +69,43 @@
   </div>
 
   <div class="row g-3 mb-4">
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Tagihan Total</div><div class="value"><%= formatRupiah(usage.invoices.total) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Tagihan <%= typeof period !== 'undefined' && period && period.label ? period.label : 'Bulan Ini' %></div><div class="value"><%= formatRupiah(usage.invoices.total) %></div></div></div>
     <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Lunas</div><div class="value text-success"><%= formatRupiah(usage.invoices.paid) %></div></div></div>
     <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Belum Lunas</div><div class="value text-warning"><%= formatRupiah(usage.invoices.unpaid) %></div></div></div>
     <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Isolir</div><div class="value text-danger"><%= formatRupiah(usage.invoices.isolir) %></div></div></div>
   </div>
 
+  <div class="row g-3 mb-4">
+    <div class="col-md-4 col-6">
+      <a href="<%= customersUrl({ copy_status: 'yes', page: null }) %>" class="text-decoration-none d-block">
+        <div class="km-stat">
+          <div class="label"><i class="bi bi-clipboard-check me-1"></i>Sudah di-copy ke Master</div>
+          <div class="value text-success"><%= copiedTotal %> <small style="font-size: .55em; color: var(--text-muted)">/ <%= customersAllTotal %> pelanggan</small></div>
+        </div>
+      </a>
+    </div>
+    <div class="col-md-4 col-6">
+      <a href="<%= customersUrl({ copy_status: 'no', page: null }) %>" class="text-decoration-none d-block">
+        <div class="km-stat">
+          <div class="label"><i class="bi bi-clipboard me-1"></i>Belum di-copy</div>
+          <div class="value text-warning"><%= notCopiedTotal %></div>
+        </div>
+      </a>
+    </div>
+    <div class="col-md-4 col-12">
+      <div class="km-stat">
+        <div class="label">Progres Copy ke Master</div>
+        <div class="value" style="color: var(--accent)"><%= copiedPercent %>%</div>
+        <div class="progress mt-2" style="height: 6px;">
+          <div class="progress-bar bg-success" role="progressbar" style="width: <%= copiedPercent %>%" aria-valuenow="<%= copiedPercent %>" aria-valuemin="0" aria-valuemax="100"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <ul class="nav nav-tabs km-master-tabs mb-3">
     <li class="nav-item">
-      <a class="nav-link <%= tab === 'customers' ? 'active' : '' %>" href="/management/master-tenant/children/<%= child.id %>?tab=customers">Pelanggan</a>
+      <a class="nav-link <%= tab === 'customers' ? 'active' : '' %>" href="/management/master-tenant/children/<%= child.id %>?tab=customers&amp;limit=<%= customersLimit %>">Pelanggan</a>
     </li>
     <li class="nav-item">
       <a class="nav-link <%= tab === 'invoices' ? 'active' : '' %>" href="/management/master-tenant/children/<%= child.id %>?tab=invoices">Tagihan</a>
@@ -36,49 +113,169 @@
   </ul>
 
   <div class="km-card km-card--flush">
+    <% if (tab === 'customers' && customers) { %>
+    <div class="d-flex flex-wrap gap-2 align-items-center justify-content-between p-3 border-bottom">
+      <form id="bulkCopyForm" method="POST" action="/management/master-tenant/children/<%= child.id %>/customers/copy-selected" class="d-flex flex-wrap gap-2 align-items-center mb-0" onsubmit="return window.confirmMasterBulkCopy();">
+        <input type="hidden" name="limit" value="<%= customersLimit %>">
+        <input type="hidden" name="page" value="<%= customers.page %>">
+        <% listStateKeys.forEach(function (key) { if (listQuery[key]) { %>
+          <input type="hidden" name="<%= key %>" value="<%= listQuery[key] %>">
+        <% } }); %>
+        <button type="submit" class="btn btn-sm btn-primary">
+          <i class="bi bi-clipboard-plus"></i> Copy yang ditandai
+        </button>
+        <small id="bulkCopyHint" style="color: var(--text-muted)">0 dipilih</small>
+      </form>
+    </div>
+    <form method="GET" action="/management/master-tenant/children/<%= child.id %>" class="d-flex flex-wrap gap-2 align-items-end p-3 border-bottom mb-0">
+      <input type="hidden" name="tab" value="customers">
+      <input type="hidden" name="sort" value="<%= listQuery.sort || 'id' %>">
+      <input type="hidden" name="dir" value="<%= listQuery.dir || 'desc' %>">
+      <div>
+        <label class="small mb-1 d-block" style="color: var(--text-muted)" for="filterCopyStatus">Status copy</label>
+        <select id="filterCopyStatus" name="copy_status" class="form-select form-select-sm" style="width: auto;" onchange="this.form.submit()">
+          <option value="" <%= !listQuery.copy_status ? 'selected' : '' %>>Semua</option>
+          <option value="no" <%= listQuery.copy_status === 'no' ? 'selected' : '' %>>Belum di-copy (<%= notCopiedTotal %>)</option>
+          <option value="yes" <%= listQuery.copy_status === 'yes' ? 'selected' : '' %>>Sudah di master (<%= copiedTotal %>)</option>
+        </select>
+      </div>
+      <div>
+        <label class="small mb-1 d-block" style="color: var(--text-muted)" for="filterArea">Area</label>
+        <select id="filterArea" name="area" class="form-select form-select-sm" style="width: auto; max-width: 14rem;" onchange="this.form.submit()">
+          <option value="">Semua area</option>
+          <% (customers.filterOptions.areas || []).forEach(function (opt) {
+               const value = opt.area == null ? emptyFilterValue : opt.area; %>
+            <option value="<%= value %>" <%= listQuery.area === value ? 'selected' : '' %>><%= opt.area == null ? 'Tanpa area' : opt.area %> (<%= opt.total %>)</option>
+          <% }); %>
+        </select>
+      </div>
+      <div>
+        <label class="small mb-1 d-block" style="color: var(--text-muted)" for="filterPackage">Paket</label>
+        <select id="filterPackage" name="package" class="form-select form-select-sm" style="width: auto; max-width: 16rem;" onchange="this.form.submit()">
+          <option value="">Semua paket</option>
+          <% (customers.filterOptions.packages || []).forEach(function (opt) {
+               const value = opt.id == null ? emptyFilterValue : String(opt.id);
+               const label = opt.id == null ? 'Tanpa paket' : (opt.name || ('Paket #' + opt.id)); %>
+            <option value="<%= value %>" <%= listQuery.package === value ? 'selected' : '' %>><%= label %> (<%= opt.total %>)</option>
+          <% }); %>
+        </select>
+      </div>
+      <div>
+        <label class="small mb-1 d-block" style="color: var(--text-muted)" for="filterStatus">Status pelanggan</label>
+        <select id="filterStatus" name="status" class="form-select form-select-sm" style="width: auto;" onchange="this.form.submit()">
+          <option value="">Semua status</option>
+          <% (customers.filterOptions.statuses || []).forEach(function (opt) {
+               const value = opt.status == null ? emptyFilterValue : opt.status; %>
+            <option value="<%= value %>" <%= listQuery.status === value ? 'selected' : '' %>><%= opt.status == null ? 'Tanpa status' : opt.status %> (<%= opt.total %>)</option>
+          <% }); %>
+        </select>
+      </div>
+      <div>
+        <label class="small mb-1 d-block" style="color: var(--text-muted)" for="customersPerPage">Per halaman</label>
+        <select id="customersPerPage" name="limit" class="form-select form-select-sm" style="width: auto;" onchange="this.form.submit()">
+          <option value="50" <%= customersLimit === 50 ? 'selected' : '' %>>50</option>
+          <option value="100" <%= customersLimit === 100 ? 'selected' : '' %>>100</option>
+        </select>
+      </div>
+      <% if (hasActiveFilter) { %>
+        <a href="<%= customersUrl({ copy_status: null, area: null, package: null, status: null, page: null }) %>" class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-x-circle"></i> Reset filter
+        </a>
+      <% } %>
+    </form>
     <div class="table-responsive">
-      <% if (tab === 'customers' && customers) { %>
       <table class="table table-hover align-middle mb-0">
         <thead>
           <tr>
-            <th>ID</th>
-            <th>Nama</th>
+            <th style="width: 2.5rem">
+              <input type="checkbox" id="selectAllCustomers" class="form-check-input" title="Tandai semua di halaman ini">
+            </th>
+            <th><a href="<%= sortHref('id') %>" class="text-reset text-decoration-none text-nowrap">ID <i class="bi <%= sortIcon('id') %>"></i></a></th>
+            <th><a href="<%= sortHref('name') %>" class="text-reset text-decoration-none text-nowrap">Nama <i class="bi <%= sortIcon('name') %>"></i></a></th>
             <th>Telepon</th>
-            <th>Status</th>
-            <th>Bergabung</th>
+            <th><a href="<%= sortHref('package') %>" class="text-reset text-decoration-none text-nowrap">Paket <i class="bi <%= sortIcon('package') %>"></i></a></th>
+            <th><a href="<%= sortHref('area') %>" class="text-reset text-decoration-none text-nowrap">Area <i class="bi <%= sortIcon('area') %>"></i></a></th>
+            <th><a href="<%= sortHref('status') %>" class="text-reset text-decoration-none text-nowrap">Status <i class="bi <%= sortIcon('status') %>"></i></a></th>
+            <th><a href="<%= sortHref('join_date') %>" class="text-reset text-decoration-none text-nowrap">Bergabung <i class="bi <%= sortIcon('join_date') %>"></i></a></th>
+            <th class="text-end"><a href="<%= sortHref('copied') %>" class="text-reset text-decoration-none text-nowrap">Copy <i class="bi <%= sortIcon('copied') %>"></i></a></th>
           </tr>
         </thead>
         <tbody>
           <% if (!customers.rows.length) { %>
-            <tr><td colspan="5" class="text-center py-4" style="color: var(--text-muted)">Tidak ada pelanggan.</td></tr>
+            <tr><td colspan="9" class="text-center py-4" style="color: var(--text-muted)"><%= hasActiveFilter ? 'Tidak ada pelanggan yang cocok dengan filter.' : 'Tidak ada pelanggan.' %></td></tr>
           <% } %>
           <% customers.rows.forEach(function(row) { %>
             <tr>
+              <td>
+                <% if (!row.copied_to_master) { %>
+                  <input type="checkbox" class="form-check-input js-copy-customer" name="customer_ids" value="<%= row.id %>" form="bulkCopyForm">
+                <% } else { %>
+                  <input type="checkbox" class="form-check-input" disabled title="Sudah di master">
+                <% } %>
+              </td>
               <td>#<%= row.id %></td>
               <td><%= row.name %></td>
               <td><%= row.phone || '—' %></td>
+              <td>
+                <% if (row.package_name) { %>
+                  <div class="fw-semibold"><%= row.package_name %></div>
+                  <small style="color: var(--text-muted)">
+                    <% if (row.package_speed && row.package_speed !== '-') { %><%= row.package_speed %> · <% } %><%= formatRupiah(row.package_price || 0) %>
+                  </small>
+                <% } else if (row.package_id) { %>
+                  <span style="color: var(--text-muted)">Paket #<%= row.package_id %></span>
+                <% } else { %>
+                  <span style="color: var(--text-muted)">—</span>
+                <% } %>
+              </td>
+              <td>
+                <% if (row.area) { %>
+                  <span class="badge bg-light text-dark"><i class="bi bi-geo-alt-fill me-1"></i><%= row.area %></span>
+                <% } else { %>
+                  <span style="color: var(--text-muted)">—</span>
+                <% } %>
+              </td>
               <td><span class="badge bg-secondary"><%= row.status %></span></td>
               <td><%= row.join_date || row.created_at || '—' %></td>
+              <td class="text-end">
+                <% if (row.copied_to_master) { %>
+                  <span class="badge bg-success">Sudah di master</span>
+                <% } else { %>
+                  <form method="POST" action="/management/master-tenant/children/<%= child.id %>/customers/<%= row.id %>/copy" class="d-inline" onsubmit="return confirm('Salin pelanggan ini ke master tenant? Data tenant sumber tidak akan diubah.');">
+                    <input type="hidden" name="limit" value="<%= customersLimit %>">
+                    <input type="hidden" name="page" value="<%= customers.page %>">
+                    <% listStateKeys.forEach(function (key) { if (listQuery[key]) { %>
+                      <input type="hidden" name="<%= key %>" value="<%= listQuery[key] %>">
+                    <% } }); %>
+                    <button type="submit" class="btn btn-sm btn-primary" title="Copy ke master tenant">
+                      <i class="bi bi-clipboard-plus"></i> Copy
+                    </button>
+                  </form>
+                <% } %>
+              </td>
             </tr>
           <% }); %>
         </tbody>
       </table>
-      <% if (customers.totalPages > 1) { %>
       <div class="d-flex justify-content-between align-items-center p-3 border-top">
-        <small style="color: var(--text-muted)">Halaman <%= customers.page %> / <%= customers.totalPages %> (<%= customers.total %> pelanggan)</small>
+        <small style="color: var(--text-muted)">
+          Menampilkan <%= customers.rows.length %> dari <%= customers.total %> pelanggan<% if (hasActiveFilter) { %> (difilter dari <%= customersAllTotal %>)<% } %>
+          · Halaman <%= customers.page %> / <%= customers.totalPages %>
+        </small>
         <div class="btn-group btn-group-sm">
           <% if (customers.page > 1) { %>
-            <a class="btn btn-outline-secondary" href="?tab=customers&page=<%= customers.page - 1 %>">←</a>
+            <a class="btn btn-outline-secondary" href="<%= customersUrl({ page: customers.page - 1 }) %>">←</a>
           <% } %>
           <% if (customers.page < customers.totalPages) { %>
-            <a class="btn btn-outline-secondary" href="?tab=customers&page=<%= customers.page + 1 %>">→</a>
+            <a class="btn btn-outline-secondary" href="<%= customersUrl({ page: customers.page + 1 }) %>">→</a>
           <% } %>
         </div>
       </div>
-      <% } %>
-      <% } %>
+    </div>
+    <% } %>
 
-      <% if (tab === 'invoices' && invoices) { %>
+    <% if (tab === 'invoices' && invoices) { %>
+    <div class="table-responsive">
       <table class="table table-hover align-middle mb-0">
         <thead>
           <tr>
@@ -117,9 +314,42 @@
         </div>
       </div>
       <% } %>
-      <% } %>
     </div>
+    <% } %>
   </div>
 </main>
+
+<script>
+(function () {
+  var selectAll = document.getElementById('selectAllCustomers');
+  var hint = document.getElementById('bulkCopyHint');
+  var boxes = function () { return Array.prototype.slice.call(document.querySelectorAll('.js-copy-customer')); };
+  function updateHint() {
+    var n = boxes().filter(function (el) { return el.checked; }).length;
+    if (hint) hint.textContent = n + ' dipilih';
+    if (selectAll) {
+      var all = boxes();
+      selectAll.checked = all.length > 0 && all.every(function (el) { return el.checked; });
+      selectAll.indeterminate = n > 0 && n < all.length;
+    }
+  }
+  if (selectAll) {
+    selectAll.addEventListener('change', function () {
+      boxes().forEach(function (el) { el.checked = selectAll.checked; });
+      updateHint();
+    });
+  }
+  boxes().forEach(function (el) { el.addEventListener('change', updateHint); });
+  window.confirmMasterBulkCopy = function () {
+    var n = boxes().filter(function (el) { return el.checked; }).length;
+    if (!n) {
+      alert('Pilih minimal satu pelanggan untuk di-copy.');
+      return false;
+    }
+    return confirm('Salin ' + n + ' pelanggan ke master tenant? Data tenant sumber tidak akan diubah.');
+  };
+  updateHint();
+})();
+</script>
 
 <%- include('../partials/footer') %>

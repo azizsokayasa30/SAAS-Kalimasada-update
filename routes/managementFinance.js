@@ -45,9 +45,9 @@ function flashFromQuery(query) {
 }
 
 function safeReturnTo(path) {
-    const p = String(path || '/management/finance/payments');
+    const p = String(path || '/management/finance/backup');
     if (p.startsWith('/management/finance')) return p;
-    return '/management/finance/payments';
+    return '/management/finance/backup';
 }
 
 function financeLocals(req, extra = {}) {
@@ -61,6 +61,15 @@ function financeLocals(req, extra = {}) {
 }
 
 // ── Backup & Restore ──
+router.get('/backup', (req, res) => {
+    res.render('platform/finance/backup', financeLocals(req, {
+        title: 'Backup & Restore Finance',
+        active: 'finance-backup',
+        financeSection: 'backup',
+        flash: flashFromQuery(req.query),
+    }));
+});
+
 router.get('/backup/download', async (req, res) => {
     try {
         const { payload, filename } = await platformFinanceBackup.exportFinanceBackup();
@@ -188,22 +197,22 @@ router.get('/payments', async (req, res) => {
 router.get('/tenant-summary', async (req, res) => {
     try {
         const range = platformFinanceService.defaultDateRange(req.query);
-        const summary = await platformFinanceService.getTenantFinancialSummary(range);
+        const summary = await platformFinanceService.getTenantPaymentRecap(range);
         const totals = summary.reduce(
             (acc, row) => {
-                acc.gross += Number(row.gross_amount) || 0;
-                acc.tax += Number(row.tax_amount) || 0;
-                acc.bhp_uso += Number(row.bhp_uso_amount) || 0;
-                acc.management_fee += Number(row.management_fee_amount) || 0;
-                acc.net += Number(row.net_amount) || 0;
-                acc.transactions += Number(row.transaction_count) || 0;
+                acc.total_tagihan += Number(row.total_tagihan) || 0;
+                acc.unpaid_amount += Number(row.unpaid_amount) || 0;
+                acc.paid_amount += Number(row.paid_amount) || 0;
+                acc.paid_cash += Number(row.paid_cash) || 0;
+                acc.paid_transfer += Number(row.paid_transfer) || 0;
+                acc.paid_pg += Number(row.paid_pg) || 0;
                 return acc;
             },
-            { gross: 0, tax: 0, bhp_uso: 0, management_fee: 0, net: 0, transactions: 0 }
+            { total_tagihan: 0, unpaid_amount: 0, paid_amount: 0, paid_cash: 0, paid_transfer: 0, paid_pg: 0 }
         );
 
         res.render('platform/finance/tenant-summary', financeLocals(req, {
-            title: 'Rekap Keuangan Per Tenant',
+            title: 'Rekap Pembayaran Per Tenant',
             active: 'finance-tenant-summary',
             financeSection: 'tenant-summary',
             summary,
@@ -220,25 +229,76 @@ router.get('/tenant-summary', async (req, res) => {
 // ── Invoice Tenant ──
 router.get('/invoices', async (req, res) => {
     try {
-        const invoices = await platformFinanceService.listTenantInvoices({
-            tenantId: req.query.tenant_id || null,
-            status: req.query.status || null,
-        });
-        const tenants = await tenantStore.listOperationalTenants();
         const range = platformFinanceService.defaultDateRange(req.query);
+        const rows = await platformFinanceService.listTenantInvoiceOverview(range);
+        const tenants = await tenantStore.listOperationalTenants();
+        const totals = rows.reduce(
+            (acc, row) => {
+                acc.pokok_amount += Number(row.pokok_amount) || 0;
+                acc.tax_amount += Number(row.tax_amount) || 0;
+                acc.management_fee_amount += Number(row.management_fee_amount) || 0;
+                acc.total_amount += Number(row.total_amount) || 0;
+                if (row.has_invoice) acc.invoiced += 1;
+                else acc.pending += 1;
+                return acc;
+            },
+            {
+                pokok_amount: 0,
+                tax_amount: 0,
+                management_fee_amount: 0,
+                total_amount: 0,
+                invoiced: 0,
+                pending: 0,
+            }
+        );
 
         res.render('platform/finance/invoices', financeLocals(req, {
-            title: 'Invoice Rekap Tenant',
+            title: 'Invoice Tenant',
             active: 'finance-invoices',
             financeSection: 'invoices',
-            invoices,
+            rows,
+            totals,
             tenants,
+            itemTypes: platformFinanceService.MANUAL_INVOICE_ITEM_TYPES,
+            selectedTenantId: req.query.tenant_id || '',
             filters: range,
             flash: flashFromQuery(req.query),
         }));
     } catch (err) {
         console.error('[finance] invoices:', err);
         res.status(500).send('Error loading invoices');
+    }
+});
+
+router.post('/invoices/create', async (req, res) => {
+    try {
+        const invoice = await platformFinanceService.createManualTenantInvoice(
+            req.body,
+            req.session.platformAdminId
+        );
+        await tenantStore.auditLog({
+            actorType: 'SuperAdmin',
+            actorId: req.session.platformAdminId,
+            action: 'platform_finance_invoice_created',
+            tenantId: Number(invoice.tenant_id),
+            details: { invoice_id: invoice.id, invoice_number: invoice.invoice_number, source: 'manual' },
+            ip: req.ip,
+        });
+        const qs = new URLSearchParams({
+            success: 'created',
+            month: String(invoice.period_start || '').slice(5, 7).replace(/^0/, '') || '',
+            year: String(invoice.period_start || '').slice(0, 4) || '',
+        });
+        if (invoice.period_start) {
+            const dt = new Date(`${invoice.period_start}T00:00:00`);
+            if (!Number.isNaN(dt.getTime())) {
+                qs.set('month', String(dt.getMonth() + 1));
+                qs.set('year', String(dt.getFullYear()));
+            }
+        }
+        res.redirect(`/management/finance/invoices?${qs.toString()}`);
+    } catch (err) {
+        res.redirect(`/management/finance/invoices?error=${encodeURIComponent(err.message)}`);
     }
 });
 

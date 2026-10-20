@@ -171,6 +171,76 @@
 
     renderTenantNas(network.tenantBreakdown || []);
     renderNasLive(nas.items || []);
+    applyServerHealth(data.server);
+  }
+
+  function levelFromPct(pct) {
+    if (pct >= 90) return 'crit';
+    if (pct >= 75) return 'warn';
+    return 'ok';
+  }
+
+  function setHealthBar(fillEl, pct) {
+    if (!fillEl) return;
+    var value = Math.max(0, Math.min(100, Number(pct) || 0));
+    fillEl.style.width = value + '%';
+    fillEl.dataset.level = levelFromPct(value);
+  }
+
+  function setHealthBadge(el, status, label) {
+    if (!el) return;
+    el.textContent = label || (status === 'abnormal' ? 'Abnormal' : 'Normal');
+    el.className = 'km-dash-health-badge is-' + (status === 'abnormal' ? 'abnormal' : status === 'pending' ? 'pending' : 'normal');
+  }
+
+  function applyServerHealth(server) {
+    if (!server) return;
+    var cpu = server.cpu || {};
+    var memory = server.memory || {};
+    var disk = server.disk || {};
+    var tasks = server.tasks || {};
+    var status = server.status || tasks.status || 'normal';
+
+    if ($('healthHostname')) {
+      var uptime = server.uptimeLabel ? ' · uptime ' + server.uptimeLabel : '';
+      $('healthHostname').textContent = (server.hostname || 'server') + uptime;
+    }
+    setHealthBadge($('healthStatusBadge'), status, status === 'abnormal' ? 'Abnormal' : 'Normal');
+    setHealthBadge($('healthTaskBadge'), tasks.status || status, tasks.label);
+
+    if ($('healthCpuValue')) $('healthCpuValue').textContent = (cpu.percent != null ? cpu.percent : '—') + '%';
+    if ($('healthRamValue')) $('healthRamValue').textContent = (memory.percent != null ? memory.percent : '—') + '%';
+    if ($('healthDiskValue')) $('healthDiskValue').textContent = (disk.percent != null ? disk.percent : '—') + '%';
+    if ($('healthCpuMeta')) {
+      $('healthCpuMeta').textContent = cpu.cores
+        ? 'Load ' + (cpu.load1 != null ? cpu.load1 : '—') + ' / ' + cpu.cores + ' core'
+        : (cpu.label || '—');
+    }
+    if ($('healthRamMeta')) {
+      var ramMeta = memory.label || '—';
+      if (memory.swapPercent) ramMeta += ' · swap ' + memory.swapPercent + '%';
+      $('healthRamMeta').textContent = ramMeta;
+    }
+    if ($('healthDiskMeta')) {
+      var diskMeta = disk.label || '—';
+      if (disk.mount) diskMeta = disk.mount + ' · ' + diskMeta;
+      $('healthDiskMeta').textContent = diskMeta;
+    }
+    if ($('healthTaskMeta')) $('healthTaskMeta').textContent = tasks.detail || '—';
+
+    setHealthBar($('healthCpuBar'), cpu.percent);
+    setHealthBar($('healthRamBar'), memory.percent);
+    setHealthBar($('healthDiskBar'), disk.percent);
+
+    var list = $('healthTaskList');
+    if (list && Array.isArray(tasks.items) && tasks.items.length) {
+      list.innerHTML = tasks.items.map(function (item) {
+        var cls = item.ok ? 'is-ok' : 'is-down';
+        var title = escapeHtml(item.detail || '');
+        return '<span class="km-dash-health-chip ' + cls + '" title="' + title + '">' +
+          escapeHtml(item.name) + '</span>';
+      }).join('');
+    }
   }
 
   async function loadMetrics() {
@@ -196,7 +266,9 @@
 
   function startPolling() {
     if (timer) clearInterval(timer);
-    timer = setInterval(loadMetrics, REFRESH_MS);
+    timer = setInterval(function () {
+      if (!document.hidden) loadMetrics();
+    }, REFRESH_MS);
   }
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -204,5 +276,8 @@
     startPolling();
     var btn = $('dashRefreshBtn');
     if (btn) btn.addEventListener('click', loadMetrics);
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) loadMetrics();
+    });
   });
 })();

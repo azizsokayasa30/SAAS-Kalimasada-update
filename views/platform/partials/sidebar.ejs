@@ -112,6 +112,10 @@
           <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-file-earmark-bar-graph"></i></span>
           <span>Laporan Keuangan</span>
         </a>
+        <a href="/management/finance/backup" class="km-nav-submenu__item km-nav-item--finance-backup <%= active === 'finance-backup' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-cloud-arrow-up"></i></span>
+          <span>Backup/Restore</span>
+        </a>
       </div>
     </div>
 
@@ -161,16 +165,15 @@
   <div class="km-sidebar-bottom">
     <div class="km-user-footer">
       <span class="km-user-avatar"><i class="bi bi-person-circle"></i></span>
-      <span>
+      <span class="km-user-meta">
         <strong><%= adminName || 'Super Admin' %></strong>
         <small>Management Admin</small>
       </span>
+      <button type="button" class="km-theme-toggle-btn" id="globalThemeToggle" title="Ganti tema gelap / terang">
+        <i class="bi bi-moon-fill" id="themeToggleIcon"></i>
+        <span id="themeToggleLabel" class="visually-hidden">Tema</span>
+      </button>
     </div>
-    <p class="km-sidebar-footer-label">Kalimasada Management</p>
-    <button type="button" class="km-theme-toggle-btn" id="globalThemeToggle" title="Ganti tema gelap / terang">
-      <i class="bi bi-moon-fill" id="themeToggleIcon"></i>
-      <span id="themeToggleLabel">Tema</span>
-    </button>
   </div>
 </aside>
 <script>

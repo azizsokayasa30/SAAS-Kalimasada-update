@@ -5,11 +5,24 @@
 const WhatsAppProvider = require('../whatsapp-provider');
 const logger = require('../logger');
 const path = require('path');
+const { attachSentMessageStore } = require('../baileys-sent-message-store');
+const { sendStableMessage } = require('../baileys-session-heal');
+
+function pickBaileysSendOptions(options = {}) {
+    const out = {};
+    if (options && options.quoted) out.quoted = options.quoted;
+    if (options && options.messageId) out.messageId = options.messageId;
+    if (options && Number(options.ephemeralExpiration) > 0) {
+        out.ephemeralExpiration = Number(options.ephemeralExpiration);
+    }
+    return out;
+}
 
 class BaileysProvider extends WhatsAppProvider {
     constructor(sock = null) {
         super();
         this.sock = sock;
+        if (sock) attachSentMessageStore(sock);
         this.status = {
             connected: false,
             phoneNumber: null,
@@ -34,6 +47,7 @@ class BaileysProvider extends WhatsAppProvider {
                 this._setupBaileysListeners();
                 this._listenersSock = sock;
             }
+            attachSentMessageStore(sock);
             
             logger.info('✅ BaileysProvider: Socket set and listeners attached');
         } else {
@@ -58,9 +72,14 @@ class BaileysProvider extends WhatsAppProvider {
                 throw new Error('Invalid phone number');
             }
 
-            await this.sock.sendMessage(jid, { text: message }, options);
+            const sent = await sendStableMessage(
+                this.sock,
+                jid,
+                { text: message, linkPreview: null },
+                pickBaileysSendOptions(options)
+            );
             logger.debug(`✅ Baileys: Message sent to ${phoneNumber}`);
-            return { success: true };
+            return { success: true, messageId: sent?.key?.id || null };
         } catch (error) {
             logger.error(`❌ Baileys sendMessage error:`, error);
             return { success: false, error: error.message };
@@ -116,9 +135,9 @@ class BaileysProvider extends WhatsAppProvider {
                 };
             }
 
-            await this.sock.sendMessage(jid, mediaMessage, options);
+            const sent = await sendStableMessage(this.sock, jid, mediaMessage, pickBaileysSendOptions(options));
             logger.debug(`✅ Baileys: Media sent to ${phoneNumber}`);
-            return { success: true };
+            return { success: true, messageId: sent?.key?.id || null };
         } catch (error) {
             logger.error(`❌ Baileys sendMedia error:`, error);
             return { success: false, error: error.message };

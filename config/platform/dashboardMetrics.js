@@ -2,6 +2,7 @@
 
 const net = require('net');
 const os = require('os');
+const fs = require('fs');
 const { exec } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
@@ -503,11 +504,230 @@ async function getLiveNetworkMetrics() {
     };
 }
 
+function formatBytesGb(bytes) {
+    const n = Number(bytes) || 0;
+    const gb = n / (1024 ** 3);
+    if (gb >= 10) return `${gb.toFixed(1)} GB`;
+    return `${gb.toFixed(2)} GB`;
+}
+
+function formatUptime(seconds) {
+    const s = Math.max(0, Math.floor(Number(seconds) || 0));
+    const days = Math.floor(s / 86400);
+    const hours = Math.floor((s % 86400) / 3600);
+    const mins = Math.floor((s % 3600) / 60);
+    if (days > 0) return `${days} hari ${hours} jam`;
+    if (hours > 0) return `${hours} jam ${mins} mnt`;
+    return `${mins} mnt`;
+}
+
+function readMemoryInfo() {
+    try {
+        const text = fs.readFileSync('/proc/meminfo', 'utf8');
+        const getKb = (key) => {
+            const match = text.match(new RegExp(`^${key}:\\s+(\\d+)`, 'm'));
+            return match ? Number(match[1]) * 1024 : 0;
+        };
+        const total = getKb('MemTotal');
+        const available = getKb('MemAvailable') || (getKb('MemFree') + getKb('Buffers') + getKb('Cached'));
+        const used = Math.max(0, total - available);
+        const swapTotal = getKb('SwapTotal');
+        const swapFree = getKb('SwapFree');
+        const swapUsed = Math.max(0, swapTotal - swapFree);
+        const swapPercent = swapTotal > 0 ? Math.round((swapUsed / swapTotal) * 100) : 0;
+        return {
+            total,
+            used,
+            available,
+            percent,
+            swapTotal,
+            swapUsed,
+            swapPercent,
+        };
+    } catch (_) {
+        const total = os.totalmem();
+        const free = os.freemem();
+        const used = Math.max(0, total - free);
+        return {
+            total,
+            used,
+            available: free,
+            percent: total > 0 ? Math.round((used / total) * 100) : 0,
+            swapTotal: 0,
+            swapUsed: 0,
+            swapPercent: 0,
+        };
+    }
+}
+
+function readDiskInfo(mount = '/') {
+    try {
+        const stats = fs.statfsSync(mount);
+        const total = Number(stats.blocks) * Number(stats.bsize);
+        const free = Number(stats.bavail) * Number(stats.bsize);
+        const used = Math.max(0, total - free);
+        const files = Number(stats.files) || 0;
+        const ffree = Number(stats.ffree) || 0;
+        const inodesUsed = Math.max(0, files - ffree);
+        return {
+            mount,
+            total,
+            used,
+            free,
+            percent: total > 0 ? Math.round((used / total) * 100) : 0,
+            inodesTotal: files,
+            inodesUsed,
+            inodesPercent: files > 0 ? Math.round((inodesUsed / files) * 100) : 0,
+        };
+    } catch (_) {
+        return {
+            mount,
+            total: 0,
+            used: 0,
+            free: 0,
+            percent: 0,
+            inodesTotal: 0,
+            inodesUsed: 0,
+            inodesPercent: 0,
+        };
+    }
+}
+
+let lastCpuSample = readCpuTimes();
+let lastCpuAt = Date.now();
+
+function readCpuTimes() {
+    try {
+        const line = fs.readFileSync('/proc/stat', 'utf8').split('\n')[0] || '';
+        const parts = line.trim().split(/\s+/).slice(1).map(Number);
+        const idle = (parts[3] || 0) + (parts[4] || 0);
+        const total = parts.reduce((sum, n) => sum + (Number(n) || 0), 0);
+        return { idle, total };
+    } catch (_) {
+        return null;
+    }
+}
+
+function readCpuUsage() {
+    const cores = os.cpus().length || 1;
+    const [load1, load5, load15] = os.loadavg();
+    const loadPercent = Math.max(0, Math.min(100, Math.round((load1 / cores) * 100)));
+    const sample = readCpuTimes();
+    const now = Date.now();
+    let percent = loadPercent;
+    if (sample && lastCpuSample && sample.total > lastCpuSample.total && now - lastCpuAt >= 500) {
+        const idleDelta = sample.idle - lastCpuSample.idle;
+        const totalDelta = sample.total - lastCpuSample.total;
+        percent = Math.max(0, Math.min(100, Math.round((1 - idleDelta / totalDelta) * 100)));
+    }
+    if (sample) {
+        lastCpuSample = sample;
+        lastCpuAt = now;
+    }
+    return {
+        percent,
+        load1: parseFloat(load1.toFixed(2)),
+        load5: parseFloat(load5.toFixed(2)),
+        load15: parseFloat(load15.toFixed(2)),
+        cores,
+        loadPercent,
+    };
+}
+
+async function isSystemdActive(serviceName) {
+    try {
+        const { stdout } = await execAsync(`systemctl is-active ${serviceName} || true`, { timeout: 2500 });
+        return String(stdout || '').trim() === 'active';
+    } catch (_) {
+        return false;
+    }
+}
+
+async function getServerHealth() {
+    const cpu = readCpuUsage();
+    const memory = readMemoryInfo();
+    const disk = readDiskInfo('/');
+    const [nginxUp, radiusUp] = await Promise.all([
+        isSystemdActive('nginx'),
+        isSystemdActive('freeradius'),
+    ]);
+
+    const tasks = [
+        { id: 'billing', name: 'Billing App', ok: true, detail: 'Proses PM2 merespons' },
+        { id: 'nginx', name: 'Nginx', ok: nginxUp, detail: nginxUp ? 'Aktif' : 'Service tidak berjalan' },
+        { id: 'freeradius', name: 'FreeRADIUS', ok: radiusUp, detail: radiusUp ? 'Aktif' : 'Service tidak berjalan' },
+    ];
+
+    const reasons = [];
+    if (cpu.percent >= 85) reasons.push(`CPU tinggi (${cpu.percent}%)`);
+    if (cpu.load1 > cpu.cores * 1.75) reasons.push(`Load ${cpu.load1} di atas ${cpu.cores} core`);
+    if (memory.percent >= 90) reasons.push(`RAM tinggi (${memory.percent}%)`);
+    if (memory.swapPercent >= 50 && memory.swapUsed > 64 * 1024 * 1024) {
+        reasons.push(`Swap terpakai ${memory.swapPercent}%`);
+    }
+    if (disk.percent >= 85) reasons.push(`Disk tinggi (${disk.percent}%)`);
+    if (disk.inodesPercent >= 90) reasons.push(`Inode disk ${disk.inodesPercent}%`);
+    for (const task of tasks) {
+        if (!task.ok) reasons.push(`${task.name} down`);
+    }
+
+    const status = reasons.length ? 'abnormal' : 'normal';
+    const failed = tasks.filter((task) => !task.ok).length;
+
+    return {
+        hostname: os.hostname(),
+        uptimeSec: Math.floor(os.uptime()),
+        uptimeLabel: formatUptime(os.uptime()),
+        cpu: {
+            percent: cpu.percent,
+            load1: cpu.load1,
+            load5: cpu.load5,
+            cores: cpu.cores,
+            label: `${cpu.percent}% · load ${cpu.load1}`,
+        },
+        memory: {
+            percent: memory.percent,
+            used: memory.used,
+            total: memory.total,
+            usedLabel: formatBytesGb(memory.used),
+            totalLabel: formatBytesGb(memory.total),
+            availableLabel: formatBytesGb(memory.available),
+            swapPercent: memory.swapPercent || 0,
+            swapUsedLabel: formatBytesGb(memory.swapUsed || 0),
+            swapTotalLabel: formatBytesGb(memory.swapTotal || 0),
+            label: `${memory.percent}% · ${formatBytesGb(memory.used)} / ${formatBytesGb(memory.total)}`,
+        },
+        disk: {
+            percent: disk.percent,
+            mount: disk.mount || '/',
+            used: disk.used,
+            total: disk.total,
+            free: disk.free,
+            usedLabel: formatBytesGb(disk.used),
+            totalLabel: formatBytesGb(disk.total),
+            freeLabel: formatBytesGb(disk.free),
+            inodesPercent: disk.inodesPercent || 0,
+            label: `${formatBytesGb(disk.used)} / ${formatBytesGb(disk.total)} · sisa ${formatBytesGb(disk.free)}`,
+        },
+        tasks: {
+            status,
+            label: status === 'normal' ? 'Normal' : 'Abnormal',
+            ok: tasks.length - failed,
+            total: tasks.length,
+            items: tasks,
+            detail: status === 'normal' ? 'Semua layanan berjalan' : reasons.join(' · '),
+        },
+        status,
+        updatedAt: new Date().toISOString(),
+    };
+}
+
 async function getDashboardMetrics() {
-    const [stats, radius, network] = await Promise.all([
+    const [stats, radius, network, server] = await Promise.all([
         tenantStore.getExtendedGlobalStats(),
         getRadiusHealth(),
         getLiveNetworkMetrics(),
+        getServerHealth(),
     ]);
 
     const servers = await buildRadiusServerStats();
@@ -521,6 +741,7 @@ async function getDashboardMetrics() {
             servers,
         },
         network,
+        server,
     };
 }
 
@@ -529,4 +750,5 @@ module.exports = {
     getRadiusHealth,
     getLiveNetworkMetrics,
     buildRadiusServerStats,
+    getServerHealth,
 };

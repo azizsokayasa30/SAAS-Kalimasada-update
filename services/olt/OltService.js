@@ -147,7 +147,12 @@ class OltService {
             this.invalidateCache();
             return { success: true, ...stats };
         } catch (error) {
-            logger.error('[olt-sync] failed:', error);
+            const msg = error && error.message ? error.message : String(error);
+            if (error && error.code === 'unsupported_driver_operation') {
+                logger.warn(`[olt-sync] skipped: ${msg}`);
+            } else {
+                logger.error(`[olt-sync] failed: ${msg}`);
+            }
             await this.repository.finishSyncRun(runId, 'failed', {}, error.message);
             await this.repository.updateOltConnection(oltId, 'error', error.message);
             this.invalidateCache();

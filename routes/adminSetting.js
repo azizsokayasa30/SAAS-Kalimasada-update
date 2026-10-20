@@ -29,55 +29,27 @@ function resolveRequestTenantId(req) {
     return Number.isFinite(n) ? n : null;
 }
 
-// Konfigurasi penyimpanan file
-const imageFileFilter = function (req, file, cb) {
-    if (file.mimetype.startsWith('image/') || file.originalname.toLowerCase().endsWith('.svg')) {
-        cb(null, true);
-    } else {
-        cb(new Error('Hanya file gambar yang diizinkan'), false);
-    }
-};
+const { createSafeImageUpload } = require('../utils/safeImageUpload');
 
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, path.join(__dirname, '../public/img'));
-    },
-    filename: function (req, file, cb) {
-        const ext = path.extname(file.originalname).toLowerCase();
+const upload = createSafeImageUpload({
+    destination: path.join(__dirname, '../public/img'),
+    maxBytes: 2 * 1024 * 1024,
+    filename: function (req, file, ext, cb) {
         cb(null, 'logo' + ext);
     }
 });
 
-const upload = multer({
-    storage: storage,
-    limits: {
-        fileSize: 2 * 1024 * 1024
-    },
-    fileFilter: imageFileFilter
-});
-
-const billingQrStorage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, path.join(__dirname, '../public/img'));
-    },
-    filename: function (req, file, cb) {
-        const ext = path.extname(file.originalname).toLowerCase();
+const billingQrUpload = createSafeImageUpload({
+    destination: path.join(__dirname, '../public/img'),
+    maxBytes: 2 * 1024 * 1024,
+    filename: function (req, file, ext, cb) {
         const tid = resolveRequestTenantId(req);
-        // Isolasi file QR per tenant agar upload tidak menimpa QR tenant lain.
         if (tid) {
             cb(null, `billing-qr-t${tid}${ext}`);
             return;
         }
         cb(null, 'billing-qr' + ext);
     }
-});
-
-const billingQrUpload = multer({
-    storage: billingQrStorage,
-    limits: {
-        fileSize: 2 * 1024 * 1024
-    },
-    fileFilter: imageFileFilter
 });
 
 // Upload backup tenant (.zip) — disimpan di folder per-tenant

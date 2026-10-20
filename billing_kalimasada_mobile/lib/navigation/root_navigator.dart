@@ -105,6 +105,7 @@ class _RootNavigatorState extends State<RootNavigator>
     } else if (auth.role == 'collector') {
       return const _CollectorTabs();
     } else {
+      // admin + area_manager memakai shell yang sama
       return const _AdminTabs();
     }
   }

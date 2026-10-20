@@ -564,7 +564,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final role = context.watch<AuthProvider>().role;
-    final isAdmin = role == 'admin';
+    final isAdmin = role == 'admin' || role == 'area_manager';
     final isTechnician = role == 'technician';
     final status = customer['status']?.toString().toLowerCase() ?? 'active';
     final customerLat = _toDouble(customer['latitude']);

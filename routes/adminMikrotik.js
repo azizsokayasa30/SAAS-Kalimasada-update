@@ -292,13 +292,28 @@ function clearPppoeAdminPageCache() {
   _pppoeProfilesApiCacheByKey.clear();
 }
 
-function getPppoeCacheKey(authMode) {
-  const tid = hasTenantContext() ? String(getTenantId()) : 'central';
-  return `${authMode}:${tid}`;
+function areaIdsForMikrotik(req) {
+  if (!(req && (req.isAreaManager || req.session?.isAreaManager))) return null;
+  return Array.isArray(req.areaManagerAreaIds) ? req.areaManagerAreaIds : [];
 }
 
-function getPppoeAdminPageCache(authMode) {
-  const key = getPppoeCacheKey(authMode);
+async function loadAllowedPppoeUsernames(req) {
+  const areaIds = areaIdsForMikrotik(req);
+  if (areaIds == null) return getTenantAllowedPppoeUsernames();
+  return getTenantAllowedPppoeUsernames({ areaIds });
+}
+
+function getPppoeCacheKey(authMode, req) {
+  const tid = hasTenantContext() ? String(getTenantId()) : 'central';
+  const areaIds = areaIdsForMikrotik(req);
+  const am = areaIds == null
+    ? ''
+    : `:am${req.areaManagerId || req.session?.areaManagerId || 0}`;
+  return `${authMode}:${tid}${am}`;
+}
+
+function getPppoeAdminPageCache(authMode, req) {
+  const key = getPppoeCacheKey(authMode, req);
   const cached = _pppoeAdminPageCacheByKey.get(key);
   if (!cached) return null;
   if (Date.now() - cached.ts > PPPOE_PAGE_CACHE_MS) {
@@ -419,7 +434,7 @@ router.get('/mikrotik', adminAuth, async (req, res) => {
     const authMode = await getUserAuthModeAsync();
     const forceRefresh = String(req.query.refresh || '') === '1';
 
-    const cached = !forceRefresh ? getPppoeAdminPageCache(authMode) : null;
+    const cached = !forceRefresh ? getPppoeAdminPageCache(authMode, req) : null;
     if (cached) {
       const settings = req.tenantSettings || getSettingsWithCache();
       return res.render('adminMikrotik', {
@@ -436,7 +451,7 @@ router.get('/mikrotik', adminAuth, async (req, res) => {
     logger.info(`Loading PPPoE users in ${authMode} mode${forceRefresh ? ' (refresh)' : ''}`);
 
     await ensureTenantPppoeUsersTable();
-    const tenantPppoeUsers = await getTenantPppoeUsernames();
+    const tenantPppoeUsers = await loadAllowedPppoeUsernames(req);
     const tenantUserSet =
       tenantPppoeUsers === null
         ? null
@@ -539,7 +554,7 @@ router.get('/mikrotik', adminAuth, async (req, res) => {
     const userStats = computeUserStats(combined);
     logger.info(`Total users to display: ${combined.length}`);
 
-    _pppoeAdminPageCacheByKey.set(getPppoeCacheKey(authMode), {
+    _pppoeAdminPageCacheByKey.set(getPppoeCacheKey(authMode, req), {
       ts: Date.now(),
       authMode,
       combined,
@@ -794,7 +809,7 @@ router.get('/mikrotik/export-pppoe-users', adminAuth, async (req, res) => {
     const authMode = await getUserAuthModeAsync();
 
     await ensureTenantPppoeUsersTable();
-    const tenantPppoeUsers = await getTenantPppoeUsernames();
+    const tenantPppoeUsers = await loadAllowedPppoeUsernames(req);
     const tenantBillingSet = await getTenantBillingPppoeUsernameSet();
 
     let users = [];
@@ -1833,7 +1848,7 @@ router.get('/mikrotik/user-stats', adminAuth, async (req, res) => {
     const authMode = await getUserAuthModeAsync();
     const forceRefresh = String(req.query.refresh || '') === '1';
 
-    const pageCached = !forceRefresh ? getPppoeAdminPageCache(authMode) : null;
+    const pageCached = !forceRefresh ? getPppoeAdminPageCache(authMode, req) : null;
     if (pageCached && pageCached.userStats) {
       return res.json({
         success: true,
@@ -1845,6 +1860,21 @@ router.get('/mikrotik/user-stats', adminAuth, async (req, res) => {
     }
 
     if (authMode === 'radius') {
+      const areaIds = areaIdsForMikrotik(req);
+      if (areaIds != null) {
+        const { getPPPoEUsersRadius } = require('../config/mikrotik');
+        const allowed = await loadAllowedPppoeUsernames(req);
+        const usersRaw = allowed && allowed.length
+          ? await getPPPoEUsersRadius({
+              allowedUsernames: allowed,
+              skipMikrotikActive: false,
+              mikrotikTimeoutMs: ROUTER_QUERY_TIMEOUT_MS,
+              forceRefreshActive: forceRefresh
+            })
+          : [];
+        const stats = computeUserStats(Array.isArray(usersRaw) ? usersRaw : []);
+        return res.json({ success: true, ...stats });
+      }
       // RADIUS mode: Get statistics from RADIUS database
       logger.info('RADIUS mode: Getting user statistics from RADIUS database');
       try {

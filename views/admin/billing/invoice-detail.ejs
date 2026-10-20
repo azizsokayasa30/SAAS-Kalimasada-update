@@ -30,9 +30,11 @@
                         <a href="/admin/billing/invoices/<%= invoice.id %>/print" target="_blank" rel="noopener noreferrer" class="btn btn-info" title="Buka halaman cetak tagihan ini" aria-label="Cetak tagihan">
                             <i class="bi bi-printer-fill"></i> Cetak
                         </a>
+                        <% if (String(invoice.customer_master_origin || '') !== 'copied' && !invoice.source_invoice_id) { %>
                         <a href="/admin/billing/invoices/<%= invoice.id %>/edit" class="btn btn-primary" title="Ubah data tagihan" aria-label="Ubah tagihan">
                             <i class="bi bi-pencil-fill"></i> Edit
                         </a>
+                        <% } %>
                         <a href="/admin/billing/invoice-list" class="btn btn-secondary" title="Kembali ke daftar tagihan" aria-label="Kembali ke daftar tagihan">
                             <i class="bi bi-circle"></i> Kembali
                         </a>
@@ -124,7 +126,8 @@
                 </div>
 
                 <!-- Payment Gateway Section -->
-                <% if (invoice.status === 'unpaid') { %>
+                <% const isCopiedInvoice = String(invoice.customer_master_origin || '') === 'copied' || invoice.source_invoice_id; %>
+                <% if (invoice.status === 'unpaid' && !isCopiedInvoice) { %>
                 <div class="row mt-4">
                     <div class="col-12">
                         <div class="card">
@@ -200,6 +203,7 @@
                 </div>
 
                 <!-- Service Control Section -->
+                <% if (!(String(invoice.customer_master_origin || '') === 'copied' || invoice.source_invoice_id)) { %>
                 <div class="row mt-4">
                     <div class="col-12">
                         <div class="card">
@@ -223,6 +227,7 @@
                         </div>
                     </div>
                 </div>
+                <% } %>
 
             </main>
         </div>

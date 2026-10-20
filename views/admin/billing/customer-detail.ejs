@@ -74,9 +74,9 @@
                                 <div class="mb-3">
                                     <strong>Username:</strong> <%= customer ? customer.username : 'N/A' %>
                                 </div>
-                                <% if (customer && (customer.pppoe_username || customer.username)) { %>
+                                <% if (customer && customer.pppoe_username) { %>
                                 <div class="mb-3">
-                                    <strong>PPPoE Username:</strong> <%= customer.pppoe_username || customer.username %>
+                                    <strong>PPPoE Username:</strong> <%= customer.pppoe_username %>
                                 </div>
                                 <% } %>
                                 <% if (typeof pppoePassword !== 'undefined' && pppoePassword) { %>
@@ -93,7 +93,7 @@
                                     </div>
                                     <small class="text-muted">Password untuk koneksi PPPoE client</small>
                                 </div>
-                                <% } else if (customer && (customer.pppoe_username || customer.username)) { %>
+                                <% } else if (customer && customer.pppoe_username && !(typeof isMasterTenant !== 'undefined' && isMasterTenant) && String(customer.master_origin || '') !== 'copied') { %>
                                 <div class="mb-3">
                                     <strong>PPPoE Password:</strong> 
                                     <span class="text-muted">
