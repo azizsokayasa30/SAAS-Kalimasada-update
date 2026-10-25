@@ -32,6 +32,39 @@ function setSock(sockInstance) {
 
 // Fungsi untuk mendapatkan pengaturan notifikasi PPPoE dari settings.json
 function getPPPoENotificationSettings() {
+    try {
+        const { hasTenantContext, getTenant } = require('./platform/tenantContext');
+        if (hasTenantContext()) {
+            const source = getTenant()?.settings || {};
+            const extra = source.whatsapp_monitor_settings && typeof source.whatsapp_monitor_settings === 'object'
+                ? source.whatsapp_monitor_settings
+                : {};
+            const monitors = source.whatsapp_system_monitors;
+            const nested = source.pppoe_notifications && typeof source.pppoe_notifications === 'object' && !Array.isArray(source.pppoe_notifications)
+                ? source.pppoe_notifications
+                : {};
+            const explicit = monitors && typeof monitors === 'object' && !Array.isArray(monitors);
+            const minutes = parseFloat(extra.pppoe_monitor_interval_minutes);
+            const includeRaw = extra['pppoe_notifications.includeOfflineList'];
+            const maxRaw = extra['pppoe_notifications.maxOfflineListCount'];
+            return {
+                ...defaultSettings,
+                enabled: explicit ? monitors.pppoe_login_logout_wa !== false : true,
+                loginNotifications: explicit ? toBoolean(nested.loginNotifications, true) : true,
+                logoutNotifications: explicit ? toBoolean(nested.logoutNotifications, true) : true,
+                includeOfflineList: includeRaw !== undefined
+                    ? toBoolean(includeRaw, true)
+                    : (explicit ? toBoolean(nested.includeOfflineList, true) : true),
+                maxOfflineListCount: maxRaw !== undefined
+                    ? toPositiveInteger(maxRaw, defaultSettings.maxOfflineListCount)
+                    : toPositiveInteger(nested.maxOfflineListCount, defaultSettings.maxOfflineListCount),
+                monitorInterval: Number.isFinite(minutes) && minutes > 0
+                    ? Math.round(minutes * 60 * 1000)
+                    : toPositiveInteger(nested.monitorInterval, defaultSettings.monitorInterval)
+            };
+        }
+    } catch (_) { /* fallback global */ }
+
     const objectSettings = getSetting('pppoe_notifications', {});
     const merged = {
         ...defaultSettings,
@@ -373,7 +406,7 @@ async function sendNotification(message) {
 
     try {
         const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-        if (!isWaSystemMonitorEnabled('pppoe_login_logout_wa')) {
+        if (!(await isWaSystemMonitorEnabled('pppoe_login_logout_wa'))) {
             logger.info('Master switch pppoe_login_logout_wa off — skip PPPoE WA notification');
             return false;
         }

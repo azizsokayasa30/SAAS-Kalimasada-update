@@ -19,6 +19,7 @@
     <% } %>
     <%- include('partials/theme-head') %>
     <link href="/css/dashboard-premium.css?v=10" rel="stylesheet">
+    <link href="/css/nms-mrtg.css?v=6" rel="stylesheet">
 </head>
 <body class="isp-dash">
 <% const _greetUser = typeof dashboardGreetingUser !== 'undefined' ? dashboardGreetingUser : (typeof technician !== 'undefined' && technician && technician.name ? technician.name : 'Admin'); %>
@@ -519,6 +520,20 @@
                     <p class="mt-3 mb-0">Pilih NAS untuk memulai monitoring</p>
                 </div>
             </div>
+
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+                <div class="isp-section-title m-0">Graph MRTG</div>
+                <div class="btn-group btn-group-sm" role="group" aria-label="Rentang graph MRTG">
+                    <button type="button" class="btn btn-outline-secondary active" data-tenant-mrtg-range="24h">24 jam</button>
+                    <button type="button" class="btn btn-outline-secondary" data-tenant-mrtg-range="7d">7 hari</button>
+                    <button type="button" class="btn btn-outline-secondary" data-tenant-mrtg-range="30d">30 hari</button>
+                </div>
+            </div>
+            <div id="mrtgContainer" class="row mb-4">
+                <div class="col-12 text-center text-muted py-4 isp-panel">
+                    <p class="mb-0">Memuat graph MRTG…</p>
+                </div>
+            </div>
         </main>
     </div>
 </div>
@@ -1011,6 +1026,9 @@ function sendWaReminderFromBtn(btn) {
         return loadScript('/js/dashboard-charts.js?v=20260921');
       })
       .catch(function (e) { console.warn('[dashboard] deferred charts:', e); });
+    loadScript('/js/nms-mrtg-charts.js?v=6')
+      .then(function () { return loadScript('/js/dashboard-mrtg.js?v=2'); })
+      .catch(function (e) { console.warn('[dashboard] mrtg:', e); });
   }
   if ('requestIdleCallback' in window) {
     requestIdleCallback(loadCharts, { timeout: 5000 });

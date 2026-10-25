@@ -17,6 +17,7 @@ const managementSettingsRouter = require('./managementSettings');
 const managementFinanceRouter = require('./managementFinance');
 const managementPopRouter = require('./managementPop');
 const managementVpnRouter = require('./managementVpn');
+const managementNmsRouter = require('./managementNms');
 const nginxManager = require('../config/platform/nginxManager');
 const { formatRupiah, formatRupiahShort } = require('../config/platform/formatRupiah');
 const masterTenantService = require('../config/platform/masterTenantService');
@@ -153,6 +154,7 @@ router.get('/master-packages/*', (req, res) => {
 router.use('/finance', managementFinanceRouter);
 router.use('/pop', managementPopRouter);
 router.use('/vpn', managementVpnRouter);
+router.use('/nms', managementNmsRouter);
 
 router.get('/dashboard', async (req, res) => {
     try {
@@ -395,6 +397,13 @@ router.post('/tenants/backup/import-excel', (req, res) => {
             console.error('[platform] tenant excel import:', err);
             res.redirect(tenantsListUrl(`error=${encodeURIComponent(err.message)}`));
         }
+    });
+});
+
+router.get('/tenants/mrtg', (req, res) => {
+    res.render('platform/tenants/mrtg', {
+        title: 'MRTG',
+        adminName: req.session.platformAdminName,
     });
 });
 

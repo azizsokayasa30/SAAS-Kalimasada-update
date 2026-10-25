@@ -112,10 +112,11 @@ class WhatsAppNotificationManager {
         this.sock = sockInstance; // Keep for backward compatibility
     }
 
-    isSystemMonitorEnabled(monitorId) {
+    async isSystemMonitorEnabled(monitorId, ...tenantCandidates) {
         try {
             const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-            return isWaSystemMonitorEnabled(monitorId);
+            const tid = this.resolveTenantId(...tenantCandidates);
+            return await isWaSystemMonitorEnabled(monitorId, tid);
         } catch (_) {
             return true;
         }
@@ -778,10 +779,11 @@ class WhatsAppNotificationManager {
     }
 
     // Send message to configured WhatsApp groups (no template replacements here)
-    async sendToConfiguredGroups(message) {
+    async sendToConfiguredGroups(message, tenantId = null) {
         try {
             const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-            if (!isWaSystemMonitorEnabled('broadcast_group_wa')) {
+            const groupTenantId = this.resolveTenantId(tenantId);
+            if (!(await isWaSystemMonitorEnabled('broadcast_group_wa', groupTenantId))) {
                 logger.info('broadcast_group_wa off — skip kirim pesan ke grup WA terdaftar');
                 return { success: true, sent: 0, failed: 0, skipped: 0 };
             }
@@ -928,19 +930,19 @@ class WhatsAppNotificationManager {
     // Send invoice created notification (jadwal: H-X sebelum jatuh tempo; manual/test: monitor terpisah)
     async sendInvoiceCreatedNotification(customerId, invoiceId, options = {}) {
         try {
-            const monitorId = options.fromSchedule ? 'billing_daily_due_wa' : 'billing_scheduler_invoice_wa';
-            if (!this.isSystemMonitorEnabled(monitorId)) {
-                logger.info(`${monitorId} off — skip invoice created notification`);
-                return { success: true, skipped: true, reason: 'System monitor disabled' };
-            }
-
             const customer = await billingManager.getCustomerById(customerId);
             const invoice = await billingManager.getInvoiceById(invoiceId);
-            const packageData = await billingManager.getPackageById(invoice.package_id);
+            const packageData = invoice ? await billingManager.getPackageById(invoice.package_id) : null;
 
             if (!customer || !invoice || !packageData) {
                 logger.error('Missing data for invoice notification');
                 return { success: false, error: 'Missing data' };
+            }
+
+            const monitorId = options.fromSchedule ? 'billing_daily_due_wa' : 'billing_scheduler_invoice_wa';
+            if (!(await this.isSystemMonitorEnabled(monitorId, invoice.tenant_id, customer.tenant_id))) {
+                logger.info(`${monitorId} off — skip invoice created notification`);
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
             }
 
             const { templates, tenantId } = await this.resolveTemplatesForSend(invoice.tenant_id, customer.tenant_id);
@@ -1187,21 +1189,21 @@ class WhatsAppNotificationManager {
     // Send due date reminder (before jatuh tempo atau hari H)
     async sendDueDateReminder(invoiceId, options = {}) {
         try {
-            if (!options.fromManual && !this.isSystemMonitorEnabled('billing_daily_due_wa')) {
-                logger.info('billing_daily_due_wa off — skip due date reminder notification');
-                return { success: true, skipped: true, reason: 'System monitor disabled' };
-            }
-
             const reminderType = options.reminderType === 'today' ? 'today' : 'before';
             const templateKey = this._resolveDueReminderTemplateKey(reminderType);
 
             const invoice = await billingManager.getInvoiceById(invoiceId);
-            const customer = await billingManager.getCustomerById(invoice.customer_id);
-            const packageData = await billingManager.getPackageById(invoice.package_id);
+            const customer = invoice ? await billingManager.getCustomerById(invoice.customer_id) : null;
+            const packageData = invoice ? await billingManager.getPackageById(invoice.package_id) : null;
 
             if (!customer || !invoice || !packageData) {
                 logger.error('Missing data for due date reminder');
                 return { success: false, error: 'Missing data' };
+            }
+
+            if (!options.fromManual && !(await this.isSystemMonitorEnabled('billing_daily_due_wa', invoice.tenant_id, customer.tenant_id))) {
+                logger.info('billing_daily_due_wa off — skip due date reminder notification');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
             }
 
             const { templates, tenantId } = await this.resolveTemplatesForSend(invoice.tenant_id, customer.tenant_id);
@@ -1243,19 +1245,19 @@ class WhatsAppNotificationManager {
     // Send member invoice created notification
     async sendMemberInvoiceCreatedNotification(memberId, invoiceId, options = {}) {
         try {
-            const monitorId = options.fromSchedule ? 'billing_daily_due_wa' : 'billing_scheduler_invoice_wa';
-            if (!this.isSystemMonitorEnabled(monitorId)) {
-                logger.info(`${monitorId} off — skip member invoice created notification`);
-                return { success: true, skipped: true, reason: 'System monitor disabled' };
-            }
-
             const member = await billingManager.getMemberById(memberId);
             const invoice = await billingManager.getInvoiceById(invoiceId);
-            const packageData = await billingManager.getMemberPackageById(invoice.package_id);
+            const packageData = invoice ? await billingManager.getMemberPackageById(invoice.package_id) : null;
 
             if (!member || !invoice || !packageData) {
                 logger.error('Missing data for member invoice notification');
                 return { success: false, error: 'Missing data' };
+            }
+
+            const monitorId = options.fromSchedule ? 'billing_daily_due_wa' : 'billing_scheduler_invoice_wa';
+            if (!(await this.isSystemMonitorEnabled(monitorId, invoice.tenant_id, member.tenant_id))) {
+                logger.info(`${monitorId} off — skip member invoice created notification`);
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
             }
 
             const { templates, tenantId } = await this.resolveTemplatesForSend(invoice.tenant_id, member.tenant_id);
@@ -1294,21 +1296,21 @@ class WhatsAppNotificationManager {
     // Send member due date reminder
     async sendMemberDueDateReminder(invoiceId, options = {}) {
         try {
-            if (!this.isSystemMonitorEnabled('billing_daily_due_wa')) {
-                logger.info('billing_daily_due_wa off — skip member due date reminder notification');
-                return { success: true, skipped: true, reason: 'System monitor disabled' };
-            }
-
             const reminderType = options.reminderType === 'today' ? 'today' : 'before';
             const templateKey = this._resolveDueReminderTemplateKey(reminderType);
 
             const invoice = await billingManager.getInvoiceById(invoiceId);
-            const member = await billingManager.getMemberById(invoice.member_id);
-            const packageData = await billingManager.getMemberPackageById(invoice.package_id);
+            const member = invoice ? await billingManager.getMemberById(invoice.member_id) : null;
+            const packageData = invoice ? await billingManager.getMemberPackageById(invoice.package_id) : null;
 
             if (!member || !invoice || !packageData) {
                 logger.error('Missing data for member due date reminder');
                 return { success: false, error: 'Missing data' };
+            }
+
+            if (!(await this.isSystemMonitorEnabled('billing_daily_due_wa', invoice.tenant_id, member.tenant_id))) {
+                logger.info('billing_daily_due_wa off — skip member due date reminder notification');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
             }
 
             const { templates, tenantId } = await this.resolveTemplatesForSend(invoice.tenant_id, member.tenant_id);
@@ -1355,6 +1357,10 @@ class WhatsAppNotificationManager {
                 logger.error('Member not found for isolir notification');
                 return { success: false, error: 'Member not found' };
             }
+            if (!(await this.isSystemMonitorEnabled('member_isolir_wa', member.tenant_id))) {
+                logger.info('member_isolir_wa off — skip member isolir notification');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
+            }
 
             const message = `🚨 *AKUN ANDA DIISOLIR*
 
@@ -1386,11 +1392,6 @@ Internet Tanpa Batas`;
     // Send payment received notification (overload: by paymentId or by phone + data)
     async sendPaymentReceivedNotification(paymentIdOrPhone, data = null) {
         try {
-            if (!this.isSystemMonitorEnabled('payment_received_wa')) {
-                logger.info('payment_received_wa off — skip payment received notification');
-                return { success: true, skipped: true, reason: 'System monitor disabled' };
-            }
-
             let phone, notificationData, invoice;
             let tenantHint = null;
 
@@ -1458,7 +1459,13 @@ Internet Tanpa Batas`;
                 }
             }
 
-            const { templates, tenantId } = await this.resolveTemplatesForSend(tenantHint, invoice?.tenant_id);
+            const payTenantId = this.resolveTenantId(tenantHint, invoice?.tenant_id);
+            if (!(await this.isSystemMonitorEnabled('payment_received_wa', payTenantId))) {
+                logger.info('payment_received_wa off — skip payment received notification');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
+            }
+
+            const { templates, tenantId } = await this.resolveTemplatesForSend(payTenantId, tenantHint, invoice?.tenant_id);
             if (!this.isTemplateEnabled('payment_received', templates)) {
                 logger.info('Payment received notification is disabled, skipping...');
                 return { success: true, skipped: true, reason: 'Template disabled' };
@@ -1580,10 +1587,6 @@ Internet Tanpa Batas`;
             if (ids.length === 1) {
                 return this.sendPaymentReceivedNotification(ids[0]);
             }
-            if (!this.isSystemMonitorEnabled('payment_received_wa')) {
-                logger.info('payment_received_wa off — skip batch payment received notification');
-                return { success: true, skipped: true, reason: 'System monitor disabled' };
-            }
 
             const rows = [];
             for (const paymentId of ids) {
@@ -1595,6 +1598,14 @@ Internet Tanpa Batas`;
             }
             if (!rows.length) {
                 return { success: false, error: 'Missing payment/invoice data' };
+            }
+            const batchTenantId = this.resolveTenantId(
+                rows[0].invoice?.tenant_id,
+                rows[0].payment?.tenant_id
+            );
+            if (!(await this.isSystemMonitorEnabled('payment_received_wa', batchTenantId))) {
+                logger.info('payment_received_wa off — skip batch payment received notification');
+                return { success: true, skipped: true, reason: 'System monitor disabled' };
             }
 
             const primary = rows[0];
@@ -1768,7 +1779,7 @@ Internet Tanpa Batas`;
 
             // Also send to configured groups
             const groupMessage = message;
-            const groupRes = await this.sendToConfiguredGroups(groupMessage);
+            const groupRes = await this.sendToConfiguredGroups(groupMessage, tenantId || disruptionData?.tenant_id);
 
             return {
                 success: true,
@@ -1822,7 +1833,7 @@ Internet Tanpa Batas`;
 
             // Also send to configured groups
             const groupMessage = message;
-            const groupRes = await this.sendToConfiguredGroups(groupMessage);
+            const groupRes = await this.sendToConfiguredGroups(groupMessage, tenantId || announcementData?.tenant_id);
 
             return {
                 success: true,
@@ -1964,7 +1975,7 @@ Internet Tanpa Batas`;
     // Send service suspension notification
     async sendServiceSuspensionNotification(customer, reason) {
         try {
-            if (!this.isSystemMonitorEnabled('isolir_suspension_wa')) {
+            if (!(await this.isSystemMonitorEnabled('isolir_suspension_wa', customer?.tenant_id))) {
                 logger.info('isolir_suspension_wa off — skip service suspension notification');
                 return { success: true, skipped: true, reason: 'System monitor disabled' };
             }
@@ -2012,7 +2023,7 @@ Internet Tanpa Batas`;
     // Send service restoration notification
     async sendServiceRestorationNotification(customer, reason) {
         try {
-            if (!this.isSystemMonitorEnabled('isolir_restore_wa')) {
+            if (!(await this.isSystemMonitorEnabled('isolir_restore_wa', customer?.tenant_id))) {
                 logger.info('isolir_restore_wa off — skip service restoration notification');
                 return { success: true, skipped: true, reason: 'System monitor disabled' };
             }
@@ -2109,7 +2120,7 @@ Internet Tanpa Batas`;
     // Send welcome message notification
     async sendWelcomeMessage(customer) {
         try {
-            if (!this.isSystemMonitorEnabled('customer_welcome_wa')) {
+            if (!(await this.isSystemMonitorEnabled('customer_welcome_wa', customer?.tenant_id))) {
                 logger.info('customer_welcome_wa off — skip welcome message notification');
                 return { success: true, skipped: true, reason: 'System monitor disabled' };
             }
@@ -2244,7 +2255,7 @@ Internet Tanpa Batas`;
     // Send installation job assignment notification to technician
     async sendInstallationJobNotification(technician, installationJob, customer, packageData) {
         try {
-            if (!this.isSystemMonitorEnabled('installation_job_wa')) {
+            if (!(await this.isSystemMonitorEnabled('installation_job_wa', installationJob?.tenant_id, customer?.tenant_id, technician?.tenant_id))) {
                 logger.info('installation_job_wa off — skip installation job notification');
                 return { success: true, skipped: true, reason: 'System monitor disabled' };
             }
@@ -2307,7 +2318,7 @@ Internet Tanpa Batas`;
     // Send installation status update notification to technician
     async sendInstallationStatusUpdateNotification(technician, installationJob, customer, newStatus, notes) {
         try {
-            if (!this.isSystemMonitorEnabled('installation_job_wa')) {
+            if (!(await this.isSystemMonitorEnabled('installation_job_wa', installationJob?.tenant_id, customer?.tenant_id, technician?.tenant_id))) {
                 logger.info('installation_job_wa off — skip installation status update notification');
                 return { success: true, skipped: true, reason: 'System monitor disabled' };
             }
@@ -2366,7 +2377,7 @@ Internet Tanpa Batas`;
     // Send installation completion notification to technician
     async sendInstallationCompletionNotification(technician, installationJob, customer, completionNotes) {
         try {
-            if (!this.isSystemMonitorEnabled('installation_job_wa')) {
+            if (!(await this.isSystemMonitorEnabled('installation_job_wa', installationJob?.tenant_id, customer?.tenant_id, technician?.tenant_id))) {
                 logger.info('installation_job_wa off — skip installation completion notification');
                 return { success: true, skipped: true, reason: 'System monitor disabled' };
             }
@@ -2415,7 +2426,7 @@ Internet Tanpa Batas`;
     // Send Sales Order notification to technicians
     async sendSalesOrderNotification(customer) {
         try {
-            if (!this.isSystemMonitorEnabled('installation_job_wa')) {
+            if (!(await this.isSystemMonitorEnabled('installation_job_wa', customer?.tenant_id))) {
                 logger.info('installation_job_wa off — skip sales order notification to technicians');
                 return { success: true, skipped: true, reason: 'System monitor disabled' };
             }

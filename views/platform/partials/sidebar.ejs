@@ -7,6 +7,7 @@
     const financeOpen = active && String(active).startsWith('finance');
     const popOpen = active && String(active).startsWith('pop');
     const vpnOpen = active && String(active).startsWith('vpn');
+    const tenantsOpen = active && String(active).startsWith('tenants');
   %>
   <div class="km-brand">
     <div class="km-brand-logo-wrap">
@@ -28,10 +29,23 @@
       <span class="km-nav-icon"><i class="bi bi-diagram-3"></i></span>
       <span>Master Tenant</span>
     </a>
-    <a href="/management/tenants" class="km-nav-item km-nav-item--tenants <%= active === 'tenants' ? 'active' : '' %>">
-      <span class="km-nav-icon"><i class="bi bi-buildings"></i></span>
-      <span>Tenant</span>
-    </a>
+    <div class="km-nav-group <%= tenantsOpen ? 'is-open' : '' %>" id="tenantsNavGroup">
+      <button type="button" class="km-nav-item km-nav-item--tenants km-nav-btn km-nav-group__toggle <%= tenantsOpen ? 'active' : '' %>" aria-expanded="<%= tenantsOpen ? 'true' : 'false' %>" aria-controls="tenantsSubmenu">
+        <span class="km-nav-icon"><i class="bi bi-buildings"></i></span>
+        <span class="km-nav-group__label">Tenant</span>
+        <i class="bi bi-chevron-down km-nav-group__chevron" aria-hidden="true"></i>
+      </button>
+      <div class="km-nav-submenu" id="tenantsSubmenu">
+        <a href="/management/tenants" class="km-nav-submenu__item km-nav-item--tenants-list <%= active === 'tenants' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-list-ul"></i></span>
+          <span>Daftar Tenant</span>
+        </a>
+        <a href="/management/tenants/mrtg" class="km-nav-submenu__item km-nav-item--tenants-mrtg <%= active === 'tenants-mrtg' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-graph-up"></i></span>
+          <span>MRTG</span>
+        </a>
+      </div>
+    </div>
     <a href="/management/mobile-app" class="km-nav-item km-nav-item--mobile <%= active === 'mobile-app' ? 'active' : '' %>">
       <span class="km-nav-icon"><i class="bi bi-phone"></i></span>
       <span>Mobile App</span>
@@ -153,6 +167,14 @@
         <a href="/management/settings/reverse-proxy" class="km-nav-submenu__item km-nav-item--settings-proxy <%= active === 'settings-reverse-proxy' ? 'active' : '' %>">
           <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-hdd-network"></i></span>
           <span>Reverse Proxy</span>
+        </a>
+        <a href="/management/settings/api" class="km-nav-submenu__item km-nav-item--settings-api <%= active === 'settings-api' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-plug"></i></span>
+          <span>Pengaturan API</span>
+        </a>
+        <a href="/management/settings/mrtg" class="km-nav-submenu__item km-nav-item--settings-mrtg <%= active === 'settings-mrtg' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-graph-up"></i></span>
+          <span>Pengaturan MRTG</span>
         </a>
       </div>
     </div>

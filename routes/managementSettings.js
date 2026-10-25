@@ -97,6 +97,24 @@ router.use('/reverse-proxy', managementNginxRouter);
 
 router.get('/', (req, res) => res.redirect('/management/settings/users'));
 
+router.get('/api', (req, res) => {
+    res.render('platform/nms/index', {
+        title: 'Pengaturan API',
+        active: 'settings-api',
+        settingsSection: 'api',
+        adminName: req.session.platformAdminName,
+    });
+});
+
+router.get('/mrtg', (req, res) => {
+    res.render('platform/nms/mrtg', {
+        title: 'Pengaturan MRTG',
+        active: 'settings-mrtg',
+        settingsSection: 'mrtg',
+        adminName: req.session.platformAdminName,
+    });
+});
+
 // ── User Manager ──
 router.get('/users', async (req, res) => {
     try {

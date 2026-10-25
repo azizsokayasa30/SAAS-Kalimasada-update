@@ -706,7 +706,7 @@ async function sendNotificationToTechnicians(report) {
 
     try {
       const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-      if (!isWaSystemMonitorEnabled('trouble_report_routing_wa')) {
+      if (!(await isWaSystemMonitorEnabled('trouble_report_routing_wa', report?.tenant_id))) {
         logger.info('trouble_report_routing_wa off — skip WA laporan gangguan ke teknisi');
         return false;
       }
@@ -769,7 +769,7 @@ async function sendStatusUpdateToCustomer(report) {
 
     try {
       const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-      if (!isWaSystemMonitorEnabled('trouble_report_routing_wa')) {
+      if (!(await isWaSystemMonitorEnabled('trouble_report_routing_wa', report?.tenant_id))) {
         logger.info('trouble_report_routing_wa off — skip WA update gangguan ke pelanggan');
         return false;
       }

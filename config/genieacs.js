@@ -677,7 +677,31 @@ const genieacsApi = {
 };
 
 // Fungsi untuk memeriksa nilai RXPower dari semua perangkat
-async function monitorRXPower(threshold = -27) {
+async function monitorRXPower(threshold = -27, options = {}) {
+    if (!options.scoped) {
+        try {
+            const { hasTenantContext } = require('./platform/tenantContext');
+            if (!hasTenantContext()) {
+                const { runForEnabledTenants, claimTenantMonitorRun, readScopedSetting } = require('./whatsappMonitoringSettings');
+                const seenUrls = new Set();
+                await runForEnabledTenants('genieacs_rx_recap_wa', async (tenant) => {
+                    const hours = parseFloat(readScopedSetting('rxpower_recap_interval_hours', '6'));
+                    const gap = Math.max((Number.isFinite(hours) && hours > 0 ? hours : 6) * 60 * 60 * 1000, 60 * 1000);
+                    if (!claimTenantMonitorRun(tenant && tenant.id, 'genieacs_rx_recap_wa', gap)) return;
+                    const url = String(getConfiguredGenieacsUrlFromSettings() || '');
+                    const fingerprint = url || `tenant:${tenant && tenant.id}`;
+                    if (seenUrls.has(fingerprint)) return;
+                    seenUrls.add(fingerprint);
+                    try { mikrotik.resetMikrotikConnectionCache(); } catch (_) { /* optional */ }
+                    const scopedThreshold = parseFloat(readScopedSetting('rx_power_critical', String(threshold)));
+                    await monitorRXPower(Number.isFinite(scopedThreshold) ? scopedThreshold : threshold, { scoped: true });
+                });
+                return { success: true, criticalDevices: [], message: 'checked per tenant' };
+            }
+        } catch (scopeErr) {
+            console.error('Error scoping monitorRXPower:', scopeErr.message);
+        }
+    }
     try {
         console.log(`Memulai pemantauan RXPower dengan threshold ${threshold} dBm`);
 
@@ -813,7 +837,7 @@ async function monitorRXPower(threshold = -27) {
             message += `Mohon segera dicek untuk menghindari koneksi terputus.`;
 
             const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-            if (!isWaSystemMonitorEnabled('genieacs_rx_recap_wa')) {
+            if (!(await isWaSystemMonitorEnabled('genieacs_rx_recap_wa'))) {
                 console.log('Master switch genieacs_rx_recap_wa off — skip WA rekap RX GenieACS');
             } else {
                 await sendTechnicianMessage(message, 'high');
@@ -903,20 +927,33 @@ function getDeviceSerialNumber(device) {
 }
 
 // Fungsi untuk memantau perangkat yang tidak aktif (offline)
-async function monitorOfflineDevices(thresholdHours = null) {
-    try {
-        const offlineNotifEnabled = getSetting('offline_notification_enable', true) !== false;
-        if (!offlineNotifEnabled) {
-            console.log('Offline notification monitoring disabled (offline_notification_enable=false) — skip monitorOfflineDevices');
-            return {
-                success: true,
-                offlineDevices: [],
-                message: 'Offline notification monitoring disabled'
-            };
+async function monitorOfflineDevices(thresholdHours = null, options = {}) {
+    if (!options.scoped) {
+        try {
+            const { hasTenantContext } = require('./platform/tenantContext');
+            if (!hasTenantContext()) {
+                const { runForEnabledTenants, claimTenantMonitorRun, readScopedSetting } = require('./whatsappMonitoringSettings');
+                const seenUrls = new Set();
+                await runForEnabledTenants('genieacs_offline_digest_wa', async (tenant) => {
+                    const hours = parseFloat(readScopedSetting('offline_notification_interval_hours', '12'));
+                    const gap = Math.max((Number.isFinite(hours) && hours > 0 ? hours : 12) * 60 * 60 * 1000, 60 * 1000);
+                    if (!claimTenantMonitorRun(tenant && tenant.id, 'genieacs_offline_digest_wa', gap)) return;
+                    const url = String(getConfiguredGenieacsUrlFromSettings() || '');
+                    const fingerprint = url || `tenant:${tenant && tenant.id}`;
+                    if (seenUrls.has(fingerprint)) return;
+                    seenUrls.add(fingerprint);
+                    const scopedHours = parseInt(readScopedSetting('offline_device_threshold_hours', '24'), 10);
+                    await monitorOfflineDevices(Number.isFinite(scopedHours) ? scopedHours : thresholdHours, { scoped: true });
+                });
+                return { success: true, offlineDevices: [], message: 'checked per tenant' };
+            }
+        } catch (scopeErr) {
+            console.error('Error scoping monitorOfflineDevices:', scopeErr.message);
         }
-
-        const { isWaSystemMonitorEnabled: waMonOff } = require('./whatsappMonitoringSettings');
-        if (!waMonOff('genieacs_offline_digest_wa')) {
+    }
+    try {
+        const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
+        if (!(await isWaSystemMonitorEnabled('genieacs_offline_digest_wa'))) {
             console.log('Master switch genieacs_offline_digest_wa off — skip monitorOfflineDevices');
             return {
                 success: true,
@@ -925,9 +962,10 @@ async function monitorOfflineDevices(thresholdHours = null) {
             };
         }
 
-        // Jika thresholdHours tidak diberikan, ambil dari settings
+        // Jika thresholdHours tidak diberikan, ambil dari pengaturan tenant ini
         if (thresholdHours === null) {
-            thresholdHours = parseInt(getSetting('offline_device_threshold_hours', '24'));
+            const { readScopedSetting } = require('./whatsappMonitoringSettings');
+            thresholdHours = parseInt(readScopedSetting('offline_device_threshold_hours', '24'), 10);
         }
         console.log(`Memulai pemantauan perangkat offline dengan threshold ${thresholdHours} jam`);
 

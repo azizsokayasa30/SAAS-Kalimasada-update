@@ -5977,11 +5977,17 @@ router.get('/whatsapp-monitoring', getAppSettings, async (req, res) => {
 
 router.get('/whatsapp-monitoring/switches', getAppSettings, async (req, res) => {
     try {
-        const { MONITOR_DEFINITIONS, getMergedMonitors } = require('../config/whatsappMonitoringSettings');
+        const {
+            MONITOR_DEFINITIONS,
+            getMergedMonitorsForTenant
+        } = require('../config/whatsappMonitoringSettings');
+        const tenantId = resolveBillingTenantId(req);
+        const switches = await getMergedMonitorsForTenant(tenantId);
         res.json({
             success: true,
+            tenantId,
             monitors: MONITOR_DEFINITIONS,
-            switches: getMergedMonitors()
+            switches
         });
     } catch (error) {
         logger.error('Error reading WA monitoring switches:', error);
@@ -6003,12 +6009,10 @@ const WHATSAPP_MONITOR_SETTING_FIELDS = [
 
 router.get('/whatsapp-monitoring/settings', getAppSettings, async (req, res) => {
     try {
-        const values = {};
-        WHATSAPP_MONITOR_SETTING_FIELDS.forEach((field) => {
-            values[field.key] = getSetting(field.key, field.defaultValue);
-        });
-
-        res.json({ success: true, fields: WHATSAPP_MONITOR_SETTING_FIELDS, values });
+        const { readMonitorFieldValues } = require('../config/whatsappMonitoringSettings');
+        const tenantId = resolveBillingTenantId(req);
+        const values = await readMonitorFieldValues(tenantId, WHATSAPP_MONITOR_SETTING_FIELDS);
+        res.json({ success: true, tenantId, fields: WHATSAPP_MONITOR_SETTING_FIELDS, values });
     } catch (error) {
         logger.error('Error reading WA monitoring settings:', error);
         res.status(500).json({ success: false, message: error.message });
@@ -6017,20 +6021,10 @@ router.get('/whatsapp-monitoring/settings', getAppSettings, async (req, res) => 
 
 router.post('/whatsapp-monitoring/settings', getAppSettings, async (req, res) => {
     try {
+        const { writeMonitorFieldValues } = require('../config/whatsappMonitoringSettings');
+        const tenantId = resolveBillingTenantId(req);
         const incoming = req.body && typeof req.body === 'object' ? req.body : {};
-        WHATSAPP_MONITOR_SETTING_FIELDS.forEach((field) => {
-            if (!(field.key in incoming)) return;
-            const rawValue = incoming[field.key];
-            const value = field.type === 'boolean' ? rawValue === true || rawValue === 'true' || rawValue === 'on' : String(rawValue ?? '').trim();
-            setSetting(field.key, value);
-        });
-
-        const rxWarnHours = parseInt(getSetting('rx_power_notification_interval_hours', '1'), 10);
-        const rxRecapHours = parseInt(getSetting('rxpower_recap_interval_hours', '6'), 10);
-        const offlineHours = parseInt(getSetting('offline_notification_interval_hours', '12'), 10);
-        setSetting('rx_power_warning_interval', String(Math.max(rxWarnHours || 1, 1) * 60 * 60 * 1000));
-        setSetting('rxpower_recap_interval', String(Math.max(rxRecapHours || 6, 1) * 60 * 60 * 1000));
-        setSetting('offline_notification_interval', String(Math.max(offlineHours || 12, 1) * 60 * 60 * 1000));
+        const values = await writeMonitorFieldValues(tenantId, WHATSAPP_MONITOR_SETTING_FIELDS, incoming);
 
         try {
             const intervalManager = require('../config/intervalManager');
@@ -6045,11 +6039,7 @@ router.post('/whatsapp-monitoring/settings', getAppSettings, async (req, res) =>
             logger.warn('restartPPPoEMonitoring after WA monitoring settings:', e.message);
         }
 
-        const values = {};
-        WHATSAPP_MONITOR_SETTING_FIELDS.forEach((field) => {
-            values[field.key] = getSetting(field.key, field.defaultValue);
-        });
-        res.json({ success: true, fields: WHATSAPP_MONITOR_SETTING_FIELDS, values });
+        res.json({ success: true, tenantId, fields: WHATSAPP_MONITOR_SETTING_FIELDS, values });
     } catch (error) {
         logger.error('Error saving WA monitoring settings:', error);
         res.status(500).json({ success: false, message: error.message });
@@ -6058,12 +6048,13 @@ router.post('/whatsapp-monitoring/settings', getAppSettings, async (req, res) =>
 
 router.post('/whatsapp-monitoring/switches', getAppSettings, async (req, res) => {
     try {
-        const { setMonitorsPartial, getMergedMonitors } = require('../config/whatsappMonitoringSettings');
+        const { setMonitorsPartialForTenant, getMergedMonitorsForTenant } = require('../config/whatsappMonitoringSettings');
         const incoming = (req.body && req.body.switches) ? req.body.switches : req.body;
         if (!incoming || typeof incoming !== 'object') {
             return res.status(400).json({ success: false, message: 'Invalid body' });
         }
-        setMonitorsPartial(incoming);
+        const tenantId = resolveBillingTenantId(req);
+        await setMonitorsPartialForTenant(tenantId, incoming);
         try {
             const intervalManager = require('../config/intervalManager');
             intervalManager.restartAll();
@@ -6076,7 +6067,8 @@ router.post('/whatsapp-monitoring/switches', getAppSettings, async (req, res) =>
         } catch (e) {
             logger.warn('restartPPPoEMonitoring after WA monitors:', e.message);
         }
-        res.json({ success: true, switches: getMergedMonitors() });
+        const switches = await getMergedMonitorsForTenant(tenantId);
+        res.json({ success: true, tenantId, switches });
     } catch (error) {
         logger.error('Error saving WA monitoring switches:', error);
         res.status(500).json({ success: false, message: error.message });

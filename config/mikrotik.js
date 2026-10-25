@@ -12,6 +12,10 @@ const { looksLikePasswordHashNotCleartext } = require('../utils/passwordHashHeur
 
 let sock = null;
 let mikrotikConnection = null;
+
+function resetMikrotikConnectionCache() {
+    mikrotikConnection = null;
+}
 let monitorInterval = null;
 const MIN_MONITOR_INTERVAL_MS = 10 * 1000;
 
@@ -282,10 +286,10 @@ function setSock(sockInstance) {
     sock = sockInstance;
 }
 
-function isPppoeLoginLogoutWaEnabled() {
+async function isPppoeLoginLogoutWaEnabled(tenantId = null) {
     try {
         const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-        return isWaSystemMonitorEnabled('pppoe_login_logout_wa');
+        return await isWaSystemMonitorEnabled('pppoe_login_logout_wa', tenantId);
     } catch (_) {
         return true;
     }
@@ -5122,36 +5126,11 @@ async function setPPPoEProfile(username, profile) {
     }
 }
 // Fungsi untuk monitoring koneksi PPPoE
-let lastActivePPPoE = [];
+const legacyPppoeLastActive = new Map();
 async function monitorPPPoEConnections() {
     try {
-        if (!isPppoeLoginLogoutWaEnabled()) {
-            if (monitorInterval) {
-                clearInterval(monitorInterval);
-                monitorInterval = null;
-            }
-            logger.info('Legacy PPPoE WA monitoring is disabled by master switch');
-            return;
-        }
-
-        // Cek ENV untuk enable/disable monitoring
-        const monitorEnableRaw = getSetting('pppoe_monitor_enable', true);
-        const monitorEnable = typeof monitorEnableRaw === 'string'
-            ? monitorEnableRaw.toLowerCase() === 'true'
-            : Boolean(monitorEnableRaw);
-        if (!monitorEnable) {
-            logger.info('PPPoE monitoring is DISABLED by ENV');
-            return;
-        }
-        // Dapatkan interval monitoring dari konfigurasi dalam menit, konversi ke milidetik
-        const configuredIntervalMinutes = parseFloat(getSetting('pppoe_monitor_interval_minutes', '1'));
-        const configuredIntervalMs = Number.isFinite(configuredIntervalMinutes) && configuredIntervalMinutes > 0
-            ? configuredIntervalMinutes * 60 * 1000
-            : 60 * 1000;
-        const interval = Math.max(configuredIntervalMs, MIN_MONITOR_INTERVAL_MS);
-        const intervalMinutes = interval / (60 * 1000);
-        
-        console.log(`📋 Starting PPPoE monitoring (interval: ${intervalMinutes} menit / ${interval/1000}s)`);
+        const interval = Math.max(30 * 1000, MIN_MONITOR_INTERVAL_MS);
+        console.log(`📋 Starting PPPoE monitoring (per-tenant toggle, poll ${interval / 1000}s)`);
         
         // Bersihkan interval sebelumnya jika ada
         if (monitorInterval) {
@@ -5161,10 +5140,34 @@ async function monitorPPPoEConnections() {
         // Set interval untuk monitoring
         monitorInterval = setInterval(async () => {
             try {
-                if (!isPppoeLoginLogoutWaEnabled()) {
+                const { runForEnabledTenants, claimTenantMonitorRun, readScopedSetting } = require('./whatsappMonitoringSettings');
+                await runForEnabledTenants('pppoe_login_logout_wa', async (tenant) => {
+                    const tid = tenant && tenant.id;
+                    const minutes = parseFloat(readScopedSetting('pppoe_monitor_interval_minutes', '5'));
+                    const gap = Math.max((Number.isFinite(minutes) && minutes > 0 ? minutes : 5) * 60 * 1000, MIN_MONITOR_INTERVAL_MS);
+                    if (!claimTenantMonitorRun(tid, 'pppoe_login_logout_wa', gap)) return;
+                    resetMikrotikConnectionCache();
+                    await runLegacyPppoeWaCheck(tid);
+                });
+            } catch (error) {
+                logger.error(`Error in PPPoE monitoring: ${error.message}`);
+            }
+        }, interval);
+        
+        logger.info(`PPPoE monitoring started with interval ${interval}ms`);
+    } catch (error) {
+        logger.error(`Error starting PPPoE monitoring: ${error.message}`);
+    }
+}
+
+async function runLegacyPppoeWaCheck(tenantId) {
+            try {
+                if (!(await isPppoeLoginLogoutWaEnabled(tenantId))) {
                     logger.debug('Legacy PPPoE WA monitoring master switch is off, skipping check');
                     return;
                 }
+                const stateKey = tenantId ? String(tenantId) : '0';
+                const lastActivePPPoE = legacyPppoeLastActive.get(stateKey) || [];
 
                 // Dapatkan koneksi PPPoE aktif
                 const connections = await getActivePPPoEConnections();
@@ -5242,17 +5245,11 @@ async function monitorPPPoEConnections() {
                     }
                     logger.info('PPPoE LOGOUT:', logoutUsers);
                 }
-                lastActivePPPoE = activeNow;
+                legacyPppoeLastActive.set(stateKey, activeNow);
                 logger.info(`Monitoring PPPoE connections: ${connections.data.length} active connections`);
             } catch (error) {
                 logger.error(`Error in PPPoE monitoring: ${error.message}`);
             }
-        }, interval);
-        
-        logger.info(`PPPoE monitoring started with interval ${interval}ms`);
-    } catch (error) {
-        logger.error(`Error starting PPPoE monitoring: ${error.message}`);
-    }
 }
 // Fungsi untuk mendapatkan traffic interface
 async function getInterfaceTraffic(interfaceName = 'ether1') {
@@ -11723,6 +11720,7 @@ module.exports = {
     setSock,
     connectToMikrotik,
     getMikrotikConnection,
+    resetMikrotikConnectionCache,
     getMikrotikConnectionForRouter,
     testMikrotikConnectionForRouter,
     getCachedFullPppSecrets,

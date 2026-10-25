@@ -3,7 +3,7 @@ const logger = require('./logger');
 const pppoeNotifications = require('./pppoe-notifications');
 
 let monitorInterval = null;
-let lastActivePPPoE = [];
+const lastActiveByTenant = new Map();
 let isMonitoring = false;
 const MIN_POLLING_INTERVAL_MS = 10 * 1000;
 
@@ -13,48 +13,35 @@ function normalizePollingIntervalMs(value, fallbackMs = 300000) {
     return Math.max(interval, MIN_POLLING_INTERVAL_MS);
 }
 
-function isPppoeWaMonitorEnabled() {
+async function isPppoeWaMonitorEnabled(tenantId = null) {
     try {
         const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-        return isWaSystemMonitorEnabled('pppoe_login_logout_wa');
+        return await isWaSystemMonitorEnabled('pppoe_login_logout_wa', tenantId);
     } catch (_) {
         return true;
     }
 }
 
-// Start PPPoE monitoring
+// Start PPPoE monitoring. Interval pendek; tiap tenant memakai jeda miliknya sendiri.
 async function startPPPoEMonitoring() {
     try {
-        if (!isPppoeWaMonitorEnabled()) {
-            if (monitorInterval) {
-                clearInterval(monitorInterval);
-                monitorInterval = null;
-            }
-            isMonitoring = false;
-            logger.info('PPPoE WA monitoring disabled by master switch');
-            return { success: true, message: 'Monitoring PPPoE WA dinonaktifkan' };
-        }
-
-        if (isMonitoring) {
+        if (isMonitoring && monitorInterval) {
             logger.info('PPPoE monitoring is already running');
             return { success: true, message: 'Monitoring sudah berjalan' };
         }
 
-        const settings = pppoeNotifications.getSettings();
-        const interval = normalizePollingIntervalMs(settings.monitorInterval); // Default 5 menit, minimum 10 detik
+        const interval = 30 * 1000;
 
-        // Clear any existing interval
         if (monitorInterval) {
             clearInterval(monitorInterval);
         }
 
-        // Start monitoring
         monitorInterval = setInterval(async () => {
             await checkPPPoEChanges();
         }, interval);
 
         isMonitoring = true;
-        logger.info(`PPPoE monitoring started with interval ${interval}ms`);
+        logger.info(`PPPoE monitoring started with interval ${interval}ms (per-tenant toggle)`);
         
         return { 
             success: true, 
@@ -111,7 +98,30 @@ async function restartPPPoEMonitoring() {
 // Check for PPPoE login/logout changes
 async function checkPPPoEChanges() {
     try {
-        if (!isPppoeWaMonitorEnabled()) {
+        const { hasTenantContext } = require('./platform/tenantContext');
+        if (!hasTenantContext()) {
+            const { runForEnabledTenants, claimTenantMonitorRun, readScopedSetting } = require('./whatsappMonitoringSettings');
+            const { resetMikrotikConnectionCache } = require('./mikrotik');
+            await runForEnabledTenants('pppoe_login_logout_wa', async (tenant) => {
+                const tid = tenant && tenant.id;
+                const minutes = parseFloat(readScopedSetting('pppoe_monitor_interval_minutes', '5'));
+                const gap = normalizePollingIntervalMs((Number.isFinite(minutes) && minutes > 0 ? minutes : 5) * 60 * 1000);
+                if (!claimTenantMonitorRun(tid, 'pppoe_login_logout_wa', gap)) return;
+                resetMikrotikConnectionCache();
+                await checkPPPoEChangesForCurrentTenant(tid);
+            });
+            return;
+        }
+        await checkPPPoEChangesForCurrentTenant();
+    } catch (error) {
+        logger.error(`❌ Error in PPPoE monitoring check: ${error.message}`);
+        logger.error(`Error stack: ${error.stack}`);
+    }
+}
+
+async function checkPPPoEChangesForCurrentTenant(explicitTenantId = null) {
+    try {
+        if (!(await isPppoeWaMonitorEnabled(explicitTenantId))) {
             logger.debug('PPPoE WA monitoring master switch is off, skipping check');
             return;
         }
@@ -135,6 +145,8 @@ async function checkPPPoEChanges() {
 
         const connections = connectionsResult.data || [];
         const activeNow = connections.map(conn => conn.name).filter(Boolean); // Filter null/undefined
+        const stateKey = explicitTenantId ? String(explicitTenantId) : 'current';
+        const lastActivePPPoE = lastActiveByTenant.get(stateKey) || [];
 
         // Detect login/logout events
         const loginUsers = activeNow.filter(user => !lastActivePPPoE.includes(user));
@@ -184,8 +196,8 @@ async function checkPPPoEChanges() {
             }
         }
 
-        // Update last active users
-        lastActivePPPoE = activeNow;
+        // Update last active users for this tenant only
+        lastActiveByTenant.set(stateKey, activeNow);
 
         // Log monitoring status
         if (loginUsers.length > 0 || logoutUsers.length > 0) {
@@ -217,7 +229,7 @@ function getMonitoringStatus() {
         interval: settings.monitorInterval,
         adminNumbers: adminNumbers,
         technicianNumbers: technicianNumbers,
-        activeConnections: lastActivePPPoE.length
+        activeConnections: Array.from(lastActiveByTenant.values()).reduce((sum, list) => sum + (list ? list.length : 0), 0)
     };
 }
 
@@ -257,8 +269,6 @@ async function setMonitoringInterval(intervalMs) {
 // Initialize monitoring on startup
 async function initializePPPoEMonitoring() {
     try {
-        const settings = pppoeNotifications.getSettings();
-        
         // Cek apakah Mikrotik sudah dikonfigurasi dari database (routers table)
         // Prioritas: database routers table, fallback ke settings.json
         let hasMikrotikConfig = false;
@@ -312,19 +322,13 @@ async function initializePPPoEMonitoring() {
             return { success: false, message: 'Mikrotik belum dikonfigurasi' };
         }
         
-        // Auto-start monitoring if enabled
-        if (settings.enabled) {
-            const result = await startPPPoEMonitoring();
-            if (result.success) {
-                logger.info(`✅ PPPoE monitoring auto-started on initialization (using ${configSource})`);
-            } else {
-                logger.error(`❌ Failed to start PPPoE monitoring: ${result.message}`);
-            }
-            return result;
+        const result = await startPPPoEMonitoring();
+        if (result.success) {
+            logger.info(`✅ PPPoE monitoring auto-started on initialization (using ${configSource})`);
         } else {
-            logger.info('ℹ️ PPPoE monitoring disabled in settings');
-            return { success: true, message: 'PPPoE monitoring disabled in settings' };
+            logger.error(`❌ Failed to start PPPoE monitoring: ${result.message}`);
         }
+        return result;
     } catch (error) {
         logger.error(`❌ Error initializing PPPoE monitoring: ${error.message}`);
         logger.error(`Error stack: ${error.stack}`);

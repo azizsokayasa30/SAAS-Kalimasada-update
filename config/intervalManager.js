@@ -13,14 +13,7 @@ function getSafeIntervalMs(settingKey, defaultMs) {
     return Math.max(intervalMs, MIN_MONITORING_INTERVAL_MS);
 }
 
-function isWaMonitorEnabled(monitorId) {
-    try {
-        const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-        return isWaSystemMonitorEnabled(monitorId);
-    } catch (_) {
-        return true;
-    }
-}
+const TENANT_POLL_MS = 60 * 1000;
 
 class IntervalManager {
     constructor() {
@@ -92,40 +85,21 @@ class IntervalManager {
      */
     startRXPowerWarning() {
         try {
-            if (!isWaMonitorEnabled('rx_power_threshold_wa')) {
-                logger.info('RX Power Warning WA monitoring is disabled by master switch');
-                return;
-            }
+            logger.info('Starting RX Power Warning monitoring (per-tenant toggle, poll 60s)');
 
-            const notificationEnabled = getSetting('rx_power_notification_enable', true);
-            
-            if (!notificationEnabled) {
-                logger.info('RX Power Warning monitoring is disabled');
-                return;
-            }
-
-            // Ambil interval dari settings (dalam milliseconds)
-            const intervalMs = getSafeIntervalMs('rx_power_warning_interval', 36000000); // Default 10 jam
-            const intervalHours = Math.round(intervalMs / (1000 * 60 * 60));
-            
-            logger.info(`Starting RX Power Warning monitoring (interval: ${intervalHours} hours)`);
-
-            // Import dan jalankan fungsi monitoring
             const { checkRXPowerAndNotify } = require('./rxPowerMonitor');
             
-            // Jalankan pengecekan pertama dengan delay
             this.timeouts.rxPowerWarning = setTimeout(() => {
                 checkRXPowerAndNotify().catch(err => {
                     logger.error('Error in initial RX Power check:', err.message);
                 });
-            }, 10000); // Delay 10 detik
+            }, 10000);
 
-            // Set interval untuk pengecekan berkala
             this.intervals.rxPowerWarning = setInterval(() => {
                 checkRXPowerAndNotify().catch(err => {
                     logger.error('Error in periodic RX Power check:', err.message);
                 });
-            }, intervalMs);
+            }, TENANT_POLL_MS);
 
         } catch (error) {
             logger.error('Error starting RX Power Warning monitoring:', error.message);
@@ -137,40 +111,21 @@ class IntervalManager {
      */
     startRXPowerRecap() {
         try {
-            if (!isWaMonitorEnabled('genieacs_rx_recap_wa')) {
-                logger.info('RX Power Recap WA monitoring is disabled by master switch');
-                return;
-            }
+            logger.info('Starting RX Power Recap monitoring (per-tenant toggle, poll 60s)');
 
-            const recapEnabled = getSetting('rxpower_recap_enable', true);
-            
-            if (!recapEnabled) {
-                logger.info('RX Power Recap monitoring is disabled');
-                return;
-            }
-
-            // Ambil interval dari settings (dalam milliseconds)
-            const intervalMs = getSafeIntervalMs('rxpower_recap_interval', 21600000); // Default 6 jam
-            const intervalHours = Math.round(intervalMs / (1000 * 60 * 60));
-            
-            logger.info(`Starting RX Power Recap monitoring (interval: ${intervalHours} hours)`);
-
-            // Import dan jalankan fungsi monitoring
             const { monitorRXPower } = require('./genieacs');
             
-            // Jalankan pengecekan pertama dengan delay
             this.timeouts.rxPowerRecap = setTimeout(() => {
                 monitorRXPower().catch(err => {
                     logger.error('Error in initial RX Power Recap check:', err.message);
                 });
-            }, 5 * 60 * 1000); // Delay 5 menit
+            }, 5 * 60 * 1000);
 
-            // Set interval untuk pengecekan berkala
             this.intervals.rxPowerRecap = setInterval(() => {
                 monitorRXPower().catch(err => {
                     logger.error('Error in periodic RX Power Recap check:', err.message);
                 });
-            }, intervalMs);
+            }, TENANT_POLL_MS);
 
         } catch (error) {
             logger.error('Error starting RX Power Recap monitoring:', error.message);
@@ -182,40 +137,21 @@ class IntervalManager {
      */
     startOfflineNotification() {
         try {
-            if (!isWaMonitorEnabled('genieacs_offline_digest_wa')) {
-                logger.info('Offline Notification WA monitoring is disabled by master switch');
-                return;
-            }
+            logger.info('Starting Offline Notification monitoring (per-tenant toggle, poll 60s)');
 
-            const offlineNotifEnabled = getSetting('offline_notification_enable', true);
-            
-            if (!offlineNotifEnabled) {
-                logger.info('Offline Notification monitoring is disabled');
-                return;
-            }
-
-            // Ambil interval dari settings (dalam milliseconds)
-            const intervalMs = getSafeIntervalMs('offline_notification_interval', 43200000); // Default 12 jam
-            const intervalHours = Math.round(intervalMs / (1000 * 60 * 60));
-            
-            logger.info(`Starting Offline Notification monitoring (interval: ${intervalHours} hours)`);
-
-            // Import dan jalankan fungsi monitoring
             const { monitorOfflineDevices } = require('./genieacs');
             
-            // Jalankan pengecekan pertama dengan delay
             this.timeouts.offlineNotification = setTimeout(() => {
                 monitorOfflineDevices().catch(err => {
                     logger.error('Error in initial Offline Notification check:', err.message);
                 });
-            }, 5 * 60 * 1000); // Delay 5 menit
+            }, 5 * 60 * 1000);
 
-            // Set interval untuk pengecekan berkala
             this.intervals.offlineNotification = setInterval(() => {
                 monitorOfflineDevices().catch(err => {
                     logger.error('Error in periodic Offline Notification check:', err.message);
                 });
-            }, intervalMs);
+            }, TENANT_POLL_MS);
 
         } catch (error) {
             logger.error('Error starting Offline Notification monitoring:', error.message);

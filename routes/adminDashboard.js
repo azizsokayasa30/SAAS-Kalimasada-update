@@ -1014,4 +1014,16 @@ async function getNetworkIO() {
   return { rx: 0, tx: 0 };
 }
 
+router.get('/dashboard/api/mrtg', adminAuth, async (req, res) => {
+  try {
+    const nms = require('../config/platform/nmsService');
+    const tenantId = resolveRequestTenantId(req) || req.session?.tenantId || null;
+    const data = await nms.loadTenantGraphs(tenantId, req.query.range);
+    return res.json(data);
+  } catch (err) {
+    console.error('[DASHBOARD] mrtg:', err);
+    return res.json({ success: false, graphs: [], message: 'Gagal memuat graph MRTG' });
+  }
+});
+
 module.exports = router;

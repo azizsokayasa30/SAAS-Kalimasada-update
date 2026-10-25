@@ -443,6 +443,11 @@
   background: #a7f3d0;
 }
 
+.km-nav-item--nms .km-nav-icon {
+  color: #0f766e;
+  background: #99f6e4;
+}
+
 .km-nav-item--logout .km-nav-icon {
   color: #b91c1c;
   background: #fecaca;
@@ -486,6 +491,11 @@
 [data-theme="dark"] .km-nav-item--logout .km-nav-icon {
   color: #fca5a5;
   background: #7f1d1d;
+}
+
+[data-theme="dark"] .km-nav-item--nms .km-nav-icon {
+  color: #5eead4;
+  background: #134e4a;
 }
 
 .km-nav a:hover,
@@ -1409,6 +1419,26 @@
   background: #fef3c7;
 }
 
+.km-nav-item--settings-api .km-nav-icon--sub {
+  color: #0f766e;
+  background: #99f6e4;
+}
+
+.km-nav-item--settings-mrtg .km-nav-icon--sub {
+  color: #0369a1;
+  background: #bae6fd;
+}
+
+.km-nav-item--tenants-list .km-nav-icon--sub {
+  color: #6d28d9;
+  background: #ede9fe;
+}
+
+.km-nav-item--tenants-mrtg .km-nav-icon--sub {
+  color: #0f766e;
+  background: #99f6e4;
+}
+
 [data-theme="dark"] .km-nav-item--settings-users .km-nav-icon--sub {
   color: #c4b5fd;
   background: #4c1d95;
@@ -1432,6 +1462,26 @@
 [data-theme="dark"] .km-nav-item--settings-logs .km-nav-icon--sub {
   color: #fcd34d;
   background: #78350f;
+}
+
+[data-theme="dark"] .km-nav-item--settings-api .km-nav-icon--sub {
+  color: #5eead4;
+  background: #134e4a;
+}
+
+[data-theme="dark"] .km-nav-item--settings-mrtg .km-nav-icon--sub {
+  color: #7dd3fc;
+  background: #0c4a6e;
+}
+
+[data-theme="dark"] .km-nav-item--tenants-list .km-nav-icon--sub {
+  color: #c4b5fd;
+  background: #4c1d95;
+}
+
+[data-theme="dark"] .km-nav-item--tenants-mrtg .km-nav-icon--sub {
+  color: #5eead4;
+  background: #134e4a;
 }
 
 .km-nav a.km-nav-submenu__item {
@@ -1506,6 +1556,22 @@
 
 .km-nav-submenu__item.km-nav-item--settings-logs.active .km-nav-icon--sub {
   background: #d97706;
+}
+
+.km-nav-submenu__item.km-nav-item--settings-api.active .km-nav-icon--sub {
+  background: #0d9488;
+}
+
+.km-nav-submenu__item.km-nav-item--settings-mrtg.active .km-nav-icon--sub {
+  background: #0284c7;
+}
+
+.km-nav-submenu__item.km-nav-item--tenants-list.active .km-nav-icon--sub {
+  background: #7c3aed;
+}
+
+.km-nav-submenu__item.km-nav-item--tenants-mrtg.active .km-nav-icon--sub {
+  background: #0d9488;
 }
 
 .km-nav-item--finance-payments .km-nav-icon--sub { color: #0d9488; background: #ccfbf1; }

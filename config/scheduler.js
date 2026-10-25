@@ -560,13 +560,33 @@ class InvoiceScheduler {
     }
 
     async sendDueDateReminders() {
+        const { forEachOperationalTenant } = require('./platform/tenantJobs');
+        const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
         try {
-            const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-            if (!isWaSystemMonitorEnabled('billing_daily_due_wa')) {
-                logger.info('Master switch billing_daily_due_wa off — skip pengingat jatuh tempo harian');
+            const tenants = await require('./platform/tenantStore').listTenants({ operationalOnly: true });
+            if (!tenants || !tenants.length) {
+                if (!(await isWaSystemMonitorEnabled('billing_daily_due_wa', null))) {
+                    logger.info('Master switch billing_daily_due_wa off — skip pengingat jatuh tempo harian');
+                    return;
+                }
+                await this._sendDueDateRemindersForCurrentTenant();
                 return;
             }
+            await forEachOperationalTenant(async (tenant) => {
+                if (!(await isWaSystemMonitorEnabled('billing_daily_due_wa', tenant.id))) {
+                    logger.info(`billing_daily_due_wa off — skip pengingat jatuh tempo tenant #${tenant.id}`);
+                    return;
+                }
+                await this._sendDueDateRemindersForCurrentTenant();
+            }, { label: 'wa-due-reminder' });
+        } catch (error) {
+            logger.error('Error in sendDueDateReminders:', error);
+            throw error;
+        }
+    }
 
+    async _sendDueDateRemindersForCurrentTenant() {
+        try {
             const whatsappNotifications = require('./whatsapp-notifications');
             const invoices = await billingManager.getInvoices();
             const schedule = getBillingNotifySchedule();
@@ -637,11 +657,16 @@ class InvoiceScheduler {
      * Tetap dijalankan setelah commit DB; error hanya di-log.
      */
     _enqueueCustomerInvoiceNotifications(customerId, invoiceId) {
+        let schedTenantId = null;
+        try {
+            const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
+            if (hasTenantContext()) schedTenantId = getTenantId();
+        } catch (_) { /* ignore */ }
         void (async () => {
             // WA tagihan baru mengikuti jadwal harian (H-X), bukan saat invoice dibuat
             try {
                 const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-                if (isWaSystemMonitorEnabled('billing_scheduler_invoice_wa')) {
+                if (await isWaSystemMonitorEnabled('billing_scheduler_invoice_wa', schedTenantId)) {
                     logger.info(
                         `WA tagihan baru invoice ${invoiceId} ditunda ke jadwal harian ` +
                         `(H-${getBillingNotifySchedule().invoice_notify_days_before}, pengingat, hari H)`
@@ -659,10 +684,15 @@ class InvoiceScheduler {
     }
 
     _enqueueMemberInvoiceNotifications(memberId, invoiceId) {
+        let schedTenantId = null;
+        try {
+            const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
+            if (hasTenantContext()) schedTenantId = getTenantId();
+        } catch (_) { /* ignore */ }
         void (async () => {
             try {
                 const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-                if (isWaSystemMonitorEnabled('billing_scheduler_invoice_wa')) {
+                if (await isWaSystemMonitorEnabled('billing_scheduler_invoice_wa', schedTenantId)) {
                     logger.info(
                         `WA tagihan member invoice ${invoiceId} ditunda ke jadwal harian`
                     );

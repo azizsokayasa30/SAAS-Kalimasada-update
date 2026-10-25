@@ -514,7 +514,7 @@ class ServiceSuspensionManager {
 
             const sendSuspensionWa = async () => {
                 const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-                if (!isWaSystemMonitorEnabled('isolir_suspension_wa')) {
+                if (!(await isWaSystemMonitorEnabled('isolir_suspension_wa', customer?.tenant_id))) {
                     logger.info('isolir_suspension_wa off — skip WA suspensi');
                     return;
                 }
@@ -822,7 +822,7 @@ class ServiceSuspensionManager {
             void (async () => {
                 try {
                     const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-                    if (!isWaSystemMonitorEnabled('isolir_restore_wa')) {
+                    if (!(await isWaSystemMonitorEnabled('isolir_restore_wa', customer?.tenant_id))) {
                         logger.info('isolir_restore_wa off — skip WA restore');
                         return;
                     }
@@ -1148,7 +1148,7 @@ class ServiceSuspensionManager {
             // Send notification
             try {
                 const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-                if (!isWaSystemMonitorEnabled('member_isolir_wa')) {
+                if (!(await isWaSystemMonitorEnabled('member_isolir_wa', member?.tenant_id))) {
                     logger.info('member_isolir_wa off — skip WA isolir member');
                 } else {
                     const whatsappNotifications = require('./whatsapp-notifications');

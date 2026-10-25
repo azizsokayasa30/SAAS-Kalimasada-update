@@ -1,0 +1,101 @@
+<%- include('../partials/head', { title }) %>
+<%- include('../partials/sidebar', { active: active || 'settings-mrtg', adminName }) %>
+<main class="km-main">
+  <div class="km-topbar">
+    <div>
+      <h2>Pengaturan MRTG</h2>
+      <p class="km-subtitle">Pilih graph yang tampil di menu MRTG dan yang dipasang ke dashboard tenant.</p>
+    </div>
+  </div>
+
+  <%- include('../settings/_nav', { settingsSection: settingsSection || 'mrtg' }) %>
+
+  <div id="nmsPageAlert" class="alert d-none" role="status"></div>
+
+  <div class="km-card mb-3">
+    <h5 class="mb-3"><i class="bi bi-diagram-2 me-2"></i>Pasang graph ke tenant</h5>
+    <form id="nmsBindingForm" class="row g-3">
+      <div class="col-md-3">
+        <label class="form-label" for="nmsTenant">Tenant</label>
+        <select id="nmsTenant" class="form-select" required>
+          <option value="">Pilih tenant</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="nmsRouter">Router</label>
+        <select id="nmsRouter" class="form-select" required disabled>
+          <option value="">Pilih router</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="nmsDevice">Perangkat NMS</label>
+        <select id="nmsDevice" class="form-select" required>
+          <option value="">Pilih perangkat</option>
+        </select>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label" for="nmsGraph">Graph / interface</label>
+        <select id="nmsGraph" class="form-select" required disabled>
+          <option value="">Pilih graph</option>
+        </select>
+      </div>
+      <div class="col-md-8 d-flex align-items-center gap-4 flex-wrap">
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="nmsShowManagement" checked>
+          <label class="form-check-label" for="nmsShowManagement">Tampil di menu MRTG</label>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="nmsShowTenant" checked>
+          <label class="form-check-label" for="nmsShowTenant">Tampil di dashboard tenant</label>
+        </div>
+      </div>
+      <div class="col-md-4 text-md-end">
+        <button type="submit" class="btn btn-km-primary btn-sm">Simpan pemetaan</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="km-card mb-3">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h5 class="mb-0"><i class="bi bi-hdd-network me-2"></i>Perangkat NMS</h5>
+      <button type="button" class="btn btn-outline-secondary btn-sm" id="nmsReloadDevices">Muat ulang</button>
+    </div>
+    <div class="table-responsive" style="max-height: 280px;">
+      <table class="table table-sm table-hover align-middle mb-0">
+        <thead>
+          <tr><th>Nama</th><th>IP</th><th>Lokasi</th><th></th></tr>
+        </thead>
+        <tbody id="nmsDeviceBody">
+          <tr><td colspan="4" class="text-center text-muted py-4">Memuat perangkat…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="km-card km-card--flush">
+    <div class="px-3 pt-3">
+      <h5 class="mb-0">Pemetaan tersimpan</h5>
+      <p class="km-subtitle mb-2">Menghapus di sini hanya melepas tampilan di portal. Graph di NMS tidak diubah.</p>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Tenant</th>
+            <th>Router</th>
+            <th>Perangkat</th>
+            <th>Graph</th>
+            <th>Menu MRTG</th>
+            <th>Dashboard tenant</th>
+            <th class="text-end">Aksi</th>
+          </tr>
+        </thead>
+        <tbody id="nmsBindingBody">
+          <tr><td colspan="7" class="text-center text-muted py-4">Memuat pemetaan…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+<script src="/js/management-nms.js?v=3"></script>
+<%- include('../partials/footer') %>

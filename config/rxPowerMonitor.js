@@ -80,22 +80,79 @@ const parameterPaths = {
   ]
 };
 
+function scopedCachePrefix() {
+  try {
+    const { hasTenantContext, getTenantId } = require('./platform/tenantContext');
+    if (hasTenantContext()) return `${getTenantId()}:`;
+  } catch (_) { /* ignore */ }
+  return '';
+}
+
+function scopedNumber(key, fallback) {
+  const { readScopedSetting } = require('./whatsappMonitoringSettings');
+  const parsed = parseFloat(readScopedSetting(key, fallback));
+  return Number.isFinite(parsed) ? parsed : parseFloat(fallback);
+}
+
 // Fungsi untuk mengecek RX Power dan mengirim notifikasi
-async function checkRXPowerAndNotify() {
-  // Cek apakah notifikasi RX Power diaktifkan
-  const notificationEnabled = getSetting('rx_power_notification_enable', true);
-  if (!notificationEnabled) {
-    console.log('📊 RX Power notification is DISABLED in settings');
-    return;
+async function checkRXPowerAndNotify(options = {}) {
+  if (!options.scoped) {
+    try {
+      const { hasTenantContext } = require('./platform/tenantContext');
+      if (!hasTenantContext()) {
+        const { runForEnabledTenants, claimTenantMonitorRun } = require('./whatsappMonitoringSettings');
+        const seenUrls = new Set();
+        await runForEnabledTenants('rx_power_threshold_wa', async (tenant) => {
+          const hours = scopedNumber('rx_power_notification_interval_hours', '1');
+          const gap = Math.max((hours > 0 ? hours : 1) * 60 * 60 * 1000, 60 * 1000);
+          if (!claimTenantMonitorRun(tenant && tenant.id, 'rx_power_threshold_wa', gap)) return;
+          let url = '';
+          try {
+            url = String(require('./genieacs').getConfiguredGenieacsUrlFromSettings() || '');
+          } catch (_) { url = ''; }
+          const fingerprint = url || `tenant:${tenant && tenant.id}`;
+          if (seenUrls.has(fingerprint)) return;
+          seenUrls.add(fingerprint);
+          try {
+            const { resetMikrotikConnectionCache } = require('./mikrotik');
+            resetMikrotikConnectionCache();
+          } catch (_) { /* optional */ }
+          await checkRXPowerAndNotify({ scoped: true });
+        });
+        return;
+      }
+    } catch (err) {
+      console.error('❌ Error scoping RX Power check:', err.message);
+    }
   }
+
+  try {
+    const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
+    if (!(await isWaSystemMonitorEnabled('rx_power_threshold_wa'))) {
+      console.log('📊 RX Power WA monitoring is disabled for this tenant');
+      return;
+    }
+  } catch (_) { /* lanjut jika modul tidak tersedia */ }
 
   try {
     console.log('📊 Checking RX Power for all devices...');
     
-    // Ambil semua device dari GenieACS
-    const genieacsUrl = getSetting('genieacs_url', 'http://localhost:7557');
-    const username = getSetting('genieacs_username', '');
-    const password = getSetting('genieacs_password', '');
+    // Ambil device dari GenieACS tenant ini bila URL-nya tersimpan di tenant.
+    let genieacsUrl = getSetting('genieacs_url', 'http://localhost:7557');
+    let username = getSetting('genieacs_username', '');
+    let password = getSetting('genieacs_password', '');
+    try {
+      const { hasTenantContext } = require('./platform/tenantContext');
+      if (hasTenantContext()) {
+        const scopedUrl = require('./genieacs').getConfiguredGenieacsUrlFromSettings();
+        if (scopedUrl) genieacsUrl = scopedUrl;
+        const { getTenantSetting } = require('./platform/tenantSettings');
+        const scopedUser = getTenantSetting('genieacs_username', '');
+        const scopedPass = getTenantSetting('genieacs_password', '');
+        if (scopedUser) username = scopedUser;
+        if (scopedPass) password = scopedPass;
+      }
+    } catch (_) { /* pakai nilai di atas */ }
     
     // Gunakan axios sebagai pengganti fetch
     const response = await axios.get(`${genieacsUrl}/devices`, {
@@ -108,9 +165,8 @@ async function checkRXPowerAndNotify() {
     
     const devices = response.data;
     
-    // Ambil threshold dari settings
-    const warningThreshold = getSetting('rx_power_warning', -25);
-    const criticalThreshold = getSetting('rx_power_critical', -27);
+    const warningThreshold = scopedNumber('rx_power_warning', '-35');
+    const criticalThreshold = scopedNumber('rx_power_critical', '-37');
     
     console.log(`📊 Checking ${devices.length} devices with thresholds: Warning=${warningThreshold}dBm, Critical=${criticalThreshold}dBm`);
     
@@ -150,11 +206,11 @@ async function checkRXPowerAndNotify() {
 // Fungsi untuk mengirim notifikasi critical
 async function sendCriticalNotification(device, rxPowerValue, threshold) {
   const deviceId = device._id;
-  const cacheKey = `${deviceId}_critical`;
+  const cacheKey = `${scopedCachePrefix()}${deviceId}_critical`;
   const now = Date.now();
   
   // Ambil interval dalam jam, konversi ke milidetik (untuk caching notification)
-  const intervalHours = parseFloat(getSetting('rx_power_notification_interval_hours', '1'));
+  const intervalHours = scopedNumber('rx_power_notification_interval_hours', '1');
   const interval = intervalHours * 60 * 60 * 1000; // Convert hours to milliseconds
   
   // Cek apakah sudah pernah notifikasi dalam interval waktu
@@ -190,11 +246,11 @@ async function sendCriticalNotification(device, rxPowerValue, threshold) {
 // Fungsi untuk mengirim notifikasi warning
 async function sendWarningNotification(device, rxPowerValue, threshold) {
   const deviceId = device._id;
-  const cacheKey = `${deviceId}_warning`;
+  const cacheKey = `${scopedCachePrefix()}${deviceId}_warning`;
   const now = Date.now();
   
   // Ambil interval dalam jam, konversi ke milidetik (untuk caching notification)
-  const intervalHours = parseFloat(getSetting('rx_power_notification_interval_hours', '1'));
+  const intervalHours = scopedNumber('rx_power_notification_interval_hours', '1');
   const interval = intervalHours * 60 * 60 * 1000; // Convert hours to milliseconds
   
   // Cek apakah sudah pernah notifikasi dalam interval waktu
@@ -231,7 +287,7 @@ async function sendToTechnicians(message, priority = 'normal') {
   try {
     try {
       const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-      if (!isWaSystemMonitorEnabled('rx_power_threshold_wa')) {
+      if (!(await isWaSystemMonitorEnabled('rx_power_threshold_wa'))) {
         console.log('Master switch rx_power_threshold_wa off — skip RX power WA ke teknisi');
         return;
       }
@@ -317,31 +373,8 @@ async function sendToTechnicians(message, priority = 'normal') {
 
 // Fungsi untuk memulai monitoring RX Power
 function startRXPowerMonitoring() {
-  try {
-    const { isWaSystemMonitorEnabled } = require('./whatsappMonitoringSettings');
-    if (!isWaSystemMonitorEnabled('rx_power_threshold_wa')) {
-      console.log('📊 RX Power WA monitoring is DISABLED by master switch');
-      return;
-    }
-  } catch (_) { /* ignore */ }
-
-  const notificationEnabled = getSetting('rx_power_notification_enable', true);
-  
-  // Ambil interval dalam millisecond langsung dari settings
-  const configuredIntervalMs = parseInt(getSetting('rx_power_warning_interval', 36000000), 10); // Default 10 jam
-  const intervalMs = Math.max(
-    Number.isFinite(configuredIntervalMs) && configuredIntervalMs > 0 ? configuredIntervalMs : 36000000,
-    MIN_MONITORING_INTERVAL_MS
-  );
-  const intervalHours = Math.round(intervalMs / (1000 * 60 * 60));
-  const interval = intervalMs;
-  
-  if (!notificationEnabled) {
-    console.log('📊 RX Power monitoring is DISABLED in settings');
-    return;
-  }
-  
-  console.log(`📊 Starting RX Power monitoring (interval: ${intervalHours} jam / ${interval/1000}s)`);
+  const interval = 60 * 1000;
+  console.log('📊 Starting RX Power monitoring (per-tenant toggle, poll 60s)');
   
   // Jalankan pengecekan pertama dengan delay
   setTimeout(() => {
