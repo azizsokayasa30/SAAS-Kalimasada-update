@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const tenantStore = require('./tenantStore');
 const { isCopiedOrigin } = require('./masterRecordGuard');
+const { loadSchema, purgeForeignKeyDependents } = require('../../utils/customerDelete');
 
 let schemaReady = false;
 let schemaPromise = null;
@@ -378,6 +379,162 @@ async function insertCopiedCustomer(master, sourceTenant, source) {
     return { id: insert.id, packageId, username, customerId };
 }
 
+function quoteIdent(name) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(name || ''))) {
+        throw new Error(`Identifier SQL tidak valid: ${name}`);
+    }
+    return `"${name}"`;
+}
+
+function chunkIds(items, size) {
+    const out = [];
+    for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+    return out;
+}
+
+function primaryKeyName(columns) {
+    const pks = (columns || []).filter((col) => col.pk > 0).sort((a, b) => a.pk - b.pk);
+    return pks.length === 1 ? pks[0].name : 'rowid';
+}
+
+async function deleteLooseCustomerRows(schema, customerId) {
+    const linkedByFk = new Set();
+    for (const table of schema.tables) {
+        for (const fk of schema.foreignKeys[table] || []) {
+            if (fk.table === 'customers') linkedByFk.add(table);
+        }
+    }
+
+    const conn = tenantStore.getDb();
+    for (const table of schema.tables) {
+        if (table === 'customers' || linkedByFk.has(table)) continue;
+        const cols = schema.columns[table] || [];
+        if (!cols.some((col) => col.name === 'customer_id')) continue;
+        const pk = primaryKeyName(cols);
+        const rows = await dbAll(
+            `SELECT ${quoteIdent(pk)} AS pk FROM ${quoteIdent(table)} WHERE customer_id = ?`,
+            [customerId]
+        );
+        const ids = rows.map((row) => row.pk).filter((id) => id != null);
+        if (!ids.length) continue;
+        await purgeForeignKeyDependents(conn, schema, table, pk, ids, new Set());
+        await dbRun(`DELETE FROM ${quoteIdent(table)} WHERE customer_id = ?`, [customerId]);
+    }
+}
+
+async function removeCopiedMirror(masterTenantId, mirror) {
+    const conn = tenantStore.getDb();
+    const schema = await loadSchema(conn);
+    const invoices = await dbAll(
+        `SELECT id FROM invoices WHERE tenant_id = ? AND customer_id = ?`,
+        [masterTenantId, mirror.id]
+    );
+    const invoiceIds = invoices.map((row) => Number(row.id)).filter((id) => Number.isFinite(id));
+
+    if (invoiceIds.length) {
+        await purgeForeignKeyDependents(conn, schema, 'invoices', 'id', invoiceIds, new Set());
+        for (const part of chunkIds(invoiceIds, 400)) {
+            const placeholders = part.map(() => '?').join(',');
+            await dbRun(`DELETE FROM payments WHERE invoice_id IN (${placeholders})`, part);
+            await dbRun(
+                `DELETE FROM invoices WHERE tenant_id = ? AND customer_id = ? AND id IN (${placeholders})`,
+                [masterTenantId, mirror.id, ...part]
+            );
+        }
+    }
+
+    await deleteLooseCustomerRows(schema, mirror.id);
+    await purgeForeignKeyDependents(conn, schema, 'customers', 'id', [mirror.id], new Set());
+
+    const deleted = await dbRun(
+        `DELETE FROM customers
+         WHERE id = ? AND tenant_id = ? AND master_origin = 'copied'
+           AND source_tenant_id = ? AND source_customer_id = ?`,
+        [mirror.id, masterTenantId, mirror.source_tenant_id, mirror.source_customer_id]
+    );
+    if (!deleted.changes) {
+        throw new Error('Salinan pelanggan di master tenant gagal dihapus.');
+    }
+}
+
+async function cancelCustomerCopy(sourceTenantId, sourceCustomerId, actor = {}) {
+    await ensureMasterMirrorSchema();
+    const master = await tenantStore.getMasterTenant();
+    if (!master) {
+        throw new Error('Master tenant belum dibuat. Setup dulu di /management/master-tenant/setup.');
+    }
+    const sourceTenant = await tenantStore.getTenantById(sourceTenantId);
+    if (!sourceTenant || sourceTenant.is_master) {
+        throw new Error('Tenant sumber tidak valid.');
+    }
+
+    const link = await dbGet(
+        `SELECT * FROM master_customer_copies
+         WHERE source_tenant_id = ? AND source_customer_id = ?`,
+        [sourceTenant.id, sourceCustomerId]
+    );
+    if (!link) {
+        const err = new Error('Pelanggan ini belum tersalin ke master tenant.');
+        err.code = 'NOT_COPIED';
+        throw err;
+    }
+
+    const mirror = await dbGet('SELECT * FROM customers WHERE id = ?', [link.master_customer_id]);
+    if (mirror) {
+        if (Number(mirror.tenant_id) !== Number(master.id) || !isCopiedOrigin(mirror)) {
+            throw new Error('Data di master bukan salinan view-only. Pembatalan dibatalkan agar data asli tidak terhapus.');
+        }
+        if (
+            Number(mirror.source_tenant_id) !== Number(sourceTenant.id)
+            || Number(mirror.source_customer_id) !== Number(sourceCustomerId)
+        ) {
+            throw new Error('Referensi salinan tidak cocok dengan tenant sumber. Pembatalan dibatalkan.');
+        }
+    }
+
+    const source = await dbGet(
+        `SELECT id, name, phone FROM customers WHERE id = ? AND tenant_id = ?`,
+        [sourceCustomerId, sourceTenant.id]
+    );
+
+    await beginImmediate();
+    try {
+        if (mirror) {
+            await removeCopiedMirror(master.id, mirror);
+        }
+        await dbRun('DELETE FROM master_customer_copies WHERE id = ?', [link.id]);
+        await dbRun(
+            `INSERT INTO master_copy_audit (
+                master_tenant_id, source_tenant_id, source_customer_id, master_customer_id,
+                actor_type, actor_id, action, details
+             ) VALUES (?, ?, ?, ?, ?, ?, 'cancel_copy', ?)`,
+            [
+                master.id,
+                sourceTenant.id,
+                sourceCustomerId,
+                link.master_customer_id,
+                actor.actorType || 'SuperAdmin',
+                actor.actorId || null,
+                JSON.stringify({
+                    source_name: source?.name || null,
+                    source_phone: source?.phone || null,
+                    removed_mirror: Boolean(mirror),
+                }),
+            ]
+        );
+        await commitTx();
+        return {
+            masterCustomerId: link.master_customer_id,
+            sourceTenantId: sourceTenant.id,
+            sourceCustomerId: Number(sourceCustomerId),
+            removedMirror: Boolean(mirror),
+        };
+    } catch (err) {
+        await rollbackTx();
+        throw err;
+    }
+}
+
 async function copyCustomerFromTenant(sourceTenantId, sourceCustomerId, actor = {}) {
     await ensureMasterMirrorSchema();
     const master = await tenantStore.getMasterTenant();
@@ -580,6 +737,7 @@ module.exports = {
     ensureMasterMirrorSchema,
     listCopiedSourceIds,
     copyCustomerFromTenant,
+    cancelCustomerCopy,
     syncMirroredCustomer,
     syncAllMirroredCustomers,
     maybeSyncOnMasterView,

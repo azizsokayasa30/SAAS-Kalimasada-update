@@ -92,7 +92,8 @@ function normalizeCustomerListQuery(query = {}) {
     const area = query.area != null ? String(query.area).slice(0, 120) : '';
     const pkg = query.package != null ? String(query.package).slice(0, 20) : '';
     const status = query.status != null ? String(query.status).slice(0, 60) : '';
-    return { sort, dir, copy_status: copyStatus, area, package: pkg, status };
+    const q = query.q != null ? String(query.q).trim().replace(/^#/, '').slice(0, 80) : '';
+    return { sort, dir, copy_status: copyStatus, area, package: pkg, status, q };
 }
 
 function dbAllAsync(db, sql, params) {
@@ -210,6 +211,16 @@ async function getChildCustomers(childId, { page = 1, limit = 50, query = {} } =
         } else if (listQuery.status) {
             where.push('c.status = ?');
             params.push(listQuery.status);
+        }
+        if (listQuery.q) {
+            const term = `%${listQuery.q.replace(/[%_]/g, '')}%`;
+            where.push(`(
+                c.name LIKE ? COLLATE NOCASE
+                OR IFNULL(c.phone, '') LIKE ?
+                OR CAST(c.id AS TEXT) LIKE ?
+                OR IFNULL(CAST(c.customer_id AS TEXT), '') LIKE ?
+            )`);
+            params.push(term, term, term, term);
         }
 
         const dir = listQuery.dir.toUpperCase();

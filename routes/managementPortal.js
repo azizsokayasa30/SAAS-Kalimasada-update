@@ -682,7 +682,7 @@ function parseCustomerIds(body) {
     return [...new Set(arr.map((id) => parseInt(id, 10)).filter((id) => Number.isFinite(id) && id > 0))].slice(0, 100);
 }
 
-const CUSTOMER_LIST_STATE_KEYS = ['sort', 'dir', 'copy_status', 'area', 'package', 'status'];
+const CUSTOMER_LIST_STATE_KEYS = ['sort', 'dir', 'copy_status', 'area', 'package', 'status', 'q'];
 
 function customerListState(req) {
     const state = {};
@@ -886,6 +886,135 @@ router.post('/master-tenant/children/:id/customers/copy-selected', async (req, r
     } catch (err) {
         console.error('[platform] bulk copy to master:', err);
         return fail(err.message || 'Gagal menyalin pelanggan.');
+    }
+});
+
+router.post('/master-tenant/children/:id/customers/:customerId/cancel', async (req, res) => {
+    const childId = parseInt(req.params.id, 10);
+    const customerId = parseInt(req.params.customerId, 10);
+    const wantsJson = String(req.get('Accept') || '').includes('application/json')
+        || req.xhr
+        || req.query.format === 'json';
+
+    const fail = (status, message, extra = {}) => {
+        if (wantsJson) {
+            return res.status(status).json({ success: false, message, ...extra });
+        }
+        return res.redirect(childCustomersListUrl(childId, {
+            ...customerListState(req),
+            error: message,
+            limit: req.query.limit || req.body?.limit,
+            page: req.query.page || req.body?.page,
+        }));
+    };
+
+    try {
+        const master = await tenantStore.getMasterTenant();
+        if (!master) return fail(400, 'Master tenant belum dibuat.');
+        if (!Number.isFinite(childId) || !Number.isFinite(customerId)) {
+            return fail(400, 'Parameter tidak valid.');
+        }
+        const child = await masterTenantService.getChildTenantById(childId);
+        if (!child) return fail(404, 'Tenant child tidak ditemukan.');
+
+        const copyService = require('../config/platform/masterCustomerCopyService');
+        const result = await copyService.cancelCustomerCopy(childId, customerId, {
+            actorType: 'SuperAdmin',
+            actorId: req.session.platformAdminId,
+        });
+        await tenantStore.auditLog({
+            tenantId: master.id,
+            actorType: 'SuperAdmin',
+            actorId: req.session.platformAdminId,
+            action: 'master_customer_copy_cancelled',
+            details: result,
+            ip: req.ip,
+        });
+        masterTenantService.bustOverviewCache();
+
+        if (wantsJson) {
+            return res.json({
+                success: true,
+                message: 'Salinan pelanggan di master tenant dibatalkan. Data tenant sumber tidak diubah.',
+                data: result,
+            });
+        }
+        return res.redirect(childCustomersListUrl(childId, {
+            ...customerListState(req),
+            cancelled: 1,
+            limit: req.query.limit || req.body?.limit,
+            page: req.query.page || req.body?.page,
+        }));
+    } catch (err) {
+        if (err.code === 'NOT_COPIED') {
+            return fail(409, err.message, { code: err.code });
+        }
+        console.error('[platform] cancel customer copy:', err);
+        return fail(500, err.message || 'Gagal membatalkan salinan.');
+    }
+});
+
+router.post('/master-tenant/children/:id/customers/cancel-selected', async (req, res) => {
+    const childId = parseInt(req.params.id, 10);
+    const ids = parseCustomerIds(req.body);
+    const limit = parseCustomerPageLimit(req.body?.limit || req.query.limit);
+    const page = req.body?.page || req.query.page;
+    const listState = customerListState(req);
+
+    const fail = (message) => {
+        return res.redirect(childCustomersListUrl(childId, { ...listState, error: message, limit, page }));
+    };
+
+    try {
+        const master = await tenantStore.getMasterTenant();
+        if (!master) return fail('Master tenant belum dibuat.');
+        if (!Number.isFinite(childId)) return fail('Parameter tidak valid.');
+        if (!ids.length) return fail('Pilih minimal satu pelanggan untuk dibatalkan salinannya.');
+
+        const child = await masterTenantService.getChildTenantById(childId);
+        if (!child) return fail('Tenant child tidak ditemukan.');
+
+        const copyService = require('../config/platform/masterCustomerCopyService');
+        let cancelled = 0;
+        let cancelSkipped = 0;
+        let cancelFailed = 0;
+        const errors = [];
+
+        for (const customerId of ids) {
+            try {
+                const result = await copyService.cancelCustomerCopy(childId, customerId, {
+                    actorType: 'SuperAdmin',
+                    actorId: req.session.platformAdminId,
+                });
+                cancelled += 1;
+                await tenantStore.auditLog({
+                    tenantId: master.id,
+                    actorType: 'SuperAdmin',
+                    actorId: req.session.platformAdminId,
+                    action: 'master_customer_copy_cancelled',
+                    details: result,
+                    ip: req.ip,
+                });
+            } catch (err) {
+                if (err.code === 'NOT_COPIED') {
+                    cancelSkipped += 1;
+                } else {
+                    cancelFailed += 1;
+                    errors.push(`#${customerId}: ${err.message}`);
+                    console.error('[platform] bulk cancel customer copy:', err);
+                }
+            }
+        }
+
+        masterTenantService.bustOverviewCache();
+        const flash = { ...listState, cancelled, cancelSkipped, cancelFailed, limit, page };
+        if (cancelFailed && errors.length) {
+            flash.error = errors.slice(0, 3).join(' | ');
+        }
+        return res.redirect(childCustomersListUrl(childId, flash));
+    } catch (err) {
+        console.error('[platform] bulk cancel copy:', err);
+        return fail(err.message || 'Gagal membatalkan salinan.');
     }
 });
 

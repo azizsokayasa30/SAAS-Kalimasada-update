@@ -5,9 +5,12 @@
   const flashCopied = (typeof flash !== 'undefined' && flash) ? (parseInt(flash.copied, 10) || 0) : 0;
   const flashSkipped = (typeof flash !== 'undefined' && flash) ? (parseInt(flash.skipped, 10) || 0) : 0;
   const flashFailed = (typeof flash !== 'undefined' && flash) ? (parseInt(flash.failed, 10) || 0) : 0;
+  const flashCancelled = (typeof flash !== 'undefined' && flash) ? (parseInt(flash.cancelled, 10) || 0) : 0;
+  const flashCancelSkipped = (typeof flash !== 'undefined' && flash) ? (parseInt(flash.cancelSkipped, 10) || 0) : 0;
+  const flashCancelFailed = (typeof flash !== 'undefined' && flash) ? (parseInt(flash.cancelFailed, 10) || 0) : 0;
   const listQuery = (typeof customers !== 'undefined' && customers && customers.query) ? customers.query : {};
   const emptyFilterValue = (typeof customers !== 'undefined' && customers && customers.emptyFilterValue) ? customers.emptyFilterValue : '__none__';
-  const listStateKeys = ['sort', 'dir', 'copy_status', 'area', 'package', 'status'];
+  const listStateKeys = ['sort', 'dir', 'copy_status', 'area', 'package', 'status', 'q'];
   const customersUrl = function (overrides) {
     const params = new URLSearchParams({ tab: 'customers', limit: String(customersLimit) });
     listStateKeys.forEach(function (key) { if (listQuery[key]) params.set(key, listQuery[key]); });
@@ -26,7 +29,7 @@
     if (listQuery.sort !== key) return 'bi-arrow-down-up opacity-50';
     return listQuery.dir === 'asc' ? 'bi-sort-up' : 'bi-sort-down';
   };
-  const hasActiveFilter = !!(listQuery.copy_status || listQuery.area || listQuery.package || listQuery.status);
+  const hasActiveFilter = !!(listQuery.copy_status || listQuery.area || listQuery.package || listQuery.status || listQuery.q);
   const customersAllTotal = (typeof customers !== 'undefined' && customers && customers.allTotal != null) ? customers.allTotal : (usage.customers.total || 0);
   const copiedTotal = (typeof copyStats !== 'undefined' && copyStats) ? (copyStats.copied || 0) : 0;
   const notCopiedTotal = Math.max(0, customersAllTotal - copiedTotal);
@@ -56,6 +59,19 @@
     </div>
   <% } else if (flashSkipped > 0 && flashFailed === 0) { %>
     <div class="alert alert-info">Semua pelanggan yang dipilih sudah ada di master tenant.</div>
+  <% } %>
+  <% if (flashCancelled > 0) { %>
+    <div class="alert alert-success">
+      <% if (flashCancelled === 1 && !flashCancelSkipped && !flashCancelFailed) { %>
+        Salinan pelanggan di master tenant dibatalkan. Data tenant sumber tidak diubah, dan pelanggan ini bisa di-copy ulang.
+      <% } else { %>
+        <%= flashCancelled %> salinan dibatalkan dari master tenant. Data tenant sumber tidak diubah.
+        <% if (flashCancelSkipped > 0) { %> <%= flashCancelSkipped %> belum ada di master.<% } %>
+        <% if (flashCancelFailed > 0) { %> <%= flashCancelFailed %> gagal.<% } %>
+      <% } %>
+    </div>
+  <% } else if (flashCancelSkipped > 0 && flashCancelFailed === 0) { %>
+    <div class="alert alert-info">Pelanggan yang dipilih belum ada di master tenant.</div>
   <% } %>
   <% if (typeof flash !== 'undefined' && flash && flash.error) { %>
     <div class="alert alert-danger"><%= flash.error %></div>
@@ -124,13 +140,33 @@
         <button type="submit" class="btn btn-sm btn-primary">
           <i class="bi bi-clipboard-plus"></i> Copy yang ditandai
         </button>
-        <small id="bulkCopyHint" style="color: var(--text-muted)">0 dipilih</small>
+        <small id="bulkCopyHint" style="color: var(--text-muted)">0 untuk di-copy</small>
+      </form>
+      <form id="bulkCancelForm" method="POST" action="/management/master-tenant/children/<%= child.id %>/customers/cancel-selected" class="d-flex flex-wrap gap-2 align-items-center mb-0" onsubmit="return window.confirmMasterBulkCancel();">
+        <input type="hidden" name="limit" value="<%= customersLimit %>">
+        <input type="hidden" name="page" value="<%= customers.page %>">
+        <% listStateKeys.forEach(function (key) { if (listQuery[key]) { %>
+          <input type="hidden" name="<%= key %>" value="<%= listQuery[key] %>">
+        <% } }); %>
+        <button type="submit" class="btn btn-sm btn-outline-danger">
+          <i class="bi bi-x-circle"></i> Batalkan yang ditandai
+        </button>
+        <small id="bulkCancelHint" style="color: var(--text-muted)">0 untuk dibatalkan</small>
       </form>
     </div>
     <form method="GET" action="/management/master-tenant/children/<%= child.id %>" class="d-flex flex-wrap gap-2 align-items-end p-3 border-bottom mb-0">
       <input type="hidden" name="tab" value="customers">
       <input type="hidden" name="sort" value="<%= listQuery.sort || 'id' %>">
       <input type="hidden" name="dir" value="<%= listQuery.dir || 'desc' %>">
+      <div style="min-width: 16rem; flex: 1 1 16rem; max-width: 24rem;">
+        <label class="small mb-1 d-block" style="color: var(--text-muted)" for="customerSearch">Cari pelanggan</label>
+        <div class="input-group input-group-sm">
+          <input id="customerSearch" type="search" name="q" value="<%= listQuery.q || '' %>" class="form-control" placeholder="Nama, telepon, atau ID" autocomplete="off">
+          <button type="submit" class="btn btn-outline-secondary" title="Cari">
+            <i class="bi bi-search"></i>
+          </button>
+        </div>
+      </div>
       <div>
         <label class="small mb-1 d-block" style="color: var(--text-muted)" for="filterCopyStatus">Status copy</label>
         <select id="filterCopyStatus" name="copy_status" class="form-select form-select-sm" style="width: auto;" onchange="this.form.submit()">
@@ -178,7 +214,7 @@
         </select>
       </div>
       <% if (hasActiveFilter) { %>
-        <a href="<%= customersUrl({ copy_status: null, area: null, package: null, status: null, page: null }) %>" class="btn btn-sm btn-outline-secondary">
+        <a href="<%= customersUrl({ copy_status: null, area: null, package: null, status: null, q: null, page: null }) %>" class="btn btn-sm btn-outline-secondary">
           <i class="bi bi-x-circle"></i> Reset filter
         </a>
       <% } %>
@@ -202,15 +238,15 @@
         </thead>
         <tbody>
           <% if (!customers.rows.length) { %>
-            <tr><td colspan="9" class="text-center py-4" style="color: var(--text-muted)"><%= hasActiveFilter ? 'Tidak ada pelanggan yang cocok dengan filter.' : 'Tidak ada pelanggan.' %></td></tr>
+            <tr><td colspan="9" class="text-center py-4" style="color: var(--text-muted)"><%= hasActiveFilter ? 'Tidak ada pelanggan yang cocok dengan pencarian atau filter.' : 'Tidak ada pelanggan.' %></td></tr>
           <% } %>
           <% customers.rows.forEach(function(row) { %>
             <tr>
               <td>
                 <% if (!row.copied_to_master) { %>
-                  <input type="checkbox" class="form-check-input js-copy-customer" name="customer_ids" value="<%= row.id %>" form="bulkCopyForm">
+                  <input type="checkbox" class="form-check-input js-copy-customer" name="customer_ids" value="<%= row.id %>" form="bulkCopyForm" title="Tandai untuk di-copy">
                 <% } else { %>
-                  <input type="checkbox" class="form-check-input" disabled title="Sudah di master">
+                  <input type="checkbox" class="form-check-input js-cancel-customer" name="customer_ids" value="<%= row.id %>" form="bulkCancelForm" title="Tandai untuk dibatalkan dari master">
                 <% } %>
               </td>
               <td>#<%= row.id %></td>
@@ -239,7 +275,19 @@
               <td><%= row.join_date || row.created_at || '—' %></td>
               <td class="text-end">
                 <% if (row.copied_to_master) { %>
-                  <span class="badge bg-success">Sudah di master</span>
+                  <div class="d-inline-flex align-items-center justify-content-end gap-2 flex-wrap">
+                    <span class="badge bg-success">Sudah di master</span>
+                    <form method="POST" action="/management/master-tenant/children/<%= child.id %>/customers/<%= row.id %>/cancel" class="d-inline mb-0" onsubmit="return confirm('Batalkan salinan pelanggan ini dari master tenant? Data tenant sumber tidak diubah. Salinan pelanggan, tagihan, dan pembayaran di master akan dihapus.');">
+                      <input type="hidden" name="limit" value="<%= customersLimit %>">
+                      <input type="hidden" name="page" value="<%= customers.page %>">
+                      <% listStateKeys.forEach(function (key) { if (listQuery[key]) { %>
+                        <input type="hidden" name="<%= key %>" value="<%= listQuery[key] %>">
+                      <% } }); %>
+                      <button type="submit" class="btn btn-sm btn-outline-danger" title="Batalkan salinan di master tenant">
+                        <i class="bi bi-x-circle"></i> Batalkan
+                      </button>
+                    </form>
+                  </div>
                 <% } else { %>
                   <form method="POST" action="/management/master-tenant/children/<%= child.id %>/customers/<%= row.id %>/copy" class="d-inline" onsubmit="return confirm('Salin pelanggan ini ke master tenant? Data tenant sumber tidak akan diubah.');">
                     <input type="hidden" name="limit" value="<%= customersLimit %>">
@@ -323,12 +371,21 @@
 (function () {
   var selectAll = document.getElementById('selectAllCustomers');
   var hint = document.getElementById('bulkCopyHint');
-  var boxes = function () { return Array.prototype.slice.call(document.querySelectorAll('.js-copy-customer')); };
+  var cancelHint = document.getElementById('bulkCancelHint');
+  var copyBoxes = function () { return Array.prototype.slice.call(document.querySelectorAll('.js-copy-customer')); };
+  var cancelBoxes = function () { return Array.prototype.slice.call(document.querySelectorAll('.js-cancel-customer')); };
+  var boxes = function () { return copyBoxes().concat(cancelBoxes()); };
+  function checkedCount(list) {
+    return list.filter(function (el) { return el.checked; }).length;
+  }
   function updateHint() {
-    var n = boxes().filter(function (el) { return el.checked; }).length;
-    if (hint) hint.textContent = n + ' dipilih';
+    var copyCount = checkedCount(copyBoxes());
+    var cancelCount = checkedCount(cancelBoxes());
+    if (hint) hint.textContent = copyCount + ' untuk di-copy';
+    if (cancelHint) cancelHint.textContent = cancelCount + ' untuk dibatalkan';
     if (selectAll) {
       var all = boxes();
+      var n = copyCount + cancelCount;
       selectAll.checked = all.length > 0 && all.every(function (el) { return el.checked; });
       selectAll.indeterminate = n > 0 && n < all.length;
     }
@@ -341,12 +398,20 @@
   }
   boxes().forEach(function (el) { el.addEventListener('change', updateHint); });
   window.confirmMasterBulkCopy = function () {
-    var n = boxes().filter(function (el) { return el.checked; }).length;
+    var n = checkedCount(copyBoxes());
     if (!n) {
-      alert('Pilih minimal satu pelanggan untuk di-copy.');
+      alert('Pilih minimal satu pelanggan yang belum di-copy.');
       return false;
     }
     return confirm('Salin ' + n + ' pelanggan ke master tenant? Data tenant sumber tidak akan diubah.');
+  };
+  window.confirmMasterBulkCancel = function () {
+    var n = checkedCount(cancelBoxes());
+    if (!n) {
+      alert('Pilih minimal satu pelanggan yang sudah ada di master.');
+      return false;
+    }
+    return confirm('Batalkan salinan ' + n + ' pelanggan dari master tenant? Data tenant sumber tidak diubah. Salinan di master akan dihapus.');
   };
   updateHint();
 })();
