@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../store/collector_provider.dart';
 import '../../utils/whatsapp_uri.dart';
 import '../../theme/collector_colors.dart';
+import '../../widgets/pppoe_traffic_card.dart';
 import 'collector_invoice_receipt_screen.dart';
 import 'collector_receive_payment_screen.dart';
 
@@ -100,11 +101,13 @@ class _CollectorCustomerDetailPanelState
     for (final inv in _history) {
       final st = (inv['status']?.toString() ?? '').toLowerCase();
       if (st != 'paid') continue;
-      final raw = inv['payment_date']?.toString() ??
+      final raw =
+          inv['payment_date']?.toString() ??
           inv['updated_at']?.toString() ??
           inv['created_at']?.toString();
       final dt = raw != null ? DateTime.tryParse(raw) : null;
-      if (best == null || (dt != null && (bestAt == null || dt.isAfter(bestAt)))) {
+      if (best == null ||
+          (dt != null && (bestAt == null || dt.isAfter(bestAt)))) {
         best = inv;
         bestAt = dt;
       }
@@ -388,8 +391,7 @@ class _CollectorCustomerDetailPanelState
     final phone = _phoneDisplay;
     final addr = row['address']?.toString() ?? '';
     final ps = row['payment_status']?.toString() ?? '';
-    final lifePs =
-        row['lifetime_payment_status']?.toString() ?? ps;
+    final lifePs = row['lifetime_payment_status']?.toString() ?? ps;
     final st = row['status']?.toString().toLowerCase() ?? '';
     final price = _coerceNum(row['package_price'])?.round() ?? 0;
     final pkg = row['package_name']?.toString() ?? '';
@@ -418,7 +420,8 @@ class _CollectorCustomerDetailPanelState
     final isPaid = ps == 'paid' || (ps == 'no_invoice' && lifePs == 'paid');
     final isLifetimeNew = lifePs == 'no_invoice';
     // Belum bayar = punya tagihan unpaid/overdue; bukan baru / nonaktif.
-    final isUnpaidLike = !isInactive && !isLifetimeNew && (ps == 'unpaid' || ps == 'overdue');
+    final isUnpaidLike =
+        !isInactive && !isLifetimeNew && (ps == 'unpaid' || ps == 'overdue');
     final hasUnpaidInvoiceInHistory =
         !_loadingDetail &&
         _history.any((inv) {
@@ -668,6 +671,18 @@ class _CollectorCustomerDetailPanelState
                   ],
                 ),
               ),
+              if (_customerId != null) ...[
+                const SizedBox(height: 12),
+                _sectionCard(
+                  context,
+                  title: 'Trafik PPPoE',
+                  child: PppoeTrafficCard(
+                    endpoint:
+                        '/api/mobile-adapter/collector/customer-traffic/$_customerId',
+                    framed: false,
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               _sectionCard(
                 context,
@@ -753,7 +768,9 @@ class _CollectorCustomerDetailPanelState
                     var paidOk = false;
                     List<int>? paidInvoiceIds;
                     if (result is Map) {
-                      paidOk = result['success'] == true || result['paid_invoice_ids'] != null;
+                      paidOk =
+                          result['success'] == true ||
+                          result['paid_invoice_ids'] != null;
                       final raw = result['paid_invoice_ids'];
                       if (raw is List) {
                         paidInvoiceIds = raw
@@ -774,7 +791,9 @@ class _CollectorCustomerDetailPanelState
                           builder: (_) => CollectorInvoiceReceiptScreen(
                             customerId: cid,
                             invoiceIds: paidInvoiceIds,
-                            invoiceId: (paidInvoiceIds != null && paidInvoiceIds.length == 1)
+                            invoiceId:
+                                (paidInvoiceIds != null &&
+                                    paidInvoiceIds.length == 1)
                                 ? paidInvoiceIds.first
                                 : null,
                           ),

@@ -18,7 +18,7 @@ const { adminAuth } = require('./adminAuth');
 const { adminBillingActivityMiddleware } = require('../config/activityLogger');
 const { localMonthDateRange, toLocalDateString, toLocalDateTimeString } = require('../utils/localDate');
 const { applyAreaManagerCustomerFilter } = require('../middleware/areaManagerAccess');
-const { verifyAdminPassword } = require('../utils/adminPassword');
+const { verifySuperAdminPassword } = require('../utils/adminPassword');
 
 router.use(adminBillingActivityMiddleware);
 
@@ -168,44 +168,6 @@ async function resolveImportPortalPassword(raw, existing) {
         return undefined;
     }
     return hashCustomerPortalPassword(explicit);
-}
-
-/**
- * Password konfirmasi aksi sensitif.
- * Tenant: password login admin tenant (settings tenant), bukan settings.json host.
- * Jika `super_admin_password` diisi di pengaturan tenant/host, itu yang dipakai.
- * Nilai tersimpan bisa teks polos atau hash bcrypt (setelah login admin).
- */
-async function verifySuperAdminPassword(plain, req) {
-    const submitted = String(plain ?? '').trim();
-    if (!submitted) return false;
-
-    let expected = '';
-    let inTenant = false;
-    try {
-        const { getTenant, hasTenantContext } = require('../config/platform/tenantContext');
-        const tenant = req?.tenant || (hasTenantContext() ? getTenant() : null);
-        inTenant = Boolean(tenant);
-        const settings = tenant?.settings && typeof tenant.settings === 'object' ? tenant.settings : null;
-        if (settings) {
-            const dedicated = String(settings.super_admin_password || '').trim();
-            expected = dedicated || String(settings.admin_password || '').trim();
-        }
-        if (!expected && tenant) {
-            expected = String(tenant.admin_password || '').trim();
-        }
-    } catch (_) {
-        expected = '';
-    }
-
-    if (inTenant && !expected) return false;
-
-    if (!expected) {
-        const dedicated = String(getSetting('super_admin_password', '') || '').trim();
-        expected = dedicated || String(getSetting('admin_password', 'admin') || 'admin').trim();
-    }
-
-    return verifyAdminPassword(submitted, expected);
 }
 
 function resolveBillingTenantId(req) {

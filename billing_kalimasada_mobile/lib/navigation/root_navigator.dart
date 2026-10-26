@@ -426,111 +426,112 @@ class _CollectorTabsState extends State<_CollectorTabs> {
           ),
         ),
         child: Scaffold(
-        backgroundColor: bg,
-        // Tab Pelanggan = layar penuh seperti teknisi (CustomerListScreen punya AppBar sendiri).
-        appBar: _currentIndex == 1
-            ? null
-            : AppBar(
-                backgroundColor: Colors.white,
-                foregroundColor: const Color(0xFF001F3F),
-                elevation: 0,
-                surfaceTintColor: Colors.transparent,
-                title: Text(
-                  titles[_currentIndex],
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 18,
-                  ),
-                ),
-                leading: IconButton(
-                  icon: const Icon(Icons.menu),
-                  onPressed: () {
-                    setState(() => _currentIndex = 3);
-                    context.read<CollectorProvider>().fetchMe();
-                  },
-                ),
-                actions: [
-                  IconButton(
-                    tooltip: 'Notifikasi',
-                    iconSize: 32,
-                    padding: const EdgeInsets.all(10),
-                    constraints: const BoxConstraints(
-                      minWidth: 48,
-                      minHeight: 48,
+          backgroundColor: bg,
+          // Tab Pelanggan = layar penuh seperti teknisi (CustomerListScreen punya AppBar sendiri).
+          appBar: _currentIndex == 1
+              ? null
+              : AppBar(
+                  backgroundColor: Colors.white,
+                  foregroundColor: const Color(0xFF001F3F),
+                  elevation: 0,
+                  surfaceTintColor: Colors.transparent,
+                  title: Text(
+                    titles[_currentIndex],
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 18,
                     ),
-                    onPressed: () async {
-                      final nav = Navigator.of(context);
-                      final notifProv = context
-                          .read<CollectorNotificationProvider>();
-                      await nav.push<void>(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const CollectorNotificationsScreen(),
-                        ),
-                      );
-                      await notifProv.fetchNotifications(silent: true);
+                  ),
+                  leading: IconButton(
+                    icon: const Icon(Icons.menu),
+                    onPressed: () {
+                      setState(() => _currentIndex = 3);
+                      context.read<CollectorProvider>().fetchMe();
                     },
-                    icon: Stack(
-                      clipBehavior: Clip.none,
-                      alignment: Alignment.center,
-                      children: [
-                        const Icon(Icons.notifications_outlined, size: 32),
-                        if (unread > 0)
-                          Positioned(
-                            right: 0,
-                            top: -1,
-                            child: Container(
-                              width: 11,
-                              height: 11,
-                              decoration: const BoxDecoration(
-                                color: Color(0xFFFF1744),
-                                shape: BoxShape.circle,
+                  ),
+                  actions: [
+                    IconButton(
+                      tooltip: 'Notifikasi',
+                      iconSize: 32,
+                      padding: const EdgeInsets.all(10),
+                      constraints: const BoxConstraints(
+                        minWidth: 48,
+                        minHeight: 48,
+                      ),
+                      onPressed: () async {
+                        final nav = Navigator.of(context);
+                        final notifProv = context
+                            .read<CollectorNotificationProvider>();
+                        await nav.push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) =>
+                                const CollectorNotificationsScreen(),
+                          ),
+                        );
+                        await notifProv.fetchNotifications(silent: true);
+                      },
+                      icon: Stack(
+                        clipBehavior: Clip.none,
+                        alignment: Alignment.center,
+                        children: [
+                          const Icon(Icons.notifications_outlined, size: 32),
+                          if (unread > 0)
+                            Positioned(
+                              right: 0,
+                              top: -1,
+                              child: Container(
+                                width: 11,
+                                height: 11,
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFFFF1744),
+                                  shape: BoxShape.circle,
+                                ),
                               ),
                             ),
-                          ),
-                      ],
+                        ],
+                      ),
                     ),
+                  ],
+                  bottom: const PreferredSize(
+                    preferredSize: Size.fromHeight(1),
+                    child: Divider(height: 1),
                   ),
-                ],
-                bottom: const PreferredSize(
-                  preferredSize: Size.fromHeight(1),
-                  child: Divider(height: 1),
                 ),
-              ),
-        body: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(child: body),
-            if (_currentIndex == 1) _collectorCustomersStatsBar(),
-          ],
-        ),
-        bottomNavigationBar: Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            border: Border(top: BorderSide(color: Colors.grey.shade200)),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x0D000000),
-                blurRadius: 10,
-                offset: Offset(0, -2),
-              ),
+          body: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: body),
+              if (_currentIndex == 1) _collectorCustomersStatsBar(),
             ],
           ),
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  _collectorNavItem(0, Icons.dashboard, 'Dashboard'),
-                  _collectorNavItem(1, Icons.group, 'Pelanggan'),
-                  _collectorNavItem(2, Icons.payments, 'Setoran'),
-                  _collectorNavItem(3, Icons.account_circle, 'Profil'),
-                ],
+          bottomNavigationBar: Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border(top: BorderSide(color: Colors.grey.shade200)),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x0D000000),
+                  blurRadius: 10,
+                  offset: Offset(0, -2),
+                ),
+              ],
+            ),
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _collectorNavItem(0, Icons.dashboard, 'Dashboard'),
+                    _collectorNavItem(1, Icons.group, 'Pelanggan'),
+                    _collectorNavItem(2, Icons.payments, 'Setoran'),
+                    _collectorNavItem(3, Icons.account_circle, 'Profil'),
+                  ],
+                ),
               ),
             ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -697,6 +698,26 @@ class _AdminTabs extends StatefulWidget {
 class _AdminTabsState extends State<_AdminTabs> {
   int _currentIndex = 0;
   String? _taskListInitialFilter;
+  NotificationProvider? _areaManagerNotifications;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || context.read<AuthProvider>().role != 'area_manager') {
+        return;
+      }
+      _areaManagerNotifications = context.read<NotificationProvider>()
+        ..ensurePolling()
+        ..fetchNotifications(silent: true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _areaManagerNotifications?.stopPolling();
+    super.dispose();
+  }
 
   void _navigateToTab(int index, {String? taskListFilter}) {
     setState(() {

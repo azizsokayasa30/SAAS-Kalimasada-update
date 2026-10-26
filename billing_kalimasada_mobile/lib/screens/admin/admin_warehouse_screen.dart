@@ -10,8 +10,10 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:provider/provider.dart';
 
 import '../../services/api_client.dart';
+import '../../store/auth_provider.dart';
 
 class AdminWarehouseScreen extends StatefulWidget {
   const AdminWarehouseScreen({super.key});
@@ -39,6 +41,8 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
   int _tab = 0;
   bool _loading = true;
   bool _saving = false;
+
+  bool get _readOnly => context.read<AuthProvider>().role == 'area_manager';
   String? _error;
   int? _selectedItemId;
   int? _selectedEmployeeId;
@@ -346,12 +350,23 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
         children: [
-          _menuTabs(),
+          if (_readOnly)
+            const _Notice(
+              color: _navy,
+              text:
+                  'Mode lihat saja: Manager Area hanya dapat melihat laporan gudang.',
+            )
+          else
+            _menuTabs(),
           const SizedBox(height: 14),
           if (_saving) const LinearProgressIndicator(minHeight: 2),
-          if (_tab == 0) _buildInbound(),
-          if (_tab == 1) _buildOutbound(),
-          if (_tab == 2) _buildReport(),
+          if (_readOnly)
+            _buildReport()
+          else ...[
+            if (_tab == 0) _buildInbound(),
+            if (_tab == 1) _buildOutbound(),
+            if (_tab == 2) _buildReport(),
+          ],
         ],
       ),
     );
@@ -775,22 +790,24 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
         ),
         Row(
           children: [
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: _saving ? null : _showAddItemSheet,
-                style: FilledButton.styleFrom(
-                  backgroundColor: _navy,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
+            if (!_readOnly) ...[
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _saving ? null : _showAddItemSheet,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _navy,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
                   ),
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('Tambah nama barang'),
                 ),
-                icon: const Icon(Icons.add_rounded),
-                label: const Text('Tambah nama barang'),
               ),
-            ),
-            const SizedBox(width: 10),
+              const SizedBox(width: 10),
+            ],
             Expanded(
               child: FilledButton.icon(
                 onPressed: _saving ? null : _exportReport,

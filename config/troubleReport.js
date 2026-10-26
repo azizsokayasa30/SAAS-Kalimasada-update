@@ -485,6 +485,7 @@ async function createTroubleReport(reportData) {
         created_at: now,
         updated_at: now,
         ...reportData,
+        tenant_id: tenantId,
         notes: []
       };
 

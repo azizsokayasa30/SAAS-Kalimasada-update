@@ -5,8 +5,11 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../attendance_screen.dart';
+import '../notifications_screen.dart';
+import '../area_manager/area_manager_collect_screen.dart';
 import '../../services/api_client.dart';
 import '../../store/auth_provider.dart';
+import '../../store/notification_provider.dart';
 import 'admin_customer_overview_screen.dart';
 import 'admin_finance_screen.dart';
 import 'admin_warehouse_screen.dart';
@@ -27,6 +30,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   static const _primarySoft = Color(0xFFEAF2FF);
   static const _bg = Color(0xFFF6F7FA);
   static const _trafficRouterName = 'Dell-R630-SKYNET';
+
   /// Fallback jika app-info / settings belum tersedia — selaras default backend.
   static const _defaultTrafficInterface = 'SFP+1';
 
@@ -142,8 +146,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     setState(() {
       _dashboardStats = critical[1];
       _adminOverview = critical[2];
-      _error =
-          critical[1] == null && critical[2] == null && errors.isNotEmpty
+      _error = critical[1] == null && critical[2] == null && errors.isNotEmpty
           ? errors.first
           : null;
       _loading = false;
@@ -295,7 +298,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       }
 
       // Fallback: rate interface utama dari network-status (sudah Mbps).
-      final fromStatus = _trafficFromNetworkStatusRouter(status ?? _networkStatus);
+      final fromStatus = _trafficFromNetworkStatusRouter(
+        status ?? _networkStatus,
+      );
       if (fromStatus.rx > 0 || fromStatus.tx > 0) {
         return {
           'interface': iface,
@@ -501,6 +506,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
+    final isAreaManager = auth.role == 'area_manager';
+    final unreadTaskNotifications = isAreaManager
+        ? context.watch<NotificationProvider>().unreadCount
+        : 0;
     final user = auth.user ?? <String, dynamic>{};
     final displayName = user['name']?.toString().trim().isNotEmpty == true
         ? user['name'].toString()
@@ -758,7 +767,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     },
                   ),
                   _AdminDrawerMenuItem(
-                    label: 'Tugas',
+                    label: isAreaManager ? 'Kerjakan Tugas' : 'Tugas',
                     icon: Icons.assignment_turned_in_rounded,
                     color: const Color(0xFFE91E63),
                     onTap: () => widget.onNavigateToTab?.call(2),
@@ -787,6 +796,35 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       );
                     },
                   ),
+                  if (isAreaManager) ...[
+                    _AdminDrawerMenuItem(
+                      label: 'Tagih Pelanggan',
+                      icon: Icons.point_of_sale_rounded,
+                      color: const Color(0xFF059669),
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const AreaManagerCollectScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                    _AdminDrawerMenuItem(
+                      label: 'Notifikasi Tugas',
+                      icon: Icons.notifications_active_rounded,
+                      color: const Color(0xFFEA580C),
+                      badgeCount: unreadTaskNotifications,
+                      onTap: () async {
+                        final notif = context.read<NotificationProvider>();
+                        await Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const NotificationsScreen(),
+                          ),
+                        );
+                        await notif.fetchNotifications(silent: true);
+                      },
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1292,12 +1330,14 @@ class _AdminDrawerMenuItem extends StatelessWidget {
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
+  final int badgeCount;
 
   const _AdminDrawerMenuItem({
     required this.label,
     required this.icon,
     required this.color,
     required this.onTap,
+    this.badgeCount = 0,
   });
 
   @override
@@ -1327,14 +1367,43 @@ class _AdminDrawerMenuItem extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.09),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Icon(icon, color: color, size: 28),
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.09),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Icon(icon, color: color, size: 28),
+                  ),
+                  if (badgeCount > 0)
+                    Positioned(
+                      right: -6,
+                      top: -6,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEF4444),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                        child: Text(
+                          badgeCount > 99 ? '99+' : '$badgeCount',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
               const SizedBox(height: 10),
               Text(

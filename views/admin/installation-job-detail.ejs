@@ -467,8 +467,9 @@
                                       const _hOld = String(history.old_status || '').toLowerCase().trim();
                                       const _hNew = String(history.new_status || '').toLowerCase().trim();
                                       const _hBy = String(history.changed_by_type || '').toLowerCase().trim();
-                                      const _hPendingFromTech = _hOld === 'in_progress' && _hNew === 'assigned' && _hBy === 'technician';
-                                      const _hResumeFromTech = _hNew === 'in_progress' && _hBy === 'technician' && (_hOld === 'assigned' || _hOld === 'scheduled');
+                                      const _hFieldActor = _hBy === 'technician' || _hBy === 'area_manager';
+                                      const _hPendingFromTech = _hOld === 'in_progress' && _hNew === 'assigned' && _hFieldActor;
+                                      const _hResumeFromTech = _hNew === 'in_progress' && _hFieldActor && (_hOld === 'assigned' || _hOld === 'scheduled');
                                       const _hResumeFromAdmin = _hNew === 'in_progress' && _hBy === 'admin';
                                     %>
                                     <div class="history-item <%= history.new_status %>">
@@ -484,7 +485,7 @@
                                                     <br><small class="text-muted"><%= history.notes %></small>
                                                 <% } %>
                                             </div>
-                                            <span class="badge bg-secondary"><%= history.changed_by_type %></span>
+                                            <span class="badge bg-secondary"><%= _hBy === 'area_manager' ? 'Manager Area' : history.changed_by_type %></span>
                                         </div>
                                     </div>
                                 <% }); %>

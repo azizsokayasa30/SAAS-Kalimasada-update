@@ -58,15 +58,44 @@ function upsertTaskNotification(technicianId, kind, refId, title, body) {
     });
 }
 
-function notifyInstallationJob(technicianId, job) {
-    if (!job || !job.id) return Promise.resolve();
+/** Teknisi hanya boleh menerima notifikasi tugas dari tenant yang sama dengan tugasnya. */
+function technicianSharesTenantWith(technicianId, table, refId) {
+    const tid = parseInt(technicianId, 10);
+    if (!Number.isFinite(tid) || refId == null || refId === '') return Promise.resolve(false);
+    return new Promise((resolve) => {
+        db.get(
+            `SELECT 1 AS ok FROM technicians t
+             INNER JOIN ${table} x ON CAST(x.id AS TEXT) = ?
+             WHERE t.id = ? AND t.tenant_id IS NOT NULL AND t.tenant_id = x.tenant_id`,
+            [String(refId), tid],
+            (e, row) => {
+                if (e) {
+                    logger.error('[technician-field-notifications] tenant check:', e.message);
+                    return resolve(false);
+                }
+                resolve(!!row);
+            }
+        );
+    });
+}
+
+async function notifyInstallationJob(technicianId, job) {
+    if (!job || !job.id) return;
+    if (!(await technicianSharesTenantWith(technicianId, 'installation_jobs', job.id))) {
+        logger.warn(`[technician-field-notifications] skip INSTALL ${job.id}: teknisi ${technicianId} beda tenant`);
+        return;
+    }
     const title = 'Tugas PSB baru';
     const body = `${job.job_number || job.id} — ${job.customer_name || ''}`.trim();
     return upsertTaskNotification(technicianId, 'INSTALL', String(job.id), title, body);
 }
 
-function notifyTroubleTicket(technicianId, report) {
-    if (!report || !report.id) return Promise.resolve();
+async function notifyTroubleTicket(technicianId, report) {
+    if (!report || !report.id) return;
+    if (!(await technicianSharesTenantWith(technicianId, 'trouble_reports', report.id))) {
+        logger.warn(`[technician-field-notifications] skip TR ${report.id}: teknisi ${technicianId} beda tenant`);
+        return;
+    }
     const title = 'Tiket gangguan baru';
     const body = `${report.id} — ${report.name || ''} · ${report.category || ''}`.trim();
     return upsertTaskNotification(technicianId, 'TR', String(report.id), title, body);

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:intl/intl.dart';
@@ -8,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/api_client.dart';
 import '../store/customer_provider.dart';
 import '../store/auth_provider.dart';
+import '../widgets/pppoe_traffic_card.dart';
 import 'dart:convert';
 
 class CustomerDetailScreen extends StatefulWidget {
@@ -72,6 +74,49 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     final s = secs % 60;
     String two(int n) => n.toString().padLeft(2, '0');
     return '${two(d)}:${two(h)}:${two(m)}:${two(s)}';
+  }
+
+  bool _isCopyableIp(String ip) =>
+      RegExp(r'^[0-9a-fA-F.:]+$').hasMatch(ip) && ip.contains(RegExp(r'\d'));
+
+  Future<void> _copyIp(String ip) async {
+    await Clipboard.setData(ClipboardData(text: ip));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('IP $ip disalin'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+  }
+
+  Widget _buildIpText(String ip, Color color) {
+    final text = Text(
+      ip,
+      style: TextStyle(fontSize: 13, color: color, fontFamily: 'monospace'),
+    );
+    if (!_isCopyableIp(ip)) return text;
+    return InkWell(
+      onTap: () => _copyIp(ip),
+      borderRadius: BorderRadius.circular(4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(child: text),
+            const SizedBox(width: 4),
+            Icon(
+              Icons.copy_rounded,
+              size: 14,
+              color: color.withValues(alpha: 0.7),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   double? _toDouble(dynamic v) {
@@ -1129,15 +1174,11 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                                 letterSpacing: 1.1,
                               ),
                             ),
-                            Text(
+                            _buildIpText(
                               _pppSession?['ip_address']?.toString() ??
                                   customer['ip_address']?.toString() ??
                                   'DHCP/Dynamic',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                color: textOnBackground,
-                                fontFamily: 'monospace',
-                              ),
+                              textOnBackground,
                             ),
                           ],
                         ),
@@ -1196,13 +1237,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                                 letterSpacing: 1.1,
                               ),
                             ),
-                            Text(
+                            _buildIpText(
                               _pppSession?['ip_address']?.toString() ?? '-',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                color: textOnBackground,
-                                fontFamily: 'monospace',
-                              ),
+                              textOnBackground,
                             ),
                           ],
                         ),
@@ -1244,6 +1281,14 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                 ],
               ),
             ),
+
+            if (customer['id'] != null) ...[
+              const SizedBox(height: 12),
+              PppoeTrafficCard(
+                endpoint:
+                    '/api/mobile-adapter/customers/${customer['id']}/traffic',
+              ),
+            ],
 
             if (!isTechnician) ...[
               const SizedBox(height: 14),

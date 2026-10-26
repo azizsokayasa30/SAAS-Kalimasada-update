@@ -231,6 +231,7 @@ const billingManager = require('../../config/billing');
 const { getTenant, getTenantId, hasTenantContext } = require('../../config/platform/tenantContext');
 const tenantStore = require('../../config/platform/tenantStore');
 const { submitCollectorPayment, collectorPaymentMulter, collectorPaymentMulterSingle } = require('../../utils/collectorPaymentSubmit');
+const { createAreaManagerFieldRouter } = require('./mobileAreaManager');
 
 db.run('ALTER TABLE customers ADD COLUMN customer_id TEXT', (err) => {
     if (err && !/duplicate column/i.test(String(err.message))) {
@@ -940,6 +941,13 @@ function requireAdmin(req, res, next) {
     next();
 }
 
+function denyAreaManager(req, res, next) {
+    if (req.user && req.user.role === 'area_manager') {
+        return res.status(403).json({ success: false, message: 'Manager Area hanya dapat melihat data ini' });
+    }
+    next();
+}
+
 /** area_ids dari JWT Manager Area (kosong = bukan area manager / full admin). */
 function getMobileAreaManagerAreaIds(req) {
     if (!req.user || req.user.role !== 'area_manager') return null;
@@ -955,6 +963,26 @@ async function assertMobileAreaManagerCustomer(req, customerId) {
     return billingManager.isCustomerInAreaManagerAreas(customerId, areaIds, tenantId);
 }
 
+async function requireAreaManagerCustomerParam(req, res, next) {
+    if (getMobileAreaManagerAreaIds(req) === null) return next();
+    try {
+        if (await assertMobileAreaManagerCustomer(req, req.params.customerId)) return next();
+    } catch (error) {
+        logger.error('[mobile-adapter] area manager customer check', error);
+    }
+    return res.status(403).json({ success: false, message: 'Pelanggan di luar wilayah Anda' });
+}
+
+/**
+ * Klausa SQL tanpa placeholder untuk membatasi pelanggan ke area Manager Area.
+ * Aman di-inline karena area_ids sudah disaring menjadi integer positif.
+ */
+function sqlAreaManagerCustomerScope(alias, areaIds) {
+    const { clause, params } = billingManager._sqlCustomerInAreaIds(alias, areaIds);
+    let i = 0;
+    return clause.replace(/\?/g, () => String(Number(params[i++])));
+}
+
 function applyMobileAreaManagerCustomerFilter(req, filters = {}) {
     const areaIds = getMobileAreaManagerAreaIds(req);
     if (areaIds !== null) {
@@ -962,6 +990,33 @@ function applyMobileAreaManagerCustomerFilter(req, filters = {}) {
     }
     return filters;
 }
+
+function isAreaManagerReq(req) {
+    return !!(req.user && req.user.role === 'area_manager');
+}
+
+/** ID Manager Area bukan ID teknisi — jangan sampai membaca/mengubah baris technicians milik orang lain. */
+function denyAreaManagerTechnicianProfile(req, res, next) {
+    if (isAreaManagerReq(req)) {
+        return res.status(403).json({ success: false, message: 'Profil teknisi tidak tersedia untuk Manager Area' });
+    }
+    next();
+}
+
+/** Label pelaku untuk catatan tugas: "Manager Area <nama>" atau "app teknisi". */
+function fieldActorLabel(req) {
+    if (!isAreaManagerReq(req)) return 'app teknisi';
+    return `Manager Area ${String(req.user.name || req.user.username || '').trim()}`.trim();
+}
+
+const areaManagerField = createAreaManagerFieldRouter({
+    db,
+    getAreaIds: getMobileAreaManagerAreaIds,
+    sqlCustomerScope: sqlAreaManagerCustomerScope,
+    sqlTroubleTicketCustomerMatch,
+    resolveReqTenantId
+});
+router.use('/area-manager', areaManagerField.router);
 
 function mobileFinancePeriod(query = {}) {
     const now = new Date();
@@ -1711,7 +1766,7 @@ router.get('/customers', verifyToken, allowFieldOps, async (req, res) => {
     }
 });
 
-router.get('/customers/:customerId/ppp-session', verifyToken, requireTechnician, async (req, res) => {
+router.get('/customers/:customerId/ppp-session', verifyToken, requireTechnician, requireAreaManagerCustomerParam, async (req, res) => {
     const customerId = parseInt(String(req.params.customerId), 10);
     if (!Number.isFinite(customerId) || customerId <= 0) {
         return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
@@ -1850,6 +1905,40 @@ router.get('/customers/:customerId/ppp-session', verifyToken, requireTechnician,
     }
 });
 
+/** Trafik PPPoE satu pelanggan (hanya dipanggil dari layar detail, bukan daftar). */
+async function respondCustomerPppoeTraffic(res, customerId, tenantId) {
+    const customer = await new Promise((resolve, reject) => {
+        db.get(
+            'SELECT id, pppoe_username, username FROM customers WHERE id = ? AND tenant_id = ?',
+            [customerId, tenantId],
+            (err, row) => (err ? reject(err) : resolve(row || null))
+        );
+    });
+    if (!customer) {
+        return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+    }
+    const { getCustomerPppoeTraffic } = require('../../config/pppoeTraffic');
+    const data = await getCustomerPppoeTraffic(customer, tenantId);
+    return res.json({ success: true, data });
+}
+
+router.get('/customers/:customerId/traffic', verifyToken, requireTechnician, requireAreaManagerCustomerParam, async (req, res) => {
+    const customerId = parseInt(String(req.params.customerId), 10);
+    if (!Number.isFinite(customerId) || customerId <= 0) {
+        return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
+    }
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
+    try {
+        return await respondCustomerPppoeTraffic(res, customerId, tenantId);
+    } catch (error) {
+        logger.error('[mobile-adapter] customers/:id/traffic', error);
+        return res.status(500).json({ success: false, message: error.message || 'Gagal memuat trafik' });
+    }
+});
+
 router.get('/customers/:customerId/payment-history', verifyToken, allowFieldOps, async (req, res) => {
     const customerId = parseInt(String(req.params.customerId), 10);
     if (!Number.isFinite(customerId) || customerId <= 0) {
@@ -1937,7 +2026,7 @@ router.post('/customers/:customerId/status', verifyToken, allowFieldOps, async (
     }
 });
 
-router.patch('/customers/:customerId/contact', verifyToken, allowFieldOps, async (req, res) => {
+router.patch('/customers/:customerId/contact', verifyToken, allowFieldOps, requireAreaManagerCustomerParam, async (req, res) => {
     if (!req.user || !isAdminLike(req.user && req.user.role)) {
         return res.status(403).json({ success: false, message: 'Hanya admin' });
     }
@@ -1962,7 +2051,7 @@ router.patch('/customers/:customerId/contact', verifyToken, allowFieldOps, async
     }
 });
 
-router.patch('/customers/:customerId/package', verifyToken, allowFieldOps, async (req, res) => {
+router.patch('/customers/:customerId/package', verifyToken, allowFieldOps, requireAreaManagerCustomerParam, async (req, res) => {
     if (!req.user || !isAdminLike(req.user && req.user.role)) {
         return res.status(403).json({ success: false, message: 'Hanya admin' });
     }
@@ -2024,6 +2113,10 @@ router.get('/customers/location-summary', verifyToken, allowFieldOps, async (req
             where += ' AND c.tenant_id = ?';
             params.push(getTenantId());
         }
+        const amAreas = getMobileAreaManagerAreaIds(req);
+        if (amAreas !== null) {
+            where += ` AND ${sqlAreaManagerCustomerScope('c', amAreas)}`;
+        }
         const summarySql = `
             SELECT
                 SUM(CASE WHEN c.latitude IS NOT NULL AND c.longitude IS NOT NULL THEN 1 ELSE 0 END) AS tagged,
@@ -2057,7 +2150,10 @@ router.get('/customers/search', verifyToken, allowFieldOps, async (req, res) => 
         return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
     }
     try {
-        const rows = await billingManager.searchCustomers(q, { tenantId, limit: 100 });
+        const searchOpts = { tenantId, limit: 100 };
+        const amAreas = getMobileAreaManagerAreaIds(req);
+        if (amAreas !== null) searchOpts.area_ids = amAreas;
+        const rows = await billingManager.searchCustomers(q, searchOpts);
         attachAreaNamesFromMaster(rows || [], (areaErr, enriched) => {
             if (areaErr) {
                 return res.status(500).json({ success: false, message: areaErr.message });
@@ -2151,7 +2247,7 @@ router.get('/areas/names', verifyToken, allowFieldOps, (req, res) => {
     );
 });
 
-router.put('/customers/:customerId/location', verifyToken, allowFieldOps, (req, res) => {
+router.put('/customers/:customerId/location', verifyToken, allowFieldOps, requireAreaManagerCustomerParam, (req, res) => {
     const id = parseInt(req.params.customerId, 10);
     const body = req.body || {};
     const { latitude, longitude } = body;
@@ -2247,7 +2343,7 @@ router.put('/customers/:customerId/location', verifyToken, allowFieldOps, (req, 
 });
 
 // --- Profil teknisi (sinkron dengan data web / tabel technicians) ---
-router.get('/me', verifyToken, requireTechnician, (req, res) => {
+router.get('/me', verifyToken, requireTechnician, denyAreaManagerTechnicianProfile, (req, res) => {
     const techId = parseTechnicianId(req);
     if (!techId) {
         return res.status(400).json({ success: false, message: 'ID teknisi tidak valid' });
@@ -2316,7 +2412,7 @@ router.get('/me', verifyToken, requireTechnician, (req, res) => {
     });
 });
 
-router.post('/me/photo', verifyToken, requireTechnician, (req, res) => {
+router.post('/me/photo', verifyToken, requireTechnician, denyAreaManagerTechnicianProfile, (req, res) => {
     const techId = parseTechnicianId(req);
     if (!techId) {
         return res.status(400).json({ success: false, message: 'ID teknisi tidak valid' });
@@ -2432,7 +2528,7 @@ router.post('/me/photo', verifyToken, requireTechnician, (req, res) => {
     });
 });
 
-router.put('/me', verifyToken, requireTechnician, (req, res) => {
+router.put('/me', verifyToken, requireTechnician, denyAreaManagerTechnicianProfile, (req, res) => {
     const techId = parseTechnicianId(req);
     if (!techId) {
         return res.status(400).json({ success: false, message: 'ID teknisi tidak valid' });
@@ -2672,6 +2768,37 @@ router.get('/admin/attendance/today', verifyToken, requireAdmin, (req, res) => {
     });
 });
 
+/**
+ * Rekap per kategori dari SELURUH transaksi periode (daftar di aplikasi dipotong).
+ * Aturan kategori pemasukan sama dengan aplikasi: `category` → invoice ("Pembayaran tagihan")
+ * → gateway "Pendapatan - X" → "Lainnya".
+ */
+function mobileFinanceCategorySummary(items, pickCategory) {
+    const byCategory = new Map();
+    let total = 0;
+    for (const item of items || []) {
+        const amount = mobileFinanceNumber(item.amount);
+        const category = pickCategory(item) || 'Lainnya';
+        const row = byCategory.get(category) || { category, total: 0, count: 0 };
+        row.total += amount;
+        row.count += 1;
+        byCategory.set(category, row);
+        total += amount;
+    }
+    const categories = [...byCategory.values()].sort((a, b) => b.total - a.total);
+    return { total, count: (items || []).length, categories };
+}
+
+function mobileIncomeCategory(item) {
+    const category = String(item.category || '').trim();
+    if (category) return category;
+    if (String(item.invoice_number || '').trim()) return 'Pembayaran tagihan';
+    const gateway = String(item.gateway_name || '').trim();
+    const m = gateway.match(/^pendapatan\s*-\s*(.+)$/i);
+    if (m && m[1].trim()) return m[1].trim();
+    return 'Lainnya';
+}
+
 router.get('/admin/finance/overview', verifyToken, requireAdmin, async (req, res) => {
     try {
         const period = mobileFinancePeriod(req.query);
@@ -2685,6 +2812,33 @@ router.get('/admin/finance/overview', verifyToken, requireAdmin, async (req, res
             limit: req.query.limit || 80,
             tenantId: resolveReqTenantId(req)
         };
+
+        const amAreas = getMobileAreaManagerAreaIds(req);
+        if (amAreas !== null) {
+            paymentFilters.area_ids = amAreas;
+            paymentFilters.collector_id = '';
+            const [payments, paymentSummary] = await Promise.all([
+                billingManager.getAllPaymentsHistory(paymentFilters),
+                billingManager.getAllPaymentsHistorySummary(paymentFilters)
+            ]);
+            return res.json({
+                success: true,
+                data: {
+                    period,
+                    scope: 'area',
+                    payments: { summary: paymentSummary || {}, items: payments || [] },
+                    remittance: { summary: {}, collectors: [], receipts: [] },
+                    income: { total: 0, items: [] },
+                    expenses: { total: 0, items: [] },
+                    financial_report: { summary: {}, transactions: [], profit_loss: null },
+                    options: {
+                        payment_methods: MOBILE_FINANCE_PAYMENT_METHODS,
+                        income_categories: [],
+                        expense_categories: []
+                    }
+                }
+            });
+        }
 
         const [
             payments,
@@ -2721,6 +2875,19 @@ router.get('/admin/finance/overview', verifyToken, requireAdmin, async (req, res
         }));
         const totalIncomeManual = (incomes || []).reduce((sum, item) => sum + mobileFinanceNumber(item.amount), 0);
         const totalExpenseManual = (expenses || []).reduce((sum, item) => sum + mobileFinanceNumber(item.amount), 0);
+        const allTransactions = Array.isArray(financialData && financialData.transactions)
+            ? financialData.transactions
+            : [];
+        const categorySummary = {
+            income: mobileFinanceCategorySummary(
+                allTransactions.filter((t) => t.type === 'income'),
+                mobileIncomeCategory
+            ),
+            expense: mobileFinanceCategorySummary(
+                expenses || [],
+                (item) => String(item.category || '').trim()
+            )
+        };
 
         res.json({
             success: true,
@@ -2745,9 +2912,9 @@ router.get('/admin/finance/overview', verifyToken, requireAdmin, async (req, res
                 },
                 financial_report: {
                     summary: (financialData && financialData.summary) || {},
-                    transactions: Array.isArray(financialData && financialData.transactions)
-                        ? financialData.transactions.slice(0, 120)
-                        : [],
+                    transactions: allTransactions.slice(0, 120),
+                    transactions_total: allTransactions.length,
+                    category_summary: categorySummary,
                     profit_loss: (financialData && financialData.profitLossData) || null
                 },
                 options: {
@@ -2763,7 +2930,91 @@ router.get('/admin/finance/overview', verifyToken, requireAdmin, async (req, res
     }
 });
 
-router.post('/admin/finance/remittance', verifyToken, requireAdmin, async (req, res) => {
+/**
+ * Batalkan satu pembayaran (Keuangan → Riwayat Pembayaran). Aturan sama dengan web
+ * POST /admin/billing/api/payments/:id/cancel: password konfirmasi admin tenant.
+ * Manager Area hanya untuk pelanggan di wilayahnya.
+ */
+router.post('/admin/finance/payments/:paymentId/cancel', verifyToken, requireAdmin, async (req, res) => {
+    const paymentId = parseInt(String(req.params.paymentId), 10);
+    if (!Number.isFinite(paymentId) || paymentId <= 0) {
+        return res.status(400).json({ success: false, message: 'ID pembayaran tidak valid' });
+    }
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const password = String(body.password ?? body.confirm_password ?? '');
+    const reason = String(body.reason || '').trim().slice(0, 300);
+    if (!password.trim()) {
+        return res.status(400).json({ success: false, message: 'Password konfirmasi wajib diisi.' });
+    }
+    try {
+        const { verifySuperAdminPassword } = require('../../utils/adminPassword');
+        if (!(await verifySuperAdminPassword(password, req))) {
+            return res.status(403).json({
+                success: false,
+                message: 'Password admin salah. Gunakan password login panel admin tenant ini.'
+            });
+        }
+
+        const payment = await new Promise((resolve, reject) => {
+            db.get(
+                `SELECT p.id, p.amount, p.invoice_id, i.invoice_number, i.customer_id, c.name AS customer_name
+                 FROM payments p
+                 JOIN invoices i ON i.id = p.invoice_id
+                 LEFT JOIN customers c ON c.id = i.customer_id
+                 WHERE p.id = ? AND p.tenant_id = ?`,
+                [paymentId, tenantId],
+                (err, row) => (err ? reject(err) : resolve(row || null))
+            );
+        });
+        if (!payment) {
+            return res.status(404).json({ success: false, message: 'Pembayaran tidak ditemukan di tenant ini' });
+        }
+        if (isAreaManagerReq(req)) {
+            const inScope = payment.customer_id != null
+                && (await assertMobileAreaManagerCustomer(req, payment.customer_id));
+            if (!inScope) {
+                return res.status(403).json({ success: false, message: 'Pembayaran di luar wilayah Anda' });
+            }
+        }
+
+        const result = await billingManager.cancelPaymentById(paymentId);
+        let message = result.invoice_reverted_unpaid
+            ? 'Pembayaran dibatalkan. Tagihan kembali belum lunas.'
+            : 'Pembayaran dibatalkan.';
+        if ((result.remittance_receipts_removed || 0) > 0) {
+            message += ' Riwayat setoran transfer kantor ikut dihapus.';
+        }
+
+        try {
+            const { logActivity, getClientIp } = require('../../config/activityLogger');
+            const actor = isAreaManagerReq(req)
+                ? `Manager Area ${(req.user && req.user.name) || ''}`.trim()
+                : (req.user && (req.user.username || req.user.name)) || 'admin';
+            await logActivity({
+                userType: isAreaManagerReq(req) ? 'area_manager' : 'admin',
+                userId: actor,
+                action: 'payment_cancel',
+                description: `Batalkan pembayaran #${paymentId} (${payment.invoice_number || 'invoice ' + payment.invoice_id}, ${payment.customer_name || '-'}) via aplikasi${reason ? ` — ${reason}` : ''}`,
+                ipAddress: getClientIp(req),
+                metadata: { source: 'mobile', payment_id: paymentId, amount: payment.amount, reason: reason || null },
+                tenantId
+            });
+        } catch (logErr) {
+            logger.warn('[mobile-adapter] payment cancel log:', logErr.message);
+        }
+
+        return res.json({ success: true, message, ...result });
+    } catch (error) {
+        logger.error('[mobile-adapter] admin/finance/payments/:id/cancel:', error);
+        return res.status(400).json({ success: false, message: error.message || 'Gagal membatalkan pembayaran' });
+    }
+});
+
+router.post('/admin/finance/remittance', verifyToken, requireAdmin, denyAreaManager, async (req, res) => {
     try {
         const { collector_id, amount, remittance_amount, payment_method, notes, remittance_date } = req.body || {};
         const result = await billingManager.recordCollectorRemittance({
@@ -2789,7 +3040,7 @@ router.post('/admin/finance/remittance', verifyToken, requireAdmin, async (req, 
     }
 });
 
-router.post('/admin/finance/income', verifyToken, requireAdmin, async (req, res) => {
+router.post('/admin/finance/income', verifyToken, requireAdmin, denyAreaManager, async (req, res) => {
     try {
         const { description, amount, category, income_date, payment_method, notes } = req.body || {};
         if (!description || !amount || !category || !income_date) {
@@ -2810,7 +3061,7 @@ router.post('/admin/finance/income', verifyToken, requireAdmin, async (req, res)
     }
 });
 
-router.post('/admin/finance/expenses', verifyToken, requireAdmin, async (req, res) => {
+router.post('/admin/finance/expenses', verifyToken, requireAdmin, denyAreaManager, async (req, res) => {
     try {
         const { amount, category, account_expenses, expense_date, payment_method, notes } = req.body || {};
         if (!amount || !category || !expense_date) {
@@ -3317,6 +3568,8 @@ router.get('/dashboard', verifyToken, allowFieldOps, (req, res) => {
         return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
     }
     const tid = Number(tenantId);
+    const amAreas = getMobileAreaManagerAreaIds(req);
+    const areaScope = amAreas !== null ? ` AND ${sqlAreaManagerCustomerScope('customers', amAreas)}` : '';
 
     const baseSql = `SELECT
             COUNT(*) AS total_customers,
@@ -3324,7 +3577,7 @@ router.get('/dashboard', verifyToken, allowFieldOps, (req, res) => {
             SUM(CASE WHEN LOWER(status) = 'suspended' THEN 1 ELSE 0 END) AS suspended_customers,
             SUM(CASE WHEN LOWER(status) IN ('inactive','register') THEN 1 ELSE 0 END) AS isolated_customers
          FROM customers
-         WHERE tenant_id = ?`;
+         WHERE tenant_id = ?${areaScope}`;
 
     const sendStats = (row, isolatedOverride) => {
         res.json({
@@ -3389,14 +3642,10 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
     const tid = Number(tenantId);
 
     const amAreas = getMobileAreaManagerAreaIds(req);
-    let areaFilterCu = '';
-    let areaFilterBare = '';
-    let areaFilterInvoice = '';
-    let areaFilterPayment = '';
-    const areaParamsCu = [];
-    const areaParamsBare = [];
-    const areaParamsInvoice = [];
-    const areaParamsPayment = [];
+    let cuScope = '';
+    let bareScope = '';
+    let invScope = '';
+    let payScope = '';
     if (amAreas !== null) {
         if (!amAreas.length) {
             return res.json({
@@ -3412,19 +3661,14 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
                 }
             });
         }
-        const ph = amAreas.map(() => '?').join(',');
-        areaFilterCu = ` AND cu.area_id IN (${ph})`;
-        areaFilterBare = ` AND area_id IN (${ph})`;
-        areaFilterInvoice = ` AND EXISTS (SELECT 1 FROM customers cu WHERE cu.id = i.customer_id AND cu.tenant_id = i.tenant_id AND cu.area_id IN (${ph}))`;
-        areaFilterPayment = ` AND EXISTS (
-            SELECT 1 FROM invoices i
-            INNER JOIN customers cu ON cu.id = i.customer_id AND cu.tenant_id = i.tenant_id
-            WHERE i.id = p.invoice_id AND cu.area_id IN (${ph})
+        cuScope = ` AND ${sqlAreaManagerCustomerScope('cu', amAreas)}`;
+        bareScope = ` AND ${sqlAreaManagerCustomerScope('customers', amAreas)}`;
+        invScope = ` AND EXISTS (SELECT 1 FROM customers cu WHERE cu.id = i.customer_id AND cu.tenant_id = i.tenant_id AND ${sqlAreaManagerCustomerScope('cu', amAreas)})`;
+        payScope = ` AND EXISTS (
+            SELECT 1 FROM invoices pi
+            INNER JOIN customers cu ON cu.id = pi.customer_id AND cu.tenant_id = pi.tenant_id
+            WHERE pi.id = p.invoice_id AND ${sqlAreaManagerCustomerScope('cu', amAreas)}
         )`;
-        areaParamsCu.push(...amAreas);
-        areaParamsBare.push(...amAreas);
-        areaParamsInvoice.push(...amAreas);
-        areaParamsPayment.push(...amAreas);
     }
 
     const now = new Date();
@@ -3439,7 +3683,7 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
     let sql = `
         SELECT
             (SELECT COUNT(*) FROM customers cu
-             WHERE cu.tenant_id = ?
+             WHERE cu.tenant_id = ?${cuScope}
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS total_customers,
             (SELECT COALESCE(SUM(
                 CASE WHEN p.price IS NOT NULL
@@ -3449,10 +3693,10 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
             ), 0)
              FROM customers cu
              LEFT JOIN packages p ON p.id = cu.package_id
-             WHERE cu.tenant_id = ?
+             WHERE cu.tenant_id = ?${cuScope}
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS total_customer_amount,
             (SELECT COUNT(*) FROM customers cu
-             WHERE cu.tenant_id = ?
+             WHERE cu.tenant_id = ?${cuScope}
                AND LOWER(COALESCE(cu.status, '')) IN ('active', 'aktif')
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS active_customers,
             (SELECT COALESCE(SUM(
@@ -3463,11 +3707,11 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
             ), 0)
              FROM customers cu
              LEFT JOIN packages p ON p.id = cu.package_id
-             WHERE cu.tenant_id = ?
+             WHERE cu.tenant_id = ?${cuScope}
                AND LOWER(COALESCE(cu.status, '')) IN ('active', 'aktif')
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS active_customer_amount,
             (SELECT COUNT(*) FROM customers
-             WHERE tenant_id = ?
+             WHERE tenant_id = ?${bareScope}
                AND date(COALESCE(join_date, created_at, '1970-01-01')) >= date(?)
                AND date(COALESCE(join_date, created_at, '1970-01-01')) < date(?)) AS new_customers,
             (SELECT COALESCE(SUM(
@@ -3478,53 +3722,53 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
             ), 0)
              FROM customers cu
              LEFT JOIN packages p ON p.id = cu.package_id
-             WHERE cu.tenant_id = ?
+             WHERE cu.tenant_id = ?${cuScope}
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) >= date(?)
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS new_customer_amount,
             (SELECT COUNT(*) FROM customers cu
-             WHERE cu.tenant_id = ?
+             WHERE cu.tenant_id = ?${cuScope}
                AND LOWER(COALESCE(cu.status, '')) IN ('suspended', 'isolir')
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS isolir_customers,
             (SELECT COUNT(*) FROM customers cu
-             WHERE cu.tenant_id = ?
+             WHERE cu.tenant_id = ?${cuScope}
                AND LOWER(COALESCE(cu.status, '')) IN ('inactive', 'nonaktif')
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS inactive_customers,
             (SELECT COUNT(*) FROM customers cu
-             WHERE cu.tenant_id = ?
+             WHERE cu.tenant_id = ?${cuScope}
                AND LOWER(COALESCE(cu.status, '')) IN ('inactive', 'register')
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS isolir_cuti_customers,
             (SELECT COUNT(*) FROM customers cu
-             WHERE cu.tenant_id = ?
+             WHERE cu.tenant_id = ?${cuScope}
                AND LOWER(COALESCE(cu.status, '')) IN ('berhenti', 'stopped', 'terminated', 'cancelled')
                AND date(COALESCE(cu.join_date, cu.created_at, '1970-01-01')) < date(?)) AS stopped_customers,
 
             (SELECT COUNT(*) FROM invoices i
-             WHERE i.tenant_id = ?
+             WHERE i.tenant_id = ?${invScope}
                AND date(COALESCE(i.created_at, i.due_date, '1970-01-01')) >= date(?)
                AND date(COALESCE(i.created_at, i.due_date, '1970-01-01')) < date(?)
                AND i.status = 'unpaid'
                AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)) AS unpaid_invoices,
             (SELECT COALESCE(SUM(i.amount), 0) FROM invoices i
-             WHERE i.tenant_id = ?
+             WHERE i.tenant_id = ?${invScope}
                AND date(COALESCE(i.created_at, i.due_date, '1970-01-01')) >= date(?)
                AND date(COALESCE(i.created_at, i.due_date, '1970-01-01')) < date(?)
                AND i.status = 'unpaid'
                AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)) AS unpaid_amount,
             (SELECT COUNT(*) FROM invoices i
-             WHERE i.tenant_id = ?
+             WHERE i.tenant_id = ?${invScope}
                AND date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) >= date(?)
                AND date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) < date(?)
                AND i.status = 'paid'
                AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)) AS paid_invoices,
             (SELECT COALESCE(SUM(i.amount), 0) FROM invoices i
-             WHERE i.tenant_id = ?
+             WHERE i.tenant_id = ?${invScope}
                AND date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) >= date(?)
                AND date(COALESCE(i.payment_date, i.created_at, '1970-01-01')) < date(?)
                AND i.status = 'paid'
                AND (i.invoice_type != 'voucher' OR i.invoice_type IS NULL)) AS paid_amount,
 
             (SELECT COUNT(*) FROM payments p
-             WHERE p.tenant_id = ?
+             WHERE p.tenant_id = ?${payScope}
                AND date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
                AND date(COALESCE(p.payment_date, '1970-01-01')) < date(?)
                AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%transfer%'
@@ -3532,7 +3776,7 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
                AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%qris%'
                AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%gateway%') AS cash_transactions,
             (SELECT COALESCE(SUM(p.amount), 0) FROM payments p
-             WHERE p.tenant_id = ?
+             WHERE p.tenant_id = ?${payScope}
                AND date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
                AND date(COALESCE(p.payment_date, '1970-01-01')) < date(?)
                AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%transfer%'
@@ -3540,7 +3784,7 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
                AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%qris%'
                AND LOWER(TRIM(COALESCE(p.payment_method, 'cash'))) NOT LIKE '%gateway%') AS cash_amount,
             (SELECT COUNT(*) FROM payments p
-             WHERE p.tenant_id = ?
+             WHERE p.tenant_id = ?${payScope}
                AND date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
                AND date(COALESCE(p.payment_date, '1970-01-01')) < date(?)
                AND (
@@ -3550,7 +3794,7 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
                  OR LOWER(TRIM(COALESCE(p.payment_method, ''))) LIKE '%gateway%'
                )) AS online_transactions,
             (SELECT COALESCE(SUM(p.amount), 0) FROM payments p
-             WHERE p.tenant_id = ?
+             WHERE p.tenant_id = ?${payScope}
                AND date(COALESCE(p.payment_date, '1970-01-01')) >= date(?)
                AND date(COALESCE(p.payment_date, '1970-01-01')) < date(?)
                AND (
@@ -3561,25 +3805,17 @@ router.get('/admin/customers/overview', verifyToken, allowFieldOps, (req, res) =
                )) AS online_amount,
 
             (SELECT COUNT(*) FROM invoices i
-             WHERE i.tenant_id = ?
+             WHERE i.tenant_id = ?${invScope}
                AND i.status = 'unpaid' AND date(i.due_date) < date('now', 'localtime')) AS overdue_invoices,
             (SELECT COUNT(DISTINCT i.customer_id) FROM invoices i
-             WHERE i.tenant_id = ?
+             WHERE i.tenant_id = ?${invScope}
                AND i.status = 'unpaid' AND date(i.due_date) < date('now', 'localtime')) AS arrears_customers
     `;
-    if (amAreas !== null) {
-        sql = sql
-            .replace(/FROM customers cu\n\s+WHERE cu\.tenant_id = \?/g, (m) => m + areaFilterCu)
-            .replace(/FROM customers\n\s+WHERE tenant_id = \?/g, (m) => m + areaFilterBare)
-            .replace(/FROM invoices i\n\s+WHERE i\.tenant_id = \?/g, (m) => m + areaFilterInvoice)
-            .replace(/FROM payments p\n\s+WHERE p\.tenant_id = \?/g, (m) => m + areaFilterPayment);
-    }
-
     const params = [];
-    const pushCu = (...base) => { params.push(...base, ...areaParamsCu); };
-    const pushBare = (...base) => { params.push(...base, ...areaParamsBare); };
-    const pushInv = (...base) => { params.push(...base, ...areaParamsInvoice); };
-    const pushPay = (...base) => { params.push(...base, ...areaParamsPayment); };
+    const pushCu = (...base) => { params.push(...base); };
+    const pushBare = pushCu;
+    const pushInv = pushCu;
+    const pushPay = pushCu;
     pushCu(tid, end); // total_customers
     pushCu(tid, end); // total_customer_amount
     pushCu(tid, end); // active_customers
@@ -3692,6 +3928,14 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
     const installParams = isAdmin ? [] : [techId, String(techId)];
     installWhere += ' AND ij.tenant_id = ?';
     installParams.push(tenantId);
+    const amAreas = getMobileAreaManagerAreaIds(req);
+    if (amAreas !== null) {
+        installWhere += ` AND EXISTS (
+            SELECT 1 FROM customers amc
+            WHERE amc.id = ij.customer_id AND amc.tenant_id = ij.tenant_id
+              AND ${sqlAreaManagerCustomerScope('amc', amAreas)}
+        )`;
+    }
     if (periodStart && periodEnd) {
         installWhere += ` AND date(COALESCE(ij.updated_at, ij.created_at, '1970-01-01')) >= date(?)
             AND date(COALESCE(ij.updated_at, ij.created_at, '1970-01-01')) < date(?)`;
@@ -3739,6 +3983,14 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
     const troubleParams = isAdmin ? [] : [techId, String(techId)];
     troubleWhere += ' AND tenant_id = ?';
     troubleParams.push(tenantId);
+    if (amAreas !== null) {
+        troubleWhere += ` AND EXISTS (
+            SELECT 1 FROM customers amc
+            WHERE amc.tenant_id = trouble_reports.tenant_id
+              AND ${sqlTroubleTicketCustomerMatch('amc', 'trouble_reports')}
+              AND ${sqlAreaManagerCustomerScope('amc', amAreas)}
+        )`;
+    }
     if (periodStart && periodEnd) {
         troubleWhere += ` AND date(COALESCE(updated_at, created_at, '1970-01-01')) >= date(?)
             AND date(COALESCE(updated_at, created_at, '1970-01-01')) < date(?)`;
@@ -3920,6 +4172,9 @@ router.post('/tasks/installations', verifyToken, allowFieldOps, async (req, res)
             });
             if (!customer) {
                 return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+            }
+            if (!(await assertMobileAreaManagerCustomer(req, customerId))) {
+                return res.status(403).json({ success: false, message: 'Pelanggan di luar wilayah Anda' });
             }
         }
         const resolvedPackageId =
@@ -4131,6 +4386,9 @@ router.post('/tasks/trouble', verifyToken, allowFieldOps, async (req, res) => {
             });
             if (!custOk) {
                 return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+            }
+            if (!(await assertMobileAreaManagerCustomer(req, customerId))) {
+                return res.status(403).json({ success: false, message: 'Pelanggan di luar wilayah Anda' });
             }
         }
 
@@ -4466,7 +4724,41 @@ router.get('/performance/week', verifyToken, requireTechnician, (req, res) => {
     });
 });
 
-router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res) => {
+function requireAreaManagerTaskParam(req, res, next) {
+    const amAreas = getMobileAreaManagerAreaIds(req);
+    if (amAreas === null) return next();
+    const tenantId = resolveReqTenantId(req);
+    const scope = sqlAreaManagerCustomerScope('amc', amAreas);
+    let sql;
+    let taskId;
+    if (req.params.type === 'INSTALL') {
+        taskId = parseInt(req.params.id, 10);
+        sql = `SELECT 1 FROM installation_jobs ij
+            WHERE ij.id = ? AND ij.tenant_id = ?
+              AND EXISTS (SELECT 1 FROM customers amc
+                  WHERE amc.id = ij.customer_id AND amc.tenant_id = ij.tenant_id AND ${scope})`;
+    } else if (req.params.type === 'TR') {
+        taskId = String(req.params.id);
+        sql = `SELECT 1 FROM trouble_reports tr
+            WHERE tr.id = ? AND tr.tenant_id = ?
+              AND EXISTS (SELECT 1 FROM customers amc
+                  WHERE amc.tenant_id = tr.tenant_id AND ${sqlTroubleTicketCustomerMatch('amc', 'tr')} AND ${scope})`;
+    } else {
+        return next();
+    }
+    db.get(sql, [taskId, tenantId], (err, row) => {
+        if (err) {
+            logger.error('[mobile-adapter] area manager task check', err);
+            return res.status(500).json({ success: false, message: err.message });
+        }
+        if (!row) {
+            return res.status(403).json({ success: false, message: 'Tugas di luar wilayah Anda' });
+        }
+        next();
+    });
+}
+
+router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, requireAreaManagerTaskParam, (req, res) => {
     const { type, id } = req.params;
     const body = req.body || {};
     const { status } = body;
@@ -4480,6 +4772,11 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
         return res.status(400).json({ success: false, message: 'ID teknisi tidak valid' });
     }
     const actorHistoryId = isAdminTask ? 0 : techId;
+    const isAmTask = isAreaManagerReq(req);
+    const actorLabel = fieldActorLabel(req);
+    const histActorType = isAmTask ? 'area_manager' : 'technician';
+    const histActorId = isAmTask ? techId || 0 : actorHistoryId;
+    const notifyAdminProgress = !isAdminTask || isAmTask;
     const rawStatus = String(status).toLowerCase();
     const tenantId = resolveReqTenantId(req);
     if (tenantId == null) {
@@ -4513,7 +4810,7 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                 if (!job) {
                     return res.status(404).json({ success: false, message: 'Tugas tidak ditemukan atau bukan milik Anda' });
                 }
-                const noteBlock = `[Pending — app teknisi]\n${pendingReason}`;
+                const noteBlock = `[Pending — ${actorLabel}]\n${pendingReason}`;
                 const newNotes = job.notes ? `${job.notes}\n\n${noteBlock}` : noteBlock;
                 const wallNow = getLocalTimestamp();
                 const updSql = isAdminTask
@@ -4537,13 +4834,13 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                     db.run(
                         `INSERT INTO installation_job_status_history (
                             job_id, old_status, new_status, changed_by_type, changed_by_id, notes
-                        ) VALUES (?, ?, 'assigned', 'technician', ?, ?)`,
-                        [jobId, job.status, actorHistoryId, pendingReason.slice(0, 500)],
+                        ) VALUES (?, ?, 'assigned', ?, ?, ?)`,
+                        [jobId, job.status, histActorType, histActorId, pendingReason.slice(0, 500)],
                         (hErr) => {
                             if (hErr) {
                                 logger.warn('[mobile-adapter] install pending history:', hErr.message);
                             }
-                            if (!isAdminTask) pingInstallProgress();
+                            if (notifyAdminProgress) pingInstallProgress();
                         }
                     );
                     return res.json({ success: true, message: 'Pending tersimpan; admin dapat melihat alasan di catatan job.' });
@@ -4624,7 +4921,7 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                         return res.status(404).json({ success: false, message: 'Tugas tidak ditemukan atau bukan milik Anda' });
                     }
                     const noteBlock =
-                        `[Selesai — app teknisi]\n${completion_description}` +
+                        `[Selesai — ${actorLabel}]\n${completion_description}` +
                         `\n📏 Kabel: ${cableM} m` +
                         (photoPath ? `\n📷 ${photoPath}` : '') +
                         `\n📷 Stiker ONT: ${stickerPath}`;
@@ -4686,13 +4983,13 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                             db.run(
                                 `INSERT INTO installation_job_status_history (
                                     job_id, old_status, new_status, changed_by_type, changed_by_id, notes
-                                ) VALUES (?, ?, 'completed', 'technician', ?, ?)`,
-                                [jobId, job.status, actorHistoryId, completion_description.slice(0, 500)],
+                                ) VALUES (?, ?, 'completed', ?, ?, ?)`,
+                                [jobId, job.status, histActorType, histActorId, completion_description.slice(0, 500)],
                                 (histErr) => {
                                     if (histErr) {
                                         logger.warn('[mobile-adapter] install history:', histErr.message);
                                     }
-                                    if (!isAdminTask) pingInstallProgress();
+                                    if (notifyAdminProgress) pingInstallProgress();
                                 }
                             );
                             const phone = (job.customer_phone || '').replace(/\D/g, '');
@@ -4787,10 +5084,14 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                             message: 'Tugas tidak ditemukan atau bukan milik Anda'
                         });
                     }
-                    const histType = isAdminTask ? 'admin' : 'technician';
-                    const histId = isAdminTask ? 0 : actorHistoryId;
+                    let histType = isAdminTask ? 'admin' : 'technician';
+                    let histId = isAdminTask ? 0 : actorHistoryId;
                     let histNotes = 'Pengerjaan di lapangan dimulai (admin).';
-                    if (!isAdminTask) {
+                    if (isAmTask) {
+                        histType = histActorType;
+                        histId = histActorId;
+                        histNotes = `Pengerjaan di lapangan dimulai oleh ${actorLabel}.`;
+                    } else if (!isAdminTask) {
                         if (oldLower === 'assigned') {
                             histNotes =
                                 'Tugas dijalankan kembali di lapangan (app teknisi) — dilanjutkan setelah pending / jeda.';
@@ -4809,7 +5110,7 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                             if (hErr) {
                                 logger.warn('[mobile-adapter] install in_progress history:', hErr.message);
                             }
-                            if (!isAdminTask) pingInstallProgress();
+                            if (notifyAdminProgress) pingInstallProgress();
                             res.json({ success: true, message: 'Status diperbarui' });
                         }
                     );
@@ -4912,7 +5213,7 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                     await updateTroubleReportStatus(
                         id,
                         'open',
-                        `[Pending — app teknisi]\n${pendingReason}`,
+                        `[Pending — ${actorLabel}]\n${pendingReason}`,
                         {},
                         false
                     );
@@ -4994,7 +5295,19 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                          work_started_at = COALESCE(work_started_at, ?)
                          WHERE id = ? AND tenant_id = ?`,
                         [dbStatus, wallNow, wallNow, id, tenantId],
-                        done
+                        function onAdminStart(err) {
+                            if (!err && this.changes > 0 && isAmTask) {
+                                const { updateTroubleReportStatus } = require('../../config/troubleReport');
+                                updateTroubleReportStatus(
+                                    id,
+                                    dbStatus,
+                                    `[Mulai dikerjakan — ${actorLabel}]`,
+                                    {},
+                                    false
+                                ).catch((e) => logger.warn('[mobile-adapter] TR start note:', e.message || e));
+                            }
+                            done.call(this, err);
+                        }
                     );
                     return;
                 }
@@ -5056,7 +5369,9 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
                     (async () => {
                         try {
                             const { updateTroubleReportStatus } = require('../../config/troubleReport');
-                            let noteText = `[Penyelesaian teknisi]\n${completion_description}`;
+                            let noteText = isAmTask
+                                ? `[Penyelesaian — ${actorLabel}]\n${completion_description}`
+                                : `[Penyelesaian teknisi]\n${completion_description}`;
                             if (photoPath) noteText += `\n📷 ${photoPath}`;
                             await updateTroubleReportStatus(id, 'resolved', noteText, {}, true);
                             const wd = clampWorkDurationSeconds(body.work_duration_seconds);
@@ -5119,22 +5434,44 @@ router.post('/tasks/:type/:id/status', verifyToken, requireTechnician, (req, res
     res.status(400).json({ success: false, message: 'Tipe tugas tidak dikenal' });
 });
 
+/** Notifikasi PSB / tiket hanya tampil bila tugasnya milik tenant aktif (2 parameter: tenantId, tenantId). */
+function sqlTechnicianNotificationTenantScope(alias) {
+    return ` AND (
+        UPPER(TRIM(${alias}.kind)) NOT IN ('TR', 'INSTALL')
+        OR (UPPER(TRIM(${alias}.kind)) = 'TR' AND EXISTS (
+            SELECT 1 FROM trouble_reports ntr
+            WHERE ntr.id = ${alias}.ref_id AND ntr.tenant_id = ?))
+        OR (UPPER(TRIM(${alias}.kind)) = 'INSTALL' AND EXISTS (
+            SELECT 1 FROM installation_jobs nij
+            WHERE nij.id = CAST(${alias}.ref_id AS INTEGER) AND nij.tenant_id = ?))
+    )`;
+}
+
 // --- Notifikasi tugas (admin → teknisi, in-app + badge di mobile) ---
 router.get('/notifications', verifyToken, requireTechnician, (req, res) => {
     const roleNt = req.user && req.user.role;
     if (roleNt === 'admin') {
         return res.json({ success: true, data: { items: [], unread_count: 0 } });
     }
+    if (roleNt === 'area_manager') {
+        return areaManagerField.notifications.list(req, res);
+    }
     const techId = parseTechnicianId(req);
     if (!techId) {
         return res.status(400).json({ success: false, message: 'ID teknisi tidak valid' });
     }
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
+    const tenantScope = sqlTechnicianNotificationTenantScope('technician_field_notifications');
+    const tenantParams = [tenantId, tenantId];
 
     db.get(
         `SELECT COUNT(*) AS c FROM technician_field_notifications
-         WHERE technician_id = ? AND read_at IS NULL`,
-        [techId],
+         WHERE technician_id = ? AND read_at IS NULL${tenantScope}`,
+        [techId, ...tenantParams],
         (e1, countRow) => {
             if (e1) {
                 logger.error('[mobile-adapter] notifications count:', e1);
@@ -5144,10 +5481,10 @@ router.get('/notifications', verifyToken, requireTechnician, (req, res) => {
             db.all(
                 `SELECT id, technician_id, kind, ref_id, title, body, read_at, created_at
                  FROM technician_field_notifications
-                 WHERE technician_id = ?
+                 WHERE technician_id = ?${tenantScope}
                  ORDER BY datetime(created_at) DESC
                  LIMIT ?`,
-                [techId, limit],
+                [techId, ...tenantParams, limit],
                 (e2, rows) => {
                     if (e2) {
                         logger.error('[mobile-adapter] notifications list:', e2);
@@ -5175,6 +5512,9 @@ router.post('/notifications/:notifId/read', verifyToken, requireTechnician, (req
     if (roleNt === 'admin') {
         return res.json({ success: true, message: 'Ditandai dibaca' });
     }
+    if (roleNt === 'area_manager') {
+        return areaManagerField.notifications.markRead(req, res);
+    }
     const techId = parseTechnicianId(req);
     const nid = parseInt(req.params.notifId, 10);
     if (!techId || !Number.isFinite(nid)) {
@@ -5200,6 +5540,9 @@ router.post('/notifications/read-all', verifyToken, requireTechnician, (req, res
     const roleNt = req.user && req.user.role;
     if (roleNt === 'admin') {
         return res.json({ success: true, message: 'Semua ditandai dibaca', updated: 0 });
+    }
+    if (roleNt === 'area_manager') {
+        return areaManagerField.notifications.markAllRead(req, res);
     }
     const techId = parseTechnicianId(req);
     if (!techId) {
@@ -5271,12 +5614,15 @@ router.get('/network-map', verifyToken, requireTechnician, async (req, res) => {
             );
         });
 
+        const amAreas = getMobileAreaManagerAreaIds(req);
+        const mapCustomerScope = amAreas !== null ? ` AND ${sqlAreaManagerCustomerScope('c', amAreas)}` : '';
+
         const customers = await new Promise((resolve, reject) => {
             db.all(
-                `SELECT id, name, phone, status, latitude, longitude, odp_id, pppoe_username, username
-                 FROM customers
-                 WHERE tenant_id = ?
-                   AND latitude IS NOT NULL AND longitude IS NOT NULL`,
+                `SELECT c.id, c.name, c.phone, c.status, c.latitude, c.longitude, c.odp_id, c.pppoe_username, c.username
+                 FROM customers c
+                 WHERE c.tenant_id = ?
+                   AND c.latitude IS NOT NULL AND c.longitude IS NOT NULL${mapCustomerScope}`,
                 [tenantId],
                 (err, rows) => (err ? reject(err) : resolve(rows || []))
             );
@@ -5293,7 +5639,7 @@ router.get('/network-map', verifyToken, requireTechnician, async (req, res) => {
                  WHERE c.tenant_id = ?
                    AND o.tenant_id = ?
                    AND c.latitude IS NOT NULL AND c.longitude IS NOT NULL
-                   AND o.latitude IS NOT NULL AND o.longitude IS NOT NULL`,
+                   AND o.latitude IS NOT NULL AND o.longitude IS NOT NULL${mapCustomerScope}`,
                 [tenantId, tenantId],
                 (err, rows) => (err ? reject(err) : resolve(rows || []))
             );
@@ -5908,12 +6254,24 @@ router.post('/odps/:odpId/assign', verifyToken, requireTechnician, (req, res) =>
                 });
             };
 
-            resolveCustomerPk((errC, custRow) => {
+            const resolveCustomerInScope = (cb) => {
+                resolveCustomerPk((e, row) => {
+                    if (e || !row || !isAreaManagerReq(req)) return cb(e, row, true);
+                    assertMobileAreaManagerCustomer(req, row.id)
+                        .then((ok) => cb(null, row, ok))
+                        .catch((err) => cb(err));
+                });
+            };
+
+            resolveCustomerInScope((errC, custRow, inScope) => {
                 if (errC) {
                     return res.status(500).json({ success: false, message: errC.message });
                 }
                 if (!custRow) {
                     return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+                }
+                if (!inScope) {
+                    return res.status(403).json({ success: false, message: 'Pelanggan di luar wilayah Anda' });
                 }
                 const custIntId = custRow.id;
 
@@ -6560,6 +6918,31 @@ router.get('/collector/customer-ppp-session/:customerId', verifyToken, requireCo
     }
 });
 
+router.get('/collector/customer-traffic/:customerId', verifyToken, requireCollector, async (req, res) => {
+    const collectorId = parseCollectorId(req);
+    if (!collectorId) {
+        return res.status(400).json({ success: false, message: 'ID kolektor tidak valid' });
+    }
+    const customerId = parseInt(String(req.params.customerId), 10);
+    if (!Number.isFinite(customerId) || customerId <= 0) {
+        return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
+    }
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
+    try {
+        const allowed = await collectorMappedCustomerIds(collectorId);
+        if (!allowed.has(customerId)) {
+            return res.status(403).json({ success: false, message: 'Pelanggan tidak ada di wilayah Anda' });
+        }
+        return await respondCustomerPppoeTraffic(res, customerId, tenantId);
+    } catch (error) {
+        logger.error('[mobile-adapter] collector/customer-traffic', error);
+        return res.status(500).json({ success: false, message: error.message || 'Gagal memuat trafik' });
+    }
+});
+
 router.post('/collector/customer-isolir/:customerId', verifyToken, requireCollector, async (req, res) => {
     const collectorId = parseCollectorId(req);
     if (!collectorId) {
@@ -7142,7 +7525,7 @@ router.get('/admin/warehouse/items', verifyToken, requireAdmin, async (req, res)
     }
 });
 
-router.post('/admin/warehouse/items', verifyToken, requireAdmin, async (req, res) => {
+router.post('/admin/warehouse/items', verifyToken, requireAdmin, denyAreaManager, async (req, res) => {
     const name = String(req.body.name ?? '').trim();
     if (!name) return res.status(400).json({ success: false, message: 'Nama barang wajib diisi' });
     const unit = String(req.body.unit ?? '').trim();
@@ -7159,7 +7542,7 @@ router.post('/admin/warehouse/items', verifyToken, requireAdmin, async (req, res
     }
 });
 
-router.put('/admin/warehouse/items/:id', verifyToken, requireAdmin, async (req, res) => {
+router.put('/admin/warehouse/items/:id', verifyToken, requireAdmin, denyAreaManager, async (req, res) => {
     const id = parseInt(req.params.id, 10);
     const name = String(req.body.name ?? '').trim();
     if (!Number.isInteger(id)) return res.status(400).json({ success: false, message: 'ID tidak valid' });
@@ -7179,7 +7562,7 @@ router.put('/admin/warehouse/items/:id', verifyToken, requireAdmin, async (req, 
     }
 });
 
-router.delete('/admin/warehouse/items/:id', verifyToken, requireAdmin, async (req, res) => {
+router.delete('/admin/warehouse/items/:id', verifyToken, requireAdmin, denyAreaManager, async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ success: false, message: 'ID tidak valid' });
     try {
@@ -7198,7 +7581,7 @@ router.delete('/admin/warehouse/items/:id', verifyToken, requireAdmin, async (re
     }
 });
 
-router.post('/admin/warehouse/inbound', verifyToken, requireAdmin, async (req, res) => {
+router.post('/admin/warehouse/inbound', verifyToken, requireAdmin, denyAreaManager, async (req, res) => {
     const itemId = parseInt(req.body.item_id, 10);
     const quantity = parseInt(req.body.quantity, 10);
     if (!Number.isInteger(itemId) || !Number.isInteger(quantity) || quantity < 1 || quantity > 5000) {
@@ -7261,7 +7644,7 @@ router.get('/admin/warehouse/inbound-history', verifyToken, requireAdmin, async 
     }
 });
 
-router.put('/admin/warehouse/inbound-batches/:id', verifyToken, requireAdmin, async (req, res) => {
+router.put('/admin/warehouse/inbound-batches/:id', verifyToken, requireAdmin, denyAreaManager, async (req, res) => {
     const batchId = parseInt(req.params.id, 10);
     if (!Number.isInteger(batchId)) return res.status(400).json({ success: false, message: 'ID batch tidak valid' });
     const reference = String(req.body.reference ?? '').trim().slice(0, 200);
@@ -7329,7 +7712,7 @@ router.put('/admin/warehouse/inbound-batches/:id', verifyToken, requireAdmin, as
     }
 });
 
-router.delete('/admin/warehouse/inbound-batches/:id', verifyToken, requireAdmin, async (req, res) => {
+router.delete('/admin/warehouse/inbound-batches/:id', verifyToken, requireAdmin, denyAreaManager, async (req, res) => {
     const batchId = parseInt(req.params.id, 10);
     if (!Number.isInteger(batchId)) return res.status(400).json({ success: false, message: 'ID batch tidak valid' });
     try {
@@ -7386,7 +7769,7 @@ router.get('/admin/warehouse/employee-lookup', verifyToken, requireAdmin, async 
     }
 });
 
-router.post('/admin/warehouse/outbound-scan', verifyToken, requireAdmin, async (req, res) => {
+router.post('/admin/warehouse/outbound-scan', verifyToken, requireAdmin, denyAreaManager, async (req, res) => {
     const code = normalizeWarehouseScan(req.body.code ?? req.body.qr ?? '').toUpperCase();
     if (!code) return res.status(400).json({ success: false, message: 'Kode QR / barcode kosong' });
     if (code.startsWith('EMP')) {

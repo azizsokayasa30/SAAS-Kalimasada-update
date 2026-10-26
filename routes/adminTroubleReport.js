@@ -375,12 +375,18 @@ router.post('/create', async (req, res) => {
         const sqlite3 = require('sqlite3').verbose();
         const db = new sqlite3.Database(dbPath);
         db.run('PRAGMA busy_timeout = 8000');
+        const reportTenantId = parseInt(newReport.tenant_id, 10);
         const techRows = await new Promise((resolve, reject) => {
+          if (!Number.isFinite(reportTenantId)) {
+            db.close();
+            return resolve([]);
+          }
           db.all(
             `SELECT id FROM technicians
              WHERE is_active = 1
+               AND tenant_id = ?
                AND LOWER(IFNULL(role, 'technician')) = 'technician'`,
-            [],
+            [reportTenantId],
             (err, rows) => {
               db.close();
               if (err) return reject(err);

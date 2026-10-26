@@ -216,7 +216,7 @@ function countUnreadInstallProgress(tenantAndSql, seenAt) {
             SELECT COUNT(DISTINCT h.job_id) AS n
             FROM installation_job_status_history h
             INNER JOIN installation_jobs ij ON ij.id = h.job_id
-            WHERE LOWER(TRIM(COALESCE(h.changed_by_type,''))) = 'technician'
+            WHERE LOWER(TRIM(COALESCE(h.changed_by_type,''))) IN ('technician', 'area_manager')
               AND datetime(h.created_at) > datetime(?)
               ${tenantAndSql || ''}
             `,
@@ -424,11 +424,17 @@ router.get('/', adminAuth, attachTenantAppSettings, async (req, res) => {
                 `
                 SELECT h.id, h.job_id, h.old_status, h.new_status, h.notes, h.created_at, h.changed_by_id,
                        ij.job_number, ij.customer_name, ij.status AS job_status,
-                       tech.name AS technician_name
+                       CASE WHEN LOWER(TRIM(COALESCE(h.changed_by_type,''))) = 'area_manager'
+                            THEN 'Manager Area ' || COALESCE(am.name, '')
+                            ELSE tech.name
+                       END AS technician_name
                 FROM installation_job_status_history h
                 INNER JOIN installation_jobs ij ON ij.id = h.job_id
                 LEFT JOIN technicians tech ON tech.id = h.changed_by_id
-                WHERE LOWER(TRIM(COALESCE(h.changed_by_type,''))) = 'technician'
+                    AND LOWER(TRIM(COALESCE(h.changed_by_type,''))) = 'technician'
+                LEFT JOIN area_managers am ON am.id = h.changed_by_id
+                    AND LOWER(TRIM(COALESCE(h.changed_by_type,''))) = 'area_manager'
+                WHERE LOWER(TRIM(COALESCE(h.changed_by_type,''))) IN ('technician', 'area_manager')
                   ${t.and('ij')}
                   AND strftime('%Y', h.created_at) = ?
                   AND strftime('%m', h.created_at) = ?
@@ -455,7 +461,7 @@ router.get('/', adminAuth, attachTenantAppSettings, async (req, res) => {
                 SELECT DISTINCT h.job_id
                 FROM installation_job_status_history h
                 INNER JOIN installation_jobs ij ON ij.id = h.job_id
-                WHERE LOWER(TRIM(COALESCE(h.changed_by_type,''))) = 'technician'
+                WHERE LOWER(TRIM(COALESCE(h.changed_by_type,''))) IN ('technician', 'area_manager')
                   AND datetime(h.created_at) > datetime(?)
                   ${t.and('ij')}
                 `,

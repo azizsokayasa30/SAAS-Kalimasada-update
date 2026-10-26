@@ -149,6 +149,8 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
     return const [];
   }
 
+  bool get _areaScoped => _data?['scope'] == 'area';
+
   String _rupiah(dynamic value) => _money.format(_num(value));
   String _number(dynamic value) => _count.format(_num(value));
 
@@ -212,6 +214,7 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
   }
 
   List<Widget> _selectedContent() {
+    if (_areaScoped) return _buildPaymentsTab();
     switch (_selectedMenu) {
       case 1:
         return _buildRemittanceTab();
@@ -250,43 +253,49 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
           title: 'Riwayat pembayaran',
           icon: Icons.receipt_long_rounded,
           color: _navy,
-          selected: _selectedMenu == 0,
+          selected: _selectedMenu == 0 || _areaScoped,
           onTap: () => setState(() => _selectedMenu = 0),
         ),
-        const SizedBox(height: 6),
-        _FinanceMenuButton(
-          title: 'Setoran kolektor',
-          icon: Icons.assignment_returned_rounded,
-          color: _orange,
-          selected: _selectedMenu == 1,
-          onTap: () => setState(() => _selectedMenu = 1),
-        ),
-        const SizedBox(height: 6),
-        _FinanceMenuButton(
-          title: 'Buku pemasukan',
-          icon: Icons.trending_up_rounded,
-          color: _green,
-          selected: _selectedMenu == 2,
-          onTap: () => setState(() => _selectedMenu = 2),
-        ),
-        const SizedBox(height: 6),
-        _FinanceMenuButton(
-          title: 'Buku pengeluaran',
-          icon: Icons.trending_down_rounded,
-          color: _red,
-          selected: _selectedMenu == 3,
-          onTap: () => setState(() => _selectedMenu = 3),
-        ),
-        const SizedBox(height: 6),
-        _FinanceMenuButton(
-          title: 'Laporan keuangan',
-          icon: Icons.assessment_rounded,
-          color: _navy,
-          selected: _selectedMenu == 4,
-          onTap: () => setState(() => _selectedMenu = 4),
-        ),
+        if (!_areaScoped) ..._fullFinanceMenuButtons(),
       ],
     );
+  }
+
+  List<Widget> _fullFinanceMenuButtons() {
+    return [
+      const SizedBox(height: 6),
+      _FinanceMenuButton(
+        title: 'Setoran kolektor',
+        icon: Icons.assignment_returned_rounded,
+        color: _orange,
+        selected: _selectedMenu == 1,
+        onTap: () => setState(() => _selectedMenu = 1),
+      ),
+      const SizedBox(height: 6),
+      _FinanceMenuButton(
+        title: 'Buku pemasukan',
+        icon: Icons.trending_up_rounded,
+        color: _green,
+        selected: _selectedMenu == 2,
+        onTap: () => setState(() => _selectedMenu = 2),
+      ),
+      const SizedBox(height: 6),
+      _FinanceMenuButton(
+        title: 'Buku pengeluaran',
+        icon: Icons.trending_down_rounded,
+        color: _red,
+        selected: _selectedMenu == 3,
+        onTap: () => setState(() => _selectedMenu = 3),
+      ),
+      const SizedBox(height: 6),
+      _FinanceMenuButton(
+        title: 'Laporan keuangan',
+        icon: Icons.assessment_rounded,
+        color: _navy,
+        selected: _selectedMenu == 4,
+        onTap: () => setState(() => _selectedMenu = 4),
+      ),
+    ];
   }
 
   Widget _periodHeader() {
@@ -485,8 +494,12 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
                         );
                         final tunggakan = _num(collector['diterima_tunggakan']);
                         final diskon = _num(collector['total_discount']);
-                        final discPeriode = _num(collector['discount_tagihan_periode']);
-                        final discTunggakan = _num(collector['discount_tunggakan']);
+                        final discPeriode = _num(
+                          collector['discount_tagihan_periode'],
+                        );
+                        final discTunggakan = _num(
+                          collector['discount_tunggakan'],
+                        );
                         final parts = <String>[
                           'Diterima ${_rupiah(diterima)}',
                           if (tunggakan > 0) 'Tunggakan ${_rupiah(tunggakan)}',
