@@ -42,7 +42,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
   bool _isSearching = false;
   String _searchQuery = '';
   late String _selectedType; // 'Semua', 'Tiket', 'PSB'
-  String _selectedStatus = 'Semua'; // 'Semua', 'Aktif', 'Selesai'
+  String _selectedStatus = 'Aktif'; // 'Semua', 'Aktif', 'Selesai'
   late int _selectedMonth;
   late int _selectedYear;
   final TextEditingController _searchController = TextEditingController();
@@ -216,7 +216,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
             onRefresh: () async {
               setState(() {
                 _selectedType = 'Semua';
-                _selectedStatus = 'Semua';
+                _selectedStatus = 'Aktif';
               });
               await _fetchTasksForSelectedPeriod(refresh: true);
             },

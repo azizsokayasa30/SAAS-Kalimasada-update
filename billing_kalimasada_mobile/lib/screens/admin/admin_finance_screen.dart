@@ -420,12 +420,106 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
       if (collector.isNotEmpty) 'Kolektor: $collector',
       if (discount > 0) 'Diskon ${_rupiah(discount)}',
     ].join(' • ');
+    final status = item['status']?.toString().toLowerCase().trim() ?? '';
+    final cancelled = const {
+      'cancelled',
+      'canceled',
+      'void',
+      'dibatalkan',
+    }.contains(status);
     return _PaymentHistoryRow(
       customerName: item['customer_name']?.toString() ?? 'Tanpa pelanggan',
       amount: _rupiah(item['jumlah_setelah_diskon'] ?? item['amount']),
       meta: '$invoice • $method • ${_shortDate(item['payment_date'])}',
       detail: detail,
+      onCancel: cancelled ? null : () => _cancelPayment(item),
     );
+  }
+
+  Future<void> _cancelPayment(Map<String, dynamic> item) async {
+    final id = (item['id'] ?? item['payment_id'])?.toString().trim() ?? '';
+    if (id.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('ID pembayaran tidak tersedia.')),
+      );
+      return;
+    }
+    final invoice = item['invoice_number']?.toString() ?? '-';
+    final message = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _CancelPaymentDialog(
+        paymentId: id,
+        customerName: item['customer_name']?.toString() ?? 'Tanpa pelanggan',
+        summary:
+            '$invoice • ${_rupiah(item['jumlah_setelah_diskon'] ?? item['amount'])}',
+      ),
+    );
+    if (message == null || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+    await _load();
+  }
+
+  List<_CategoryTotal> _groupByCategory(
+    List<Map<String, dynamic>> items,
+    String Function(Map<String, dynamic>) categoryOf,
+  ) {
+    final totals = <String, _CategoryTotal>{};
+    for (final item in items) {
+      final name = categoryOf(item);
+      final current = totals[name];
+      totals[name] = _CategoryTotal(
+        name,
+        (current?.amount ?? 0) + _num(item['amount']),
+        (current?.count ?? 0) + 1,
+      );
+    }
+    return totals.values.toList()
+      ..sort((a, b) => b.amount.compareTo(a.amount));
+  }
+
+  /// Ringkasan kategori dari server (`financial_report.category_summary`)
+  /// mencakup seluruh transaksi periode, sedangkan daftar transaksi dibatasi.
+  List<_CategoryTotal>? _serverCategoryTotals(String type) {
+    final report = _map(_data?['financial_report']);
+    final group = _map(_map(report['category_summary'])[type]);
+    final raw = group['categories'];
+    if (raw is! List || raw.isEmpty) return null;
+    final totals = <_CategoryTotal>[];
+    for (final entry in raw) {
+      if (entry is! Map) continue;
+      final name = entry['category']?.toString().trim() ?? '';
+      totals.add(
+        _CategoryTotal(
+          name.isEmpty ? 'Lainnya' : name,
+          _num(entry['total']),
+          _num(entry['count']).toInt(),
+        ),
+      );
+    }
+    if (totals.isEmpty) return null;
+    return totals..sort((a, b) => b.amount.compareTo(a.amount));
+  }
+
+  String _incomeCategoryOf(Map<String, dynamic> item) {
+    final category = item['category']?.toString().trim() ?? '';
+    if (category.isNotEmpty) return category;
+    final invoice = item['invoice_number']?.toString().trim() ?? '';
+    if (invoice.isNotEmpty) return 'Pembayaran tagihan';
+    final gateway = item['gateway_name']?.toString().trim() ?? '';
+    final manual = RegExp(
+      r'^pendapatan\s*-\s*(.+)$',
+      caseSensitive: false,
+    ).firstMatch(gateway);
+    if (manual != null) return manual.group(1)!.trim();
+    return gateway.isNotEmpty ? gateway : 'Lainnya';
+  }
+
+  String _expenseCategoryOf(Map<String, dynamic> item) {
+    final category = item['category']?.toString().trim() ?? '';
+    return category.isNotEmpty ? category : 'Lainnya';
   }
 
   List<Widget> _buildRemittanceTab() {
@@ -552,6 +646,9 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
       0,
       (sum, item) => sum + _num(item['amount']),
     );
+    final categoryTotals =
+        _serverCategoryTotals('income') ??
+        _groupByCategory(items, _incomeCategoryOf);
     return [
       _ActionHeader(
         title: 'Pemasukan',
@@ -560,6 +657,15 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
         onPressed: _openIncomeSheet,
       ),
       const SizedBox(height: 14),
+      if (categoryTotals.isNotEmpty) ...[
+        _CategoryBreakdownCard(
+          title: 'Pemasukan per Kategori',
+          totals: categoryTotals,
+          color: _green,
+          format: _rupiah,
+        ),
+        const SizedBox(height: 14),
+      ],
       _SectionCard(
         title: 'Daftar Pemasukan',
         subtitle: '${items.length} catatan pada periode ini',
@@ -616,6 +722,9 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
   List<Widget> _buildExpensesTab() {
     final expenses = _map(_data?['expenses']);
     final items = _list(expenses['items']);
+    final categoryTotals =
+        _serverCategoryTotals('expense') ??
+        _groupByCategory(items, _expenseCategoryOf);
     return [
       _ActionHeader(
         title: 'Pengeluaran',
@@ -624,6 +733,15 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
         onPressed: _openExpenseSheet,
       ),
       const SizedBox(height: 14),
+      if (categoryTotals.isNotEmpty) ...[
+        _CategoryBreakdownCard(
+          title: 'Pengeluaran per Kategori',
+          totals: categoryTotals,
+          color: _red,
+          format: _rupiah,
+        ),
+        const SizedBox(height: 14),
+      ],
       _SectionCard(
         title: 'Daftar Pengeluaran',
         subtitle: '${items.length} catatan pada periode ini',
@@ -1546,12 +1664,14 @@ class _PaymentHistoryRow extends StatelessWidget {
   final String amount;
   final String meta;
   final String detail;
+  final VoidCallback? onCancel;
 
   const _PaymentHistoryRow({
     required this.customerName,
     required this.amount,
     required this.meta,
     required this.detail,
+    this.onCancel,
   });
 
   @override
@@ -1606,18 +1726,346 @@ class _PaymentHistoryRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          Text(
-            amount,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Color(0xFF0F172A),
-              fontSize: 12,
-              fontWeight: FontWeight.w900,
-            ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                amount,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFF0F172A),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              if (onCancel != null)
+                InkWell(
+                  onTap: onCancel,
+                  borderRadius: BorderRadius.circular(8),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                    child: Text(
+                      'Batalkan',
+                      style: TextStyle(
+                        color: Color(0xFFE84C4F),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
         ],
       ),
+    );
+  }
+}
+
+class _CategoryTotal {
+  final String name;
+  final num amount;
+  final int count;
+
+  const _CategoryTotal(this.name, this.amount, this.count);
+}
+
+class _CategoryBreakdownCard extends StatelessWidget {
+  final String title;
+  final List<_CategoryTotal> totals;
+  final Color color;
+  final String Function(dynamic) format;
+
+  const _CategoryBreakdownCard({
+    required this.title,
+    required this.totals,
+    required this.color,
+    required this.format,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final sum = totals.fold<num>(0, (acc, t) => acc + t.amount);
+    return _SectionCard(
+      title: title,
+      subtitle: '${totals.length} kategori • total ${format(sum)}',
+      child: Column(
+        children: [
+          for (var i = 0; i < totals.length; i++) ...[
+            if (i > 0) const SizedBox(height: 12),
+            _row(totals[i], sum),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _row(_CategoryTotal t, num sum) {
+    final share = sum <= 0 ? 0.0 : (t.amount / sum).clamp(0.0, 1.0).toDouble();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                t.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFF0F172A),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              format(t.amount),
+              style: const TextStyle(
+                color: Color(0xFF0F172A),
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(99),
+                child: LinearProgressIndicator(
+                  value: share,
+                  minHeight: 6,
+                  color: color,
+                  backgroundColor: color.withValues(alpha: 0.12),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              '${t.count} catatan • ${(share * 100).round()}%',
+              style: const TextStyle(
+                color: Color(0xFF64748B),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _CancelPaymentDialog extends StatefulWidget {
+  final String paymentId;
+  final String customerName;
+  final String summary;
+
+  const _CancelPaymentDialog({
+    required this.paymentId,
+    required this.customerName,
+    required this.summary,
+  });
+
+  @override
+  State<_CancelPaymentDialog> createState() => _CancelPaymentDialogState();
+}
+
+class _CancelPaymentDialogState extends State<_CancelPaymentDialog> {
+  static const _red = Color(0xFFE84C4F);
+
+  final _password = TextEditingController();
+  final _reason = TextEditingController();
+  bool _obscure = true;
+  bool _submitting = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _password.dispose();
+    _reason.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_password.text.isEmpty) {
+      setState(() => _error = 'Password wajib diisi.');
+      return;
+    }
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    try {
+      final response = await ApiClient.post(
+        '/api/mobile-adapter/admin/finance/payments/${widget.paymentId}/cancel',
+        {'password': _password.text, 'reason': _reason.text.trim()},
+      );
+      final body = ApiClient.decodeJsonObject(
+        response,
+        debugLabel: 'admin/finance/payments/cancel',
+      );
+      if (!mounted) return;
+      if (response.statusCode >= 200 &&
+          response.statusCode < 300 &&
+          ApiClient.jsonSuccess(body['success'])) {
+        Navigator.of(
+          context,
+        ).pop(body['message']?.toString() ?? 'Pembayaran dibatalkan.');
+        return;
+      }
+      setState(() {
+        _submitting = false;
+        _error =
+            body['message']?.toString() ?? 'Gagal membatalkan pembayaran.';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _submitting = false;
+        _error = 'Gagal membatalkan pembayaran: $e';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
+      title: const Text(
+        'Batalkan pembayaran?',
+        style: TextStyle(
+          color: Color(0xFF0F172A),
+          fontWeight: FontWeight.w900,
+          fontSize: 18,
+        ),
+      ),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.customerName,
+              style: const TextStyle(
+                color: Color(0xFF0F172A),
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            Text(
+              widget.summary,
+              style: const TextStyle(
+                color: Color(0xFF64748B),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: _red.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                'Pembayaran akan dibatalkan dan tagihan kembali belum lunas. '
+                'Masukkan password untuk konfirmasi.',
+                style: TextStyle(
+                  color: _red,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _password,
+              obscureText: _obscure,
+              autofocus: true,
+              enabled: !_submitting,
+              style: const TextStyle(
+                color: Color(0xFF0F172A),
+                fontWeight: FontWeight.w700,
+              ),
+              cursorColor: const Color(0xFF2563EB),
+              onSubmitted: (_) => _submit(),
+              decoration: _financeInputDecoration(
+                'Password',
+                suffixIcon: IconButton(
+                  onPressed: () => setState(() => _obscure = !_obscure),
+                  icon: Icon(
+                    _obscure
+                        ? Icons.visibility_rounded
+                        : Icons.visibility_off_rounded,
+                    color: const Color(0xFF64748B),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _reason,
+              maxLines: 2,
+              enabled: !_submitting,
+              style: const TextStyle(
+                color: Color(0xFF0F172A),
+                fontWeight: FontWeight.w700,
+              ),
+              cursorColor: const Color(0xFF2563EB),
+              decoration: _financeInputDecoration('Alasan (opsional)'),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                _error!,
+                style: const TextStyle(
+                  color: _red,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _submitting ? null : () => Navigator.of(context).pop(),
+          child: const Text(
+            'Tutup',
+            style: TextStyle(color: Color(0xFF64748B)),
+          ),
+        ),
+        FilledButton(
+          onPressed: _submitting ? null : _submit,
+          style: FilledButton.styleFrom(
+            backgroundColor: _red,
+            foregroundColor: Colors.white,
+          ),
+          child: _submitting
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text('Batalkan pembayaran'),
+        ),
+      ],
     );
   }
 }

@@ -76,6 +76,182 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     return '${two(d)}:${two(h)}:${two(m)}:${two(s)}';
   }
 
+  /// Waktu dari router: ISO / `yyyy-MM-dd HH:mm:ss` (RouterOS 7)
+  /// atau `oct/26/2026 10:22:33` (RouterOS lama).
+  DateTime? _parseRouterTime(String raw) {
+    final s = raw.trim();
+    if (s.isEmpty || s == '-') return null;
+    final iso = DateTime.tryParse(s.contains('T') ? s : s.replaceFirst(' ', 'T'));
+    if (iso != null) return iso.toLocal();
+    final m = RegExp(
+      r'^([a-z]{3})/(\d{1,2})/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})$',
+      caseSensitive: false,
+    ).firstMatch(s);
+    if (m == null) return null;
+    const months = [
+      'jan', 'feb', 'mar', 'apr', 'may', 'jun',
+      'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
+    ];
+    final month = months.indexOf(m.group(1)!.toLowerCase()) + 1;
+    if (month == 0) return null;
+    return DateTime(
+      int.parse(m.group(3)!),
+      month,
+      int.parse(m.group(2)!),
+      int.parse(m.group(4)!),
+      int.parse(m.group(5)!),
+      int.parse(m.group(6)!),
+    );
+  }
+
+  String _durationSince(DateTime t) {
+    final d = DateTime.now().difference(t);
+    if (d.inDays > 0) return '${d.inDays} hari ${d.inHours % 24} jam';
+    if (d.inHours > 0) return '${d.inHours} jam ${d.inMinutes % 60} menit';
+    if (d.inMinutes > 0) return '${d.inMinutes} menit';
+    return 'kurang dari 1 menit';
+  }
+
+  Widget _buildPppLogSection(Color labelColor, Color valueColor) {
+    final session = _pppSession;
+    final uptimeRaw = _pickString(session, const ['uptime', 'session_time']);
+    final online =
+        session?['online'] == true ||
+        _pickString(session, const ['ip_address']).isNotEmpty ||
+        uptimeRaw.isNotEmpty;
+
+    final loginRaw = _pickString(session, const [
+      'last_login_at',
+      'last_login',
+      'last_logged_in',
+      'last-logged-in',
+      'login_at',
+      'session_started_at',
+    ]);
+    var loginAt = _parseRouterTime(loginRaw);
+    if (loginAt == null && online) {
+      final secs = _uptimeSecondsFromText(uptimeRaw);
+      if (secs != null) {
+        loginAt = DateTime.now().subtract(Duration(seconds: secs));
+      }
+    }
+
+    final logoutRaw = _pickString(session, const [
+      'last_logout_at',
+      'last_logout',
+      'last_logged_out',
+      'last-logged-out',
+      'logout_at',
+    ]);
+    final logoutAt = _parseRouterTime(logoutRaw);
+    final reason = _pickString(session, const [
+      'last_disconnect_reason',
+      'last-disconnect-reason',
+      'disconnect_reason',
+    ]);
+
+    final fmt = DateFormat('dd MMM yyyy, HH:mm', 'id_ID');
+    String display(DateTime? t, String raw) =>
+        t != null ? fmt.format(t) : (raw.isEmpty ? '-' : raw);
+
+    Widget cell(String label, String value, Color color) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: labelColor,
+              letterSpacing: 1.1,
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
+      );
+    }
+
+    const offlineColor = Color(0xFFDC2626);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 10),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: cell(
+                'LAST LOGIN PPPoE',
+                display(loginAt, loginRaw),
+                valueColor,
+              ),
+            ),
+            Expanded(
+              child: cell(
+                'LAST LOGOUT PPPoE',
+                display(logoutAt, logoutRaw),
+                online ? valueColor : offlineColor,
+              ),
+            ),
+          ],
+        ),
+        if (!online) ...[
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: offlineColor.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: offlineColor.withValues(alpha: 0.25)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(
+                  Icons.wifi_off_rounded,
+                  size: 18,
+                  color: offlineColor,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        logoutAt != null
+                            ? 'Offline sejak ${_durationSince(logoutAt)} lalu'
+                            : 'Offline · waktu logout belum tersedia dari router',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: offlineColor,
+                        ),
+                      ),
+                      if (reason.isNotEmpty)
+                        Text(
+                          'Alasan putus: $reason',
+                          style: TextStyle(fontSize: 12, color: labelColor),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
   bool _isCopyableIp(String ip) =>
       RegExp(r'^[0-9a-fA-F.:]+$').hasMatch(ip) && ip.contains(RegExp(r'\d'));
 
@@ -1278,6 +1454,12 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                       ),
                     ],
                   ),
+
+                  if (_pppSession != null)
+                    _buildPppLogSection(
+                      textOnSurfaceVariant,
+                      textOnBackground,
+                    ),
                 ],
               ),
             ),

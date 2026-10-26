@@ -194,29 +194,36 @@ class _TechnicianDashboardState extends State<TechnicianDashboard>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Hallo, $displayName',
-                                  style: const TextStyle(
-                                    color: textOnPrimary,
-                                    fontSize: 22,
-                                    fontWeight: FontWeight.w600,
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Hallo, $displayName',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: textOnPrimary,
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.w600,
+                                    ),
                                   ),
-                                ),
-                                Text(
-                                  displayTenant,
-                                  style: const TextStyle(
-                                    color: inversePrimary,
-                                    fontSize: 14,
+                                  Text(
+                                    displayTenant,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: inversePrimary,
+                                      fontSize: 14,
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
+                            const SizedBox(width: 12),
                             Row(
+                              mainAxisSize: MainAxisSize.min,
                               children: [
                                 Consumer<NotificationProvider>(
                                   builder: (context, notif, _) {

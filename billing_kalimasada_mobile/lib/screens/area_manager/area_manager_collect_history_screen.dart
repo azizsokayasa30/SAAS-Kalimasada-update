@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../services/api_client.dart';
+import 'area_manager_theme.dart';
 
 /// Riwayat pembayaran yang diterima Manager Area (31 hari terakhir).
 class AreaManagerCollectHistoryScreen extends StatefulWidget {
@@ -89,6 +90,13 @@ class _AreaManagerCollectHistoryScreenState
 
   @override
   Widget build(BuildContext context) {
+    return Theme(
+      data: areaManagerTheme,
+      child: _buildScaffold(context),
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context) {
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(

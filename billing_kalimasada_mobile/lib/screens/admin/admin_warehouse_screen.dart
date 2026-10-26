@@ -41,6 +41,7 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
   int _tab = 0;
   bool _loading = true;
   bool _saving = false;
+  bool _showAllLowStock = false;
 
   bool get _readOnly => context.read<AuthProvider>().role == 'area_manager';
   String? _error;
@@ -772,17 +773,7 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (lowStock.isNotEmpty)
-          _Notice(
-            color: _red,
-            text:
-                'Stok menipis: ${lowStock.map((e) => '${e['name']} (${_int(e['stock_in'])})').join(', ')}',
-          )
-        else
-          const _Notice(
-            color: _green,
-            text: 'Tidak ada barang di bawah batas stok tipis.',
-          ),
+        _buildLowStockCard(lowStock, items),
         const SizedBox(height: 14),
         _sectionHeader(
           'Ringkasan per barang',
@@ -830,6 +821,221 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
         if (items.isEmpty)
           const _EmptyState(text: 'Belum ada master barang aktif.'),
       ],
+    );
+  }
+
+  Widget _buildLowStockCard(
+    List<Map<String, dynamic>> lowStock,
+    List<Map<String, dynamic>> items,
+  ) {
+    if (lowStock.isEmpty) {
+      return _Card(
+        child: Row(
+          children: [
+            _circleIcon(Icons.verified_rounded, _green),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Stok aman',
+                    style: TextStyle(
+                      color: Color(0xFF0F172A),
+                      fontSize: 15,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'Tidak ada barang di bawah batas minimum.',
+                    style: TextStyle(color: Color(0xFF64748B), fontSize: 12.5),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Entri lowStock bisa tanpa unit/batas; lengkapi dari ringkasan per barang.
+    final byId = {for (final it in items) _int(it['id']): it};
+    final byName = {
+      for (final it in items) (it['name'] ?? '').toString().toLowerCase(): it,
+    };
+    final rows = lowStock.map((e) {
+      final ref =
+          byId[_int(e['id'] ?? e['item_id'])] ??
+          byName[(e['name'] ?? '').toString().toLowerCase()] ??
+          const <String, dynamic>{};
+      return <String, dynamic>{...ref, ...e};
+    }).toList()
+      ..sort((a, b) {
+        double ratio(Map<String, dynamic> r) {
+          final low = _int(r['low_stock_threshold']);
+          return low <= 0 ? 0 : _int(r['stock_in']) / low;
+        }
+
+        return ratio(a).compareTo(ratio(b));
+      });
+
+    final outOfStock = rows.where((r) => _int(r['stock_in']) <= 0).length;
+    const previewCount = 5;
+    final visible = _showAllLowStock ? rows : rows.take(previewCount).toList();
+
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              _circleIcon(Icons.warning_amber_rounded, _red),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Stok Menipis',
+                      style: TextStyle(
+                        color: Color(0xFF0F172A),
+                        fontSize: 15,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      outOfStock > 0
+                          ? '${rows.length} barang perlu restock · $outOfStock habis'
+                          : '${rows.length} barang perlu restock',
+                      style: const TextStyle(
+                        color: Color(0xFF64748B),
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _Badge(text: '${rows.length}', color: _red),
+            ],
+          ),
+          const SizedBox(height: 12),
+          for (var i = 0; i < visible.length; i++) ...[
+            if (i > 0) const Divider(height: 20, color: Color(0xFFEFF2F6)),
+            _lowStockRow(visible[i]),
+          ],
+          if (rows.length > previewCount) ...[
+            const SizedBox(height: 6),
+            TextButton.icon(
+              onPressed: () =>
+                  setState(() => _showAllLowStock = !_showAllLowStock),
+              style: TextButton.styleFrom(foregroundColor: _navy),
+              icon: Icon(
+                _showAllLowStock
+                    ? Icons.expand_less_rounded
+                    : Icons.expand_more_rounded,
+              ),
+              label: Text(
+                _showAllLowStock
+                    ? 'Tampilkan lebih sedikit'
+                    : 'Lihat semua (${rows.length})',
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _lowStockRow(Map<String, dynamic> row) {
+    final stock = _int(row['stock_in']);
+    final low = _int(row['low_stock_threshold']);
+    final empty = stock <= 0;
+    final color = empty ? _red : _orange;
+    final rawUnit = (row['unit'] ?? '').toString().trim();
+    final unit = RegExp(r'^\d*$').hasMatch(rawUnit) ? '' : rawUnit;
+    final progress = low <= 0 ? 0.0 : (stock / low).clamp(0.0, 1.0);
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      row['name']?.toString() ?? '-',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF0F172A),
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  _Badge(text: empty ? 'Habis' : 'Menipis', color: color),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(99),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 6,
+                  color: color,
+                  backgroundColor: color.withValues(alpha: 0.14),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                low > 0
+                    ? 'Batas minimum ${_count.format(low)}${unit.isEmpty ? '' : ' $unit'}'
+                    : 'Batas minimum belum diatur',
+                style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        SizedBox(
+          width: 64,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                _count.format(stock),
+                style: TextStyle(
+                  color: color,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              Text(
+                unit.isEmpty ? 'sisa' : 'sisa $unit',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _circleIcon(IconData icon, Color color) {
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        shape: BoxShape.circle,
+      ),
+      child: Icon(icon, color: color, size: 22),
     );
   }
 

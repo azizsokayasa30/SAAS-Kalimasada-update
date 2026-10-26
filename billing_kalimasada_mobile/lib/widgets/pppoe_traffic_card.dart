@@ -26,7 +26,6 @@ class PppoeTrafficCard extends StatefulWidget {
 class _PppoeTrafficCardState extends State<PppoeTrafficCard> {
   static const _pollInterval = Duration(seconds: 3);
   static const _liveDuration = Duration(minutes: 2);
-  static const _maxSamples = 20;
 
   static const _downloadColor = Color(0xFF2563EB);
   static const _uploadColor = Color(0xFFF97316);
@@ -41,7 +40,6 @@ class _PppoeTrafficCardState extends State<PppoeTrafficCard> {
   bool _fetching = false;
   String? _error;
   Map<String, dynamic>? _data;
-  final List<_RateSample> _samples = [];
 
   bool get _live => _timer != null;
 
@@ -95,15 +93,6 @@ class _PppoeTrafficCardState extends State<PppoeTrafficCard> {
           _data = data;
           _error = null;
           _loading = false;
-          if (online) {
-            final rate = data['rate'] is Map ? data['rate'] as Map : const {};
-            _samples.add(
-              _RateSample(_num(rate['download_bps']), _num(rate['upload_bps'])),
-            );
-            if (_samples.length > _maxSamples) _samples.removeAt(0);
-          } else {
-            _samples.clear();
-          }
         });
         if (!online) _stopLive();
       } else {
@@ -274,12 +263,6 @@ class _PppoeTrafficCardState extends State<PppoeTrafficCard> {
             ),
           ],
         ),
-        const SizedBox(height: 8),
-        SizedBox(
-          height: 70,
-          width: double.infinity,
-          child: CustomPaint(painter: _RateSparklinePainter(_samples)),
-        ),
         const SizedBox(height: 12),
         const Text(
           'TERPAKAI SELAMA SESI',
@@ -396,61 +379,4 @@ class _PppoeTrafficCardState extends State<PppoeTrafficCard> {
       ],
     );
   }
-}
-
-class _RateSample {
-  const _RateSample(this.download, this.upload);
-  final double download;
-  final double upload;
-}
-
-class _RateSparklinePainter extends CustomPainter {
-  _RateSparklinePainter(this.samples);
-
-  final List<_RateSample> samples;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final grid = Paint()
-      ..color = const Color(0xFFE5E7EB)
-      ..strokeWidth = 1;
-    for (var i = 0; i <= 2; i++) {
-      final y = size.height * i / 2;
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), grid);
-    }
-    if (samples.length < 2) return;
-
-    var maxV = 1.0;
-    for (final s in samples) {
-      if (s.download > maxV) maxV = s.download;
-      if (s.upload > maxV) maxV = s.upload;
-    }
-
-    void drawSeries(double Function(_RateSample) pick, Color color) {
-      final path = Path();
-      final stepX = size.width / (samples.length - 1);
-      for (var i = 0; i < samples.length; i++) {
-        final x = i * stepX;
-        final y = size.height - (pick(samples[i]) / maxV) * (size.height - 4);
-        if (i == 0) {
-          path.moveTo(x, y);
-        } else {
-          path.lineTo(x, y);
-        }
-      }
-      canvas.drawPath(
-        path,
-        Paint()
-          ..color = color
-          ..strokeWidth = 2
-          ..style = PaintingStyle.stroke,
-      );
-    }
-
-    drawSeries((s) => s.upload, const Color(0xFFF97316));
-    drawSeries((s) => s.download, const Color(0xFF2563EB));
-  }
-
-  @override
-  bool shouldRepaint(covariant _RateSparklinePainter oldDelegate) => true;
 }

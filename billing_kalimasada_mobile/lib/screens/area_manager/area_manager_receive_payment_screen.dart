@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 
 import '../../services/api_client.dart';
+import 'area_manager_theme.dart';
 
 /// Terima pembayaran oleh Manager Area: dicatat atas namanya, tanpa komisi kolektor.
 class AreaManagerReceivePaymentScreen extends StatefulWidget {
@@ -123,21 +124,25 @@ class _AreaManagerReceivePaymentScreenState
   Future<void> _pickProof() async {
     final src = await showModalBottomSheet<ImageSource>(
       context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_camera),
-              title: const Text('Kamera'),
-              onTap: () => Navigator.pop(ctx, ImageSource.camera),
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Galeri'),
-              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
-            ),
-          ],
+      backgroundColor: Colors.white,
+      builder: (ctx) => Theme(
+        data: areaManagerTheme,
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_camera),
+                title: const Text('Kamera'),
+                onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('Galeri'),
+                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -154,25 +159,28 @@ class _AreaManagerReceivePaymentScreenState
     final name = _customer?['name']?.toString() ?? 'pelanggan';
     final result = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Simpan pembayaran?'),
-        content: Text(
-          'Terima ${_money.format(_total)} dari $name '
-          '(${_selected.length} tagihan) secara '
-          '${_method == 'transfer' ? 'transfer' : (_method == 'cash' ? 'tunai' : 'metode lain')}.\n\n'
-          'Pembayaran dicatat atas nama Anda sebagai Manager Area.',
+      builder: (ctx) => Theme(
+        data: areaManagerTheme,
+        child: AlertDialog(
+          title: const Text('Simpan pembayaran?'),
+          content: Text(
+            'Terima ${_money.format(_total)} dari $name '
+            '(${_selected.length} tagihan) secara '
+            '${_method == 'transfer' ? 'transfer' : (_method == 'cash' ? 'tunai' : 'metode lain')}.\n\n'
+            'Pembayaran dicatat atas nama Anda sebagai Manager Area.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Batal'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: FilledButton.styleFrom(backgroundColor: _primary),
+              child: const Text('Simpan'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Batal'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: _primary),
-            child: const Text('Simpan'),
-          ),
-        ],
       ),
     );
     return result == true;
@@ -262,6 +270,13 @@ class _AreaManagerReceivePaymentScreenState
 
   @override
   Widget build(BuildContext context) {
+    return Theme(
+      data: areaManagerTheme,
+      child: _buildScaffold(context),
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context) {
     final c = _customer ?? const <String, dynamic>{};
     return Scaffold(
       backgroundColor: _bg,
