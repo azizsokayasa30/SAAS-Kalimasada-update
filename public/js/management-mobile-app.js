@@ -9,6 +9,18 @@
 
     function el(id) { return document.getElementById(id); }
 
+    function escapeHtml(value) {
+        return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+
+    function setChip(chip, tone, icon, label) {
+        if (!chip) return;
+        chip.className = 'km-mob-chip is-' + tone;
+        chip.innerHTML = '<i class="bi ' + icon + '"></i> ' + escapeHtml(label);
+    }
+
     function formatDuration(ms) {
         var sec = Math.max(15, Math.round(ms / 1000));
         if (sec < 60) return sec + ' detik';
@@ -68,10 +80,16 @@
         return 'Estimasi sisa: ~' + formatDuration(elapsed * (100 - pct) / Math.max(pct, 1));
     }
 
+    var lastReadiness = null;
+
     function setBuildControls(status) {
         var s = (status || 'idle').toLowerCase();
         el('btnCancelBuild').disabled = s !== 'running';
-        el('btnBuildApk').disabled = s === 'running';
+        el('btnBuildApk').disabled = s === 'running' || !!(lastReadiness && !lastReadiness.can_build);
+    }
+
+    function shortPublicPath(p) {
+        return String(p || '').replace(/\\/g, '/').replace(/^.*\/public\//, 'public/');
     }
 
     function updateBuildProgress(status) {
@@ -182,18 +200,21 @@
     function renderApkList(files) {
         var ul = el('apkList');
         if (!files || !files.length) {
-            ul.innerHTML = '<li class="text-muted">Belum ada APK di public/mobile-app/</li>';
+            ul.innerHTML = '<li class="km-apk-empty"><i class="bi bi-inbox"></i><span>Belum ada APK.</span></li>';
             return;
         }
         ul.innerHTML = files.map(function (f) {
             var href = '/mobile-app/' + encodeURIComponent(f.name);
+            var when = '';
+            try { when = new Date(f.mtime).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }); } catch (_) {}
             return '<li>' +
+                '<span class="km-apk-icon"><i class="bi bi-android2"></i></span>' +
                 '<span class="km-apk-meta">' +
-                '<strong>' + f.name + '</strong> — ' + f.size_mb + ' MB ' +
-                '<span class="text-muted">(' + new Date(f.mtime).toLocaleString('id-ID') + ')</span>' +
+                '<strong>' + escapeHtml(f.name) + '</strong>' +
+                '<small>' + escapeHtml(f.size_mb) + ' MB' + (when ? ' · ' + escapeHtml(when) : '') + '</small>' +
                 '</span>' +
-                '<a class="btn btn-sm btn-outline-success" href="' + href + '" download="' + f.name + '">' +
-                '<i class="bi bi-download me-1"></i>Unduh</a>' +
+                '<a class="btn btn-sm btn-outline-success" href="' + href + '" download="' + escapeHtml(f.name) + '">' +
+                '<i class="bi bi-download"></i> Unduh</a>' +
                 '</li>';
         }).join('');
     }
@@ -206,20 +227,34 @@
         var btnBoot = el('btnBootstrapKeystore');
         var btnAdopt = el('btnAdoptKeystore');
         var ready = !!(readiness && readiness.ready);
+        lastReadiness = readiness || null;
+
+        var items = (readiness && readiness.items) || [];
+        var readyCount = items.filter(function (i) { return i.ready; }).length;
 
         if (panel) {
-            panel.className = 'km-readiness-banner mb-3 ' + (ready ? 'is-ready' : 'is-missing');
+            panel.className = 'km-mob-ready ' + (ready ? 'is-ready' : 'is-missing');
         }
-        if (text) text.textContent = ready ? 'Server Siap' : 'Server Belum Siap';
+        if (text) text.textContent = ready ? 'Server siap build' : 'Server belum siap build';
+        if (el('readinessCount')) {
+            el('readinessCount').textContent = items.length ? readyCount + ' dari ' + items.length + ' komponen siap' : '';
+        }
         if (icon) {
             icon.className = ready ? 'bi bi-check-circle-fill' : 'bi bi-exclamation-triangle-fill';
         }
 
-        if (badge) {
-            badge.className = 'badge ' + (ready ? 'bg-success' : 'bg-warning text-dark');
-            badge.innerHTML = ready
-                ? '<i class="bi bi-check-circle me-1"></i> Server Siap'
-                : '<i class="bi bi-exclamation-triangle me-1"></i> Belum siap';
+        setChip(badge, ready ? 'ok' : 'warn',
+            ready ? 'bi-check-circle' : 'bi-exclamation-triangle',
+            ready ? 'Server siap' : 'Server belum siap');
+
+        var list = el('readinessList');
+        if (list) {
+            list.innerHTML = items.map(function (item) {
+                return '<li class="' + (item.ready ? 'is-ok' : 'is-missing') + '"' +
+                    (item.detail ? ' title="' + escapeHtml(item.detail) + '"' : '') + '>' +
+                    '<i class="bi ' + (item.ready ? 'bi-check-circle-fill' : 'bi-x-circle-fill') + '"></i>' +
+                    '<div><strong>' + escapeHtml(item.label) + '</strong></div></li>';
+            }).join('');
         }
 
         var ks = (readiness && readiness.keystore) || {};
@@ -237,30 +272,21 @@
     }
 
     function renderKeystoreStatus(ks) {
-        var box = el('keystoreAlert');
         var okHint = el('keystoreOkHint');
         var badge = el('keystoreStatusBadge');
         if (!ks || (ks.ready && ks.matches_production)) {
-            box.classList.add('d-none');
             if (okHint) okHint.classList.toggle('d-none', !(ks && ks.ready && ks.matches_production));
             if (badge) {
-                badge.classList.toggle('d-none', !(ks && ks.ready));
                 if (ks && ks.ready) {
-                    badge.className = 'badge ' + (ks.matches_production ? 'bg-success' : 'bg-warning text-dark');
-                    badge.innerHTML = '<i class="bi bi-shield-check me-1"></i> Keystore OK';
+                    setChip(badge, ks.matches_production ? 'ok' : 'warn', 'bi-shield-check', 'Keystore OK');
+                } else {
+                    badge.classList.add('d-none');
                 }
             }
             return;
         }
         if (okHint) okHint.classList.add('d-none');
-        if (badge) {
-            badge.classList.remove('d-none');
-            badge.className = 'badge bg-danger';
-            badge.innerHTML = '<i class="bi bi-shield-x me-1"></i> Keystore';
-        }
-        box.className = 'alert mb-3 ' + (ks.ready ? 'alert-warning' : 'alert-danger');
-        box.textContent = ks.message || 'Keystore belum siap.';
-        box.classList.remove('d-none');
+        setChip(badge, 'bad', 'bi-shield-x', ks.ready ? 'Keystore beda' : 'Keystore belum ada');
     }
 
     function fillForm(data) {
@@ -272,11 +298,11 @@
         el('forceUpdate').checked = !!data.force_update;
         el('flutterPath').value = data.flutter_path || data.flutter_path_default || '';
 
-        if (data.flutter_path_default) {
-            el('defaultFlutterPathHint').textContent = data.flutter_path_default.replace(/^.*public\//, 'public/');
+        if (data.flutter_path_default && el('defaultFlutterPathHint')) {
+            el('defaultFlutterPathHint').textContent = shortPublicPath(data.flutter_path_default);
         }
-        if (data.apk_publish_dir) {
-            el('apkPublishDirHint').textContent = data.apk_publish_dir.replace(/^.*public\//, 'public/') + '/';
+        if (data.apk_publish_dir && el('apkPublishDirHint')) {
+            el('apkPublishDirHint').textContent = shortPublicPath(data.apk_publish_dir) + '/';
         }
         if (data.ota_manifest_url) el('otaManifestUrl').textContent = data.ota_manifest_url;
         if (data.apk_url) el('otaApkUrl').textContent = data.apk_url;
@@ -286,19 +312,19 @@
             ? 'Flutter terdeteksi: ' + det.path
             : 'Flutter belum terdeteksi — pasang SDK ke path default atau isi path lain.';
 
-        var flutterBadge = el('flutterStatusBadge');
-        if (flutterBadge) {
-            flutterBadge.className = 'badge ' + (det.exists ? 'bg-success' : 'bg-warning text-dark');
-            flutterBadge.innerHTML = det.exists
-                ? '<i class="bi bi-check-circle me-1"></i> Flutter OK'
-                : '<i class="bi bi-exclamation-triangle me-1"></i> Flutter belum terdeteksi';
-        }
+        setChip(el('flutterStatusBadge'), det.exists ? 'ok' : 'warn',
+            det.exists ? 'bi-check-circle' : 'bi-exclamation-triangle',
+            det.exists ? 'Flutter OK' : 'Flutter belum ada');
+
+        if (el('heroAppName') && data.app_name) el('heroAppName').textContent = data.app_name;
 
         if (data.min_build_number) {
             el('versionCode').min = data.min_build_number;
             el('versionCodeHint').textContent = 'Minimal ' + data.min_build_number + ' untuk update dari app 5.9.2+91';
             if (parseInt(el('versionCode').value, 10) < data.min_build_number) {
-                el('versionCode').value = data.min_build_number;
+            if (el('versionCodeHint')) {
+                el('versionCodeHint').textContent = 'Minimal ' + data.min_build_number + ' untuk update dari app 5.9.2+91';
+            }
             }
         }
 
@@ -429,6 +455,19 @@
         } catch (err) {
             alert('Error: ' + err.message);
         }
+    });
+
+    document.querySelectorAll('.km-mob-copy').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var target = el(btn.getAttribute('data-copy-target'));
+            var value = target ? target.textContent.trim() : '';
+            if (!/^https?:\/\//.test(value) || !navigator.clipboard) return;
+            navigator.clipboard.writeText(value).then(function () {
+                var iconEl = btn.querySelector('i');
+                iconEl.className = 'bi bi-check2';
+                setTimeout(function () { iconEl.className = 'bi bi-copy'; }, 1500);
+            });
+        });
     });
 
     loadConfig().then(pollStatus).catch(function (e) { alert(e.message); });

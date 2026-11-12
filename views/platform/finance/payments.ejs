@@ -1,119 +1,164 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main">
+<%
+  const periodLabel = fin.periodLabel(filters.month, filters.year);
+  const gateways = ['midtrans', 'xendit', 'tripay', 'duitku'];
+  const gatewayTone = { midtrans: 'blue', xendit: 'violet', tripay: 'teal', duitku: 'amber' };
+  const successRate = summary.total ? Math.round(summary.successCount / summary.total * 100) : 0;
+  const avg = summary.total ? summary.totalAmount / summary.total : 0;
+  const pageQuery = function (page) {
+    return '?page=' + page + '&month=' + filters.month + '&year=' + filters.year
+      + '&tenant_id=' + encodeURIComponent(filters.tenantId || '') + '&gateway=' + encodeURIComponent(filters.gateway || '');
+  };
+  const firstRow = pagination.total ? (pagination.page - 1) * pagination.limit + 1 : 0;
+  const lastRow = Math.min(pagination.page * pagination.limit, pagination.total);
+%>
+<main class="km-main km-inv-page km-fin-page">
   <div class="km-topbar">
     <div>
       <h2>Riwayat Pembayaran Gateway</h2>
-      <p class="km-subtitle">Pembayaran online pelanggan tenant via payment gateway</p>
     </div>
   </div>
 
   <%- include('_nav', { financeSection }) %>
 
-  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
-  <% if (flash && flash.success === 'restored') { %><div class="alert alert-success">Backup finance berhasil di-restore.</div><% } %>
+  <% if (flash && flash.error) { %><div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-1"></i> <%= flash.error %></div><% } %>
+  <% if (flash && flash.success === 'restored') { %><div class="alert alert-success"><i class="bi bi-arrow-counterclockwise me-1"></i> Backup finance berhasil di-restore.</div><% } %>
 
-  <div class="km-card mb-3">
-    <form method="GET" class="row g-2 align-items-end">
-      <div class="col-md-2">
-        <label class="form-label small">Bulan</label>
-        <select name="month" class="form-select form-select-sm">
-          <% const monthNames = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des']; %>
-          <% for (let m = 1; m <= 12; m++) { %>
-            <option value="<%= m %>" <%= Number(filters.month) === m ? 'selected' : '' %>><%= monthNames[m-1] %></option>
-          <% } %>
-        </select>
+  <%- include('_period-filter', {
+    filters,
+    yearOnly: false,
+    extraSelects: [
+      { name: 'tenant_id', label: 'Tenant', allLabel: 'Semua tenant', selected: filters.tenantId, wide: true,
+        options: tenants.map(function (t) { return { value: t.id, label: t.name }; }) },
+      { name: 'gateway', label: 'Gateway', allLabel: 'Semua gateway', selected: filters.gateway,
+        options: gateways.map(function (g) { return { value: g, label: g.charAt(0).toUpperCase() + g.slice(1) }; }) }
+    ]
+  }) %>
+
+  <div class="km-inv-stats mb-3">
+    <div class="km-inv-stat km-inv-stat--green">
+      <span class="km-inv-stat__icon"><i class="bi bi-cash-coin"></i></span>
+      <div class="km-inv-stat__body">
+        <div class="km-inv-stat__label">Total Koleksi</div>
+        <div class="km-inv-stat__value"><%= formatRupiah(summary.totalAmount) %></div>
+        <div class="km-inv-stat__meta"><%= periodLabel %></div>
       </div>
-      <div class="col-md-2">
-        <label class="form-label small">Tahun</label>
-        <% const cy = new Date().getFullYear(); %>
-        <select name="year" class="form-select form-select-sm">
-          <% for (let y = cy - 3; y <= cy + 1; y++) { %>
-            <option value="<%= y %>" <%= Number(filters.year) === y ? 'selected' : '' %>><%= y %></option>
-          <% } %>
-        </select>
+    </div>
+    <div class="km-inv-stat km-inv-stat--blue">
+      <span class="km-inv-stat__icon"><i class="bi bi-receipt"></i></span>
+      <div class="km-inv-stat__body">
+        <div class="km-inv-stat__label">Jumlah Transaksi</div>
+        <div class="km-inv-stat__value"><%= summary.total %> <small>transaksi</small></div>
+        <div class="km-inv-stat__meta">Rata-rata <%= formatRupiah(avg) %></div>
       </div>
-      <div class="col-md-3">
-        <label class="form-label small">Tenant</label>
-        <select name="tenant_id" class="form-select form-select-sm">
-          <option value="">Semua tenant</option>
-          <% tenants.forEach(function(t) { %>
-            <option value="<%= t.id %>" <%= String(filters.tenantId) === String(t.id) ? 'selected' : '' %>><%= t.name %></option>
-          <% }); %>
-        </select>
+    </div>
+    <div class="km-inv-stat km-inv-stat--violet">
+      <span class="km-inv-stat__icon"><i class="bi bi-buildings"></i></span>
+      <div class="km-inv-stat__body">
+        <div class="km-inv-stat__label">Tenant Bertransaksi</div>
+        <div class="km-inv-stat__value"><%= summary.tenantCount %> <small>tenant</small></div>
+        <div class="km-inv-stat__meta">dari <%= tenants.length %> tenant aktif</div>
       </div>
-      <div class="col-md-2">
-        <label class="form-label small">Gateway</label>
-        <select name="gateway" class="form-select form-select-sm">
-          <option value="">Semua</option>
-          <% ['midtrans','xendit','tripay','duitku'].forEach(function(g) { %>
-            <option value="<%= g %>" <%= filters.gateway === g ? 'selected' : '' %>><%= g %></option>
-          <% }); %>
-        </select>
+    </div>
+    <div class="km-inv-stat km-inv-stat--amber">
+      <span class="km-inv-stat__icon"><i class="bi bi-patch-check"></i></span>
+      <div class="km-inv-stat__body">
+        <div class="km-inv-stat__label">Tingkat Berhasil</div>
+        <div class="km-inv-stat__value"><%= summary.total ? successRate + '%' : '-' %></div>
+        <div class="km-inv-progress"><span style="width: <%= successRate %>%"></span></div>
+        <div class="km-inv-stat__meta"><%= summary.successCount %> dari <%= summary.total %> transaksi</div>
       </div>
-      <div class="col-md-2">
-        <button type="submit" class="btn btn-km-primary btn-sm w-100"><i class="bi bi-funnel me-1"></i> Filter</button>
-      </div>
-    </form>
+    </div>
   </div>
 
   <div class="km-card km-card--flush">
-    <div class="table-responsive">
-      <table class="table table-hover align-middle mb-0 km-tenant-table">
-        <thead>
-          <tr>
-            <th>Tanggal</th>
-            <th>Tenant</th>
-            <th>Invoice</th>
-            <th>Pelanggan</th>
-            <th>Gateway</th>
-            <th>Order ID</th>
-            <th class="text-end">Nominal</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          <% if (!payments.length) { %>
-            <tr><td colspan="8" class="text-center py-4" style="color: var(--text-muted)">Tidak ada pembayaran pada periode ini.</td></tr>
-          <% } %>
-          <% payments.forEach(function(p) { %>
+    <div class="km-inv-list__head">
+      <div>
+        <h5>Daftar Pembayaran</h5>
+        <p><%= pagination.total %> transaksi pada <%= periodLabel %></p>
+      </div>
+      <% if (payments.length) { %>
+        <div class="km-inv-search">
+          <i class="bi bi-search"></i>
+          <input type="search" class="form-control form-control-sm" data-fin-search="#paymentBody" placeholder="Cari tenant, invoice, pelanggan…" autocomplete="off">
+        </div>
+      <% } %>
+    </div>
+
+    <% if (!payments.length) { %>
+      <div class="km-inv-empty">
+        <i class="bi bi-credit-card-2-front"></i>
+        <strong>Belum ada pembayaran di <%= periodLabel %></strong>
+        <span>Pembayaran online dari pelanggan tenant melalui payment gateway akan tampil di sini.</span>
+      </div>
+    <% } else { %>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0 km-tenant-table km-inv-table">
+          <thead>
             <tr>
-              <td><%= new Date(p.payment_date).toLocaleDateString('id-ID') %></td>
-              <td>
-                <strong><%= p.tenant_name %></strong>
-                <div class="small text-muted"><%= p.subdomain %></div>
-              </td>
-              <td><code><%= p.invoice_number %></code></td>
-              <td><%= p.customer_name %></td>
-              <td><span class="badge bg-secondary"><%= p.gateway || 'online' %></span></td>
-              <td class="small"><%= p.order_id || '-' %></td>
-              <td class="text-end fw-semibold"><%= formatRupiah(p.amount) %></td>
-              <td>
-                <span class="badge <%= p.gateway_status === 'settlement' || p.gateway_status === 'paid' ? 'bg-success' : 'bg-warning text-dark' %>">
-                  <%= p.gateway_status %>
-                </span>
-              </td>
+              <th>Tanggal</th>
+              <th>Tenant</th>
+              <th>Invoice</th>
+              <th>Gateway</th>
+              <th class="text-end">Nominal</th>
+              <th>Status</th>
             </tr>
-          <% }); %>
-        </tbody>
-      </table>
-    </div>
-    <% if (pagination.totalPages > 1) { %>
-    <div class="d-flex justify-content-between align-items-center p-3 border-top">
-      <span class="small text-muted"><%= pagination.total %> transaksi</span>
-      <nav>
-        <ul class="pagination pagination-sm mb-0">
-          <% if (pagination.page > 1) { %>
-            <li class="page-item"><a class="page-link" href="?page=<%= pagination.page - 1 %>&month=<%= filters.month %>&year=<%= filters.year %>&tenant_id=<%= filters.tenantId %>&gateway=<%= filters.gateway %>">«</a></li>
-          <% } %>
-          <li class="page-item disabled"><span class="page-link"><%= pagination.page %> / <%= pagination.totalPages %></span></li>
-          <% if (pagination.page < pagination.totalPages) { %>
-            <li class="page-item"><a class="page-link" href="?page=<%= pagination.page + 1 %>&month=<%= filters.month %>&year=<%= filters.year %>&tenant_id=<%= filters.tenantId %>&gateway=<%= filters.gateway %>">»</a></li>
-          <% } %>
-        </ul>
-      </nav>
-    </div>
+          </thead>
+          <tbody id="paymentBody">
+            <% payments.forEach(function(p) {
+                 const dp = fin.dateParts(p.payment_date);
+                 const st = fin.paymentStatus(p.gateway_status);
+                 const gw = String(p.gateway || '').toLowerCase();
+            %>
+              <tr class="js-search-row" data-search="<%= [p.tenant_name, p.subdomain, p.invoice_number, p.customer_name, p.gateway, p.order_id].filter(Boolean).join(' ').toLowerCase() %>">
+                <td>
+                  <% if (dp) { %>
+                    <div class="km-fin-date" title="<%= fin.fullDate(p.payment_date) %><%= fin.timeOf(p.payment_date) ? ' ' + fin.timeOf(p.payment_date) : '' %>">
+                      <strong><%= String(dp.d).padStart(2, '0') %></strong>
+                      <span><%= fin.MONTHS_SHORT[dp.m - 1] %></span>
+                    </div>
+                  <% } else { %>-<% } %>
+                </td>
+                <td>
+                  <div class="km-inv-tenant">
+                    <span class="km-inv-avatar"><%= fin.initials(p.tenant_name) %></span>
+                    <div>
+                      <div class="km-fin-desc__title"><%= p.tenant_name %></div>
+                      <div class="km-inv-sub"><%= p.subdomain %></div>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <span class="km-fin-code"><%= p.invoice_number %></span>
+                  <div class="km-inv-sub mt-1"><i class="bi bi-person"></i> <%= p.customer_name %></div>
+                </td>
+                <td>
+                  <span class="km-fin-cat km-fin-cat--plain km-fin-cat--<%= gatewayTone[gw] || 'slate' %>"><%= gw ? gw.charAt(0).toUpperCase() + gw.slice(1) : 'Online' %></span>
+                  <% if (p.order_id) { %><div class="km-inv-sub mt-1" title="Order ID"><%= p.order_id %></div><% } %>
+                </td>
+                <td class="text-end"><span class="km-inv-total"><%= formatRupiah(p.amount) %></span></td>
+                <td><span class="km-inv-pill km-inv-pill--<%= st.key === 'paid' ? 'paid' : (st.key === 'failed' ? 'failed' : 'none') %>"><i class="bi <%= st.icon %>"></i> <%= st.label %></span></td>
+              </tr>
+            <% }); %>
+            <tr class="js-search-empty d-none">
+              <td colspan="6"><div class="km-inv-empty py-4"><i class="bi bi-search"></i><strong>Tidak ditemukan</strong><span>Tidak ada pembayaran yang cocok dengan pencarian di halaman ini.</span></div></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="km-fin-pager">
+        <span>Menampilkan <%= firstRow %>–<%= lastRow %> dari <%= pagination.total %> transaksi</span>
+        <% if (pagination.totalPages > 1) { %>
+          <div class="km-fin-pager__nav">
+            <a href="<%= pageQuery(pagination.page - 1) %>" class="km-fin-filter__nav <%= pagination.page > 1 ? '' : 'is-disabled' %>" aria-label="Halaman sebelumnya"><i class="bi bi-chevron-left"></i></a>
+            <span><%= pagination.page %> / <%= pagination.totalPages %></span>
+            <a href="<%= pageQuery(pagination.page + 1) %>" class="km-fin-filter__nav <%= pagination.page < pagination.totalPages ? '' : 'is-disabled' %>" aria-label="Halaman berikutnya"><i class="bi bi-chevron-right"></i></a>
+          </div>
+        <% } %>
+      </div>
     <% } %>
   </div>
 </main>
+<script src="/js/platform-finance.js?v=1"></script>
 <%- include('../partials/footer') %>

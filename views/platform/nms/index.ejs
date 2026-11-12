@@ -1,54 +1,49 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active: active || 'settings-api', adminName }) %>
-<main class="km-main">
+<main class="km-main km-set">
   <div class="km-topbar">
     <div>
-      <h2>Pengaturan API</h2>
-      <p class="km-subtitle">Sambungkan portal ke API NMS. Graph yang tampil diatur di Pengaturan MRTG.</p>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-plug"></i></span>Pengaturan API</h2>
     </div>
   </div>
-
-  <%- include('../settings/_nav', { settingsSection: settingsSection || 'api' }) %>
 
   <div id="nmsPageAlert" class="alert d-none" role="status"></div>
 
   <div class="row g-3 mb-3">
     <div class="col-lg-5">
       <div class="km-card h-100">
-        <h5 class="mb-3"><i class="bi bi-plug me-2"></i>Koneksi API</h5>
+        <div class="km-vpn-card__head">
+          <h5><i class="bi bi-plug"></i> Koneksi API</h5>
+          <span id="nmsTokenState" class="badge bg-secondary">Token belum dicek</span>
+        </div>
         <form id="nmsConnectionForm" class="row g-3">
           <div class="col-12">
             <label class="form-label" for="nmsBaseUrl">Alamat NMS</label>
             <input id="nmsBaseUrl" name="baseUrl" class="form-control" placeholder="https://nms.kalimasada-app.com" required>
-            <div class="form-text">Origin saja, tanpa path. Hostname harus sesuai sertifikat. IP 103.132.40.79 dilayani sebagai nms.kalimasada-app.com.</div>
           </div>
           <div class="col-12">
             <label class="form-label" for="nmsToken">Token API</label>
-            <input id="nmsToken" name="token" type="password" class="form-control" autocomplete="new-password" placeholder="Biarkan kosong jika tidak diubah">
-            <div class="form-text">Dibuat di NMS, menu Settings, tab Akses API. Token tidak ditampilkan kembali.</div>
+            <input id="nmsToken" name="token" type="password" class="form-control" autocomplete="new-password" placeholder="Kosongkan jika tidak diubah">
           </div>
-          <div class="col-6">
+          <div class="col-sm-6">
             <label class="form-label" for="nmsTimeout">Timeout (ms)</label>
             <input id="nmsTimeout" name="timeoutMs" type="number" min="1000" max="20000" class="form-control" value="8000">
           </div>
-          <div class="col-6 d-flex align-items-end">
-            <span id="nmsTokenState" class="badge bg-secondary">Token belum dicek</span>
-          </div>
-          <div class="col-12 d-flex gap-2">
-            <button type="submit" class="btn btn-km-primary btn-sm">Simpan</button>
-            <button type="button" class="btn btn-outline-secondary btn-sm" id="nmsTestBtn">Uji koneksi</button>
-          </div>
           <div class="col-12">
-            <div id="nmsTestResult" class="small text-muted">Belum diuji.</div>
+            <div class="km-proxy-actions mt-0">
+              <button type="submit" class="btn btn-km-primary btn-sm"><i class="bi bi-check-lg me-1"></i> Simpan</button>
+              <button type="button" class="btn btn-outline-secondary btn-sm" id="nmsTestBtn"><i class="bi bi-lightning-charge me-1"></i> Uji koneksi</button>
+              <span id="nmsTestResult" class="small text-muted w-100">Belum diuji.</span>
+            </div>
           </div>
         </form>
       </div>
     </div>
     <div class="col-lg-7">
       <div class="km-card h-100">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-          <h5 class="mb-0"><i class="bi bi-hdd-network me-2"></i>Perangkat NMS</h5>
-          <button type="button" class="btn btn-outline-secondary btn-sm" id="nmsReloadDevices">Muat ulang</button>
+        <div class="km-vpn-card__head">
+          <h5><i class="bi bi-hdd-network"></i> Perangkat NMS</h5>
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="nmsReloadDevices"><i class="bi bi-arrow-clockwise me-1"></i> Muat ulang</button>
         </div>
         <div class="table-responsive" style="max-height: 320px;">
           <table class="table table-sm table-hover align-middle mb-0">

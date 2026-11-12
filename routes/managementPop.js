@@ -18,8 +18,8 @@ router.get('/switches', async (req, res) => {
         ]);
         res.render('platform/pop/switches', {
             title: 'Switch Manager',
-            active: 'pop-switches',
-            popSection: 'switches',
+            active: 'settings-switches',
+            settingsSection: 'switches',
             switches,
             pops,
             adminName: req.session.platformAdminName,
@@ -108,8 +108,8 @@ router.get('/radius', async (req, res) => {
 
         res.render('platform/pop/radius', {
             title: 'Radius Manager',
-            active: 'pop-radius',
-            popSection: 'radius',
+            active: 'settings-radius',
+            settingsSection: 'radius',
             radiusServers: radiusServersWithStatus,
             radiusLive: liveStats,
             pops,
@@ -182,7 +182,6 @@ router.get('/', async (req, res) => {
         res.render('platform/pop/index', {
             title: 'Daftar POP/CABANG',
             active: 'pop-list',
-            popSection: 'list',
             pops,
             adminName: req.session.platformAdminName,
             flash: req.query,

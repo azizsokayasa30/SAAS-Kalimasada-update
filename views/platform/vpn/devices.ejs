@@ -1,10 +1,9 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main">
+<main class="km-main km-set">
   <div class="km-topbar">
     <div>
-      <h2>Perangkat VPN</h2>
-      <p class="km-subtitle">WireGuard &amp; L2TP/IPsec — status koneksi &amp; kualitas ping</p>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-router"></i></span>Perangkat VPN</h2>
     </div>
     <div class="d-flex gap-2">
       <button type="button" class="btn btn-outline-secondary btn-sm px-3" id="refreshStatusBtn">
@@ -21,11 +20,6 @@
   <% if (!status.wgAvailable) { %>
     <div class="alert alert-warning">
       WireGuard belum terdeteksi di host (interface <code><%= status.interfaceName || 'wg0' %></code>).
-      Status peer WG memakai ping; peer L2TP selalu memakai ping. Pasang WireGuard lalu jalankan script VPS dari menu Server.
-    </div>
-  <% } else { %>
-    <div class="alert alert-success py-2">
-      WireGuard terdeteksi — status handshake live dari <code>wg show</code>. Peer L2TP memakai ping.
     </div>
   <% } %>
 
@@ -141,7 +135,6 @@
       <div class="modal-header km-package-modal__header">
         <div>
           <h5 class="modal-title mb-0">Tambah Perangkat</h5>
-          <p class="km-package-modal__subtitle mb-0">Pilih versi RouterOS — protokol dipilih otomatis</p>
         </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>

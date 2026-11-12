@@ -1,75 +1,164 @@
-<% const returnPath = typeof financeReturnTo !== 'undefined' ? financeReturnTo : '/management/finance/backup'; %>
-<div class="km-card km-master-backup-card" id="backup-restore">
-  <div class="km-master-backup-card__head">
-    <div>
-      <h3 class="km-master-backup-card__title"><i class="bi bi-cloud-arrow-up me-2"></i>Backup &amp; Restore Finance</h3>
-      <p class="km-subtitle mb-0">Cadangkan invoice rekap, pengaturan fee, catatan pemasukan/pengeluaran, dan kategori platform</p>
+<%
+  const returnPath = typeof financeReturnTo !== 'undefined' ? financeReturnTo : '/management/finance/backup';
+  const list = backups || [];
+  const totalSize = list.reduce(function (sum, b) { return sum + (Number(b.size) || 0); }, 0);
+  const latest = list.reduce(function (max, b) { return !max || new Date(b.created_at) > new Date(max.created_at) ? b : max; }, null);
+  const fmtSize = function (bytes) {
+    const n = Number(bytes) || 0;
+    return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1024).toFixed(1) + ' KB';
+  };
+  const fmtStamp = function (v) {
+    const d = new Date(v);
+    if (isNaN(d)) return { date: '-', time: '' };
+    return {
+      date: d.getDate() + ' ' + fin.MONTHS[d.getMonth()] + ' ' + d.getFullYear(),
+      time: String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
+    };
+  };
+  const latestStamp = latest ? fmtStamp(latest.created_at) : null;
+%>
+<div class="km-inv-stats km-inv-stats--3 mb-3">
+  <div class="km-inv-stat km-inv-stat--teal">
+    <span class="km-inv-stat__icon"><i class="bi bi-archive"></i></span>
+    <div class="km-inv-stat__body">
+      <div class="km-inv-stat__label">Backup Tersimpan</div>
+      <div class="km-inv-stat__value"><%= list.length %> <small>file</small></div>
+      <div class="km-inv-stat__meta">Di server</div>
     </div>
-    <a href="/management/finance/backup/download?return_to=<%= encodeURIComponent(returnPath) %>" class="btn btn-km-primary btn-sm px-3">
-      <i class="bi bi-download me-1"></i> Backup Sekarang
-    </a>
   </div>
-  <div class="row g-4 km-master-backup-card__body">
-    <div class="col-lg-5">
-      <div class="km-form-section km-form-section--flat h-100">
-        <h6 class="km-form-section__title mb-2"><i class="bi bi-arrow-counterclockwise me-1"></i> Restore dari File</h6>
-        <p class="text-muted small mb-3">Unggah file JSON backup untuk mengembalikan data finance platform.</p>
-        <form method="POST" action="/management/finance/backup/restore" enctype="multipart/form-data">
-          <input type="hidden" name="return_to" value="<%= returnPath %>">
-          <div class="mb-3">
-            <input type="file" name="backup_file" class="form-control form-control-sm" accept=".json,application/json" required>
-          </div>
-          <div class="mb-3">
-            <label class="form-label small fw-semibold">Mode restore</label>
-            <select name="mode" class="form-select form-select-sm">
-              <option value="replace">Ganti semua (hapus data finance lalu restore)</option>
-              <option value="merge">Gabung (tambah/perbarui dari backup)</option>
-            </select>
-          </div>
-          <button type="submit" class="btn btn-outline-primary btn-sm px-3" onclick="return confirm('Restore akan mengubah data finance platform. Cadangan otomatis dibuat sebelum restore. Lanjutkan?')">
-            <i class="bi bi-upload me-1"></i> Restore
-          </button>
-        </form>
-      </div>
+  <div class="km-inv-stat km-inv-stat--blue">
+    <span class="km-inv-stat__icon"><i class="bi bi-clock-history"></i></span>
+    <div class="km-inv-stat__body">
+      <div class="km-inv-stat__label">Backup Terakhir</div>
+      <div class="km-inv-stat__value"><%= latestStamp ? latestStamp.date : '-' %></div>
+      <div class="km-inv-stat__meta"><%= latestStamp ? 'Pukul ' + latestStamp.time : 'Belum pernah backup' %></div>
     </div>
-    <div class="col-lg-7">
-      <h6 class="km-form-section__title mb-2"><i class="bi bi-clock-history me-1"></i> Riwayat Backup Server</h6>
-      <div class="table-responsive">
-        <table class="table table-sm table-hover align-middle mb-0 km-tenant-table">
-          <thead>
-            <tr>
-              <th>File</th>
-              <th>Ukuran</th>
-              <th>Tanggal</th>
-              <th class="text-end">Aksi</th>
-            </tr>
-          </thead>
-          <tbody>
-            <% if (!backups || !backups.length) { %>
-              <tr><td colspan="4" class="text-center py-3 text-muted">Belum ada backup tersimpan di server.</td></tr>
-            <% } %>
-            <% (backups || []).forEach(function(b) { %>
-              <tr>
-                <td><code class="small"><%= b.filename %></code></td>
-                <td class="text-muted small"><%= (b.size / 1024).toFixed(1) %> KB</td>
-                <td class="text-muted small"><%= new Date(b.created_at).toLocaleString('id-ID') %></td>
-                <td class="text-end">
-                  <a href="/management/finance/backup/file/<%= encodeURIComponent(b.filename) %>" class="btn btn-sm btn-outline-secondary" title="Unduh">
-                    <i class="bi bi-download"></i>
-                  </a>
-                  <form method="POST" action="/management/finance/backup/restore/<%= encodeURIComponent(b.filename) %>" class="d-inline">
-                    <input type="hidden" name="return_to" value="<%= returnPath %>">
-                    <input type="hidden" name="mode" value="replace">
-                    <button type="submit" class="btn btn-sm btn-outline-success" title="Restore" onclick="return confirm('Restore dari <%= b.filename %>? Cadangan otomatis dibuat sebelum restore.')">
-                      <i class="bi bi-arrow-counterclockwise"></i>
-                    </button>
-                  </form>
-                </td>
-              </tr>
-            <% }); %>
-          </tbody>
-        </table>
+  </div>
+  <div class="km-inv-stat km-inv-stat--violet">
+    <span class="km-inv-stat__icon"><i class="bi bi-hdd"></i></span>
+    <div class="km-inv-stat__body">
+      <div class="km-inv-stat__label">Total Ukuran</div>
+      <div class="km-inv-stat__value"><%= fmtSize(totalSize) %></div>
+      <div class="km-inv-stat__meta">Semua file backup</div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3" id="backup-restore">
+  <div class="col-xl-5">
+    <form method="POST" action="/management/finance/backup/restore" enctype="multipart/form-data" class="km-card km-card--flush h-100">
+      <input type="hidden" name="return_to" value="<%= returnPath %>">
+      <div class="km-fin-card-head">
+        <div class="km-fin-card-head__title">
+          <span class="km-fin-icon"><i class="bi bi-arrow-counterclockwise"></i></span>
+          <div>
+            <h5>Restore dari File</h5>
+            <p>Unggah file backup JSON hasil export.</p>
+          </div>
+        </div>
       </div>
+      <div class="km-fin-card-body">
+        <label class="km-fin-drop js-fin-drop mb-3">
+          <input type="file" name="backup_file" accept=".json,application/json" required>
+          <i class="bi bi-cloud-arrow-up"></i>
+          <strong>Pilih atau seret file ke sini</strong>
+          <span class="js-fin-drop-name">Format .json, maksimal 8 MB</span>
+        </label>
+
+        <div class="form-label small fw-semibold">Mode restore</div>
+        <div class="km-fin-modes mb-3">
+          <label class="km-fin-mode">
+            <input type="radio" name="mode" value="replace" checked>
+            <i class="bi bi-arrow-repeat"></i>
+            <div>
+              <strong>Ganti semua</strong>
+              <small>Hapus data finance lalu restore</small>
+            </div>
+          </label>
+          <label class="km-fin-mode">
+            <input type="radio" name="mode" value="merge">
+            <i class="bi bi-intersect"></i>
+            <div>
+              <strong>Gabung</strong>
+              <small>Tambah / perbarui dari backup</small>
+            </div>
+          </label>
+        </div>
+
+        <button type="submit" class="btn btn-km-primary btn-sm w-100" onclick="return confirm('Restore akan mengubah data finance platform. Cadangan otomatis dibuat sebelum restore. Lanjutkan?')">
+          <i class="bi bi-upload"></i> Restore Sekarang
+        </button>
+        <div class="km-fin-note">
+          <i class="bi bi-shield-check"></i>
+          <span>Cadangan otomatis selalu dibuat sebelum restore, jadi data lama masih bisa dikembalikan.</span>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div class="col-xl-7">
+    <div class="km-card km-card--flush h-100">
+      <div class="km-fin-card-head">
+        <div class="km-fin-card-head__title">
+          <span class="km-fin-icon"><i class="bi bi-clock-history"></i></span>
+          <div>
+            <h5>Riwayat Backup Server</h5>
+            <p><%= list.length %> file tersimpan</p>
+          </div>
+        </div>
+        <% if (list.length) { %>
+          <div class="km-inv-search">
+            <i class="bi bi-search"></i>
+            <input type="search" class="form-control form-control-sm" data-fin-search="#backupBody" placeholder="Cari nama file…" autocomplete="off">
+          </div>
+        <% } %>
+      </div>
+      <% if (!list.length) { %>
+        <div class="km-inv-empty">
+          <i class="bi bi-archive"></i>
+          <strong>Belum ada backup</strong>
+          <span>Klik <b>Backup Sekarang</b> untuk membuat cadangan pertama.</span>
+        </div>
+      <% } else { %>
+        <div class="table-responsive">
+          <table class="table table-hover align-middle mb-0 km-tenant-table km-inv-table">
+            <thead>
+              <tr><th>File</th><th class="text-end">Ukuran</th><th class="text-end">Aksi</th></tr>
+            </thead>
+            <tbody id="backupBody">
+              <% list.forEach(function(b) { const st = fmtStamp(b.created_at); %>
+                <tr class="js-search-row" data-search="<%= String(b.filename).toLowerCase() %>">
+                  <td>
+                    <div class="km-fin-file">
+                      <span class="km-fin-file__icon"><i class="bi bi-filetype-json"></i></span>
+                      <div>
+                        <div class="km-fin-file__name"><%= b.filename %></div>
+                        <div class="km-inv-sub"><i class="bi bi-calendar3"></i> <%= st.date %> · <%= st.time %></div>
+                      </div>
+                    </div>
+                  </td>
+                  <td class="text-end km-fin-num km-inv-sub"><%= fmtSize(b.size) %></td>
+                  <td class="text-end">
+                    <div class="km-fin-actions">
+                      <a href="/management/finance/backup/file/<%= encodeURIComponent(b.filename) %>" class="km-inv-action" title="Unduh" aria-label="Unduh backup"><i class="bi bi-download"></i></a>
+                      <form method="POST" action="/management/finance/backup/restore/<%= encodeURIComponent(b.filename) %>" class="d-inline">
+                        <input type="hidden" name="return_to" value="<%= returnPath %>">
+                        <input type="hidden" name="mode" value="replace">
+                        <button type="submit" class="km-inv-action km-inv-action--success" title="Restore" aria-label="Restore backup" onclick="return confirm('Restore dari <%= b.filename %>? Cadangan otomatis dibuat sebelum restore.')">
+                          <i class="bi bi-arrow-counterclockwise"></i>
+                        </button>
+                      </form>
+                    </div>
+                  </td>
+                </tr>
+              <% }); %>
+              <tr class="js-search-empty d-none">
+                <td colspan="3"><div class="km-inv-empty py-4"><i class="bi bi-search"></i><strong>Tidak ditemukan</strong><span>Tidak ada file yang cocok.</span></div></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      <% } %>
     </div>
   </div>
 </div>

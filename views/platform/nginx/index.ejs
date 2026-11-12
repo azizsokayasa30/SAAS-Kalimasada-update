@@ -1,10 +1,9 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main">
+<main class="km-main km-set">
   <div class="km-topbar">
     <div>
-      <h2>Reverse Proxy</h2>
-      <p class="km-subtitle">Kelola domain <code><%= config.base_domain %></code> dan routing subdomain tenant</p>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-diagram-3"></i></span>Reverse Proxy</h2>
     </div>
     <div class="d-flex gap-2 flex-wrap">
       <form method="POST" action="/management/settings/reverse-proxy/sync" class="d-inline">
@@ -19,8 +18,6 @@
       </form>
     </div>
   </div>
-
-  <%- include('../settings/_nav', { settingsSection }) %>
 
   <% if (flash && flash.success) { %>
     <div class="alert alert-success">
@@ -45,51 +42,53 @@
     <div class="alert alert-danger"><%= flash.error %></div>
   <% } %>
 
-  <% if (typeof diagnostics !== 'undefined' && diagnostics.issues && diagnostics.issues.length) { %>
-    <div class="alert alert-warning">
-      <strong>Perlu perbaikan:</strong>
-      <ul class="mb-0 mt-2"><% diagnostics.issues.forEach(function(issue) { %><li><%= issue %></li><% }); %></ul>
-    </div>
-  <% } %>
-
-  <% if (!status.nginx_installed) { %>
-    <div class="alert alert-warning mb-4">
-      <strong>Nginx belum terinstall.</strong> Jalankan:
-      <code>sudo bash /var/www/billing-kalimasada/scripts/setup-nginx-proxy.sh</code>
+  <% const proxyIssues = (typeof diagnostics !== 'undefined' && diagnostics.issues) ? diagnostics.issues : []; %>
+  <% if (!status.nginx_installed || proxyIssues.length) { %>
+    <div class="alert alert-warning km-proxy-issues mb-4">
+      <div class="fw-semibold mb-1"><i class="bi bi-exclamation-triangle me-1"></i> Perlu perbaikan</div>
+      <ul class="mb-0">
+        <% if (!status.nginx_installed) { %>
+          <li>Nginx belum terinstall. Jalankan <code>sudo bash /var/www/billing-kalimasada/scripts/setup-nginx-proxy.sh</code></li>
+        <% } %>
+        <% proxyIssues.forEach(function(issue) { %><li><%= issue %></li><% }); %>
+      </ul>
     </div>
   <% } %>
 
   <div class="row g-3 mb-4">
     <div class="col-md-4 col-6">
-      <div class="km-stat">
-        <div class="label">Status Nginx</div>
-        <div class="value fs-6">
-          <% if (!status.nginx_installed) { %>
-            <span class="badge bg-secondary">Belum install</span>
-          <% } else if (status.nginx_active) { %>
-            <span class="badge bg-success">Aktif</span>
-          <% } else { %>
-            <span class="badge bg-warning text-dark">Tidak aktif</span>
-          <% } %>
+      <div class="km-card km-set-stat">
+        <span class="km-set-stat__icon <%= status.nginx_active ? 'km-tone-green' : 'km-tone-orange' %>"><i class="bi bi-server"></i></span>
+        <div>
+          <div class="km-set-stat__label">Status Nginx</div>
+          <div class="mt-1">
+            <% if (!status.nginx_installed) { %>
+              <span class="badge bg-secondary">Belum install</span>
+            <% } else if (status.nginx_active) { %>
+              <span class="badge bg-success">Aktif</span>
+            <% } else { %>
+              <span class="badge bg-warning text-dark">Tidak aktif</span>
+            <% } %>
+          </div>
         </div>
       </div>
     </div>
     <div class="col-md-4 col-6">
-      <div class="km-stat">
-        <div class="label">Tenant di Proxy</div>
-        <div class="value"><%= (config.tenant_subdomains || []).length %></div>
+      <div class="km-card km-set-stat">
+        <span class="km-set-stat__icon km-tone-blue"><i class="bi bi-buildings"></i></span>
+        <div><div class="km-set-stat__label">Tenant</div><div class="km-set-stat__value"><%= (config.tenant_subdomains || []).length %></div></div>
       </div>
     </div>
     <div class="col-md-4 col-12">
-      <div class="km-stat">
-        <div class="label">Upstream</div>
-        <div class="value fs-6"><code><%= config.upstream_host %>:<%= config.upstream_port %></code></div>
+      <div class="km-card km-set-stat">
+        <span class="km-set-stat__icon km-tone-purple"><i class="bi bi-arrow-left-right"></i></span>
+        <div><div class="km-set-stat__label">Upstream</div><div class="km-set-stat__value"><code><%= config.upstream_host %>:<%= config.upstream_port %></code></div></div>
       </div>
     </div>
   </div>
 
   <div class="km-card mb-4">
-    <h5 class="mb-3"><i class="bi bi-buildings me-1"></i> Tenant</h5>
+    <div class="km-vpn-card__head"><h5><i class="bi bi-buildings"></i> Tenant</h5></div>
     <% if (typeof tenantProxyRows !== 'undefined' && tenantProxyRows.length) { %>
     <div class="table-responsive">
       <table class="table table-sm table-hover mb-0">
@@ -118,12 +117,12 @@
       </table>
     </div>
     <% } else { %>
-      <p class="km-subtitle small mb-0">Belum ada tenant. Tambahkan tenant lalu klik Sync.</p>
+      <p class="text-muted small mb-0">Belum ada tenant.</p>
     <% } %>
   </div>
 
   <div class="km-card mb-4">
-    <h5 class="mb-3"><i class="bi bi-hdd-network me-1"></i> Proxy ke Server Lain</h5>
+    <div class="km-vpn-card__head"><h5><i class="bi bi-hdd-network"></i> Proxy ke Server Lain</h5></div>
     <% if (typeof customProxies !== 'undefined' && customProxies.length) { %>
     <div class="table-responsive mb-3">
       <table class="table table-sm table-hover mb-0">
@@ -151,14 +150,14 @@
     </div>
     <% } %>
     <form method="POST" action="/management/settings/reverse-proxy/proxies/add" class="row g-2 align-items-end">
-      <div class="col-md-3">
+      <div class="col-lg-6">
         <label class="form-label small mb-1">Subdomain</label>
         <div class="input-group input-group-sm">
           <input type="text" name="hostname" class="form-control" placeholder="bna" required>
           <span class="input-group-text">.<%= config.base_domain %></span>
         </div>
       </div>
-      <div class="col-md-4">
+      <div class="col-lg-6">
         <label class="form-label small mb-1">Target (IP:port)</label>
         <div class="input-group input-group-sm">
           <input type="text" name="upstream_host" class="form-control" placeholder="192.168.1.10" required>
@@ -166,11 +165,11 @@
           <input type="number" name="upstream_port" class="form-control" value="3003" min="1" max="65535" required style="max-width:5rem;">
         </div>
       </div>
-      <div class="col-md-3">
+      <div class="col-lg-8">
         <label class="form-label small mb-1">Label <span class="text-muted">(opsional)</span></label>
         <input type="text" name="label" class="form-control form-control-sm" placeholder="Cabang BNA">
       </div>
-      <div class="col-md-2">
+      <div class="col-lg-4">
         <button type="submit" class="btn btn-outline-primary btn-sm w-100" <%= !status.nginx_installed ? 'disabled' : '' %>>
           <i class="bi bi-plus-lg"></i> Tambah
         </button>
@@ -179,7 +178,7 @@
   </div>
 
   <div class="km-card">
-    <h5 class="mb-3"><i class="bi bi-gear me-1"></i> Pengaturan</h5>
+    <div class="km-vpn-card__head"><h5><i class="bi bi-gear"></i> Pengaturan</h5></div>
     <form method="POST" action="/management/settings/reverse-proxy/save">
       <div class="row g-3">
         <div class="col-md-6">
@@ -246,16 +245,17 @@
       </details>
 
       <input type="hidden" name="auto_sync_on_tenant_change" value="on">
-      <div class="d-flex gap-2 mt-4 flex-wrap">
+      <div class="km-proxy-actions">
         <button type="submit" class="btn btn-km-primary btn-sm" <%= !status.nginx_installed ? 'disabled' : '' %>>
-          <i class="bi bi-check-lg"></i> Simpan & Terapkan
+          <i class="bi bi-check-lg me-1"></i> Simpan & Terapkan
         </button>
         <button type="submit" formaction="/management/settings/reverse-proxy/test" class="btn btn-outline-info btn-sm" <%= !status.nginx_installed ? 'disabled' : '' %>>
-          Test nginx -t
+          <i class="bi bi-clipboard-check me-1"></i> Test nginx -t
         </button>
-        <a href="/management/settings/reverse-proxy/preview" target="_blank" class="btn btn-outline-secondary btn-sm">Preview config</a>
+        <a href="/management/settings/reverse-proxy/preview" target="_blank" class="btn btn-outline-secondary btn-sm"><i class="bi bi-file-earmark-code me-1"></i> Preview config</a>
       </div>
-      <% if (config.last_apply_message) { %>
+      <% const sslErr = (typeof sslStatus !== 'undefined' && sslStatus && !sslStatus.ok && sslStatus.error) ? String(sslStatus.error) : ''; %>
+      <% if (config.last_apply_message && !(sslErr && String(config.last_apply_message).indexOf(sslErr) === 0)) { %>
         <p class="small mt-3 mb-0 <%= config.last_apply_ok ? 'text-success' : 'text-danger' %>">
           <%= config.last_apply_message %>
         </p>

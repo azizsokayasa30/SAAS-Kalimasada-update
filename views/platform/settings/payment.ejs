@@ -2,80 +2,71 @@
 function gwEnabled(gw, key) { return gw && gw[key] && gw[key].enabled ? 'checked' : ''; }
 function gwProd(gw, key) { return gw && gw[key] && gw[key].production ? 'checked' : ''; }
 function gwVal(gw, key, field) { return (gw && gw[key] && gw[key][field]) ? gw[key][field] : ''; }
+const fieldLabels = {
+  server_key: 'Server Key', client_key: 'Client Key', merchant_id: 'Merchant ID', base_url: 'Base URL',
+  api_key: 'API Key', callback_token: 'Callback Token', private_key: 'Private Key', merchant_code: 'Merchant Code'
+};
+const gateways = [
+  { key: 'midtrans', title: 'Midtrans', fields: ['server_key','client_key','merchant_id','base_url'] },
+  { key: 'xendit', title: 'Xendit', fields: ['api_key','callback_token','base_url'] },
+  { key: 'tripay', title: 'Tripay', fields: ['api_key','private_key','merchant_code','base_url'] },
+  { key: 'duitku', title: 'Duitku', fields: ['merchant_code','api_key','base_url'] },
+];
 %>
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main">
-  <div class="km-topbar">
-    <div>
-      <h2>Payment Manager</h2>
-      <p class="km-subtitle">Konfigurasi payment gateway tingkat platform SaaS</p>
-    </div>
-  </div>
-
-  <%- include('_nav', { settingsSection }) %>
-
-  <% if (flash && flash.success === 'saved') { %><div class="alert alert-success">Pengaturan payment gateway berhasil disimpan.</div><% } %>
-  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
-
+<main class="km-main km-set">
   <form method="POST" action="/management/settings/payment">
-    <div class="km-card mb-4">
-      <div class="row g-3 align-items-end">
-        <div class="col-md-6">
-          <label class="form-label fw-semibold">Gateway Aktif</label>
-          <select name="active" class="form-select">
-            <% ['midtrans','xendit','tripay','duitku'].forEach(function(g) { %>
-              <option value="<%= g %>" <%= payment.active === g ? 'selected' : '' %>><%= g.charAt(0).toUpperCase() + g.slice(1) %></option>
-            <% }); %>
-          </select>
-        </div>
-        <div class="col-md-6">
-          <p class="text-muted small mb-0"><i class="bi bi-info-circle me-1"></i>Pengaturan ini otomatis diterapkan ke <strong>semua tenant</strong>. Tenant tidak perlu mengatur payment gateway sendiri.</p>
-        </div>
+    <div class="km-topbar">
+      <div>
+        <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-credit-card"></i></span>Payment Manager</h2>
+      </div>
+      <div class="km-pay-toolbar">
+        <label class="km-pay-toolbar__label" for="paymentActive">Gateway aktif</label>
+        <select name="active" id="paymentActive" class="form-select form-select-sm">
+          <% gateways.forEach(function(g) { %>
+            <option value="<%= g.key %>" <%= payment.active === g.key ? 'selected' : '' %>><%= g.title %></option>
+          <% }); %>
+        </select>
+        <button type="submit" class="btn btn-km-primary btn-sm px-3"><i class="bi bi-check-lg me-1"></i> Simpan</button>
       </div>
     </div>
 
+    <% if (flash && flash.success === 'saved') { %><div class="alert alert-success">Pengaturan payment gateway berhasil disimpan.</div><% } %>
+    <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+
     <div class="row g-3">
-      <% const gateways = [
-        { key: 'midtrans', title: 'Midtrans', fields: ['server_key','client_key','merchant_id','base_url'] },
-        { key: 'xendit', title: 'Xendit', fields: ['api_key','callback_token','base_url'] },
-        { key: 'tripay', title: 'Tripay', fields: ['api_key','private_key','merchant_code','base_url'] },
-        { key: 'duitku', title: 'Duitku', fields: ['merchant_code','api_key','base_url'] },
-      ]; %>
       <% gateways.forEach(function(gw) { %>
-      <div class="col-lg-6">
-        <div class="km-form-section h-100">
-          <div class="km-form-section__head">
+      <% const isDefault = payment.active === gw.key; %>
+      <div class="col-xl-6">
+        <div class="km-card km-pay-card h-100 <%= isDefault ? 'km-pay-card--default' : '' %>">
+          <div class="km-pay-card__head">
             <span class="km-form-section__icon km-form-section__icon--green"><i class="bi bi-credit-card"></i></span>
-            <div>
-              <h6 class="km-form-section__title"><%= gw.title %></h6>
-              <p class="km-form-section__desc">Konfigurasi kredensial <%= gw.title %></p>
+            <h6 class="km-pay-card__title"><%= gw.title %></h6>
+            <% if (isDefault) { %><span class="badge text-bg-primary">Default</span><% } %>
+            <div class="km-pay-card__switches">
+              <div class="form-check form-switch mb-0">
+                <input class="form-check-input" type="checkbox" name="<%= gw.key %>[enabled]" value="1" id="<%= gw.key %>Enabled" <%= gwEnabled(payment, gw.key) %>>
+                <label class="form-check-label" for="<%= gw.key %>Enabled">Aktif</label>
+              </div>
+              <div class="form-check form-switch mb-0">
+                <input class="form-check-input" type="checkbox" name="<%= gw.key %>[production]" value="1" id="<%= gw.key %>Prod" <%= gwProd(payment, gw.key) %>>
+                <label class="form-check-label" for="<%= gw.key %>Prod">Production</label>
+              </div>
             </div>
           </div>
-          <div class="km-form-section__body">
-            <div class="form-check form-switch mb-3">
-              <input class="form-check-input" type="checkbox" name="<%= gw.key %>[enabled]" value="1" id="<%= gw.key %>Enabled" <%= gwEnabled(payment, gw.key) %>>
-              <label class="form-check-label" for="<%= gw.key %>Enabled">Aktifkan</label>
-            </div>
-            <div class="form-check form-switch mb-3">
-              <input class="form-check-input" type="checkbox" name="<%= gw.key %>[production]" value="1" id="<%= gw.key %>Prod" <%= gwProd(payment, gw.key) %>>
-              <label class="form-check-label" for="<%= gw.key %>Prod">Production mode</label>
-            </div>
+          <div class="row g-2">
             <% gw.fields.forEach(function(field) { %>
-            <div class="mb-2">
-              <label class="form-label small text-capitalize"><%= field.replace(/_/g, ' ') %></label>
-              <input type="text" name="<%= gw.key %>[<%= field %>]" class="form-control form-control-sm"
-                value="<%= gwVal(payment, gw.key, field) %>">
+            <div class="<%= (field === 'base_url' && gw.fields.length % 2 === 1) ? 'col-12' : 'col-sm-6' %>">
+              <label class="form-label small mb-1" for="<%= gw.key %>_<%= field %>"><%= fieldLabels[field] || field %></label>
+              <input type="text" id="<%= gw.key %>_<%= field %>" name="<%= gw.key %>[<%= field %>]" class="form-control form-control-sm"
+                value="<%= gwVal(payment, gw.key, field) %>" autocomplete="off">
             </div>
             <% }); %>
           </div>
         </div>
       </div>
       <% }); %>
-    </div>
-
-    <div class="mt-4 d-flex justify-content-end">
-      <button type="submit" class="btn btn-km-primary px-4"><i class="bi bi-check-lg me-1"></i> Simpan Payment Gateway</button>
     </div>
   </form>
 </main>

@@ -1,80 +1,527 @@
 <%- include('partials/head', { title }) %>
 <%- include('partials/sidebar', { active: 'dashboard', adminName }) %>
-<main class="km-main km-dashboard">
-  <div class="km-dash-hero">
-    <div class="km-dash-hero-copy">
-      <span class="km-dash-eyebrow"><i class="bi bi-broadcast-pin"></i> Operations Center</span>
-      <h2>Dashboard Management Kalimasada</h2>
-      <p class="km-subtitle">Monitoring multi-tenant ISP</p>
+<%
+  const company = (typeof platformCompany !== 'undefined' && platformCompany) ? platformCompany : {};
+  const companyName = company.company_name || 'PT. KALIMASADA INTI SARANA';
+  const now = new Date();
+  const hour = Number(new Intl.DateTimeFormat('en-GB', { hour: 'numeric', hourCycle: 'h23', timeZone: 'Asia/Jakarta' }).format(now));
+  const greeting = hour < 11 ? 'Selamat pagi' : hour < 15 ? 'Selamat siang' : hour < 18 ? 'Selamat sore' : 'Selamat malam';
+  const greetIcon = hour < 11 ? 'bi-sunrise-fill' : hour < 15 ? 'bi-sun-fill' : hour < 18 ? 'bi-cloud-sun-fill' : 'bi-moon-stars-fill';
+  const todayLabel = new Intl.DateTimeFormat('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Jakarta' }).format(now);
+  const monthLabel = new Intl.DateTimeFormat('id-ID', { month: 'long', year: 'numeric', timeZone: 'Asia/Jakarta' }).format(now);
+  const fmt = function (n) { return new Intl.NumberFormat('id-ID').format(Number(n) || 0); };
+
+  const ts = tenantStatus || { active: 0, suspended: 0, other: 0 };
+  const inv = invoiceSummary || { invoiced: 0, pending: 0, paid: 0, sent: 0, draft: 0, total: 0, paidAmount: 0, unpaidAmount: 0 };
+  const invTenants = inv.invoiced + inv.pending;
+  const ci = customerInsights || { growth: [], newThisMonth: 0, topTenants: [] };
+  const statusLabels = { active: 'Aktif', suspended: 'Suspended', provisioning: 'Provisioning', failed: 'Gagal' };
+  const initials = function (name) {
+    return String(name || '?').trim().split(/\s+/).slice(0, 2).map(function (w) { return w.charAt(0); }).join('').toUpperCase() || '?';
+  };
+
+  // Grafik pertumbuhan pelanggan (SVG)
+  const chart = { w: 600, h: 220, l: 48, r: 16, t: 16, b: 30 };
+  const gValues = ci.growth.map(function (g) { return g.value; });
+  const gMaxRaw = gValues.length ? Math.max.apply(null, gValues) : 0;
+  const gMinRaw = gValues.length ? Math.min.apply(null, gValues) : 0;
+  const niceStep = function (raw) {
+    if (raw <= 1) return 1;
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const n = raw / mag;
+    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * mag;
+  };
+  const gTickCount = 4;
+  let gStep = niceStep(Math.max(gMaxRaw - gMinRaw * 0.9, 1) / gTickCount);
+  let gMin = Math.floor((gMinRaw * 0.9) / gStep) * gStep;
+  while (gMin + gStep * gTickCount < gMaxRaw * 1.05) {
+    gStep = niceStep(gStep * 1.01);
+    gMin = Math.floor((gMinRaw * 0.9) / gStep) * gStep;
+  }
+  if (gMaxRaw === 0) gStep = 1;
+  const gMax = gMin + gStep * gTickCount;
+  const plotW = chart.w - chart.l - chart.r;
+  const plotH = chart.h - chart.t - chart.b;
+  const gPoints = ci.growth.map(function (g, i) {
+    const x = chart.l + (ci.growth.length > 1 ? (i * plotW) / (ci.growth.length - 1) : plotW / 2);
+    const y = chart.t + plotH - ((g.value - gMin) / (gMax - gMin)) * plotH;
+    return { x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, label: g.label, value: g.value };
+  });
+  const gLine = gPoints.map(function (p) { return p.x + ',' + p.y; }).join(' ');
+  const gArea = gPoints.length
+    ? 'M' + gPoints[0].x + ',' + (chart.t + plotH) + ' L' + gPoints.map(function (p) { return p.x + ',' + p.y; }).join(' L') + ' L' + gPoints[gPoints.length - 1].x + ',' + (chart.t + plotH) + ' Z'
+    : '';
+  const gTicks = [0, 1, 2, 3, 4].map(function (k) {
+    const v = gMin + gStep * k;
+    return { v: Math.round(v * 10) / 10, y: chart.t + plotH - (plotH * k) / gTickCount };
+  });
+  const gLast = gValues.length ? gValues[gValues.length - 1] : 0;
+  const gFirst = gValues.length ? gValues[0] : 0;
+  const gDelta = gLast - gFirst;
+
+  // Donut status invoice
+  const donutParts = [
+    { key: 'paid', label: 'Lunas', value: inv.paid, color: '#10b981' },
+    { key: 'sent', label: 'Terkirim', value: inv.sent, color: '#3b82f6' },
+    { key: 'draft', label: 'Draft', value: inv.draft, color: '#a78bfa' },
+    { key: 'pending', label: 'Belum dibuat', value: inv.pending, color: '#f59e0b' },
+  ];
+  let donutAcc = 0;
+  const donutStops = invTenants
+    ? donutParts.filter(function (p) { return p.value > 0; }).map(function (p) {
+        const start = (donutAcc / invTenants) * 100;
+        donutAcc += p.value;
+        const end = (donutAcc / invTenants) * 100;
+        return p.color + ' ' + start.toFixed(2) + '% ' + end.toFixed(2) + '%';
+      }).join(', ')
+    : 'rgba(148,163,184,0.25) 0% 100%';
+  const paidPct = invTenants ? Math.round((inv.paid / invTenants) * 100) : 0;
+  const topMax = ci.topTenants.length ? Math.max(1, ci.topTenants[0].total) : 1;
+%>
+<main class="km-main km-dashboard" id="kmDashboard">
+
+  <section class="km-hero-banner">
+    <svg class="km-hero-banner__art" viewBox="0 0 1200 260" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <defs>
+        <linearGradient id="kmSky" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#060d24"/>
+          <stop offset="0.45" stop-color="#132a6b"/>
+          <stop offset="0.8" stop-color="#3b2a7a"/>
+          <stop offset="1" stop-color="#c2410c"/>
+        </linearGradient>
+        <radialGradient id="kmGlow" cx="0.86" cy="0.78" r="0.45">
+          <stop offset="0" stop-color="#fb923c" stop-opacity="0.85"/>
+          <stop offset="1" stop-color="#fb923c" stop-opacity="0"/>
+        </radialGradient>
+        <linearGradient id="kmMtnFar" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#5b6fd6"/>
+          <stop offset="1" stop-color="#25358a"/>
+        </linearGradient>
+        <linearGradient id="kmMtnMid" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#2f3f9e"/>
+          <stop offset="1" stop-color="#16225e"/>
+        </linearGradient>
+        <linearGradient id="kmMtnNear" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#0d1838"/>
+          <stop offset="1" stop-color="#050a1c"/>
+        </linearGradient>
+      </defs>
+      <rect width="1200" height="260" fill="url(#kmSky)"/>
+      <rect width="1200" height="260" fill="url(#kmGlow)"/>
+      <g class="km-hero-stars" fill="#fff">
+        <circle cx="120" cy="30" r="1.2"/><circle cx="260" cy="62" r="0.9"/><circle cx="380" cy="24" r="1.4"/>
+        <circle cx="520" cy="48" r="1"/><circle cx="610" cy="18" r="1.1"/><circle cx="700" cy="70" r="0.8"/>
+        <circle cx="820" cy="34" r="1.3"/><circle cx="930" cy="56" r="0.9"/><circle cx="460" cy="90" r="0.8"/>
+        <circle cx="180" cy="96" r="1"/><circle cx="1010" cy="22" r="1"/><circle cx="330" cy="120" r="0.7"/>
+      </g>
+      <path d="M0,170 L120,120 L210,150 L330,92 L430,140 L540,104 L650,150 L760,110 L830,136 L900,100 L960,132 L1000,118 L1200,160 L1200,260 L0,260 Z" fill="url(#kmMtnFar)" opacity="0.9"/>
+      <path d="M0,200 L90,168 L190,190 L300,140 L410,186 L520,150 L640,196 L760,156 L860,190 L980,150 L1100,186 L1200,170 L1200,260 L0,260 Z" fill="url(#kmMtnMid)"/>
+      <path d="M0,230 L140,206 L260,226 L380,200 L520,232 L660,208 L800,230 L940,206 L1080,226 L1200,212 L1200,260 L0,260 Z" fill="url(#kmMtnNear)"/>
+      <g class="km-hero-lights" fill="#fbbf24">
+        <circle cx="70" cy="238" r="1.6"/><circle cx="96" cy="244" r="1.2"/><circle cx="210" cy="232" r="1.5"/>
+        <circle cx="236" cy="240" r="1.1"/><circle cx="350" cy="226" r="1.6"/><circle cx="372" cy="234" r="1.2"/>
+        <circle cx="470" cy="244" r="1.4"/><circle cx="590" cy="230" r="1.6"/><circle cx="612" cy="238" r="1.1"/>
+        <circle cx="720" cy="246" r="1.4"/><circle cx="850" cy="232" r="1.6"/><circle cx="874" cy="240" r="1.2"/>
+        <circle cx="990" cy="228" r="1.5"/><circle cx="1012" cy="236" r="1.1"/><circle cx="1120" cy="240" r="1.5"/>
+      </g>
+      <g class="km-hero-net" fill="none" stroke="#7dd3fc" stroke-width="1.4" stroke-linecap="round">
+        <path class="km-hero-link" d="M330,92 L540,104 L760,110 L900,100 L1000,118"/>
+        <path class="km-hero-link km-hero-link--b" d="M300,140 L520,150 L760,156 L980,150"/>
+        <path class="km-hero-link km-hero-link--c" d="M330,92 L300,140 M540,104 L520,150 M760,110 L760,156 M1000,118 L980,150"/>
+      </g>
+      <g class="km-hero-nodes" fill="#e0f2fe">
+        <circle cx="330" cy="92" r="4"/><circle cx="540" cy="104" r="4"/><circle cx="760" cy="110" r="4"/><circle cx="1000" cy="118" r="4"/>
+        <circle cx="300" cy="140" r="3"/><circle cx="520" cy="150" r="3"/><circle cx="760" cy="156" r="3"/><circle cx="980" cy="150" r="3"/>
+      </g>
+      <g class="km-hero-tower">
+        <g stroke="#bae6fd" stroke-width="1.6" fill="none" opacity="0.85">
+          <path d="M900,100 L892,52 L908,52 Z M894,66 L906,66 M896,80 L904,80 M892,52 L900,40 L908,52"/>
+        </g>
+        <g class="km-hero-wave" fill="none" stroke="#7dd3fc" stroke-width="1.4" opacity="0.8">
+          <path d="M884,32 a22,22 0 0 1 32,0"/>
+          <path d="M876,24 a34,34 0 0 1 48,0"/>
+        </g>
+      </g>
+    </svg>
+    <div class="km-hero-aurora" aria-hidden="true"><span></span><span></span><span></span></div>
+    <span class="km-hero-meteor" aria-hidden="true"></span>
+    <span class="km-hero-meteor km-hero-meteor--b" aria-hidden="true"></span>
+    <div class="km-hero-banner__shade" aria-hidden="true"></div>
+
+    <div class="km-hero-banner__body">
+      <div class="km-hero-banner__copy">
+        <span class="km-hero-banner__eyebrow"><span class="km-dash-live-dot" aria-hidden="true"></span> Operations Center · <%= greeting %> <i class="bi <%= greetIcon %> km-hero-greet-icon" aria-hidden="true"></i></span>
+        <h2><span class="km-wave-hand" aria-hidden="true">👋</span> Hallo, <%= adminName || 'Admin' %>!</h2>
+        <p>Pusat kendali seluruh tenant <%= companyName %></p>
+        <div class="km-hero-pills">
+          <span class="km-hero-pill"><i class="bi bi-buildings"></i><b><%= fmt(ts.active) %></b> tenant aktif</span>
+          <span class="km-hero-pill"><i class="bi bi-people-fill"></i><b><%= fmt(stats.totalCustomers) %></b> pelanggan</span>
+          <span class="km-hero-pill"><i class="bi bi-hdd-network"></i>NAS <b id="heroNasValue">—</b></span>
+          <span class="km-hero-pill is-pending" id="heroServerPill"><i class="bi bi-heart-pulse-fill"></i>Server <b id="heroServerValue">…</b></span>
+        </div>
+        <div class="km-hero-banner__actions">
+          <a href="/management/tenants/new" class="btn btn-sm px-3 km-hero-btn">
+            <i class="bi bi-plus-lg me-1"></i> Tambah Tenant
+          </a>
+          <button type="button" class="btn btn-sm km-hero-btn km-hero-btn--ghost" id="dashRefreshBtn">
+            <i class="bi bi-arrow-clockwise"></i> Refresh
+          </button>
+          <span class="km-hero-banner__updated" id="dashUpdatedAt">Memuat data live…</span>
+        </div>
+      </div>
+      <div class="km-hero-banner__side">
+        <div class="km-hero-clock" aria-live="off">
+          <div class="km-hero-clock__time">
+            <span id="dashClockHM">--:--</span><span class="km-hero-clock__sec" id="dashClockSec">--</span>
+          </div>
+          <div class="km-hero-clock__date">
+            <span class="km-hero-clock__day" id="dashClockDay"></span>
+            <span id="dashClockDate"><%= todayLabel %></span>
+          </div>
+        </div>
+        <p class="km-hero-banner__slogan">Satu Pusat Kendali<br>untuk Semua Tenant</p>
+      </div>
     </div>
-    <div class="km-dash-hero-actions">
-      <span class="km-dash-updated" id="dashUpdatedAt">Memuat data live…</span>
-      <button type="button" class="btn btn-outline-secondary btn-sm" id="dashRefreshBtn">
-        <i class="bi bi-arrow-clockwise"></i> Refresh
-      </button>
-      <a href="/management/tenants/new" class="btn btn-km-primary btn-sm px-3">
-        <i class="bi bi-plus-lg me-1"></i> Tambah Tenant
-      </a>
+  </section>
+
+  <div class="km-dash-section-title">
+    <h3><span class="km-dash-section-icon km-dash-section-icon--amber"><i class="bi bi-lightning-charge-fill"></i></span>Akses Cepat</h3>
+  </div>
+  <div class="km-quick-grid mb-4">
+    <a href="/management/tenants/new" class="km-quick km-quick--violet">
+      <span class="km-quick__icon"><i class="bi bi-building-add"></i></span>
+      <span class="km-quick__text"><strong>Tambah Tenant</strong><small>Daftarkan ISP baru</small></span>
+      <i class="bi bi-chevron-right km-quick__arrow"></i>
+    </a>
+    <a href="/management/finance/invoices" class="km-quick km-quick--blue">
+      <span class="km-quick__icon"><i class="bi bi-receipt"></i></span>
+      <span class="km-quick__text"><strong>Buat Invoice</strong><small>Tagihan ke tenant</small></span>
+      <i class="bi bi-chevron-right km-quick__arrow"></i>
+    </a>
+    <a href="/management/finance/payments" class="km-quick km-quick--green">
+      <span class="km-quick__icon"><i class="bi bi-credit-card-2-front"></i></span>
+      <span class="km-quick__text"><strong>Pembayaran</strong><small>Riwayat gateway</small></span>
+      <i class="bi bi-chevron-right km-quick__arrow"></i>
+    </a>
+    <a href="/management/pop" class="km-quick km-quick--orange">
+      <span class="km-quick__icon"><i class="bi bi-geo-alt-fill"></i></span>
+      <span class="km-quick__text"><strong>POP/Cabang</strong><small>Titik infrastruktur</small></span>
+      <i class="bi bi-chevron-right km-quick__arrow"></i>
+    </a>
+    <a href="/management/vpn/devices" class="km-quick km-quick--indigo">
+      <span class="km-quick__icon"><i class="bi bi-shield-lock-fill"></i></span>
+      <span class="km-quick__text"><strong>Perangkat VPN</strong><small>Status tunnel</small></span>
+      <i class="bi bi-chevron-right km-quick__arrow"></i>
+    </a>
+    <a href="/management/settings/backup-restore" class="km-quick km-quick--rose">
+      <span class="km-quick__icon"><i class="bi bi-database-fill"></i></span>
+      <span class="km-quick__text"><strong>Backup</strong><small>Cadangkan data</small></span>
+      <i class="bi bi-chevron-right km-quick__arrow"></i>
+    </a>
+  </div>
+
+  <div class="km-dash-section-title">
+    <h3><span class="km-dash-section-icon km-dash-section-icon--violet"><i class="bi bi-bar-chart-fill"></i></span>Statistik Platform</h3>
+    <button type="button" class="km-dash-eye" id="dashPrivacyToggle" title="Sembunyikan / tampilkan nominal">
+      <i class="bi bi-eye"></i>
+    </button>
+  </div>
+  <div class="km-gcards mb-4">
+    <div class="km-gcard km-gcard--violet">
+      <div class="km-gcard__top"><span class="km-gcard__label">Total Tenant</span><span class="km-gcard__icon"><i class="bi bi-buildings"></i></span></div>
+      <div class="km-gcard__value" id="kpiTotalTenants"><%= fmt(stats.totalTenants) %></div>
+      <div class="km-gcard__meta">Unit operasional terdaftar</div>
+      <svg class="km-gcard__wave" viewBox="0 0 120 24" preserveAspectRatio="none" aria-hidden="true"><path d="M0,16 C15,6 25,22 40,14 C55,6 65,20 80,12 C95,4 105,16 120,8"/></svg>
+      <a href="/management/tenants" class="km-gcard__link">Lihat Detail <i class="bi bi-chevron-right"></i></a>
+    </div>
+    <div class="km-gcard km-gcard--green">
+      <div class="km-gcard__top"><span class="km-gcard__label">Tenant Aktif</span><span class="km-gcard__icon"><i class="bi bi-wifi"></i></span></div>
+      <div class="km-gcard__value"><%= fmt(ts.active) %></div>
+      <div class="km-gcard__meta"><%= fmt(ts.suspended) %> suspended · <%= fmt(ts.other) %> lainnya</div>
+      <svg class="km-gcard__wave" viewBox="0 0 120 24" preserveAspectRatio="none" aria-hidden="true"><path d="M0,14 C20,4 30,20 50,12 C70,4 80,18 100,10 C110,6 115,10 120,8"/></svg>
+      <a href="/management/tenants" class="km-gcard__link">Lihat Detail <i class="bi bi-chevron-right"></i></a>
+    </div>
+    <div class="km-gcard km-gcard--blue">
+      <div class="km-gcard__top"><span class="km-gcard__label">Total Pelanggan</span><span class="km-gcard__icon"><i class="bi bi-people-fill"></i></span></div>
+      <div class="km-gcard__value" id="kpiTotalCustomers"><%= fmt(stats.totalCustomers) %></div>
+      <div class="km-gcard__meta">Akumulasi semua tenant</div>
+      <svg class="km-gcard__wave" viewBox="0 0 120 24" preserveAspectRatio="none" aria-hidden="true"><path d="M0,20 C20,18 35,14 55,12 C75,10 95,6 120,4"/></svg>
+      <a href="/management/tenants/mrtg" class="km-gcard__link">Lihat Detail <i class="bi bi-chevron-right"></i></a>
+    </div>
+    <div class="km-gcard km-gcard--pink">
+      <div class="km-gcard__top"><span class="km-gcard__label">Pelanggan Baru</span><span class="km-gcard__icon"><i class="bi bi-person-plus-fill"></i></span></div>
+      <div class="km-gcard__value"><%= fmt(ci.newThisMonth) %></div>
+      <div class="km-gcard__meta">Bergabung <%= monthLabel %></div>
+      <div class="km-gcard__bars" aria-hidden="true"><span style="height:40%"></span><span style="height:65%"></span><span style="height:50%"></span><span style="height:80%"></span><span style="height:60%"></span><span style="height:90%"></span><span style="height:70%"></span><span style="height:100%"></span></div>
+      <a href="/management/tenants" class="km-gcard__link">Lihat Detail <i class="bi bi-chevron-right"></i></a>
+    </div>
+    <div class="km-gcard km-gcard--orange">
+      <div class="km-gcard__top"><span class="km-gcard__label">Tagihan Tenant</span><span class="km-gcard__icon"><i class="bi bi-receipt-cutoff"></i></span></div>
+      <div class="km-gcard__value km-money"><%= formatRupiah(inv.total) %></div>
+      <div class="km-gcard__meta"><%= fmt(inv.invoiced) %> invoice · <span class="km-money">lunas <%= formatRupiah(inv.paidAmount) %></span></div>
+      <div class="km-gcard__bars" aria-hidden="true"><span style="height:55%"></span><span style="height:70%"></span><span style="height:45%"></span><span style="height:85%"></span><span style="height:65%"></span><span style="height:75%"></span><span style="height:95%"></span><span style="height:80%"></span></div>
+      <a href="/management/finance/invoices" class="km-gcard__link">Lihat Detail <i class="bi bi-chevron-right"></i></a>
+    </div>
+    <div class="km-gcard km-gcard--rose">
+      <div class="km-gcard__top"><span class="km-gcard__label">Belum Lunas</span><span class="km-gcard__icon"><i class="bi bi-hourglass-split"></i></span></div>
+      <div class="km-gcard__value km-money"><%= formatRupiah(inv.unpaidAmount) %></div>
+      <div class="km-gcard__meta"><%= fmt(inv.invoiced - inv.paid) %> invoice · <%= fmt(inv.pending) %> tenant belum di-invoice</div>
+      <div class="km-gcard__bars" aria-hidden="true"><span style="height:90%"></span><span style="height:70%"></span><span style="height:80%"></span><span style="height:55%"></span><span style="height:65%"></span><span style="height:45%"></span><span style="height:50%"></span><span style="height:35%"></span></div>
+      <a href="/management/finance/invoices" class="km-gcard__link">Lihat Detail <i class="bi bi-chevron-right"></i></a>
+    </div>
+    <div class="km-gcard km-gcard--indigo">
+      <div class="km-gcard__top"><span class="km-gcard__label">FreeRADIUS</span><span class="km-gcard__icon"><i class="bi bi-shield-check"></i></span></div>
+      <div class="km-gcard__value" id="kpiRadiusTotal">—</div>
+      <div class="km-gcard__meta"><span id="kpiRadiusUp">— up</span> · <span id="kpiRadiusDown">— down</span></div>
+      <svg class="km-gcard__wave" viewBox="0 0 120 24" preserveAspectRatio="none" aria-hidden="true"><path d="M0,12 L20,12 L26,4 L32,20 L38,12 L60,12 L66,6 L72,18 L78,12 L120,12"/></svg>
+      <a href="/management/pop/radius" class="km-gcard__link">Lihat Detail <i class="bi bi-chevron-right"></i></a>
+    </div>
+    <div class="km-gcard km-gcard--cyan">
+      <div class="km-gcard__top"><span class="km-gcard__label">Trafik Uplink</span><span class="km-gcard__icon"><i class="bi bi-activity"></i></span></div>
+      <div class="km-gcard__value km-dash-traffic-line">
+        <span class="rx" id="kpiRxMbps">—</span><span class="sep">/</span><span class="tx" id="kpiTxMbps">—</span><small>Mbps</small>
+      </div>
+      <div class="km-gcard__meta"><code id="kpiMainIface">—</code> · <span id="kpiTrafficRouters">—</span> NAS melaporkan</div>
+      <svg class="km-gcard__wave" viewBox="0 0 120 24" preserveAspectRatio="none" aria-hidden="true"><path d="M0,18 C10,8 18,20 28,10 C38,2 46,16 56,8 C66,2 74,14 84,6 C94,0 104,12 120,4"/></svg>
+      <a href="/management/settings/mrtg" class="km-gcard__link">Lihat Detail <i class="bi bi-chevron-right"></i></a>
     </div>
   </div>
 
-  <div class="row g-3 mb-4 km-dash-kpis">
-    <div class="col-xl-3 col-md-6 col-6">
-      <div class="km-dash-kpi km-dash-kpi--tenants">
-        <div class="km-dash-kpi-icon"><i class="bi bi-buildings"></i></div>
-        <div>
-          <div class="label">Total Tenant/PIC</div>
-          <div class="value" id="kpiTotalTenants"><%= stats.totalTenants %></div>
-          <div class="meta">Unit operasional terdaftar</div>
-        </div>
+  <% if (typeof financeOverview !== 'undefined' && financeOverview) {
+       const fo = financeOverview;
+       const delta = function (cur, prev, higherIsGood) {
+         if (!prev && !cur) return { cls: 'is-flat', icon: 'bi-dash', text: 'Sama seperti bulan lalu' };
+         if (!prev) return { cls: higherIsGood ? 'is-up' : 'is-down', icon: 'bi-stars', text: 'Baru bulan ini' };
+         const pct = Math.round(((cur - prev) / Math.abs(prev)) * 100);
+         if (pct === 0) return { cls: 'is-flat', icon: 'bi-dash', text: 'Sama seperti bulan lalu' };
+         const good = higherIsGood ? pct > 0 : pct < 0;
+         return { cls: good ? 'is-up' : 'is-down', icon: pct > 0 ? 'bi-arrow-up-right' : 'bi-arrow-down-right', text: (pct > 0 ? '+' : '') + pct + '% vs bulan lalu' };
+       };
+       const incDelta = delta(fo.income.total, fo.income.previousTotal, true);
+       const expDelta = delta(fo.expense.total, fo.expense.previousTotal, false);
+       const netDelta = delta(fo.net, fo.previousNet, true);
+       const netPositive = fo.net >= 0;
+
+       const fc = { w: 640, h: 240, l: 64, r: 12, t: 16, b: 30 };
+       const fcPlotW = fc.w - fc.l - fc.r;
+       const fcPlotH = fc.h - fc.t - fc.b;
+       const fcMaxRaw = Math.max.apply(null, fo.income.monthly.concat(fo.expense.monthly).concat([0]));
+       const fcStep = fcMaxRaw > 0 ? niceStep(fcMaxRaw / 4) : 1;
+       const fcMax = fcStep * 4;
+       const fcGroupW = fcPlotW / fo.periods.length;
+       const fcBarW = Math.min(26, fcGroupW * 0.3);
+       const fcY = function (v) { return fc.t + fcPlotH - (v / fcMax) * fcPlotH; };
+       const fcLabel = function (p) { const m = Number(p.split('-')[1]); return fin.MONTHS_SHORT[m - 1]; };
+       const fcTotalInc = fo.income.monthly.reduce(function (s, v) { return s + v; }, 0);
+       const fcTotalExp = fo.expense.monthly.reduce(function (s, v) { return s + v; }, 0);
+       const recentLists = [
+         { title: 'Pemasukan Terbaru', mod: 'income', icon: 'bi-arrow-down-left-circle', panel: 'green', items: fo.income.recent, href: '/management/finance/income', empty: 'Belum ada catatan pemasukan.' },
+         { title: 'Pengeluaran Terbaru', mod: 'expense', icon: 'bi-arrow-up-right-circle', panel: 'rose', items: fo.expense.recent, href: '/management/finance/expenses', empty: 'Belum ada catatan pengeluaran.' }
+       ];
+  %>
+  <div class="km-dash-section-title">
+    <h3><span class="km-dash-section-icon km-dash-section-icon--green"><i class="bi bi-wallet2"></i></span>Ringkasan Keuangan <span class="km-dash-month-chip"><%= monthLabel %></span></h3>
+    <a href="/management/finance/reports" class="km-dash-link">Laporan lengkap <i class="bi bi-arrow-right"></i></a>
+  </div>
+  <div class="row g-3 mb-3">
+    <div class="col-xl-4">
+      <div class="km-dash-fin-tiles h-100">
+        <a href="/management/finance/income" class="km-dash-fin-tile km-dash-fin-tile--income">
+          <span class="km-dash-fin-tile__icon"><i class="bi bi-arrow-down-left-circle"></i></span>
+          <div class="km-dash-fin-tile__body">
+            <span class="km-dash-fin-tile__label" title="Pemasukan <%= monthLabel %>">Pemasukan</span>
+            <strong class="km-money"><%= formatRupiah(fo.income.total) %></strong>
+            <span class="km-dash-fin-tile__meta">
+              <span class="km-dash-delta <%= incDelta.cls %>"><i class="bi <%= incDelta.icon %>"></i> <%= incDelta.text %></span>
+              <small><%= fo.income.count %> catatan</small>
+            </span>
+          </div>
+          <i class="bi bi-chevron-right km-dash-fin-tile__arrow"></i>
+        </a>
+        <a href="/management/finance/expenses" class="km-dash-fin-tile km-dash-fin-tile--expense">
+          <span class="km-dash-fin-tile__icon"><i class="bi bi-arrow-up-right-circle"></i></span>
+          <div class="km-dash-fin-tile__body">
+            <span class="km-dash-fin-tile__label" title="Pengeluaran <%= monthLabel %>">Pengeluaran</span>
+            <strong class="km-money"><%= formatRupiah(fo.expense.total) %></strong>
+            <span class="km-dash-fin-tile__meta">
+              <span class="km-dash-delta <%= expDelta.cls %>"><i class="bi <%= expDelta.icon %>"></i> <%= expDelta.text %></span>
+              <small><%= fo.expense.count %> catatan</small>
+            </span>
+          </div>
+          <i class="bi bi-chevron-right km-dash-fin-tile__arrow"></i>
+        </a>
+        <a href="/management/finance/reports" class="km-dash-fin-tile km-dash-fin-tile--<%= netPositive ? 'net' : 'loss' %>">
+          <span class="km-dash-fin-tile__icon"><i class="bi <%= netPositive ? 'bi-wallet2' : 'bi-exclamation-triangle' %>"></i></span>
+          <div class="km-dash-fin-tile__body">
+            <span class="km-dash-fin-tile__label" title="Selisih pemasukan dan pengeluaran <%= monthLabel %>">Selisih Bersih</span>
+            <strong class="km-money <%= netPositive ? 'text-success' : 'text-danger' %>"><%= formatRupiah(fo.net) %></strong>
+            <span class="km-dash-fin-tile__meta">
+              <span class="km-dash-delta <%= netDelta.cls %>"><i class="bi <%= netDelta.icon %>"></i> <%= netDelta.text %></span>
+            </span>
+          </div>
+          <i class="bi bi-chevron-right km-dash-fin-tile__arrow"></i>
+        </a>
       </div>
     </div>
-    <div class="col-xl-3 col-md-6 col-6">
-      <div class="km-dash-kpi km-dash-kpi--customers">
-        <div class="km-dash-kpi-icon"><i class="bi bi-people-fill"></i></div>
-        <div>
-          <div class="label">Total Pelanggan</div>
-          <div class="value" id="kpiTotalCustomers"><%= stats.totalCustomers %></div>
-          <div class="meta">Akumulasi semua tenant</div>
-        </div>
-      </div>
-    </div>
-    <div class="col-xl-3 col-md-6 col-6">
-      <div class="km-dash-kpi km-dash-kpi--radius">
-        <div class="km-dash-kpi-icon"><i class="bi bi-shield-check"></i></div>
-        <div>
-          <div class="label">FreeRADIUS</div>
-          <div class="value" id="kpiRadiusTotal">—</div>
-          <div class="meta">
-            <span class="text-success" id="kpiRadiusUp">— up</span>
-            ·
-            <span class="text-danger" id="kpiRadiusDown">— down</span>
+    <div class="col-xl-8">
+      <div class="km-card km-dash-panel h-100">
+        <div class="km-dash-panel-head">
+          <h5 class="mb-0"><span class="km-dash-panel-icon km-dash-panel-icon--blue"><i class="bi bi-bar-chart-line"></i></span>Pemasukan vs Pengeluaran (6 Bulan)</h5>
+          <div class="km-dash-fin-legend">
+            <span><i style="background:#10b981"></i> Pemasukan <b class="km-money"><%= formatRupiahShort(fcTotalInc) %></b></span>
+            <span><i style="background:#f43f5e"></i> Pengeluaran <b class="km-money"><%= formatRupiahShort(fcTotalExp) %></b></span>
           </div>
         </div>
+        <svg class="km-line-chart km-dash-fin-chart km-money" viewBox="0 0 <%= fc.w %> <%= fc.h %>" role="img" aria-label="Grafik pemasukan dan pengeluaran 6 bulan terakhir">
+          <% [0, 1, 2, 3, 4].forEach(function (k) { const v = fcStep * k; const y = fcY(v); %>
+            <line class="km-line-chart__grid" x1="<%= fc.l %>" x2="<%= fc.w - fc.r %>" y1="<%= y %>" y2="<%= y %>"/>
+            <text class="km-line-chart__tick" x="<%= fc.l - 8 %>" y="<%= y + 4 %>" text-anchor="end"><%= fcMaxRaw > 0 ? formatRupiahShort(v) : (k === 0 ? 'Rp 0' : '') %></text>
+          <% }); %>
+          <% fo.periods.forEach(function (p, i) {
+               const cx = fc.l + fcGroupW * i + fcGroupW / 2;
+               const inc = fo.income.monthly[i];
+               const exp = fo.expense.monthly[i];
+               const yi = fcY(inc);
+               const ye = fcY(exp);
+          %>
+            <rect class="km-dash-fin-bar km-dash-fin-bar--income" x="<%= (cx - fcBarW - 2).toFixed(1) %>" y="<%= yi.toFixed(1) %>" width="<%= fcBarW.toFixed(1) %>" height="<%= Math.max(fc.t + fcPlotH - yi, inc > 0 ? 2 : 0).toFixed(1) %>" rx="4"><title><%= fcLabel(p) %> · Pemasukan <%= formatRupiah(inc) %></title></rect>
+            <rect class="km-dash-fin-bar km-dash-fin-bar--expense" x="<%= (cx + 2).toFixed(1) %>" y="<%= ye.toFixed(1) %>" width="<%= fcBarW.toFixed(1) %>" height="<%= Math.max(fc.t + fcPlotH - ye, exp > 0 ? 2 : 0).toFixed(1) %>" rx="4"><title><%= fcLabel(p) %> · Pengeluaran <%= formatRupiah(exp) %></title></rect>
+            <text class="km-line-chart__tick" x="<%= cx.toFixed(1) %>" y="<%= fc.h - 8 %>" text-anchor="middle"><%= fcLabel(p) %></text>
+          <% }); %>
+        </svg>
       </div>
     </div>
-    <div class="col-xl-3 col-md-6 col-6">
-      <div class="km-dash-kpi km-dash-kpi--traffic">
-        <div class="km-dash-kpi-icon"><i class="bi bi-activity"></i></div>
-        <div>
-          <div class="label">Trafik Aggregate Uplink</div>
-          <div class="value km-dash-traffic-line">
-            <span class="rx" id="kpiRxMbps">—</span>
-            <span class="sep">/</span>
-            <span class="tx" id="kpiTxMbps">—</span>
-            <small>Mbps</small>
+  </div>
+  <div class="row g-3 mb-4">
+    <% recentLists.forEach(function (list) { %>
+      <div class="col-lg-6">
+        <div class="km-card km-dash-panel h-100 km-fin-page km-fin-page--<%= list.mod %>">
+          <div class="km-dash-panel-head">
+            <h5 class="mb-0"><span class="km-dash-panel-icon km-dash-panel-icon--<%= list.panel %>"><i class="bi <%= list.icon %>"></i></span><%= list.title %></h5>
+            <a href="<%= list.href %>" class="km-dash-link">Kelola <i class="bi bi-arrow-right"></i></a>
           </div>
-          <div class="meta">Interface <code id="kpiMainIface">—</code> · <span id="kpiTrafficRouters">—</span> NAS melaporkan</div>
+          <% if (!list.items.length) { %>
+            <div class="km-dash-empty">
+              <i class="bi <%= list.icon %>"></i>
+              <p class="mb-2"><%= list.empty %></p>
+              <a href="<%= list.href %>" class="btn btn-km-primary btn-sm">Tambah Catatan</a>
+            </div>
+          <% } else { %>
+            <ul class="km-fin-mini-list km-dash-fin-list">
+              <% list.items.forEach(function (row) { const dp = fin.dateParts(row.transaction_date); %>
+                <li>
+                  <% if (dp) { %>
+                    <div class="km-fin-date" title="<%= fin.fullDate(row.transaction_date) %>">
+                      <strong><%= String(dp.d).padStart(2, '0') %></strong>
+                      <span><%= fin.MONTHS_SHORT[dp.m - 1] %></span>
+                    </div>
+                  <% } %>
+                  <div class="km-fin-mini-list__body">
+                    <div title="<%= row.description %>"><%= row.description %></div>
+                    <span class="km-fin-cat km-fin-cat--<%= fin.toneOf(row.category) %>"><%= row.category || 'Lainnya' %></span>
+                  </div>
+                  <span class="km-fin-amount km-money"><%= formatRupiah(row.amount) %></span>
+                </li>
+              <% }); %>
+            </ul>
+          <% } %>
         </div>
+      </div>
+    <% }); %>
+  </div>
+  <% } %>
+
+  <div class="row g-3 mb-4">
+    <div class="col-xl-5">
+      <div class="km-card km-dash-panel h-100">
+        <div class="km-dash-panel-head">
+          <h5 class="mb-0"><span class="km-dash-panel-icon km-dash-panel-icon--blue"><i class="bi bi-graph-up-arrow"></i></span>Grafik Pelanggan (6 Bulan)</h5>
+          <span class="km-dash-delta <%= gDelta >= 0 ? 'is-up' : 'is-down' %>">
+            <i class="bi <%= gDelta >= 0 ? 'bi-arrow-up-right' : 'bi-arrow-down-right' %>"></i> <%= gDelta >= 0 ? '+' : '' %><%= fmt(gDelta) %>
+          </span>
+        </div>
+        <svg class="km-line-chart" viewBox="0 0 <%= chart.w %> <%= chart.h %>" role="img" aria-label="Grafik jumlah pelanggan 6 bulan terakhir">
+          <defs>
+            <linearGradient id="kmGrowthFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#10b981" stop-opacity="0.35"/>
+              <stop offset="1" stop-color="#10b981" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <% gTicks.forEach(function (t) { %>
+            <line class="km-line-chart__grid" x1="<%= chart.l %>" x2="<%= chart.w - chart.r %>" y1="<%= t.y %>" y2="<%= t.y %>"/>
+            <text class="km-line-chart__tick" x="<%= chart.l - 8 %>" y="<%= t.y + 4 %>" text-anchor="end"><%= fmt(t.v) %></text>
+          <% }); %>
+          <% if (gPoints.length) { %>
+            <path class="km-line-chart__area" d="<%= gArea %>" fill="url(#kmGrowthFill)"/>
+            <polyline class="km-line-chart__line" points="<%= gLine %>" pathLength="1"/>
+            <% gPoints.forEach(function (p) { %>
+              <circle class="km-line-chart__dot" cx="<%= p.x %>" cy="<%= p.y %>" r="4"><title><%= p.label %>: <%= fmt(p.value) %> pelanggan</title></circle>
+              <text class="km-line-chart__tick" x="<%= p.x %>" y="<%= chart.h - 8 %>" text-anchor="middle"><%= p.label %></text>
+            <% }); %>
+          <% } %>
+        </svg>
+      </div>
+    </div>
+    <div class="col-xl-4 col-lg-6">
+      <div class="km-card km-dash-panel h-100">
+        <div class="km-dash-panel-head">
+          <h5 class="mb-0"><span class="km-dash-panel-icon km-dash-panel-icon--amber"><i class="bi bi-pie-chart-fill"></i></span>Status Invoice Bulan Ini</h5>
+          <a href="/management/finance/invoices" class="km-dash-link">Kelola <i class="bi bi-arrow-right"></i></a>
+        </div>
+        <div class="km-donut-wrap">
+          <div class="km-donut" style="background: conic-gradient(<%= donutStops %>);">
+            <div class="km-donut__hole">
+              <strong><%= paidPct %>%</strong>
+              <span>lunas</span>
+            </div>
+          </div>
+          <ul class="km-donut-legend">
+            <% donutParts.forEach(function (p) { %>
+              <li>
+                <span class="dot" style="background: <%= p.color %>"></span>
+                <span><%= p.label %></span>
+                <strong><%= fmt(p.value) %></strong>
+                <small><%= invTenants ? Math.round((p.value / invTenants) * 100) : 0 %>%</small>
+              </li>
+            <% }); %>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="col-xl-3 col-lg-6">
+      <div class="km-card km-dash-panel h-100">
+        <div class="km-dash-panel-head">
+          <h5 class="mb-0"><span class="km-dash-panel-icon km-dash-panel-icon--violet"><i class="bi bi-trophy-fill"></i></span>Top 5 Tenant</h5>
+        </div>
+        <% if (!ci.topTenants.length) { %>
+          <div class="km-dash-empty">
+            <i class="bi bi-building-add"></i>
+            <p class="mb-2">Belum ada tenant operasional.</p>
+            <a href="/management/tenants/new" class="btn btn-km-primary btn-sm">Tambah Tenant</a>
+          </div>
+        <% } else { %>
+          <ol class="km-rank-list">
+            <% ci.topTenants.forEach(function (t, i) { %>
+              <li>
+                <div class="km-rank-list__head">
+                  <span class="km-rank-list__no km-rank-list__no--<%= i + 1 %>"><%= i + 1 %></span>
+                  <a href="/management/tenants/<%= t.id %>" class="km-rank-list__name"><%= t.name %></a>
+                  <strong><%= fmt(t.total) %></strong>
+                </div>
+                <div class="km-rank-list__bar"><span style="width: <%= Math.max(4, Math.round((t.total / topMax) * 100)) %>%"></span></div>
+              </li>
+            <% }); %>
+          </ol>
+        <% } %>
       </div>
     </div>
   </div>
 
   <div class="row g-3 mb-4">
-    <div class="col-12">
-      <div class="km-card km-dash-panel km-dash-health" id="serverHealthCard">
+    <div class="col-xl-8">
+      <div class="km-card km-dash-panel km-dash-health h-100" id="serverHealthCard">
         <div class="km-dash-panel-head">
-          <h5 class="mb-0"><i class="bi bi-heart-pulse me-2"></i>Kesehatan Server</h5>
+          <h5 class="mb-0"><span class="km-dash-panel-icon km-dash-panel-icon--rose"><i class="bi bi-heart-pulse"></i></span>Kesehatan Server</h5>
           <div class="km-dash-health-head-meta">
             <span class="km-dash-health-host" id="healthHostname">—</span>
             <span class="km-dash-health-badge is-pending" id="healthStatusBadge">Memuat</span>
@@ -120,13 +567,10 @@
         </div>
       </div>
     </div>
-  </div>
-
-  <div class="row g-3 mb-4">
-    <div class="col-lg-5">
+    <div class="col-xl-4">
       <div class="km-card km-dash-panel h-100">
         <div class="km-dash-panel-head">
-          <h5 class="mb-0"><i class="bi bi-pie-chart me-2"></i>Ringkasan Infrastruktur</h5>
+          <h5 class="mb-0"><span class="km-dash-panel-icon km-dash-panel-icon--sky"><i class="bi bi-hdd-network"></i></span>Ringkasan Infrastruktur</h5>
         </div>
         <div class="km-dash-gauges">
           <div class="km-dash-gauge">
@@ -162,10 +606,13 @@
         </div>
       </div>
     </div>
-    <div class="col-lg-7">
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-xl-7">
       <div class="km-card km-dash-panel h-100">
         <div class="km-dash-panel-head">
-          <h5 class="mb-0"><i class="bi bi-diagram-3 me-2"></i>NAS per Tenant</h5>
+          <h5 class="mb-0"><span class="km-dash-panel-icon km-dash-panel-icon--teal"><i class="bi bi-diagram-3"></i></span>NAS per Tenant</h5>
           <span class="badge bg-secondary" id="nasTableCount">—</span>
         </div>
         <div class="table-responsive km-dash-table-wrap">
@@ -188,60 +635,102 @@
         </div>
       </div>
     </div>
-  </div>
-
-  <div class="row g-3">
-    <div class="col-lg-7">
-      <div class="km-card km-dash-panel">
+    <div class="col-xl-5">
+      <div class="km-card km-dash-panel h-100">
         <div class="km-dash-panel-head">
-          <h5 class="mb-0"><i class="bi bi-router me-2"></i>Status NAS (Live)</h5>
+          <h5 class="mb-0"><span class="km-dash-panel-icon km-dash-panel-icon--indigo"><i class="bi bi-clock-history"></i></span>Tenant Terbaru</h5>
+          <a href="/management/tenants" class="km-dash-link">Lihat Semua <i class="bi bi-arrow-right"></i></a>
         </div>
-        <div class="table-responsive km-dash-table-wrap">
-          <table class="table table-sm table-hover mb-0" id="nasLiveTable">
-            <thead>
-              <tr>
-                <th>NAS</th>
-                <th>Tenant</th>
-                <th>IP</th>
-                <th>Status</th>
-                <th class="text-end">RX Mbps</th>
-                <th class="text-end">TX Mbps</th>
-              </tr>
-            </thead>
-            <tbody id="nasLiveBody">
-              <tr><td colspan="6" class="text-center py-4 text-muted">Memuat probe MikroTik…</td></tr>
-            </tbody>
-          </table>
-        </div>
+        <% if (!recentTenants.length) { %>
+          <div class="km-dash-empty">
+            <i class="bi bi-inbox"></i>
+            <p class="mb-0">Belum ada tenant.</p>
+          </div>
+        <% } else { %>
+          <ul class="km-dash-tenant-list">
+            <% recentTenants.forEach(function(t) { %>
+              <li>
+                <a href="/management/tenants/<%= t.id %>" class="km-dash-tenant">
+                  <span class="km-dash-avatar"><%= initials(t.name) %></span>
+                  <span class="km-dash-tenant-info">
+                    <strong><%= t.name %></strong>
+                    <small><%= t.subdomain %> · <%= t.usage?.customers?.total ?? 0 %> pelanggan</small>
+                  </span>
+                  <span class="badge <%= t.status === 'active' ? 'badge-status-active' : 'badge-status-suspended' %>"><%= statusLabels[t.status] || t.status %></span>
+                </a>
+              </li>
+            <% }); %>
+          </ul>
+        <% } %>
       </div>
     </div>
-    <div class="col-lg-5">
-      <div class="km-card km-dash-panel">
-        <div class="d-flex justify-content-between align-items-center mb-3">
-          <h5 class="mb-0"><i class="bi bi-clock-history me-2"></i>Tenant Terbaru</h5>
-          <a href="/management/tenants" class="btn btn-outline-secondary btn-sm">Lihat Semua</a>
-        </div>
-        <div class="table-responsive">
-          <table class="table table-hover mb-0">
-            <thead><tr><th>Nama</th><th>Subdomain</th><th>Pelanggan</th></tr></thead>
-            <tbody>
-              <% if (!recentTenants.length) { %>
-                <tr><td colspan="3" class="text-center py-3 text-muted">Belum ada tenant.</td></tr>
-              <% } %>
-              <% recentTenants.forEach(function(t) { %>
-                <tr>
-                  <td><a href="/management/tenants/<%= t.id %>" class="fw-semibold text-decoration-none"><%= t.name %></a></td>
-                  <td><code><%= t.subdomain %></code></td>
-                  <td><%= t.usage?.customers?.total ?? 0 %></td>
-                </tr>
-              <% }); %>
-            </tbody>
-          </table>
-        </div>
-      </div>
+  </div>
+
+  <div class="km-card km-dash-panel">
+    <div class="km-dash-panel-head">
+      <h5 class="mb-0"><span class="km-dash-panel-icon km-dash-panel-icon--green"><i class="bi bi-router"></i></span>Status NAS (Live)</h5>
+    </div>
+    <div class="table-responsive km-dash-table-wrap">
+      <table class="table table-sm table-hover mb-0" id="nasLiveTable">
+        <thead>
+          <tr>
+            <th>NAS</th>
+            <th>Tenant</th>
+            <th>IP</th>
+            <th>Status</th>
+            <th class="text-end">RX Mbps</th>
+            <th class="text-end">TX Mbps</th>
+          </tr>
+        </thead>
+        <tbody id="nasLiveBody">
+          <tr><td colspan="6" class="text-center py-4 text-muted">Memuat probe MikroTik…</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
 
 </main>
-<script src="/js/management-dashboard.js?v=4"></script>
+<script>
+(function () {
+  var clockHM = document.getElementById('dashClockHM');
+  var clockSec = document.getElementById('dashClockSec');
+  var clockDay = document.getElementById('dashClockDay');
+  var clockDate = document.getElementById('dashClockDate');
+  var jakartaParts = new Intl.DateTimeFormat('id-ID', {
+    timeZone: 'Asia/Jakarta', hour12: false,
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  });
+  function pad(v) { return ('0' + (parseInt(v, 10) % 24)).slice(-2); }
+  function tick() {
+    if (!clockHM) return;
+    var t = {};
+    jakartaParts.formatToParts(new Date()).forEach(function (p) { t[p.type] = p.value; });
+    clockHM.textContent = pad(t.hour) + ':' + ('0' + t.minute).slice(-2);
+    if (clockSec) clockSec.textContent = ('0' + t.second).slice(-2);
+    if (clockDay) clockDay.textContent = t.weekday;
+    if (clockDate) clockDate.textContent = t.day + ' ' + t.month + ' ' + t.year;
+  }
+  tick();
+  setInterval(tick, 1000);
+
+  var KEY = 'km_mgmt_hide_amounts';
+  var root = document.getElementById('kmDashboard');
+  var btn = document.getElementById('dashPrivacyToggle');
+  function apply(hidden) {
+    if (root) root.classList.toggle('km-dash-private', hidden);
+    if (btn) btn.innerHTML = hidden ? '<i class="bi bi-eye-slash"></i>' : '<i class="bi bi-eye"></i>';
+  }
+  var hidden = false;
+  try { hidden = localStorage.getItem(KEY) === '1'; } catch (_) {}
+  apply(hidden);
+  if (btn) btn.addEventListener('click', function () {
+    hidden = !hidden;
+    try { localStorage.setItem(KEY, hidden ? '1' : '0'); } catch (_) {}
+    apply(hidden);
+  });
+})();
+</script>
+<script src="/js/management-dashboard.js?v=5"></script>
+<script src="/js/management-dashboard-fx.js?v=1"></script>
 <%- include('partials/footer') %>

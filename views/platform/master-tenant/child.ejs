@@ -39,10 +39,6 @@
   <div class="km-topbar">
     <div>
       <h2><%= child.name %></h2>
-      <p class="km-subtitle">
-        Child tenant · <code><%= tenantHostname %></code>
-        · <span class="km-master-readonly-badge"><i class="bi bi-eye me-1"></i>Sumber tenant — tidak diubah</span>
-    </p>
     </div>
     <a href="/management/master-tenant" class="btn btn-outline-secondary btn-sm">← Master Tenant</a>
   </div>
@@ -50,9 +46,9 @@
   <% if (flashCopied > 0) { %>
     <div class="alert alert-success">
       <% if (flashCopied === 1 && !flashSkipped && !flashFailed) { %>
-        Pelanggan berhasil disalin ke master tenant (view-only). Progress invoice/pembayaran/isolir akan mengikuti tenant sumber.
+        Pelanggan berhasil disalin ke master tenant.
       <% } else { %>
-        <%= flashCopied %> pelanggan berhasil disalin ke master tenant (view-only).
+        <%= flashCopied %> pelanggan berhasil disalin ke master tenant.
         <% if (flashSkipped > 0) { %> <%= flashSkipped %> sudah ada di master.<% } %>
         <% if (flashFailed > 0) { %> <%= flashFailed %> gagal.<% } %>
       <% } %>
@@ -63,9 +59,9 @@
   <% if (flashCancelled > 0) { %>
     <div class="alert alert-success">
       <% if (flashCancelled === 1 && !flashCancelSkipped && !flashCancelFailed) { %>
-        Salinan pelanggan di master tenant dibatalkan. Data tenant sumber tidak diubah, dan pelanggan ini bisa di-copy ulang.
+        Salinan pelanggan di master tenant dibatalkan.
       <% } else { %>
-        <%= flashCancelled %> salinan dibatalkan dari master tenant. Data tenant sumber tidak diubah.
+        <%= flashCancelled %> salinan dibatalkan dari master tenant.
         <% if (flashCancelSkipped > 0) { %> <%= flashCancelSkipped %> belum ada di master.<% } %>
         <% if (flashCancelFailed > 0) { %> <%= flashCancelFailed %> gagal.<% } %>
       <% } %>
@@ -95,7 +91,7 @@
     <div class="col-md-4 col-6">
       <a href="<%= customersUrl({ copy_status: 'yes', page: null }) %>" class="text-decoration-none d-block">
         <div class="km-stat">
-          <div class="label"><i class="bi bi-clipboard-check me-1"></i>Sudah di-copy ke Master</div>
+          <div class="label"><i class="bi bi-clipboard-check me-1"></i>Sudah di-copy</div>
           <div class="value text-success"><%= copiedTotal %> <small style="font-size: .55em; color: var(--text-muted)">/ <%= customersAllTotal %> pelanggan</small></div>
         </div>
       </a>
@@ -110,7 +106,7 @@
     </div>
     <div class="col-md-4 col-12">
       <div class="km-stat">
-        <div class="label">Progres Copy ke Master</div>
+        <div class="label">Progres Copy</div>
         <div class="value" style="color: var(--accent)"><%= copiedPercent %>%</div>
         <div class="progress mt-2" style="height: 6px;">
           <div class="progress-bar bg-success" role="progressbar" style="width: <%= copiedPercent %>%" aria-valuenow="<%= copiedPercent %>" aria-valuemin="0" aria-valuemax="100"></div>
@@ -277,7 +273,7 @@
                 <% if (row.copied_to_master) { %>
                   <div class="d-inline-flex align-items-center justify-content-end gap-2 flex-wrap">
                     <span class="badge bg-success">Sudah di master</span>
-                    <form method="POST" action="/management/master-tenant/children/<%= child.id %>/customers/<%= row.id %>/cancel" class="d-inline mb-0" onsubmit="return confirm('Batalkan salinan pelanggan ini dari master tenant? Data tenant sumber tidak diubah. Salinan pelanggan, tagihan, dan pembayaran di master akan dihapus.');">
+                    <form method="POST" action="/management/master-tenant/children/<%= child.id %>/customers/<%= row.id %>/cancel" class="d-inline mb-0" onsubmit="return confirm('Batalkan salinan pelanggan ini? Salinan pelanggan, tagihan, dan pembayaran di master akan dihapus.');">
                       <input type="hidden" name="limit" value="<%= customersLimit %>">
                       <input type="hidden" name="page" value="<%= customers.page %>">
                       <% listStateKeys.forEach(function (key) { if (listQuery[key]) { %>
@@ -289,7 +285,7 @@
                     </form>
                   </div>
                 <% } else { %>
-                  <form method="POST" action="/management/master-tenant/children/<%= child.id %>/customers/<%= row.id %>/copy" class="d-inline" onsubmit="return confirm('Salin pelanggan ini ke master tenant? Data tenant sumber tidak akan diubah.');">
+                  <form method="POST" action="/management/master-tenant/children/<%= child.id %>/customers/<%= row.id %>/copy" class="d-inline" onsubmit="return confirm('Salin pelanggan ini ke master tenant?');">
                     <input type="hidden" name="limit" value="<%= customersLimit %>">
                     <input type="hidden" name="page" value="<%= customers.page %>">
                     <% listStateKeys.forEach(function (key) { if (listQuery[key]) { %>
@@ -403,7 +399,7 @@
       alert('Pilih minimal satu pelanggan yang belum di-copy.');
       return false;
     }
-    return confirm('Salin ' + n + ' pelanggan ke master tenant? Data tenant sumber tidak akan diubah.');
+    return confirm('Salin ' + n + ' pelanggan ke master tenant?');
   };
   window.confirmMasterBulkCancel = function () {
     var n = checkedCount(cancelBoxes());
@@ -411,7 +407,7 @@
       alert('Pilih minimal satu pelanggan yang sudah ada di master.');
       return false;
     }
-    return confirm('Batalkan salinan ' + n + ' pelanggan dari master tenant? Data tenant sumber tidak diubah. Salinan di master akan dihapus.');
+    return confirm('Batalkan salinan ' + n + ' pelanggan? Salinan di master akan dihapus.');
   };
   updateHint();
 })();

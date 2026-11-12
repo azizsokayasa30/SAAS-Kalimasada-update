@@ -1,17 +1,14 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main">
+<main class="km-main km-set">
   <div class="km-topbar">
     <div>
-      <h2>Switch Manager</h2>
-      <p class="km-subtitle">Kelola switch per POP — trafik uplink masuk ke aggregate dashboard</p>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-hdd-network"></i></span>Switch Manager</h2>
     </div>
     <button type="button" class="btn btn-km-primary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#addSwitchModal">
       <i class="bi bi-plus-lg me-1"></i> Tambah Switch
     </button>
   </div>
-
-  <%- include('_nav', { popSection }) %>
 
   <% const activePopCount = pops.filter(function(p) { return p.is_active; }).length; %>
   <% if (!activePopCount) { %>
@@ -88,7 +85,6 @@
       <div class="modal-header km-package-modal__header">
         <div>
           <h5 class="modal-title mb-0">Tambah Switch</h5>
-          <p class="km-package-modal__subtitle mb-0">Switch di POP untuk monitoring trafik aggregate</p>
         </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>

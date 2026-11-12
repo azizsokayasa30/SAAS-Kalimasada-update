@@ -1,64 +1,61 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active: active || 'settings-mrtg', adminName }) %>
-<main class="km-main">
+<main class="km-main km-set">
   <div class="km-topbar">
     <div>
-      <h2>Pengaturan MRTG</h2>
-      <p class="km-subtitle">Pilih graph yang tampil di menu MRTG dan yang dipasang ke dashboard tenant.</p>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-graph-up"></i></span>Pengaturan MRTG</h2>
     </div>
   </div>
-
-  <%- include('../settings/_nav', { settingsSection: settingsSection || 'mrtg' }) %>
 
   <div id="nmsPageAlert" class="alert d-none" role="status"></div>
 
   <div class="km-card mb-3">
-    <h5 class="mb-3"><i class="bi bi-diagram-2 me-2"></i>Pasang graph ke tenant</h5>
+    <div class="km-vpn-card__head"><h5><i class="bi bi-diagram-2"></i> Pasang Graph ke Tenant</h5></div>
     <form id="nmsBindingForm" class="row g-3">
-      <div class="col-md-3">
+      <div class="col-md-6 col-xl-3">
         <label class="form-label" for="nmsTenant">Tenant</label>
         <select id="nmsTenant" class="form-select" required>
           <option value="">Pilih tenant</option>
         </select>
       </div>
-      <div class="col-md-3">
+      <div class="col-md-6 col-xl-3">
         <label class="form-label" for="nmsRouter">Router</label>
         <select id="nmsRouter" class="form-select" required disabled>
           <option value="">Pilih router</option>
         </select>
       </div>
-      <div class="col-md-3">
+      <div class="col-md-6 col-xl-3">
         <label class="form-label" for="nmsDevice">Perangkat NMS</label>
         <select id="nmsDevice" class="form-select" required>
           <option value="">Pilih perangkat</option>
         </select>
       </div>
-      <div class="col-md-3">
+      <div class="col-md-6 col-xl-3">
         <label class="form-label" for="nmsGraph">Graph / interface</label>
         <select id="nmsGraph" class="form-select" required disabled>
           <option value="">Pilih graph</option>
         </select>
       </div>
-      <div class="col-md-8 d-flex align-items-center gap-4 flex-wrap">
-        <div class="form-check">
-          <input class="form-check-input" type="checkbox" id="nmsShowManagement" checked>
-          <label class="form-check-label" for="nmsShowManagement">Tampil di menu MRTG</label>
+      <div class="col-12">
+        <div class="km-proxy-actions mt-0 align-items-center">
+          <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" role="switch" id="nmsShowManagement" checked>
+            <label class="form-check-label" for="nmsShowManagement">Tampil di menu MRTG</label>
+          </div>
+          <div class="form-check form-switch mb-0 ms-3">
+            <input class="form-check-input" type="checkbox" role="switch" id="nmsShowTenant" checked>
+            <label class="form-check-label" for="nmsShowTenant">Tampil di dashboard tenant</label>
+          </div>
+          <button type="submit" class="btn btn-km-primary btn-sm ms-auto"><i class="bi bi-check-lg me-1"></i> Simpan Pemetaan</button>
         </div>
-        <div class="form-check">
-          <input class="form-check-input" type="checkbox" id="nmsShowTenant" checked>
-          <label class="form-check-label" for="nmsShowTenant">Tampil di dashboard tenant</label>
-        </div>
-      </div>
-      <div class="col-md-4 text-md-end">
-        <button type="submit" class="btn btn-km-primary btn-sm">Simpan pemetaan</button>
       </div>
     </form>
   </div>
 
   <div class="km-card mb-3">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-      <h5 class="mb-0"><i class="bi bi-hdd-network me-2"></i>Perangkat NMS</h5>
-      <button type="button" class="btn btn-outline-secondary btn-sm" id="nmsReloadDevices">Muat ulang</button>
+    <div class="km-vpn-card__head">
+      <h5><i class="bi bi-hdd-network"></i> Perangkat NMS</h5>
+      <button type="button" class="btn btn-outline-secondary btn-sm" id="nmsReloadDevices"><i class="bi bi-arrow-clockwise me-1"></i> Muat ulang</button>
     </div>
     <div class="table-responsive" style="max-height: 280px;">
       <table class="table table-sm table-hover align-middle mb-0">
@@ -73,9 +70,8 @@
   </div>
 
   <div class="km-card km-card--flush">
-    <div class="px-3 pt-3">
-      <h5 class="mb-0">Pemetaan tersimpan</h5>
-      <p class="km-subtitle mb-2">Menghapus di sini hanya melepas tampilan di portal. Graph di NMS tidak diubah.</p>
+    <div class="km-vpn-card__head px-3 pt-3 mb-0">
+      <h5><i class="bi bi-link-45deg"></i> Pemetaan Tersimpan</h5>
     </div>
     <div class="table-responsive">
       <table class="table table-hover align-middle mb-0">

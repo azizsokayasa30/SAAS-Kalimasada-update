@@ -1,158 +1,156 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active: 'mobile-app', adminName }) %>
 <main class="km-main km-mobile-build">
-  <div class="km-topbar">
-    <div>
-      <h2>Mobile App — Build &amp; OTA</h2>
-      <p class="km-subtitle">Aplikasi Flutter unified <code>billing_kalimasada_mobile</code> — build APK release &amp; publikasi update OTA</p>
+  <section class="km-mob-hero">
+    <div class="km-mob-hero__main">
+      <span class="km-mob-hero__icon"><i class="bi bi-phone"></i></span>
+      <h2>Mobile App</h2>
     </div>
-    <div class="d-flex align-items-center gap-2 flex-wrap">
-      <span class="badge bg-secondary" id="readinessBadge"><i class="bi bi-hourglass-split me-1"></i> Memuat…</span>
-      <span class="badge bg-secondary" id="flutterStatusBadge"><i class="bi bi-hourglass-split me-1"></i> Flutter…</span>
-      <span class="badge bg-secondary d-none" id="keystoreStatusBadge"></span>
+    <div class="km-mob-chips">
+      <span class="km-mob-chip" id="readinessBadge"><i class="bi bi-hourglass-split"></i> Memuat…</span>
+      <span class="km-mob-chip" id="flutterStatusBadge"><i class="bi bi-hourglass-split"></i> Flutter…</span>
+      <span class="km-mob-chip d-none" id="keystoreStatusBadge"></span>
     </div>
-  </div>
+  </section>
 
-  <div id="readinessPanel" class="km-readiness-banner mb-3 is-loading" role="status">
-    <div class="km-readiness-banner__main">
-      <i class="bi bi-hourglass-split" id="readinessIcon" aria-hidden="true"></i>
-      <span id="readinessText">Memuat…</span>
-    </div>
-    <div class="d-flex gap-2 flex-wrap">
-      <button type="button" class="btn btn-sm btn-warning d-none" id="btnBootstrapKeystore">
-        <i class="bi bi-shield-plus me-1"></i>Buat keystore
-      </button>
-      <button type="button" class="btn btn-sm btn-outline-warning d-none" id="btnAdoptKeystore">
-        <i class="bi bi-shield-check me-1"></i>Adopsi keystore ini
-      </button>
-    </div>
-  </div>
-
-  <div class="alert alert-info km-mobile-info">
-    <i class="bi bi-info-circle me-2"></i>
-    <strong>Aplikasi unified</strong> — satu APK untuk semua tenant. Pengguna memilih server saat login di dalam app.
-    API mobile memakai <code>https://mobile.kalimasada-app.com</code> (bukan portal <code>manage.</code>).
-    Setelah build sukses, <code>manifest.json</code> dan APK di <code id="apkPublishDirHint">public/mobile-app/</code> diperbarui
-    sehingga pengguna bisa update langsung dari aplikasi.
-    <span id="keystoreOkHint" class="d-none"><br><i class="bi bi-shield-check text-success me-1"></i>Keystore produksi aktif di <code>public/mobile-app/keystore/kalimasada.jks</code>.</span>
-  </div>
-  <div id="keystoreAlert" class="alert alert-danger d-none mb-3"></div>
-
-  <div class="row g-3 mb-4" id="mobileStatsRow">
-    <div class="col-md-3 col-6">
-      <div class="km-stat">
-        <div class="label">Versi Saat Ini</div>
-        <div class="value fs-6" id="statVersion">—</div>
+  <div class="km-inv-stats mb-4" id="mobileStatsRow">
+    <div class="km-inv-stat km-inv-stat--blue">
+      <div class="km-inv-stat__icon"><i class="bi bi-tag"></i></div>
+      <div class="km-inv-stat__body">
+        <div class="km-inv-stat__label">Versi Saat Ini</div>
+        <div class="km-inv-stat__value" id="statVersion">—</div>
       </div>
     </div>
-    <div class="col-md-3 col-6">
-      <div class="km-stat">
-        <div class="label">Build Number</div>
-        <div class="value" id="statBuild">—</div>
+    <div class="km-inv-stat km-inv-stat--violet">
+      <div class="km-inv-stat__icon"><i class="bi bi-hash"></i></div>
+      <div class="km-inv-stat__body">
+        <div class="km-inv-stat__label">Build Number</div>
+        <div class="km-inv-stat__value" id="statBuild">—</div>
       </div>
     </div>
-    <div class="col-md-3 col-6">
-      <div class="km-stat">
-        <div class="label">Status Build</div>
-        <div class="value fs-6" id="statBuildStatus">—</div>
+    <div class="km-inv-stat km-inv-stat--green">
+      <div class="km-inv-stat__icon"><i class="bi bi-activity"></i></div>
+      <div class="km-inv-stat__body">
+        <div class="km-inv-stat__label">Status Build</div>
+        <div class="km-inv-stat__value" id="statBuildStatus">—</div>
       </div>
     </div>
-    <div class="col-md-3 col-6">
-      <div class="km-stat">
-        <div class="label">APK Terbit</div>
-        <div class="value" id="statApkCount">—</div>
+    <div class="km-inv-stat km-inv-stat--amber">
+      <div class="km-inv-stat__icon"><i class="bi bi-box-seam"></i></div>
+      <div class="km-inv-stat__body">
+        <div class="km-inv-stat__label">APK Terbit</div>
+        <div class="km-inv-stat__value" id="statApkCount">—</div>
       </div>
     </div>
   </div>
 
-  <form id="mobileBuildForm">
-    <div class="row g-3">
-      <div class="col-lg-6">
-        <div class="km-card">
-          <h5 class="mb-3"><i class="bi bi-wifi text-primary me-2"></i>Environment &amp; Flutter SDK</h5>
-          <div class="mb-3">
-            <label class="form-label fw-semibold" for="apiUrl">API_URL default (.env)</label>
-            <input type="url" class="form-control" id="apiUrl" name="api_url" placeholder="https://mobile.kalimasada-app.com" required>
-            <div class="form-text">URL hub API mobile (default). Tanpa slash di akhir. Disalin ke <code>billing_kalimasada_mobile/.env</code>. Portal management tetap di <code>manage.</code>.</div>
-          </div>
-          <div class="mb-0">
-            <label class="form-label fw-semibold" for="flutterPath">Path Flutter SDK</label>
-            <input type="text" class="form-control" id="flutterPath" name="flutter_path" placeholder="public/mobile-app/flutter-sdk/bin/flutter">
-            <div class="form-text" id="flutterDetectHint">—</div>
-            <div class="form-text">Default: <code id="defaultFlutterPathHint">public/mobile-app/flutter-sdk/bin/flutter</code></div>
-          </div>
+  <div class="row g-3 mb-3">
+    <div class="col-xl-8">
+      <form id="mobileBuildForm" class="km-card km-mob-form h-100">
+        <div class="km-mob-card-head">
+          <span class="km-mob-card-head__icon" style="--mob-color:#3b82f6"><i class="bi bi-sliders"></i></span>
+          <h5>Konfigurasi Build</h5>
         </div>
-      </div>
-      <div class="col-lg-6">
-        <div class="km-card">
-          <h5 class="mb-3"><i class="bi bi-app-indicator text-success me-2"></i>Aplikasi &amp; Versi</h5>
-          <div class="mb-3">
-            <label class="form-label fw-semibold" for="appName">Nama aplikasi (launcher)</label>
-            <input type="text" class="form-control" id="appName" name="app_name" maxlength="40" required>
-            <div class="form-text">Diubah di <code>AndroidManifest.xml</code> (<code>android:label</code>).</div>
-          </div>
-          <div class="row g-2">
-            <div class="col-7">
-              <label class="form-label fw-semibold" for="versionName">Versi (nama)</label>
+
+        <div class="km-mob-section">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label" for="appName">Nama aplikasi</label>
+              <input type="text" class="form-control" id="appName" name="app_name" maxlength="40" required>
+            </div>
+            <div class="col-md-3 col-6">
+              <label class="form-label" for="versionName">Versi</label>
               <input type="text" class="form-control" id="versionName" name="version_name" placeholder="5.9.3" required>
             </div>
-            <div class="col-5">
-              <label class="form-label fw-semibold" for="versionCode">Build (+)</label>
+            <div class="col-md-3 col-6">
+              <label class="form-label" for="versionCode">Build number</label>
               <input type="number" class="form-control" id="versionCode" name="version_code" min="1" step="1" required>
-              <div class="form-text" id="versionCodeHint">Min. build untuk update OTA</div>
             </div>
-          </div>
-          <div class="form-text mt-1">Disimpan ke <code>pubspec.yaml</code> sebagai <code>version: nama+build</code>.</div>
-        </div>
-      </div>
-      <div class="col-12">
-        <div class="km-card">
-          <h5 class="mb-3"><i class="bi bi-cloud-upload text-warning me-2"></i>Publikasi OTA</h5>
-          <div class="row g-3">
-            <div class="col-lg-8">
-              <label class="form-label fw-semibold" for="releaseNotes">Catatan rilis</label>
-              <textarea class="form-control" id="releaseNotes" name="release_notes" rows="3" placeholder="Perbaikan bug, fitur baru…"></textarea>
-              <div class="form-text">Masuk ke <code>public/mobile-app/manifest.json</code> — ditampilkan saat pengguna update dari dalam app.</div>
+            <div class="col-md-6">
+              <label class="form-label" for="apiUrl">API URL</label>
+              <input type="url" class="form-control" id="apiUrl" name="api_url" placeholder="https://mobile.kalimasada-app.com" required>
             </div>
-            <div class="col-lg-4">
-              <label class="form-label fw-semibold">Endpoint OTA</label>
-              <div class="km-ota-endpoints small">
-                <div class="mb-2">
-                  <span class="text-muted">Manifest API</span><br>
-                  <code class="text-break" id="otaManifestUrl">—</code>
-                </div>
-                <div>
-                  <span class="text-muted">APK URL</span><br>
-                  <code class="text-break" id="otaApkUrl">—</code>
-                </div>
-              </div>
-              <div class="form-check mt-3">
-                <input class="form-check-input" type="checkbox" id="forceUpdate" name="force_update">
-                <label class="form-check-label" for="forceUpdate">Paksa update (<code>force_update</code>)</label>
+            <div class="col-md-6">
+              <label class="form-label" for="flutterPath">Path Flutter SDK</label>
+              <input type="text" class="form-control" id="flutterPath" name="flutter_path" placeholder="public/mobile-app/flutter-sdk/bin/flutter">
+            </div>
+            <div class="col-12">
+              <label class="form-label" for="releaseNotes">Catatan rilis</label>
+              <textarea class="form-control" id="releaseNotes" name="release_notes" rows="3"></textarea>
+            </div>
+            <div class="col-12">
+              <div class="form-check form-switch km-mob-switch">
+                <input class="form-check-input" type="checkbox" role="switch" id="forceUpdate" name="force_update">
+                <label class="form-check-label" for="forceUpdate"><strong>Wajib update</strong></label>
               </div>
             </div>
           </div>
         </div>
-      </div>
+
+        <div class="km-mob-actions">
+          <button type="button" class="btn btn-outline-danger" id="btnCancelBuild" disabled>
+            <i class="bi bi-x-circle"></i> Batalkan build
+          </button>
+          <div class="km-mob-actions__main">
+            <button type="submit" class="btn btn-outline-primary" id="btnSaveConfig">
+              <i class="bi bi-save"></i> Simpan
+            </button>
+            <button type="button" class="btn btn-km-primary" id="btnBuildApk">
+              <i class="bi bi-hammer"></i> Build APK Release
+            </button>
+          </div>
+        </div>
+      </form>
     </div>
 
-    <div class="d-flex flex-wrap gap-2 my-4">
-      <button type="submit" class="btn btn-km-primary" id="btnSaveConfig">
-        <i class="bi bi-save me-1"></i>Simpan konfigurasi
-      </button>
-      <button type="button" class="btn btn-success" id="btnBuildApk">
-        <i class="bi bi-hammer me-1"></i>Build APK Release
-      </button>
-      <button type="button" class="btn btn-outline-danger" id="btnCancelBuild" disabled>
-        <i class="bi bi-x-circle me-1"></i>Batalkan build
-      </button>
+    <div class="col-xl-4 d-flex flex-column gap-3">
+      <div class="km-card">
+        <div class="km-mob-card-head">
+          <span class="km-mob-card-head__icon" style="--mob-color:#10b981"><i class="bi bi-clipboard-check"></i></span>
+          <h5>Kesiapan Server</h5>
+        </div>
+        <div id="readinessPanel" class="km-mob-ready is-loading" role="status">
+          <i class="bi bi-hourglass-split" id="readinessIcon" aria-hidden="true"></i>
+          <div>
+            <strong id="readinessText">Memuat…</strong>
+            <span id="readinessCount"></span>
+          </div>
+        </div>
+        <ul class="km-mob-checklist" id="readinessList"></ul>
+        <div class="km-mob-ready-actions">
+          <button type="button" class="btn btn-sm btn-warning d-none" id="btnBootstrapKeystore">
+            <i class="bi bi-shield-plus"></i> Buat keystore
+          </button>
+          <button type="button" class="btn btn-sm btn-outline-warning d-none" id="btnAdoptKeystore">
+            <i class="bi bi-shield-check"></i> Adopsi keystore ini
+          </button>
+        </div>
+      </div>
+
+      <div class="km-card">
+        <div class="km-mob-card-head">
+          <span class="km-mob-card-head__icon" style="--mob-color:#f59e0b"><i class="bi bi-link-45deg"></i></span>
+          <h5>Endpoint OTA</h5>
+        </div>
+        <div class="km-mob-endpoint">
+          <span>Manifest</span>
+          <div><code id="otaManifestUrl">—</code><button type="button" class="km-mob-copy" data-copy-target="otaManifestUrl" title="Salin"><i class="bi bi-copy"></i></button></div>
+        </div>
+        <div class="km-mob-endpoint">
+          <span>APK</span>
+          <div><code id="otaApkUrl">Belum ada APK terbit</code><button type="button" class="km-mob-copy" data-copy-target="otaApkUrl" title="Salin"><i class="bi bi-copy"></i></button></div>
+        </div>
+      </div>
     </div>
-  </form>
+  </div>
 
   <div class="km-card mb-3">
-    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-      <h5 class="mb-0"><i class="bi bi-terminal me-2"></i>Log build</h5>
-      <button type="button" class="btn btn-sm btn-outline-secondary" id="btnClearLogView">Bersihkan tampilan</button>
+    <div class="km-mob-card-head km-mob-card-head--split">
+      <div class="d-flex align-items-center gap-3">
+        <span class="km-mob-card-head__icon" style="--mob-color:#8b5cf6"><i class="bi bi-terminal"></i></span>
+        <h5>Progres &amp; Log Build</h5>
+      </div>
+      <button type="button" class="btn btn-sm btn-outline-secondary" id="btnClearLogView"><i class="bi bi-eraser"></i> Bersihkan log</button>
     </div>
 
     <div id="buildProgressPanel" class="km-build-progress mb-3">
@@ -179,9 +177,12 @@
   </div>
 
   <div class="km-card">
-    <h5 class="mb-3"><i class="bi bi-archive me-2"></i>APK di server</h5>
-    <ul id="apkList" class="km-apk-list mb-0 text-muted"><li>Memuat…</li></ul>
+    <div class="km-mob-card-head">
+      <span class="km-mob-card-head__icon" style="--mob-color:#06b6d4"><i class="bi bi-archive"></i></span>
+      <h5>APK di Server</h5>
+    </div>
+    <ul id="apkList" class="km-apk-list mb-0"><li class="km-apk-empty">Memuat…</li></ul>
   </div>
 </main>
 <%- include('../partials/footer') %>
-<script src="/js/management-mobile-app.js?v=4"></script>
+<script src="/js/management-mobile-app.js?v=9"></script>

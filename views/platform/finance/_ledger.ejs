@@ -1,0 +1,233 @@
+<%
+  const isIncome = kind === 'income';
+  const cfg = isIncome
+    ? { title: 'Catatan Pemasukan', noun: 'Pemasukan', base: '/management/finance/income', mod: 'income', tone: 'green', icon: 'bi-arrow-down-left-circle', emptyIcon: 'bi-piggy-bank', emptyHint: 'Catat pemasukan di luar payment gateway agar laporan keuangan tetap akurat.', placeholder: 'Contoh: Jasa instalasi jaringan', modalId: 'addIncomeModal', editPrefix: 'editIncome' }
+    : { title: 'Catatan Pengeluaran', noun: 'Pengeluaran', base: '/management/finance/expenses', mod: 'expense', tone: 'rose', icon: 'bi-arrow-up-right-circle', emptyIcon: 'bi-wallet2', emptyHint: 'Catat biaya operasional platform agar laporan keuangan tetap akurat.', placeholder: 'Contoh: Sewa server Oktober', modalId: 'addExpenseModal', editPrefix: 'editExpense' };
+  const periodLabel = fin.periodLabel(filters.month, filters.year);
+
+  const total = items.reduce(function (s, e) { return s + (Number(e.amount) || 0); }, 0);
+  const avg = items.length ? total / items.length : 0;
+  const byCategory = {};
+  items.forEach(function (e) {
+    const k = e.category || 'Lainnya';
+    byCategory[k] = (byCategory[k] || 0) + (Number(e.amount) || 0);
+  });
+  const topCategory = Object.keys(byCategory).sort(function (a, b) { return byCategory[b] - byCategory[a]; })[0] || null;
+  const largest = items.reduce(function (max, e) { return !max || Number(e.amount) > Number(max.amount) ? e : max; }, null);
+  const nounLower = cfg.noun.toLowerCase();
+%>
+<main class="km-main km-inv-page km-fin-page km-fin-page--<%= cfg.mod %>">
+  <div class="km-topbar">
+    <div>
+      <h2><%= cfg.title %></h2>
+    </div>
+    <button type="button" class="btn btn-km-primary btn-sm" data-bs-toggle="modal" data-bs-target="#<%= cfg.modalId %>">
+      <i class="bi bi-plus-lg"></i> Tambah <%= cfg.noun %>
+    </button>
+  </div>
+
+  <%- include('_nav', { financeSection }) %>
+
+  <% if (flash && flash.success === 'created') { %><div class="alert alert-success"><i class="bi bi-check-circle me-1"></i> <%= cfg.noun %> berhasil ditambahkan.</div><% } %>
+  <% if (flash && flash.success === 'updated') { %><div class="alert alert-success"><i class="bi bi-check-circle me-1"></i> <%= cfg.noun %> berhasil diperbarui.</div><% } %>
+  <% if (flash && flash.success === 'deleted') { %><div class="alert alert-success"><i class="bi bi-trash me-1"></i> <%= cfg.noun %> dihapus.</div><% } %>
+  <% if (flash && flash.success === 'restored') { %><div class="alert alert-success"><i class="bi bi-arrow-counterclockwise me-1"></i> Backup finance berhasil di-restore.</div><% } %>
+  <% if (flash && flash.error) { %><div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-1"></i> <%= flash.error %></div><% } %>
+
+  <%- include('_period-filter', { filters, yearOnly: false, extraSelects: [] }) %>
+
+  <div class="km-inv-stats mb-3">
+    <div class="km-inv-stat km-inv-stat--<%= cfg.tone %>">
+      <span class="km-inv-stat__icon"><i class="bi <%= cfg.icon %>"></i></span>
+      <div class="km-inv-stat__body">
+        <div class="km-inv-stat__label">Total <%= cfg.noun %></div>
+        <div class="km-inv-stat__value"><%= formatRupiah(total) %></div>
+        <div class="km-inv-stat__meta"><%= periodLabel %></div>
+      </div>
+    </div>
+    <div class="km-inv-stat km-inv-stat--blue">
+      <span class="km-inv-stat__icon"><i class="bi bi-receipt"></i></span>
+      <div class="km-inv-stat__body">
+        <div class="km-inv-stat__label">Jumlah Transaksi</div>
+        <div class="km-inv-stat__value"><%= items.length %> <small>catatan</small></div>
+        <div class="km-inv-stat__meta">Rata-rata <%= formatRupiah(avg) %></div>
+      </div>
+    </div>
+    <div class="km-inv-stat km-inv-stat--violet">
+      <span class="km-inv-stat__icon"><i class="bi bi-tags"></i></span>
+      <div class="km-inv-stat__body">
+        <div class="km-inv-stat__label">Kategori Terbesar</div>
+        <div class="km-inv-stat__value" title="<%= topCategory || '-' %>"><%= topCategory || '-' %></div>
+        <div class="km-inv-stat__meta"><%= topCategory ? formatRupiah(byCategory[topCategory]) + ' · ' + Math.round(byCategory[topCategory] / (total || 1) * 100) + '%' : 'Belum ada data' %></div>
+      </div>
+    </div>
+    <div class="km-inv-stat km-inv-stat--amber">
+      <span class="km-inv-stat__icon"><i class="bi bi-graph-up-arrow"></i></span>
+      <div class="km-inv-stat__body">
+        <div class="km-inv-stat__label"><%= cfg.noun %> Terbesar</div>
+        <div class="km-inv-stat__value"><%= largest ? formatRupiah(largest.amount) : '-' %></div>
+        <div class="km-inv-stat__meta" title="<%= largest ? largest.description : '' %>"><%= largest ? largest.description : 'Belum ada data' %></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="km-card km-card--flush">
+    <div class="km-inv-list__head">
+      <div>
+        <h5>Daftar <%= cfg.noun %></h5>
+        <p><%= items.length %> catatan pada <%= periodLabel %></p>
+      </div>
+      <% if (items.length) { %>
+        <div class="km-inv-search">
+          <i class="bi bi-search"></i>
+          <input type="search" class="form-control form-control-sm" data-fin-search="#ledgerBody" placeholder="Cari deskripsi, kategori, catatan…" autocomplete="off">
+        </div>
+      <% } %>
+    </div>
+
+    <% if (!items.length) { %>
+      <div class="km-inv-empty">
+        <i class="bi <%= cfg.emptyIcon %>"></i>
+        <strong>Belum ada <%= nounLower %> di <%= periodLabel %></strong>
+        <span><%= cfg.emptyHint %></span>
+        <button type="button" class="btn btn-km-primary btn-sm mt-2" data-bs-toggle="modal" data-bs-target="#<%= cfg.modalId %>"><i class="bi bi-plus-lg"></i> Tambah <%= cfg.noun %></button>
+      </div>
+    <% } else { %>
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0 km-tenant-table km-inv-table">
+          <thead>
+            <tr>
+              <th>Tanggal</th>
+              <th>Deskripsi</th>
+              <th>Kategori</th>
+              <th>Metode</th>
+              <th class="text-end">Jumlah</th>
+              <th class="text-end">Aksi</th>
+            </tr>
+          </thead>
+          <tbody id="ledgerBody">
+            <% items.forEach(function(row) {
+                 const dp = fin.dateParts(row.transaction_date);
+                 const mIcon = fin.methodIcon(row.payment_method);
+            %>
+              <tr class="js-search-row" data-search="<%= [row.description, row.category, row.payment_method, row.notes].filter(Boolean).join(' ').toLowerCase() %>">
+                <td>
+                  <% if (dp) { %>
+                    <div class="km-fin-date" title="<%= fin.fullDate(row.transaction_date) %>">
+                      <strong><%= String(dp.d).padStart(2, '0') %></strong>
+                      <span><%= fin.MONTHS_SHORT[dp.m - 1] %></span>
+                    </div>
+                  <% } else { %>-<% } %>
+                </td>
+                <td class="km-fin-desc">
+                  <div class="km-fin-desc__title"><%= row.description %></div>
+                  <% if (row.notes) { %><div class="km-inv-sub km-fin-desc__note"><i class="bi bi-chat-left-text"></i> <%= row.notes %></div><% } %>
+                </td>
+                <td><span class="km-fin-cat km-fin-cat--<%= fin.toneOf(row.category) %>"><%= row.category || 'Lainnya' %></span></td>
+                <td>
+                  <% if (mIcon) { %>
+                    <span class="km-fin-method"><i class="bi <%= mIcon %>"></i> <%= row.payment_method %></span>
+                  <% } else { %><span class="km-inv-sub">-</span><% } %>
+                </td>
+                <td class="text-end"><span class="km-fin-amount"><%= formatRupiah(row.amount) %></span></td>
+                <td class="text-end">
+                  <div class="km-fin-actions">
+                    <button type="button" class="km-inv-action" data-bs-toggle="modal" data-bs-target="#<%= cfg.editPrefix %><%= row.id %>" title="Edit" aria-label="Edit <%= nounLower %>"><i class="bi bi-pencil"></i></button>
+                    <form method="POST" action="<%= cfg.base %>/<%= row.id %>/delete" class="d-inline" onsubmit="return confirm('Hapus catatan ini?')">
+                      <button type="submit" class="km-inv-action km-inv-action--danger" title="Hapus" aria-label="Hapus <%= nounLower %>"><i class="bi bi-trash3"></i></button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+            <% }); %>
+            <tr class="js-search-empty d-none">
+              <td colspan="6"><div class="km-inv-empty py-4"><i class="bi bi-search"></i><strong>Tidak ditemukan</strong><span>Tidak ada <%= nounLower %> yang cocok dengan pencarian.</span></div></td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr class="km-inv-foot">
+              <td colspan="4">Total <%= periodLabel %></td>
+              <td class="text-end"><span class="km-fin-amount"><%= formatRupiah(total) %></span></td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    <% } %>
+  </div>
+</main>
+
+<datalist id="ledgerMethodList">
+  <option value="Cash"></option>
+  <option value="Transfer Bank"></option>
+  <option value="E-Wallet"></option>
+  <option value="Kartu Kredit"></option>
+</datalist>
+
+<% items.forEach(function(row) { %>
+  <div class="modal fade" id="<%= cfg.editPrefix %><%= row.id %>" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <form method="POST" action="<%= cfg.base %>/<%= row.id %>" class="modal-content">
+        <div class="modal-header"><h5 class="modal-title"><i class="bi bi-pencil-square me-2"></i>Edit <%= cfg.noun %></h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+          <div class="mb-3"><label class="form-label">Deskripsi</label><input name="description" class="form-control" value="<%= row.description %>" required></div>
+          <div class="row g-3 mb-3">
+            <div class="col-sm-6">
+              <label class="form-label">Jumlah</label>
+              <div class="input-group"><span class="input-group-text">Rp</span><input name="amount" type="number" min="0" class="form-control" value="<%= row.amount %>" required></div>
+            </div>
+            <div class="col-sm-6"><label class="form-label">Tanggal</label><input name="transaction_date" type="date" class="form-control" value="<%= String(row.transaction_date).slice(0,10) %>" required></div>
+          </div>
+          <div class="row g-3 mb-3">
+            <div class="col-sm-6">
+              <label class="form-label">Kategori</label>
+              <select name="category" class="form-select">
+                <% categories.forEach(function(c) { %>
+                  <option value="<%= c.name %>" <%= row.category === c.name ? 'selected' : '' %>><%= c.name %></option>
+                <% }); %>
+              </select>
+            </div>
+            <div class="col-sm-6"><label class="form-label">Metode</label><input name="payment_method" class="form-control" list="ledgerMethodList" value="<%= row.payment_method || '' %>" placeholder="Cash / Transfer Bank"></div>
+          </div>
+          <div><label class="form-label">Catatan</label><textarea name="notes" class="form-control" rows="2"><%= row.notes || '' %></textarea></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+          <button type="submit" class="btn btn-km-primary">Simpan</button>
+        </div>
+      </form>
+    </div>
+  </div>
+<% }); %>
+
+<div class="modal fade" id="<%= cfg.modalId %>" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <form method="POST" action="<%= cfg.base %>" class="modal-content">
+      <div class="modal-header"><h5 class="modal-title"><i class="bi bi-plus-circle me-2"></i>Tambah <%= cfg.noun %></h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <div class="mb-3"><label class="form-label">Deskripsi</label><input name="description" class="form-control" placeholder="<%= cfg.placeholder %>" required></div>
+        <div class="row g-3 mb-3">
+          <div class="col-sm-6">
+            <label class="form-label">Jumlah</label>
+            <div class="input-group"><span class="input-group-text">Rp</span><input name="amount" type="number" min="0" class="form-control" placeholder="0" required></div>
+          </div>
+          <div class="col-sm-6"><label class="form-label">Tanggal</label><input name="transaction_date" type="date" class="form-control" value="<%= new Date().toISOString().slice(0,10) %>" required></div>
+        </div>
+        <div class="row g-3 mb-3">
+          <div class="col-sm-6">
+            <label class="form-label">Kategori</label>
+            <select name="category" class="form-select">
+              <% categories.forEach(function(c) { %><option value="<%= c.name %>"><%= c.name %></option><% }); %>
+            </select>
+          </div>
+          <div class="col-sm-6"><label class="form-label">Metode</label><input name="payment_method" class="form-control" list="ledgerMethodList" placeholder="Cash / Transfer Bank"></div>
+        </div>
+        <div><label class="form-label">Catatan</label><textarea name="notes" class="form-control" rows="2"></textarea></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-km-primary">Simpan</button>
+      </div>
+    </form>
+  </div>
+</div>

@@ -1,17 +1,14 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main">
+<main class="km-main km-set">
   <div class="km-topbar">
     <div>
-      <h2>User Manager</h2>
-      <p class="km-subtitle">Kelola akun yang dapat login ke portal management</p>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-people"></i></span>User Manager</h2>
     </div>
     <button type="button" class="btn btn-km-primary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#addUserModal">
       <i class="bi bi-person-plus me-1"></i> Tambah User
     </button>
   </div>
-
-  <%- include('_nav', { settingsSection }) %>
 
   <% if (flash && flash.success === 'created') { %><div class="alert alert-success">User berhasil ditambahkan.</div><% } %>
   <% if (flash && flash.success === 'updated') { %><div class="alert alert-success">User berhasil diperbarui.</div><% } %>
@@ -26,7 +23,7 @@
             <th>Nama</th>
             <th>Email</th>
             <th>Status</th>
-            <th>Terakhir diubah</th>
+            <th class="d-none d-xl-table-cell">Terakhir diubah</th>
             <th class="text-end">Aksi</th>
           </tr>
         </thead>
@@ -36,17 +33,20 @@
           <% } %>
           <% users.forEach(function(u) { %>
             <tr class="<%= u.is_active ? '' : 'opacity-50' %>">
-              <td class="fw-semibold">
-                <%= u.name %>
-                <% if (Number(u.id) === Number(currentAdminId)) { %><span class="badge bg-primary ms-1">Anda</span><% } %>
+              <td>
+                <div class="km-set-user">
+                  <span class="km-set-avatar"><%= String(u.name || u.email || '?').trim().charAt(0).toUpperCase() %></span>
+                  <span class="fw-semibold"><%= u.name %></span>
+                  <% if (Number(u.id) === Number(currentAdminId)) { %><span class="badge bg-primary">Anda</span><% } %>
+                </div>
               </td>
               <td><%= u.email %></td>
               <td>
                 <% if (u.is_active) { %><span class="badge bg-success">Aktif</span>
                 <% } else { %><span class="badge bg-secondary">Nonaktif</span><% } %>
               </td>
-              <td class="text-muted small"><%= u.updated_at ? new Date(u.updated_at).toLocaleString('id-ID') : '—' %></td>
-              <td class="text-end">
+              <td class="text-muted small text-nowrap d-none d-xl-table-cell"><%= u.updated_at ? new Date(u.updated_at).toLocaleString('id-ID') : '—' %></td>
+              <td class="text-end text-nowrap">
                 <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editUserModal-<%= u.id %>">
                   <i class="bi bi-pencil"></i>
                 </button>
@@ -70,7 +70,6 @@
       <div class="modal-header km-package-modal__header">
         <div>
           <h5 class="modal-title mb-0">Tambah User Management</h5>
-          <p class="km-package-modal__subtitle mb-0">Akun baru dapat login ke portal management</p>
         </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>

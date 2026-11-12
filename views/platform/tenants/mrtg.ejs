@@ -1,40 +1,43 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active: 'tenants-mrtg', adminName }) %>
-<main class="km-main">
+<main class="km-main km-set km-mrtg-page">
   <div class="km-topbar">
     <div>
-      <h2>MRTG</h2>
-      <p class="km-subtitle">Graph trafik perangkat yang dipetakan untuk portal management</p>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-graph-up"></i></span>MRTG Tenant</h2>
     </div>
-      <a href="/management/settings/mrtg" class="btn btn-outline-secondary btn-sm">Kelola pemetaan</a>
+    <a href="/management/settings/mrtg" class="btn btn-outline-secondary btn-sm px-3">
+      <i class="bi bi-sliders me-1"></i> Kelola Pemetaan
+    </a>
   </div>
 
-  <div class="nms-mrtg-toolbar">
-    <label class="nms-mrtg-search">
-      <i class="bi bi-search" aria-hidden="true"></i>
-      <input type="search" id="nmsMrtgSearch" class="form-control form-control-sm" placeholder="Cari nama tenant atau router" autocomplete="off" aria-label="Cari nama tenant atau router">
-    </label>
-    <div class="btn-group btn-group-sm" role="group" aria-label="Rentang graph MRTG">
-      <button type="button" class="btn btn-outline-secondary active" data-nms-range="24h">Harian</button>
-      <button type="button" class="btn btn-outline-secondary" data-nms-range="7d">Mingguan</button>
-      <button type="button" class="btn btn-outline-secondary" data-nms-range="30d">Bulanan</button>
-      <button type="button" class="btn btn-outline-secondary" data-nms-range="custom">Custom</button>
+  <div class="km-card km-mrtg-toolbar mb-3">
+    <div class="km-mrtg-toolbar__row">
+      <label class="km-tl-search mb-0">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input type="search" id="nmsMrtgSearch" class="form-control" placeholder="Cari tenant / router…" autocomplete="off" aria-label="Cari nama tenant atau router">
+      </label>
+      <div class="km-mrtg-range" role="group" aria-label="Rentang graph MRTG">
+        <button type="button" class="active" data-nms-range="24h"><i class="bi bi-clock"></i> Harian</button>
+        <button type="button" data-nms-range="7d"><i class="bi bi-calendar-week"></i> Mingguan</button>
+        <button type="button" data-nms-range="30d"><i class="bi bi-calendar3"></i> Bulanan</button>
+        <button type="button" data-nms-range="custom"><i class="bi bi-calendar-range"></i> Custom</button>
+      </div>
     </div>
-    <form id="nmsMrtgCustom" class="nms-mrtg-custom" hidden>
-      <label>Mulai
-        <input type="date" id="nmsMrtgFrom" class="form-control form-control-sm" required aria-label="Tanggal mulai">
-      </label>
-      <label>Akhir
-        <input type="date" id="nmsMrtgTo" class="form-control form-control-sm" required aria-label="Tanggal akhir">
-      </label>
-      <button type="submit" class="btn btn-km-primary btn-sm">Tampilkan</button>
+    <form id="nmsMrtgCustom" class="km-mrtg-custom" hidden>
+      <div>
+        <label class="form-label" for="nmsMrtgFrom">Mulai</label>
+        <input type="date" id="nmsMrtgFrom" class="form-control" required>
+      </div>
+      <div>
+        <label class="form-label" for="nmsMrtgTo">Akhir</label>
+        <input type="date" id="nmsMrtgTo" class="form-control" required>
+      </div>
+      <button type="submit" class="btn btn-km-primary"><i class="bi bi-check2 me-1"></i> Tampilkan</button>
     </form>
   </div>
 
-  <div class="km-card">
-    <div class="row g-3" id="nmsMrtgGrid">
-      <div class="col-12"><div class="nms-mrtg-empty">Memuat graph MRTG…</div></div>
-    </div>
+  <div class="row g-3" id="nmsMrtgGrid">
+    <div class="col-12"><div class="nms-mrtg-empty">Memuat graph MRTG…</div></div>
   </div>
 </main>
 <link rel="stylesheet" href="/css/nms-mrtg.css?v=6">

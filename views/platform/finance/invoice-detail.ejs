@@ -1,14 +1,32 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main">
+<%
+  const monthFull = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+  const ps = String(invoice.period_start || '').slice(0, 7).split('-').map(Number);
+  const periodLabel = ps[0] && ps[1] ? monthFull[ps[1] - 1] + ' ' + ps[0] : '-';
+
+  const owner = invoice.ownerSnapshot || {};
+  const items = Array.isArray(invoice.items) ? invoice.items : [];
+  const pokok = Number(invoice.pokok_amount) || 0;
+  const pajakTotal = (Number(invoice.tax_amount) || 0) + (Number(invoice.bhp_amount) || 0) + (Number(invoice.uso_amount) || 0);
+  const fee = Number(invoice.management_fee_amount) || 0;
+  const itemsSum = items.reduce(function (s, it) { return s + (Number(it.amount) || 0); }, 0);
+  const totalTagihan = Number(invoice.total_amount) || itemsSum || (pokok + pajakTotal + fee);
+  const tenantName = invoice.tenant_name || owner.tenant_name || '-';
+  const ownerName = invoice.owner_name || owner.owner_name || '';
+  const statusLabels = { draft: 'Draft', sent: 'Terkirim', paid: 'Lunas' };
+  const statusIcons = { draft: 'bi-pencil-square', sent: 'bi-send-check', paid: 'bi-check-circle-fill' };
+  const st = statusLabels[invoice.status] ? invoice.status : 'draft';
+%>
+<main class="km-main km-bbs-page">
   <div class="km-topbar">
     <div>
       <h2>Invoice <%= invoice.invoice_number %></h2>
-      <p class="km-subtitle"><%= invoice.tenant_name %> · <%= invoice.period_start %> — <%= invoice.period_end %></p>
+      <p class="km-subtitle"><%= tenantName %> · <%= periodLabel %></p>
     </div>
     <div class="d-flex gap-2 flex-wrap">
-      <a href="/management/finance/invoices" class="btn btn-outline-secondary btn-sm">← Daftar</a>
-      <a href="/management/finance/invoices/<%= invoice.id %>/print" target="_blank" class="btn btn-outline-primary btn-sm"><i class="bi bi-printer me-1"></i> Cetak</a>
+      <a href="<%= typeof backUrl !== 'undefined' && backUrl ? backUrl : '/management/finance/invoices' %>" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left"></i> Kembali</a>
+      <a href="/management/finance/invoices/<%= invoice.id %>/print" target="_blank" class="btn btn-km-primary btn-sm"><i class="bi bi-printer"></i> Cetak</a>
     </div>
   </div>
 
@@ -19,90 +37,52 @@
   <% if (flash && flash.success === 'restored') { %><div class="alert alert-success">Backup finance berhasil di-restore.</div><% } %>
   <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
 
-  <%
-    const pokok = Number(invoice.pokok_amount) || 0;
-    const pajakTotal = (Number(invoice.tax_amount) || 0) + (Number(invoice.bhp_amount) || 0) + (Number(invoice.uso_amount) || 0);
-    const fee = Number(invoice.management_fee_amount) || 0;
-    const totalTagihan = Number(invoice.total_amount) || (pokok + pajakTotal + fee);
-  %>
-
-  <div class="row g-3 mb-4">
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pokok</div><div class="value"><%= formatRupiah(pokok) %></div></div></div>
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pajak</div><div class="value"><%= formatRupiah(pajakTotal) %></div></div></div>
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Mgmt Fee</div><div class="value text-warning"><%= formatRupiah(fee) %></div></div></div>
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Total Tagihan</div><div class="value text-success"><%= formatRupiah(totalTagihan) %></div></div></div>
-  </div>
-
   <div class="row g-3">
-    <div class="col-lg-7">
-      <div class="km-card">
-        <h5 class="mb-3">Rincian Invoice</h5>
-        <table class="table table-sm mb-0">
-          <thead>
-            <tr>
-              <th>Item</th>
-              <th class="text-end">Qty</th>
-              <th class="text-end">Harga</th>
-              <th class="text-end">Jumlah</th>
-            </tr>
-          </thead>
-          <tbody>
-            <% invoice.items.forEach(function(item) { %>
-              <tr>
-                <td><%= item.description %></td>
-                <td class="text-end">
-                  <% if (item.item_type === 'tax') { %>
-                    <%= String(item.qty).replace('.', ',') %>%
-                  <% } else { %>
-                    <%= Number(item.qty) || 1 %>
-                  <% } %>
-                </td>
-                <td class="text-end">
-                  <% if (item.item_type === 'tax') { %>
-                    <%= formatRupiah(item.unit_price) %>
-                  <% } else { %>
-                    <%= formatRupiah(item.unit_price || item.amount) %>
-                  <% } %>
-                </td>
-                <td class="text-end"><%= formatRupiah(item.amount) %></td>
-              </tr>
-            <% }); %>
-            <tr class="fw-bold border-top">
-              <td colspan="3">Total Tagihan</td>
-              <td class="text-end text-success"><%= formatRupiah(totalTagihan) %></td>
-            </tr>
-          </tbody>
-        </table>
-        <% if (invoice.notes) { %>
-          <p class="small mt-3 mb-0" style="color: var(--text-muted)">Catatan: <%= invoice.notes %></p>
-        <% } %>
+    <div class="col-xxl-8 col-xl-8">
+      <div class="km-bbs-wrap">
+        <%- include('_statement', { invoice }) %>
       </div>
     </div>
-    <div class="col-lg-5">
-      <div class="km-card mb-3">
-        <h5 class="mb-3">Pemilik Tenant</h5>
-        <table class="table table-sm mb-0">
-          <tr><td>Nama</td><td><%= invoice.owner_name || invoice.ownerSnapshot.owner_name %></td></tr>
-          <tr><td>Email</td><td><%= invoice.owner_email || invoice.ownerSnapshot.owner_email || '-' %></td></tr>
-          <tr><td>WhatsApp</td><td><%= invoice.owner_phone || invoice.ownerSnapshot.owner_phone || '-' %></td></tr>
-        </table>
-      </div>
-      <div class="km-card">
-        <h5 class="mb-3">Status</h5>
-        <p>Status saat ini: <span class="badge <%= invoice.status === 'paid' ? 'bg-success' : invoice.status === 'sent' ? 'bg-primary' : 'bg-secondary' %>"><%= invoice.status %></span></p>
-        <form method="POST" action="/management/finance/invoices/<%= invoice.id %>/status" class="d-flex gap-2 flex-wrap mb-2">
-          <select name="status" class="form-select form-select-sm" style="max-width: 140px;">
-            <option value="draft" <%= invoice.status === 'draft' ? 'selected' : '' %>>Draft</option>
-            <option value="sent" <%= invoice.status === 'sent' ? 'selected' : '' %>>Terkirim</option>
-            <option value="paid" <%= invoice.status === 'paid' ? 'selected' : '' %>>Lunas</option>
-          </select>
-          <button type="submit" class="btn btn-km-primary btn-sm">Update</button>
+
+    <div class="col-xxl-4 col-xl-4">
+      <div class="km-card km-bbs-side mb-3">
+        <div class="km-bbs-side__head">
+          <h5>Status Invoice</h5>
+          <span class="km-inv-pill km-inv-pill--<%= st %>"><i class="bi <%= statusIcons[st] %>"></i> <%= statusLabels[st] %></span>
+        </div>
+        <form method="POST" action="/management/finance/invoices/<%= invoice.id %>/status" class="km-bbs-status">
+          <% ['draft', 'sent', 'paid'].forEach(function (s) { %>
+            <label class="km-bbs-status__opt km-bbs-status__opt--<%= s %>">
+              <input type="radio" name="status" value="<%= s %>" <%= invoice.status === s ? 'checked' : '' %>>
+              <span><i class="bi <%= statusIcons[s] %>"></i> <%= statusLabels[s] %></span>
+            </label>
+          <% }); %>
+          <button type="submit" class="btn btn-km-primary btn-sm w-100 mt-2"><i class="bi bi-arrow-repeat"></i> Update Status</button>
         </form>
         <% if (invoice.status === 'draft') { %>
-        <form method="POST" action="/management/finance/invoices/<%= invoice.id %>/delete" onsubmit="return confirm('Hapus invoice draft ini?')">
-          <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash me-1"></i> Hapus Draft</button>
-        </form>
+          <form method="POST" action="/management/finance/invoices/<%= invoice.id %>/delete" onsubmit="return confirm('Hapus invoice draft ini?')" class="mt-2">
+            <button type="submit" class="btn btn-outline-danger btn-sm w-100"><i class="bi bi-trash"></i> Hapus Draft</button>
+          </form>
         <% } %>
+      </div>
+
+      <div class="km-card km-bbs-side mb-3">
+        <div class="km-bbs-side__head"><h5>Ringkasan Tagihan</h5></div>
+        <ul class="km-bbs-sum">
+          <li><span>Pokok</span><strong><%= formatRupiah(pokok) %></strong></li>
+          <li><span>Pajak</span><strong><%= formatRupiah(pajakTotal) %></strong></li>
+          <li><span>Mgmt Fee</span><strong><%= formatRupiah(fee) %></strong></li>
+          <li class="is-total"><span>Total Tagihan</span><strong><%= formatRupiah(totalTagihan) %></strong></li>
+        </ul>
+      </div>
+
+      <div class="km-card km-bbs-side">
+        <div class="km-bbs-side__head"><h5>Pemilik Tenant</h5></div>
+        <ul class="km-bbs-owner">
+          <li><i class="bi bi-person"></i><span><%= ownerName || '-' %></span></li>
+          <li><i class="bi bi-envelope"></i><span><%= invoice.owner_email || owner.owner_email || '-' %></span></li>
+          <li><i class="bi bi-whatsapp"></i><span><%= invoice.owner_phone || owner.owner_phone || '-' %></span></li>
+        </ul>
       </div>
     </div>
   </div>

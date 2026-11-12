@@ -59,6 +59,7 @@
     if (label) {
       label.textContent = online + ' dari ' + total + ' NAS merespons';
     }
+    if ($('heroNasValue')) $('heroNasValue').textContent = online + '/' + total;
   }
 
   function setGaugeRadius(radius) {
@@ -206,6 +207,10 @@
       $('healthHostname').textContent = (server.hostname || 'server') + uptime;
     }
     setHealthBadge($('healthStatusBadge'), status, status === 'abnormal' ? 'Abnormal' : 'Normal');
+    if ($('heroServerPill')) {
+      $('heroServerPill').className = 'km-hero-pill ' + (status === 'abnormal' ? 'is-bad' : 'is-ok');
+      $('heroServerValue').textContent = status === 'abnormal' ? 'Abnormal' : 'Normal';
+    }
     setHealthBadge($('healthTaskBadge'), tasks.status || status, tasks.label);
 
     if ($('healthCpuValue')) $('healthCpuValue').textContent = (cpu.percent != null ? cpu.percent : '—') + '%';

@@ -4,7 +4,6 @@
   <div class="km-topbar">
     <div>
       <h2><%= tenant && tenant.id ? 'Edit Tenant' : 'Tambah Tenant' %></h2>
-      <p class="km-subtitle">Provisioning otomatis — tanpa setup manual database/radius</p>
     </div>
     <a href="/management/tenants" class="btn btn-outline-secondary btn-sm">Kembali</a>
   </div>
@@ -41,7 +40,6 @@
         <div class="col-12 mt-2">
           <hr class="my-2">
           <h6 class="mb-1"><i class="bi bi-shield-lock me-1"></i> Kredensial Login Admin Tenant</h6>
-          <p class="km-subtitle small mb-0">Digunakan untuk login di <code>{subdomain}.<%= typeof tenantBaseDomain !== 'undefined' ? tenantBaseDomain : 'kalimasada-app.com' %>/login</code></p>
         </div>
         <div class="col-md-6">
           <label class="form-label">Username Admin *</label>
@@ -51,7 +49,7 @@
             placeholder="admin">
         </div>
         <div class="col-md-6">
-          <label class="form-label">Password Admin<% if (!tenant || !tenant.id) { %> <span class="text-muted fw-normal">(kosongkan = generate otomatis)</span><% } %></label>
+          <label class="form-label">Password Admin</label>
           <div class="input-group">
             <input type="password" name="admin_password" id="adminPassword" class="form-control" autocomplete="new-password"
               placeholder="<%= tenant && tenant.id ? 'Kosongkan jika tidak diubah' : 'Minimal 4 karakter atau kosongkan untuk auto-generate' %>"

@@ -5,6 +5,8 @@ const multer = require('multer');
 const tenantStore = require('../config/platform/tenantStore');
 const tenantBackup = require('../config/platform/tenantBackup');
 const dashboardMetrics = require('../config/platform/dashboardMetrics');
+const platformFinanceService = require('../config/platform/platformFinanceService');
+const financeViewHelpers = require('../config/platform/financeViewHelpers');
 const { platformAuth, platformGuest } = require('../middleware/platformAuth');
 const {
     getTenantBaseDomain,
@@ -156,6 +158,47 @@ router.use('/pop', managementPopRouter);
 router.use('/vpn', managementVpnRouter);
 router.use('/nms', managementNmsRouter);
 
+const DASHBOARD_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+
+async function getCustomerInsights() {
+    const joinedAt = "DATE(COALESCE(NULLIF(created_at, ''), NULLIF(join_date, '')))";
+    const now = new Date();
+    const growth = [];
+    for (let i = 5; i >= 0; i -= 1) {
+        const year = now.getFullYear();
+        const monthIndex = now.getMonth() - i;
+        const end = new Date(year, monthIndex + 1, 0);
+        const endStr = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`;
+        const row = await tenantStore.dbGet(
+            `SELECT COUNT(*) AS total FROM customers WHERE ${joinedAt} IS NULL OR ${joinedAt} <= DATE(?)`,
+            [endStr]
+        );
+        growth.push({ label: DASHBOARD_MONTHS[end.getMonth()], value: Number(row?.total) || 0 });
+    }
+
+    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const newRow = await tenantStore.dbGet(
+        `SELECT COUNT(*) AS total FROM customers WHERE ${joinedAt} >= DATE(?)`,
+        [monthStart]
+    );
+
+    const topTenants = await tenantStore.dbAll(
+        `SELECT t.id, t.name, t.subdomain, COUNT(c.id) AS total
+         FROM tenants t
+         LEFT JOIN customers c ON c.tenant_id = t.id
+         WHERE t.deleted_at IS NULL AND COALESCE(t.is_master, 0) = 0
+         GROUP BY t.id
+         ORDER BY total DESC, t.name COLLATE NOCASE ASC
+         LIMIT 5`
+    );
+
+    return {
+        growth,
+        newThisMonth: Number(newRow?.total) || 0,
+        topTenants: topTenants.map((t) => ({ ...t, total: Number(t.total) || 0 })),
+    };
+}
+
 router.get('/dashboard', async (req, res) => {
     try {
         const stats = await tenantStore.getExtendedGlobalStats();
@@ -167,11 +210,66 @@ router.get('/dashboard', async (req, res) => {
             }))
         );
         const radius = await dashboardMetrics.getRadiusHealth();
+
+        const tenantStatus = { active: 0, suspended: 0, other: 0 };
+        tenants.forEach((t) => {
+            if (t.status === 'active') tenantStatus.active += 1;
+            else if (t.status === 'suspended') tenantStatus.suspended += 1;
+            else tenantStatus.other += 1;
+        });
+
+        const invoiceSummary = { invoiced: 0, pending: 0, paid: 0, sent: 0, draft: 0, total: 0, paidAmount: 0, unpaidAmount: 0 };
+        try {
+            const rows = await platformFinanceService.listTenantInvoiceOverview(
+                platformFinanceService.defaultDateRange({})
+            );
+            rows.forEach((row) => {
+                if (!row.has_invoice) {
+                    invoiceSummary.pending += 1;
+                    return;
+                }
+                const amount = Number(row.total_amount) || 0;
+                invoiceSummary.invoiced += 1;
+                invoiceSummary.total += amount;
+                if (row.status === 'paid') {
+                    invoiceSummary.paid += 1;
+                    invoiceSummary.paidAmount += amount;
+                } else {
+                    if (row.status === 'sent') invoiceSummary.sent += 1;
+                    else invoiceSummary.draft += 1;
+                    invoiceSummary.unpaidAmount += amount;
+                }
+            });
+        } catch (err) {
+            console.warn('[platform] dashboard invoice summary:', err.message);
+        }
+
+        let customerInsights = { growth: [], newThisMonth: 0, topTenants: [] };
+        try {
+            customerInsights = await getCustomerInsights();
+        } catch (err) {
+            console.warn('[platform] dashboard customer insights:', err.message);
+        }
+
+        let financeOverview = null;
+        try {
+            financeOverview = await platformFinanceService.getIncomeExpenseOverview({ months: 6 });
+        } catch (err) {
+            console.warn('[platform] dashboard finance overview:', err.message);
+        }
+
         res.render('platform/dashboard', {
             title: 'Dashboard',
             stats,
             radius,
             recentTenants: recent,
+            tenantStatus,
+            invoiceSummary,
+            customerInsights,
+            financeOverview,
+            fin: financeViewHelpers,
+            formatRupiah,
+            formatRupiahShort,
             adminName: req.session.platformAdminName,
         });
     } catch (err) {
@@ -574,11 +672,41 @@ function tenantActionRedirect(req, id, query = '') {
     return query ? `${base}?${query}` : base;
 }
 
+router.post('/tenants/:id/rename', async (req, res) => {
+    try {
+        const existing = await tenantStore.getTenantById(req.params.id);
+        if (!existing || existing.is_master) {
+            return res.redirect('/management/tenants?error=Tenant+tidak+ditemukan');
+        }
+        const name = String(req.body.name || '').replace(/\s+/g, ' ').trim();
+        if (!name) throw new Error('Nama tenant wajib diisi.');
+        if (name.length > 120) throw new Error('Nama tenant maksimal 120 karakter.');
+        if (name === existing.name) {
+            return res.redirect(tenantActionRedirect(req, existing.id));
+        }
+        await tenantStore.updateTenant(existing.id, { name });
+        await tenantStore.auditLog({
+            tenantId: existing.id,
+            actorType: 'SuperAdmin',
+            actorId: req.session.platformAdminId,
+            action: 'tenant_renamed',
+            details: { from: existing.name, to: name },
+            ip: req.ip,
+        });
+        return res.redirect(tenantActionRedirect(req, existing.id, 'success=renamed'));
+    } catch (err) {
+        return res.redirect(tenantActionRedirect(req, req.params.id, `error=${encodeURIComponent(err.message)}`));
+    }
+});
+
 router.post('/tenants/:id/delete', async (req, res) => {
     try {
         const existing = await tenantStore.getTenantById(req.params.id);
         if (!existing || existing.is_master) {
             return res.redirect('/management/tenants?error=Tenant+tidak+ditemukan');
+        }
+        if (String(req.body.confirm_text || '').trim().toUpperCase() !== 'YES') {
+            throw new Error('Ketik YES untuk konfirmasi. Tenant tidak dihapus.');
         }
         await tenantStore.deleteTenant(req.params.id);
         await tenantStore.auditLog({
@@ -595,7 +723,7 @@ router.post('/tenants/:id/delete', async (req, res) => {
         }
         res.redirect('/management/tenants?success=deleted');
     } catch (err) {
-        res.redirect(`/management/tenants/${req.params.id}?error=${encodeURIComponent(err.message)}`);
+        res.redirect(tenantActionRedirect(req, req.params.id, `error=${encodeURIComponent(err.message)}`));
     }
 });
 

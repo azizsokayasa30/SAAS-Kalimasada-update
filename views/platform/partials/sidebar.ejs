@@ -5,8 +5,6 @@
     const brandLogo = company.logo_path || '/img/logo.png';
     const settingsOpen = active && String(active).startsWith('settings');
     const financeOpen = active && String(active).startsWith('finance');
-    const popOpen = active && String(active).startsWith('pop');
-    const vpnOpen = active && String(active).startsWith('vpn');
     const tenantsOpen = active && String(active).startsWith('tenants');
   %>
   <div class="km-brand">
@@ -51,45 +49,10 @@
       <span>Mobile App</span>
     </a>
 
-    <div class="km-nav-group <%= popOpen ? 'is-open' : '' %>" id="popNavGroup">
-      <button type="button" class="km-nav-item km-nav-item--pop km-nav-btn km-nav-group__toggle <%= popOpen ? 'active' : '' %>" aria-expanded="<%= popOpen ? 'true' : 'false' %>" aria-controls="popSubmenu">
-        <span class="km-nav-icon"><i class="bi bi-geo-alt-fill"></i></span>
-        <span class="km-nav-group__label">POP/CABANG</span>
-        <i class="bi bi-chevron-down km-nav-group__chevron" aria-hidden="true"></i>
-      </button>
-      <div class="km-nav-submenu" id="popSubmenu">
-        <a href="/management/pop" class="km-nav-submenu__item km-nav-item--pop-list <%= active === 'pop-list' ? 'active' : '' %>">
-          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-list-ul"></i></span>
-          <span>Daftar POP/CABANG</span>
-        </a>
-        <a href="/management/pop/switches" class="km-nav-submenu__item km-nav-item--pop-switches <%= active === 'pop-switches' ? 'active' : '' %>">
-          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-hdd-network"></i></span>
-          <span>Switch Manager</span>
-        </a>
-        <a href="/management/pop/radius" class="km-nav-submenu__item km-nav-item--pop-radius <%= active === 'pop-radius' ? 'active' : '' %>">
-          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-shield-check"></i></span>
-          <span>Radius Manager</span>
-        </a>
-      </div>
-    </div>
-
-    <div class="km-nav-group <%= vpnOpen ? 'is-open' : '' %>" id="vpnNavGroup">
-      <button type="button" class="km-nav-item km-nav-item--vpn km-nav-btn km-nav-group__toggle <%= vpnOpen ? 'active' : '' %>" aria-expanded="<%= vpnOpen ? 'true' : 'false' %>" aria-controls="vpnSubmenu">
-        <span class="km-nav-icon"><i class="bi bi-shield-lock-fill"></i></span>
-        <span class="km-nav-group__label">VPN Management</span>
-        <i class="bi bi-chevron-down km-nav-group__chevron" aria-hidden="true"></i>
-      </button>
-      <div class="km-nav-submenu" id="vpnSubmenu">
-        <a href="/management/vpn" class="km-nav-submenu__item km-nav-item--vpn-server <%= active === 'vpn-server' ? 'active' : '' %>">
-          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-hdd-network"></i></span>
-          <span>VPN Server</span>
-        </a>
-        <a href="/management/vpn/devices" class="km-nav-submenu__item km-nav-item--vpn-devices <%= active === 'vpn-devices' ? 'active' : '' %>">
-          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-router"></i></span>
-          <span>Perangkat</span>
-        </a>
-      </div>
-    </div>
+    <a href="/management/pop" class="km-nav-item km-nav-item--pop <%= active === 'pop-list' ? 'active' : '' %>">
+      <span class="km-nav-icon"><i class="bi bi-geo-alt-fill"></i></span>
+      <span>POP/CABANG</span>
+    </a>
 
     <div class="km-nav-group <%= financeOpen ? 'is-open' : '' %>" id="financeNavGroup">
       <button type="button" class="km-nav-item km-nav-item--finance km-nav-btn km-nav-group__toggle <%= financeOpen ? 'active' : '' %>" aria-expanded="<%= financeOpen ? 'true' : 'false' %>" aria-controls="financeSubmenu">
@@ -155,6 +118,18 @@
         <a href="/management/settings/payment" class="km-nav-submenu__item km-nav-item--settings-payment <%= active === 'settings-payment' ? 'active' : '' %>">
           <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-credit-card"></i></span>
           <span>Payment Manager</span>
+        </a>
+        <a href="/management/vpn" class="km-nav-submenu__item km-nav-item--settings-vpn <%= String(active || '').startsWith('settings-vpn') ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-shield-lock"></i></span>
+          <span>VPN Management</span>
+        </a>
+        <a href="/management/pop/switches" class="km-nav-submenu__item km-nav-item--settings-switches <%= active === 'settings-switches' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-hdd-network"></i></span>
+          <span>Switch Manager</span>
+        </a>
+        <a href="/management/pop/radius" class="km-nav-submenu__item km-nav-item--settings-radius <%= active === 'settings-radius' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-shield-check"></i></span>
+          <span>Radius Manager</span>
         </a>
         <a href="/management/settings/activity-logs" class="km-nav-submenu__item km-nav-item--settings-logs <%= active === 'settings-logs' ? 'active' : '' %>">
           <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-journal-text"></i></span>

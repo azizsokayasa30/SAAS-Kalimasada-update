@@ -1,0 +1,118 @@
+<%
+  const company = (typeof platformCompany !== 'undefined' && platformCompany) || {};
+  const inv = (typeof invoice !== 'undefined' && invoice) || null;
+  const monthFull = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+  const parseDate = function (v) {
+    const p = String(v || '').slice(0, 10).split('-').map(Number);
+    return p.length === 3 && p[0] ? { y: p[0], m: p[1], d: p[2] } : null;
+  };
+  const fmtLong = function (v) {
+    const d = parseDate(v);
+    return d ? d.d + ' ' + monthFull[d.m - 1] + ' ' + d.y : '-';
+  };
+
+  let periodText = (typeof periodLabel !== 'undefined' && periodLabel) || '-';
+  if (inv) {
+    const ps = parseDate(inv.period_start);
+    const pe = parseDate(inv.period_end);
+    if (ps && (!pe || (ps.m === pe.m && ps.y === pe.y))) periodText = monthFull[ps.m - 1] + ' ' + ps.y;
+    else if (ps && pe) periodText = fmtLong(inv.period_start) + ' – ' + fmtLong(inv.period_end);
+  }
+
+  const owner = (inv && inv.ownerSnapshot) || {};
+  const items = inv && Array.isArray(inv.items) ? inv.items : [];
+  const itemsSum = items.reduce(function (s, it) { return s + (Number(it.amount) || 0); }, 0);
+  const grandTotal = inv
+    ? (Number(inv.total_amount) || itemsSum || ((Number(inv.pokok_amount) || 0) + (Number(inv.tax_amount) || 0) + (Number(inv.bhp_amount) || 0) + (Number(inv.uso_amount) || 0) + (Number(inv.management_fee_amount) || 0)))
+    : 0;
+  const fillerPx = Math.max(0, 300 - Math.max(items.length, 1) * 26);
+  const toName = (inv && (inv.tenant_name || owner.tenant_name)) || (typeof tenantName !== 'undefined' && tenantName) || '-';
+  const toOwner = (inv && (inv.owner_name || owner.owner_name)) || (typeof ownerName !== 'undefined' && ownerName) || '';
+  const logo = company.logo_path || '/img/logo.png';
+  const emptyMsg = (typeof emptyMessage !== 'undefined' && emptyMessage) || 'Belum ada invoice';
+  const emptyTenant = (typeof emptyTenantId !== 'undefined' && emptyTenantId) || '';
+%>
+<article class="km-bbs">
+  <% if (inv && inv.status === 'paid') { %><div class="km-bbs-stamp">LUNAS</div><% } %>
+
+  <header class="km-bbs-kop">
+    <div class="km-bbs-kop__left">
+      <img class="km-bbs-logo" src="<%= logo %>" alt="<%= company.company_name || 'Logo' %>" onerror="this.src='/img/logo.png'">
+      <div class="km-bbs-contact">
+        <h6>RINCIAN KONTAK</h6>
+        <table>
+          <tr><td>Phone</td><td>:</td><td><%= company.contact_phone || company.contact_whatsapp || '-' %></td></tr>
+          <tr><td>Email</td><td>:</td><td><%= company.contact_email || '-' %></td></tr>
+          <tr><td>Alamat</td><td>:</td><td><%= company.company_address || '-' %></td></tr>
+        </table>
+      </div>
+    </div>
+    <div class="km-bbs-kop__right">
+      <h1 class="km-bbs-title">Branch Billing<br>Statement</h1>
+      <table class="km-bbs-meta">
+        <tr><td>No</td><td><%= inv ? (inv.invoice_number || ('#' + inv.id)) : '-' %></td></tr>
+        <tr><td>Kepada</td><td><%= toName %><% if (toOwner) { %><span><%= toOwner %></span><% } %></td></tr>
+        <tr><td>Periode</td><td><%= periodText %></td></tr>
+        <tr><td>Tanggal</td><td class="is-normal"><%= inv ? fmtLong(inv.created_at) : '-' %></td></tr>
+      </table>
+    </div>
+  </header>
+
+  <div class="km-bbs-table-wrap">
+    <table class="km-bbs-table">
+      <thead>
+        <tr><th>NO</th><th>KETERANGAN</th><th>JUMLAH</th></tr>
+      </thead>
+      <tbody>
+        <% items.forEach(function (item, idx) {
+             const qty = Number(item.qty) || 0;
+             let sub = '';
+             if (item.item_type === 'tax' && qty) sub = String(qty).replace('.', ',') + '% dari pokok';
+             else if (qty > 1 && Number(item.unit_price)) sub = String(qty).replace('.', ',') + ' x ' + formatRupiah(item.unit_price);
+        %>
+          <tr>
+            <td class="no"><%= idx + 1 %></td>
+            <td class="desc"><%= item.description || '-' %><% if (sub) { %><small><%= sub %></small><% } %></td>
+            <td class="amt"><%= formatRupiah(item.amount) %></td>
+          </tr>
+        <% }); %>
+        <% if (!items.length) { %>
+          <tr>
+            <td class="no"></td>
+            <td class="desc">
+              <div class="km-bbs-empty">
+                <i class="bi bi-file-earmark-x"></i>
+                <span><%= emptyMsg %></span>
+                <% if (emptyTenant) { %>
+                  <button type="button" class="btn btn-km-primary btn-sm js-pick-tenant" data-tenant-id="<%= emptyTenant %>"><i class="bi bi-plus-lg"></i> Buat Invoice</button>
+                <% } %>
+              </div>
+            </td>
+            <td class="amt"></td>
+          </tr>
+        <% } %>
+        <tr class="filler" style="height: <%= fillerPx %>px"><td class="no"></td><td class="desc"></td><td class="amt"></td></tr>
+      </tbody>
+      <tfoot>
+        <tr><td colspan="2">GRAND TOTAL</td><td class="amt"><%= formatRupiah(grandTotal) %></td></tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <% if (inv && inv.notes) { %>
+    <div class="km-bbs-notes"><strong>Catatan:</strong> <%= inv.notes %></div>
+  <% } %>
+
+  <footer class="km-bbs-bottom">
+    <div class="km-bbs-bank">
+      <%= company.bank_name || 'BANK NEGARA INDONESIA' %><br>
+      <span class="text-lowercase">a.n</span> : <%= company.bank_account_name || 'PT KALIMASADA INTI SARANA' %><br>
+      <%= company.bank_account_number || '1743379325' %>
+    </div>
+    <div class="km-bbs-sign">
+      <div class="km-bbs-sign__role">FINANCE</div>
+      <img src="<%= logo %>" alt="" onerror="this.style.display='none'">
+      <div class="km-bbs-sign__name"><%= company.company_name || 'PT KALIMASADA INTI SARANA' %></div>
+    </div>
+  </footer>
+</article>

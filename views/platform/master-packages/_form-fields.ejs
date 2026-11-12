@@ -2,7 +2,6 @@
         <div class="km-package-modal__head-text">
           <span class="km-package-modal__kicker"><i class="bi bi-box-seam me-1"></i> Master Paket</span>
           <h5 class="modal-title mb-0"><%= pkg.id ? 'Edit Paket Internet' : 'Tambah Paket Internet' %></h5>
-          <p class="km-package-modal__subtitle mb-0"><%= pkg.id ? 'Perbarui katalog paket untuk semua tenant' : 'Definisikan paket baru di katalog pusat' %></p>
         </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
       </div>
@@ -14,7 +13,6 @@
             <span class="km-form-section__icon km-form-section__icon--blue"><i class="bi bi-card-text"></i></span>
             <div>
               <h6 class="km-form-section__title">Informasi Paket</h6>
-              <p class="km-form-section__desc">Nama dan kecepatan yang ditampilkan ke tenant</p>
             </div>
           </div>
           <div class="km-form-section__body">
@@ -41,7 +39,6 @@
             <span class="km-form-section__icon km-form-section__icon--green"><i class="bi bi-currency-exchange"></i></span>
             <div>
               <h6 class="km-form-section__title">Harga &amp; PPN</h6>
-              <p class="km-form-section__desc">Nominal tagihan sebelum atau sesudah pajak</p>
             </div>
           </div>
           <div class="km-form-section__body">
@@ -85,11 +82,9 @@
             <span class="km-form-section__icon km-form-section__icon--purple"><i class="bi bi-hdd-network"></i></span>
             <div>
               <h6 class="km-form-section__title">Profil &amp; Bandwidth</h6>
-              <p class="km-form-section__desc">Dipakai saat pelanggan PPPoE. Pelanggan IP statik memakai harga &amp; kecepatan paket yang sama.</p>
             </div>
           </div>
           <div class="km-form-section__body">
-            <p class="km-form-section__note text-muted small mb-3"><i class="bi bi-info-circle me-1"></i>Paket default mendukung <strong>PPPoE dan IP statik</strong>. Tenant memilih tipe koneksi saat menambah pelanggan.</p>
             <div class="row g-3">
               <div class="col-md-4">
                 <label class="form-label">Profil PPPoE</label>

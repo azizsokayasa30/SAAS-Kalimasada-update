@@ -1,19 +1,19 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main">
+<main class="km-main km-set">
   <div class="km-topbar">
     <div>
-      <h2>Company Profile</h2>
-      <p class="km-subtitle">Profil perusahaan yang ditampilkan di portal management</p>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-building"></i></span>Company Profile</h2>
     </div>
   </div>
-
-  <%- include('_nav', { settingsSection }) %>
 
   <% if (flash && flash.success === 'saved') { %><div class="alert alert-success">Profil perusahaan berhasil disimpan.</div><% } %>
   <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
 
   <div class="km-card">
+    <div class="km-vpn-card__head">
+      <h5><i class="bi bi-card-text"></i> Identitas &amp; Kontak</h5>
+    </div>
     <form method="POST" action="/management/settings/company" class="km-settings-form">
       <div class="row g-4">
         <div class="col-lg-4 text-center">
@@ -23,7 +23,6 @@
           <div class="mb-0">
             <label class="form-label">Path Logo</label>
             <input type="text" name="logo_path" class="form-control form-control-sm" value="<%= profile.logo_path || '/img/logo.png' %>" id="logoPathInput">
-            <small class="text-muted">Contoh: /img/logo.png</small>
           </div>
         </div>
         <div class="col-lg-8">

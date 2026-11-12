@@ -8,6 +8,7 @@ const platformFinanceService = require('../config/platform/platformFinanceServic
 const platformFinanceBackup = require('../config/platform/platformFinanceBackup');
 const { platformAuth } = require('../middleware/platformAuth');
 const { formatRupiah } = require('../config/platform/formatRupiah');
+const financeViewHelpers = require('../config/platform/financeViewHelpers');
 
 const router = express.Router();
 
@@ -25,6 +26,7 @@ router.use(platformAuth);
 
 router.use((req, res, next) => {
     res.locals.formatRupiah = formatRupiah;
+    res.locals.fin = financeViewHelpers;
     next();
 });
 
@@ -185,6 +187,12 @@ router.get('/payments', async (req, res) => {
             tenants,
             filters: { ...range, tenantId: req.query.tenant_id || '', gateway: req.query.gateway || '', status: req.query.status || '' },
             pagination: { page, totalPages, total: result.total, limit },
+            summary: {
+                total: result.total,
+                totalAmount: result.totalAmount,
+                tenantCount: result.tenantCount,
+                successCount: result.successCount,
+            },
             flash: flashFromQuery(req.query),
         }));
     } catch (err) {
@@ -227,6 +235,17 @@ router.get('/tenant-summary', async (req, res) => {
 });
 
 // ── Invoice Tenant ──
+function invoiceListUrl(periodStart, extra = {}) {
+    const qs = new URLSearchParams(extra);
+    const match = /^(\d{4})-(\d{2})/.exec(String(periodStart || ''));
+    if (match) {
+        qs.set('month', String(Number(match[2])));
+        qs.set('year', match[1]);
+    }
+    const query = qs.toString();
+    return `/management/finance/invoices${query ? `?${query}` : ''}`;
+}
+
 router.get('/invoices', async (req, res) => {
     try {
         const range = platformFinanceService.defaultDateRange(req.query);
@@ -238,8 +257,13 @@ router.get('/invoices', async (req, res) => {
                 acc.tax_amount += Number(row.tax_amount) || 0;
                 acc.management_fee_amount += Number(row.management_fee_amount) || 0;
                 acc.total_amount += Number(row.total_amount) || 0;
-                if (row.has_invoice) acc.invoiced += 1;
-                else acc.pending += 1;
+                if (row.has_invoice) {
+                    acc.invoiced += 1;
+                    if (row.status === 'paid') acc.paid_amount += Number(row.total_amount) || 0;
+                    else acc.unpaid_amount += Number(row.total_amount) || 0;
+                } else {
+                    acc.pending += 1;
+                }
                 return acc;
             },
             {
@@ -247,10 +271,22 @@ router.get('/invoices', async (req, res) => {
                 tax_amount: 0,
                 management_fee_amount: 0,
                 total_amount: 0,
+                paid_amount: 0,
+                unpaid_amount: 0,
                 invoiced: 0,
                 pending: 0,
             }
         );
+
+        const viewTenantId = String(req.query.view || '');
+        const statementRow =
+            rows.find((r) => String(r.tenant_id) === viewTenantId) ||
+            rows.find((r) => r.has_invoice) ||
+            rows[0] ||
+            null;
+        const statementInvoice = statementRow && statementRow.has_invoice
+            ? await platformFinanceService.getTenantInvoice(statementRow.invoice_id)
+            : null;
 
         res.render('platform/finance/invoices', financeLocals(req, {
             title: 'Invoice Tenant',
@@ -259,6 +295,8 @@ router.get('/invoices', async (req, res) => {
             rows,
             totals,
             tenants,
+            statementRow,
+            statementInvoice,
             itemTypes: platformFinanceService.MANUAL_INVOICE_ITEM_TYPES,
             selectedTenantId: req.query.tenant_id || '',
             filters: range,
@@ -284,21 +322,32 @@ router.post('/invoices/create', async (req, res) => {
             details: { invoice_id: invoice.id, invoice_number: invoice.invoice_number, source: 'manual' },
             ip: req.ip,
         });
-        const qs = new URLSearchParams({
-            success: 'created',
-            month: String(invoice.period_start || '').slice(5, 7).replace(/^0/, '') || '',
-            year: String(invoice.period_start || '').slice(0, 4) || '',
-        });
-        if (invoice.period_start) {
-            const dt = new Date(`${invoice.period_start}T00:00:00`);
-            if (!Number.isNaN(dt.getTime())) {
-                qs.set('month', String(dt.getMonth() + 1));
-                qs.set('year', String(dt.getFullYear()));
-            }
-        }
-        res.redirect(`/management/finance/invoices?${qs.toString()}`);
+        res.redirect(invoiceListUrl(invoice.period_start, { success: 'created', view: invoice.tenant_id }));
     } catch (err) {
-        res.redirect(`/management/finance/invoices?error=${encodeURIComponent(err.message)}`);
+        res.redirect(invoiceListUrl(req.body.period_start, {
+            error: err.message,
+            view: req.body.tenant_id || '',
+        }));
+    }
+});
+
+router.post('/invoices/:id/update', async (req, res) => {
+    let invoice = null;
+    try {
+        invoice = await platformFinanceService.getTenantInvoice(req.params.id);
+        if (!invoice) throw new Error('Invoice tidak ditemukan.');
+        await platformFinanceService.updateTenantInvoiceItems(req.params.id, req.body);
+        await tenantStore.auditLog({
+            actorType: 'SuperAdmin',
+            actorId: req.session.platformAdminId,
+            action: 'platform_finance_invoice_updated',
+            tenantId: Number(invoice.tenant_id),
+            details: { invoice_id: invoice.id, invoice_number: invoice.invoice_number },
+            ip: req.ip,
+        });
+        res.redirect(invoiceListUrl(invoice.period_start, { success: 'saved', view: invoice.tenant_id }));
+    } catch (err) {
+        res.redirect(invoiceListUrl(invoice?.period_start, { error: err.message, view: invoice?.tenant_id || '' }));
     }
 });
 
@@ -337,6 +386,7 @@ router.get('/invoices/:id', async (req, res) => {
             active: 'finance-invoices',
             financeSection: 'invoices',
             invoice,
+            backUrl: invoiceListUrl(invoice.period_start, { view: invoice.tenant_id }),
             flash: flashFromQuery(req.query),
         }));
     } catch (err) {
@@ -364,8 +414,12 @@ router.get('/invoices/:id/print', async (req, res) => {
 });
 
 router.post('/invoices/:id/status', async (req, res) => {
+    const toList = req.body.return_to === 'list';
     try {
-        await platformFinanceService.updateTenantInvoiceStatus(req.params.id, req.body.status);
+        const invoice = await platformFinanceService.updateTenantInvoiceStatus(req.params.id, req.body.status);
+        if (toList && invoice) {
+            return res.redirect(invoiceListUrl(invoice.period_start, { success: 'updated', view: invoice.tenant_id }));
+        }
         res.redirect(`/management/finance/invoices/${req.params.id}?success=updated`);
     } catch (err) {
         res.redirect(`/management/finance/invoices/${req.params.id}?error=${encodeURIComponent(err.message)}`);
@@ -374,8 +428,9 @@ router.post('/invoices/:id/status', async (req, res) => {
 
 router.post('/invoices/:id/delete', async (req, res) => {
     try {
+        const invoice = await platformFinanceService.getTenantInvoice(req.params.id);
         await platformFinanceService.deleteTenantInvoice(req.params.id);
-        res.redirect('/management/finance/invoices?success=deleted');
+        res.redirect(invoiceListUrl(invoice?.period_start, { success: 'deleted', view: invoice?.tenant_id || '' }));
     } catch (err) {
         res.redirect(`/management/finance/invoices/${req.params.id}?error=${encodeURIComponent(err.message)}`);
     }

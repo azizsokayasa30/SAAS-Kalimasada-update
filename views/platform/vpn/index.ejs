@@ -1,10 +1,9 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main">
+<main class="km-main km-set">
   <div class="km-topbar">
     <div>
-      <h2>VPN Server</h2>
-      <p class="km-subtitle">WireGuard (RouterOS v7) &amp; L2TP/IPsec (RouterOS v6) — script VPS &amp; MikroTik</p>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-shield-lock"></i></span>VPN Server</h2>
     </div>
   </div>
 
@@ -24,11 +23,8 @@
     const rl2 = rt.l2tp || {};
   %>
   <div class="km-card mb-4" id="vpnMonitorCard">
-    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
-      <div>
-        <h5 class="mb-1">Monitoring Server VPN</h5>
-        <p class="text-muted small mb-0">Status live WireGuard &amp; L2TP di VPS ini. Auto-refresh tiap 10 detik.</p>
-      </div>
+    <div class="km-vpn-card__head">
+      <h5><i class="bi bi-activity"></i> Monitoring Server VPN</h5>
       <div class="d-flex flex-wrap gap-2">
         <button type="button" class="btn btn-outline-secondary btn-sm" id="btnRefreshVpnStatus">
           <i class="bi bi-arrow-clockwise me-1"></i> Refresh
@@ -43,8 +39,8 @@
 
     <div class="row g-3 mb-3">
       <div class="col-md-3 col-6">
-        <div class="border rounded p-3 h-100">
-          <div class="text-muted small">WireGuard</div>
+        <div class="km-vpn-mon h-100">
+          <div class="km-vpn-mon__label">WireGuard</div>
           <div class="fs-5 fw-semibold" id="monWgState">
             <% if (rt.running) { %>
               <span class="badge bg-success">Running</span>
@@ -56,8 +52,8 @@
         </div>
       </div>
       <div class="col-md-3 col-6">
-        <div class="border rounded p-3 h-100">
-          <div class="text-muted small">Peer Online</div>
+        <div class="km-vpn-mon h-100">
+          <div class="km-vpn-mon__label">Peer Online</div>
           <div class="fs-5 fw-semibold" id="monPeerOnline"><%= rp.wireguardOnline != null ? rp.wireguardOnline : '—' %></div>
           <div class="small text-muted mt-1" id="monPeerBreakdown">
             stale <span id="monPeerStale"><%= rp.wireguardStale != null ? rp.wireguardStale : 0 %></span>
@@ -67,8 +63,8 @@
         </div>
       </div>
       <div class="col-md-3 col-6">
-        <div class="border rounded p-3 h-100">
-          <div class="text-muted small">Transfer</div>
+        <div class="km-vpn-mon h-100">
+          <div class="km-vpn-mon__label">Transfer</div>
           <div class="fs-6 fw-semibold" id="monTransfer">↓ <%= rtx.rxLabel || '—' %> / ↑ <%= rtx.txLabel || '—' %></div>
           <div class="small text-muted mt-1">Port <code id="monPort"><%= rt.listenPort || server.listen_port || 51820 %></code>
             <span id="monPortBadge" class="badge <%= rt.portListening ? 'bg-success' : 'bg-secondary' %> ms-1"><%= rt.portListening ? 'listen' : 'n/a' %></span>
@@ -76,8 +72,8 @@
         </div>
       </div>
       <div class="col-md-3 col-6">
-        <div class="border rounded p-3 h-100">
-          <div class="text-muted small">L2TP/IPsec</div>
+        <div class="km-vpn-mon h-100">
+          <div class="km-vpn-mon__label">L2TP/IPsec</div>
           <div class="fs-6 fw-semibold" id="monL2tpState">
             <% if (rl2.xl2tpdActive && rl2.strongswanActive) { %>
               <span class="badge bg-success">Running</span>
@@ -108,101 +104,102 @@
 
   <form method="POST" action="/management/vpn" class="km-settings-form">
     <div class="km-card mb-4">
-      <h5 class="mb-3">Umum</h5>
+      <div class="km-vpn-card__head">
+        <h5><i class="bi bi-sliders"></i> Umum</h5>
+      </div>
       <div class="row g-3">
-        <div class="col-md-6">
-          <label class="form-label">Public Endpoint (IP / hostname VPS)</label>
+        <div class="col-md-6 col-xl-3">
+          <label class="form-label">Public Endpoint</label>
           <input type="text" name="public_endpoint" class="form-control" required
-                 value="<%= server.public_endpoint || '' %>" placeholder="103.132.40.78">
+                 value="<%= server.public_endpoint || '' %>" placeholder="IP / hostname VPS">
         </div>
-        <div class="col-md-3">
-          <label class="form-label">WAN Interface (NAT)</label>
+        <div class="col-md-6 col-xl-3">
+          <label class="form-label">WAN Interface</label>
           <input type="text" name="wan_interface" class="form-control"
                  value="<%= server.wan_interface || 'ens18' %>" placeholder="ens18">
         </div>
-        <div class="col-md-3">
-          <label class="form-label">Tunnel Address Server</label>
+        <div class="col-md-6 col-xl-3">
+          <label class="form-label">Tunnel Address</label>
           <input type="text" name="tunnel_address" class="form-control"
                  value="<%= server.tunnel_address || '10.10.0.1/24' %>" placeholder="10.10.0.1/24">
         </div>
-        <div class="col-md-6">
+        <div class="col-md-6 col-xl-3">
           <label class="form-label">Network Subnet</label>
           <input type="text" name="network_subnet" class="form-control"
                  value="<%= server.network_subnet || '10.10.0.0/24' %>" placeholder="10.10.0.0/24">
-          <small class="text-muted">Pool Tunnel IP bersama untuk WireGuard dan L2TP.</small>
         </div>
       </div>
     </div>
 
-    <div class="km-card mb-4">
-      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-        <h5 class="mb-0">WireGuard <span class="badge <%= wgReady ? 'bg-success' : 'bg-secondary' %>"><%= wgReady ? 'Siap' : 'Belum siap' %></span></h5>
-      </div>
-      <div class="row g-3">
-        <div class="col-md-3">
-          <label class="form-label">Listen Port</label>
-          <input type="number" name="listen_port" class="form-control" min="1" max="65535"
-                 value="<%= server.listen_port || 51820 %>">
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">Interface Name</label>
-          <input type="text" name="interface_name" class="form-control"
-                 value="<%= server.interface_name || 'wg0' %>">
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Server Public Key</label>
-          <input type="text" name="server_public_key" class="form-control font-monospace"
-                 value="<%= server.server_public_key || '' %>" placeholder="Base64 public key" autocomplete="off">
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Server Private Key</label>
-          <div class="input-group">
-            <input type="password" name="server_private_key" id="serverPrivateKey" class="form-control font-monospace"
-                   value="" placeholder="<%= server.server_private_key ? '•••• tersimpan — isi untuk mengganti' : 'Private key WireGuard' %>" autocomplete="off">
-            <button type="button" class="btn btn-outline-secondary" id="togglePrivKey" title="Tampilkan / sembunyikan">
-              <i class="bi bi-eye"></i>
+    <div class="row g-4 mb-4">
+      <div class="col-xl-6">
+        <div class="km-card h-100">
+          <div class="km-vpn-card__head">
+            <h5><i class="bi bi-shield-lock"></i> WireGuard <span class="badge <%= wgReady ? 'bg-success' : 'bg-secondary' %>"><%= wgReady ? 'Siap' : 'Belum siap' %></span></h5>
+            <button type="submit" formaction="/management/vpn/generate-keys" formmethod="POST"
+                    class="btn btn-outline-primary btn-sm" onclick="return confirm('Generate keypair WireGuard baru? Key lama akan diganti.')">
+              <i class="bi bi-key me-1"></i> Generate Keypair
             </button>
           </div>
-          <small class="text-muted">Kosongkan untuk mempertahankan private key yang sudah tersimpan.</small>
+          <div class="row g-3">
+            <div class="col-sm-6">
+              <label class="form-label">Listen Port</label>
+              <input type="number" name="listen_port" class="form-control" min="1" max="65535"
+                     value="<%= server.listen_port || 51820 %>">
+            </div>
+            <div class="col-sm-6">
+              <label class="form-label">Interface</label>
+              <input type="text" name="interface_name" class="form-control"
+                     value="<%= server.interface_name || 'wg0' %>">
+            </div>
+            <div class="col-12">
+              <label class="form-label">Server Public Key</label>
+              <input type="text" name="server_public_key" class="form-control font-monospace"
+                     value="<%= server.server_public_key || '' %>" placeholder="Base64 public key" autocomplete="off">
+            </div>
+            <div class="col-12">
+              <label class="form-label">Server Private Key</label>
+              <div class="input-group">
+                <input type="password" name="server_private_key" id="serverPrivateKey" class="form-control font-monospace"
+                       value="" placeholder="<%= server.server_private_key ? '•••• tersimpan — kosongkan jika tidak diganti' : 'Private key WireGuard' %>" autocomplete="off">
+                <button type="button" class="btn btn-outline-secondary" id="togglePrivKey" title="Tampilkan / sembunyikan">
+                  <i class="bi bi-eye"></i>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-      <div class="mt-3">
-        <button type="submit" formaction="/management/vpn/generate-keys" formmethod="POST"
-                class="btn btn-outline-primary btn-sm" onclick="return confirm('Generate keypair WireGuard baru? Key lama akan diganti.')">
-          <i class="bi bi-key me-1"></i> Generate Keypair WireGuard
-        </button>
-      </div>
-    </div>
 
-    <div class="km-card mb-4">
-      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-        <h5 class="mb-0">L2TP/IPsec <span class="badge <%= l2tpReady ? 'bg-success' : 'bg-secondary' %>"><%= l2tpReady ? 'Siap' : 'Belum siap' %></span></h5>
-      </div>
-      <div class="row g-3">
-        <div class="col-md-8">
-          <label class="form-label">IPsec PSK (shared secret)</label>
-          <div class="input-group">
-            <input type="password" name="ipsec_psk" id="ipsecPsk" class="form-control font-monospace"
-                   value="" placeholder="<%= server.ipsec_psk ? '•••• tersimpan — isi untuk mengganti' : 'Shared secret IPsec' %>" autocomplete="off">
-            <button type="button" class="btn btn-outline-secondary" id="toggleIpsecPsk" title="Tampilkan / sembunyikan">
-              <i class="bi bi-eye"></i>
+      <div class="col-xl-6">
+        <div class="km-card h-100">
+          <div class="km-vpn-card__head">
+            <h5><i class="bi bi-key"></i> L2TP/IPsec <span class="badge <%= l2tpReady ? 'bg-success' : 'bg-secondary' %>"><%= l2tpReady ? 'Siap' : 'Belum siap' %></span></h5>
+            <button type="submit" formaction="/management/vpn/generate-ipsec-psk" formmethod="POST"
+                    class="btn btn-outline-primary btn-sm" onclick="return confirm('Generate IPsec PSK baru? Client L2TP perlu update secret.')">
+              <i class="bi bi-key me-1"></i> Generate PSK
             </button>
           </div>
-          <small class="text-muted">Kosongkan untuk mempertahankan PSK yang sudah tersimpan. Dipakai semua client L2TP.</small>
+          <div class="row g-3">
+            <div class="col-12">
+              <label class="form-label">Status L2TP</label>
+              <select name="l2tp_enabled" class="form-select">
+                <option value="1" <%= Number(server.l2tp_enabled) !== 0 ? 'selected' : '' %>>Aktif</option>
+                <option value="0" <%= Number(server.l2tp_enabled) === 0 ? 'selected' : '' %>>Nonaktif</option>
+              </select>
+            </div>
+            <div class="col-12">
+              <label class="form-label">IPsec PSK</label>
+              <div class="input-group">
+                <input type="password" name="ipsec_psk" id="ipsecPsk" class="form-control font-monospace"
+                       value="" placeholder="<%= server.ipsec_psk ? '•••• tersimpan — kosongkan jika tidak diganti' : 'Shared secret IPsec' %>" autocomplete="off">
+                <button type="button" class="btn btn-outline-secondary" id="toggleIpsecPsk" title="Tampilkan / sembunyikan">
+                  <i class="bi bi-eye"></i>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="col-md-4">
-          <label class="form-label">Status L2TP</label>
-          <select name="l2tp_enabled" class="form-select">
-            <option value="1" <%= Number(server.l2tp_enabled) !== 0 ? 'selected' : '' %>>Aktif</option>
-            <option value="0" <%= Number(server.l2tp_enabled) === 0 ? 'selected' : '' %>>Nonaktif</option>
-          </select>
-        </div>
-      </div>
-      <div class="mt-3">
-        <button type="submit" formaction="/management/vpn/generate-ipsec-psk" formmethod="POST"
-                class="btn btn-outline-primary btn-sm" onclick="return confirm('Generate IPsec PSK baru? Client L2TP perlu update secret.')">
-          <i class="bi bi-key me-1"></i> Generate IPsec PSK
-        </button>
       </div>
     </div>
 
@@ -216,11 +213,8 @@
   <div class="row g-4">
     <div class="col-lg-6">
       <div class="km-card h-100">
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-          <div>
-            <h5 class="mb-1">Script Setup VPS — WireGuard</h5>
-            <p class="text-muted small mb-0"><%= (wgPeers || []).filter(function(p){ return p.is_active; }).length %> peer aktif.</p>
-          </div>
+        <div class="km-vpn-card__head">
+          <h5><i class="bi bi-terminal"></i> Script Setup VPS — WireGuard <span class="badge text-bg-light border"><%= (wgPeers || []).filter(function(p){ return p.is_active; }).length %> peer</span></h5>
           <a href="/management/vpn/vps-script" class="btn btn-sm btn-km-primary">
             <i class="bi bi-download me-1"></i> Download .sh
           </a>
@@ -230,11 +224,8 @@
     </div>
     <div class="col-lg-6">
       <div class="km-card h-100">
-        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
-          <div>
-            <h5 class="mb-1">Script Setup VPS — L2TP/IPsec</h5>
-            <p class="text-muted small mb-0"><%= (l2tpPeers || []).filter(function(p){ return p.is_active; }).length %> peer aktif.</p>
-          </div>
+        <div class="km-vpn-card__head">
+          <h5><i class="bi bi-terminal"></i> Script Setup VPS — L2TP/IPsec <span class="badge text-bg-light border"><%= (l2tpPeers || []).filter(function(p){ return p.is_active; }).length %> peer</span></h5>
           <a href="/management/vpn/vps-l2tp-script" class="btn btn-sm btn-km-primary">
             <i class="bi bi-download me-1"></i> Download .sh
           </a>
@@ -244,9 +235,6 @@
     </div>
   </div>
 
-  <p class="small text-muted mt-3 mb-0">
-    Script MikroTik per perangkat tersedia di menu <a href="/management/vpn/devices">Perangkat</a>.
-  </p>
 </main>
 
 <script>

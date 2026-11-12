@@ -293,7 +293,10 @@ async function getGatewayPayments(filters = {}) {
     const offset = Math.max(Number(filters.offset) || 0, 0);
 
     const countRow = await tenantStore.dbGet(
-        `SELECT COUNT(*) AS total
+        `SELECT COUNT(*) AS total,
+            COALESCE(SUM(p.amount), 0) AS total_amount,
+            COUNT(DISTINCT p.tenant_id) AS tenant_count,
+            COALESCE(SUM(CASE WHEN LOWER(COALESCE(pgt.status, 'settlement')) IN ('settlement', 'paid', 'capture', 'success', 'completed') THEN 1 ELSE 0 END), 0) AS success_count
          FROM payments p
          JOIN invoices i ON i.id = p.invoice_id
          JOIN tenants t ON t.id = p.tenant_id
@@ -332,6 +335,9 @@ async function getGatewayPayments(filters = {}) {
     return {
         rows,
         total: countRow?.total || 0,
+        totalAmount: roundMoney(countRow?.total_amount || 0),
+        tenantCount: countRow?.tenant_count || 0,
+        successCount: countRow?.success_count || 0,
         startDate,
         endDate,
         limit,
@@ -639,18 +645,23 @@ async function createManualTenantInvoice(data = {}, createdBy = null) {
     const periodStart = data.period_start || range.startDate;
     const periodEnd = data.period_end || range.endDate;
     if (!periodStart || !periodEnd) throw new Error('Periode invoice wajib diisi.');
+    if (periodEnd < periodStart) throw new Error('Periode akhir tidak boleh sebelum periode mulai.');
 
     const items = normalizeManualInvoiceItems(data.items);
     if (!items.length) throw new Error('Minimal satu item invoice dengan jumlah lebih dari 0.');
 
     const existing = await tenantStore.dbGet(
-        `SELECT id, invoice_number FROM platform_tenant_invoices
-         WHERE tenant_id = ? AND period_start = ? AND period_end = ?
+        `SELECT id, invoice_number, period_start, period_end FROM platform_tenant_invoices
+         WHERE tenant_id = ?
+           AND DATE(period_start) <= DATE(?)
+           AND DATE(period_end) >= DATE(?)
          ORDER BY id DESC LIMIT 1`,
-        [tenantId, periodStart, periodEnd]
+        [tenantId, periodEnd, periodStart]
     );
     if (existing) {
-        throw new Error(`Tenant ini sudah memiliki invoice ${existing.invoice_number} untuk periode tersebut.`);
+        throw new Error(
+            `Tenant ini sudah memiliki invoice ${existing.invoice_number} (${existing.period_start} s/d ${existing.period_end}) yang beririsan dengan periode tersebut.`
+        );
     }
 
     const totals = summarizeManualInvoiceItems(items);
@@ -714,6 +725,8 @@ async function listTenantInvoiceOverview(filters = {}) {
             inv.id AS invoice_id,
             inv.invoice_number,
             inv.status,
+            inv.period_start,
+            inv.period_end,
             COALESCE(NULLIF(inv.pokok_amount, 0), COALESCE(inv.gross_amount, 0), 0) AS pokok_amount,
             (
                 COALESCE(inv.tax_amount, 0)
@@ -736,8 +749,7 @@ async function listTenantInvoiceOverview(filters = {}) {
                 SELECT pti.id
                 FROM platform_tenant_invoices pti
                 WHERE pti.tenant_id = t.id
-                  AND DATE(pti.period_start) = DATE(?)
-                  AND DATE(pti.period_end) = DATE(?)
+                  AND DATE(pti.period_start) BETWEEN DATE(?) AND DATE(?)
                 ORDER BY pti.id DESC
                 LIMIT 1
             )
@@ -800,6 +812,65 @@ async function getTenantInvoice(id) {
         ownerSnapshot = {};
     }
     return { ...invoice, items, ownerSnapshot };
+}
+
+function normalizeStatementItems(rawItems) {
+    const allowed = new Set(['pokok', 'tax', 'management_fee']);
+    const items = [];
+    for (const raw of toItemList(rawItems)) {
+        if (!raw || typeof raw !== 'object') continue;
+        const description = String(raw.description || '').trim();
+        const amount = parseMoney(raw.amount);
+        if (!description && !amount) continue;
+        if (!description) throw new Error('Keterangan wajib diisi untuk setiap baris yang memiliki jumlah.');
+        if (amount <= 0) throw new Error(`Jumlah untuk "${description}" harus lebih dari 0.`);
+        const itemType = allowed.has(String(raw.item_type || '').trim()) ? String(raw.item_type).trim() : 'pokok';
+        const qty = itemType === 'tax' ? (parseDecimal(raw.qty) || 1) : 1;
+        const unitPrice = itemType === 'tax' ? (parseMoney(raw.unit_price) || amount) : amount;
+        items.push({ item_type: itemType, description, qty, unit_price: unitPrice, amount });
+    }
+    return items;
+}
+
+async function updateTenantInvoiceItems(id, data = {}) {
+    await ensureFinanceSchema();
+    const inv = await getTenantInvoice(id);
+    if (!inv) throw new Error('Invoice tidak ditemukan.');
+    if (inv.status === 'paid') throw new Error('Invoice yang sudah lunas tidak bisa diubah.');
+
+    const items = normalizeStatementItems(data.items);
+    if (!items.length) throw new Error('Minimal satu baris tagihan dengan jumlah lebih dari 0.');
+    const totals = summarizeManualInvoiceItems(items);
+
+    await tenantStore.dbRun(
+        `UPDATE platform_tenant_invoices
+         SET gross_amount = ?, tax_amount = ?, bhp_uso_amount = ?, management_fee_amount = ?, net_amount = ?,
+             pokok_amount = ?, bhp_amount = ?, uso_amount = ?, total_amount = ?, notes = ?,
+             updated_at = datetime('now','localtime')
+         WHERE id = ?`,
+        [
+            totals.pokok_amount,
+            totals.tax_amount,
+            totals.bhp_uso_amount,
+            totals.management_fee_amount,
+            totals.total_amount,
+            totals.pokok_amount,
+            totals.bhp_amount,
+            totals.uso_amount,
+            totals.total_amount,
+            data.notes ? String(data.notes).trim() : null,
+            id,
+        ]
+    );
+    await tenantStore.dbRun('DELETE FROM platform_tenant_invoice_items WHERE invoice_id = ?', [id]);
+    for (const item of items) {
+        await tenantStore.dbRun(
+            `INSERT INTO platform_tenant_invoice_items (invoice_id, description, amount, item_type, qty, unit_price)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [id, item.description, item.amount, item.item_type, item.qty, item.unit_price]
+        );
+    }
+    return getTenantInvoice(id);
 }
 
 async function updateTenantInvoiceStatus(id, status) {
@@ -930,6 +1001,53 @@ async function deleteExpense(id) {
     return { success: true };
 }
 
+async function getIncomeExpenseOverview({ months = 6 } = {}) {
+    await ensureFinanceSchema();
+    const now = new Date();
+    const periods = [];
+    for (let i = months - 1; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        periods.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+    const current = periods[periods.length - 1];
+    const previous = periods[periods.length - 2] || null;
+    const rangeStart = `${periods[0]}-01`;
+
+    const summarize = async (table) => {
+        const monthly = await tenantStore.dbAll(
+            `SELECT strftime('%Y-%m', transaction_date) AS period, COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
+             FROM ${table}
+             WHERE DATE(transaction_date) >= ?
+             GROUP BY period`,
+            [rangeStart]
+        );
+        const byPeriod = Object.fromEntries(monthly.map((r) => [r.period, r]));
+        const recent = await tenantStore.dbAll(
+            `SELECT id, description, category, amount, transaction_date
+             FROM ${table}
+             ORDER BY transaction_date DESC, id DESC
+             LIMIT 5`
+        );
+        return {
+            total: roundMoney(byPeriod[current]?.total || 0),
+            count: Number(byPeriod[current]?.count) || 0,
+            previousTotal: roundMoney((previous && byPeriod[previous]?.total) || 0),
+            monthly: periods.map((p) => roundMoney(byPeriod[p]?.total || 0)),
+            recent,
+        };
+    };
+
+    const income = await summarize('platform_finance_income');
+    const expense = await summarize('platform_finance_expenses');
+    return {
+        periods,
+        income,
+        expense,
+        net: roundMoney(income.total - expense.total),
+        previousNet: roundMoney(income.previousTotal - expense.previousTotal),
+    };
+}
+
 async function listCategories(type = null) {
     await ensureFinanceSchema();
     if (type) {
@@ -1002,6 +1120,7 @@ module.exports = {
     listTenantInvoiceOverview,
     listTenantInvoices,
     getTenantInvoice,
+    updateTenantInvoiceItems,
     updateTenantInvoiceStatus,
     deleteTenantInvoice,
     listIncome,
@@ -1013,5 +1132,6 @@ module.exports = {
     updateExpense,
     deleteExpense,
     listCategories,
+    getIncomeExpenseOverview,
     getPlatformFinancialReport,
 };

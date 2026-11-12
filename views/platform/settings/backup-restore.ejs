@@ -1,76 +1,62 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main">
+<main class="km-main km-set">
   <div class="km-topbar">
     <div>
-      <h2>Backup &amp; Restore</h2>
-      <p class="km-subtitle">Cadangan penuh data operasional billing, portal management, RADIUS, dan konfigurasi server</p>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-database"></i></span>Backup &amp; Restore</h2>
     </div>
   </div>
 
-  <%- include('_nav', { settingsSection }) %>
-
   <% if (flash && flash.success === 'created') { %><div class="alert alert-success">Backup penuh berhasil dibuat<%= flash.filename ? ': ' + flash.filename : '' %>.</div><% } %>
-  <% if (flash && flash.success === 'restored') { %><div class="alert alert-success">Restore backup penuh berhasil. Cadangan pra-restore telah dibuat otomatis.</div><% } %>
+  <% if (flash && flash.success === 'restored') { %><div class="alert alert-success">Restore backup penuh berhasil.</div><% } %>
   <% if (flash && flash.success === 'uploaded') { %><div class="alert alert-success">File backup berhasil diunggah<%= flash.filename ? ': ' + flash.filename : '' %>.</div><% } %>
   <% if (flash && flash.success === 'auto') { %><div class="alert alert-success">Pengaturan auto backup disimpan.</div><% } %>
   <% if (flash && flash.warnings) { %><div class="alert alert-warning"><%= flash.warnings %></div><% } %>
   <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
 
-  <div class="alert alert-warning mb-4">
-    <i class="bi bi-exclamation-triangle-fill me-1"></i>
-    Satu arsip <code>.tar.gz</code> berisi <strong>billing.db</strong> (semua tenant dan data portal),
-    <strong>radius.db</strong> plus konfigurasi FreeRADIUS, konfigurasi nginx, kunci WireGuard,
-    registry mobile app, serta snapshot keuangan platform, registry tenant, dan master paket.
-    File gambar di disk tidak ikut.
-  </div>
-
-  <div class="km-card km-master-backup-card mb-4">
+  <form method="POST" action="/management/settings/backup-restore/auto" class="km-card km-master-backup-card mb-4">
     <div class="km-master-backup-card__head">
-      <div>
-        <h3 class="km-master-backup-card__title"><i class="bi bi-clock-history me-2"></i>Auto Backup</h3>
-        <p class="km-subtitle mb-0">Dicek setiap hari pukul 02:05. Backup baru dibuat jika jarak hari sudah terpenuhi.</p>
+      <h3 class="km-master-backup-card__title"><i class="bi bi-clock-history me-2"></i>Auto Backup</h3>
+      <div class="form-check form-switch mb-0">
+        <input class="form-check-input" type="checkbox" role="switch" id="autoBackupEnabled" name="enabled" value="on" <%= autoBackup && autoBackup.enabled ? 'checked' : '' %>>
+        <label class="form-check-label fw-semibold" for="autoBackupEnabled">Aktif</label>
       </div>
     </div>
-    <form method="POST" action="/management/settings/backup-restore/auto" class="row g-3 align-items-end">
-      <div class="col-md-3">
-        <div class="form-check mt-2">
-          <input class="form-check-input" type="checkbox" id="autoBackupEnabled" name="enabled" value="on" <%= autoBackup && autoBackup.enabled ? 'checked' : '' %>>
-          <label class="form-check-label" for="autoBackupEnabled">Aktifkan auto backup</label>
-        </div>
-      </div>
-      <div class="col-md-3">
+    <div class="row g-3 align-items-end">
+      <div class="col-sm-4">
         <label class="form-label" for="autoBackupInterval">Interval (hari)</label>
         <input type="number" class="form-control" id="autoBackupInterval" name="interval_days" min="1" max="365" required
           value="<%= autoBackup && autoBackup.interval_days ? autoBackup.interval_days : 7 %>">
       </div>
-      <div class="col-md-3">
-        <label class="form-label" for="autoBackupKeep">Maksimal file tersimpan</label>
+      <div class="col-sm-4">
+        <label class="form-label" for="autoBackupKeep">Simpan maks. (file)</label>
         <input type="number" class="form-control" id="autoBackupKeep" name="keep_count" min="1" max="30" required
           value="<%= autoBackup && autoBackup.keep_count ? autoBackup.keep_count : 5 %>">
       </div>
-      <div class="col-md-3">
-        <button type="submit" class="btn btn-km-primary btn-sm px-3">Simpan Jadwal</button>
+      <div class="col-sm-4">
+        <button type="submit" class="btn btn-km-primary w-100"><i class="bi bi-check-lg me-1"></i> Simpan Jadwal</button>
       </div>
-    </form>
-    <p class="text-muted small mt-3 mb-0">
+    </div>
+    <div class="km-backup-last">
+      <i class="bi bi-info-circle"></i>
+      <span>
       <% if (autoBackup && autoBackup.last_filename) { %>
-        Backup terakhir: <code><%= autoBackup.last_filename %></code>
-        <% if (autoBackup.last_run_at) { %>(<%= new Date(autoBackup.last_run_at).toLocaleString('id-ID') %>, <%= autoBackup.last_trigger === 'auto' ? 'otomatis' : 'manual' %>)<% } %>
+        Terakhir: <code><%= autoBackup.last_filename %></code>
+        <% if (autoBackup.last_run_at) { %>· <%= new Date(autoBackup.last_run_at).toLocaleString('id-ID') %> · <%= autoBackup.last_trigger === 'auto' ? 'otomatis' : 'manual' %><% } %>
       <% } else { %>
-        Belum ada backup penuh yang tercatat.
+        Belum ada backup penuh.
       <% } %>
       <% if (autoBackup && autoBackup.last_error) { %>
-        <br>Catatan terakhir: <%= autoBackup.last_error %>
+        <span class="text-danger d-block"><%= autoBackup.last_error %></span>
       <% } %>
-    </p>
-  </div>
+      </span>
+    </div>
+  </form>
 
   <div class="km-card km-master-backup-card">
     <div class="km-master-backup-card__head">
       <div>
         <h3 class="km-master-backup-card__title"><i class="bi bi-archive me-2"></i>Backup Penuh Platform</h3>
-        <p class="km-subtitle mb-0">Data operasional billing dan portal ikut di dalam billing.db. File gambar tidak ikut.</p>
       </div>
       <form method="POST" action="/management/settings/backup-restore/create" class="d-inline">
         <button type="submit" class="btn btn-km-primary btn-sm px-3">
@@ -82,7 +68,6 @@
       <div class="col-lg-5">
         <div class="km-form-section km-form-section--flat h-100">
           <h6 class="km-form-section__title mb-2"><i class="bi bi-upload me-1"></i> Upload &amp; Restore</h6>
-          <p class="text-muted small mb-3">Unggah arsip <code>.tar.gz</code> lalu restore. File <code>.db</code> lama tetap diterima dan hanya memulihkan billing.db.</p>
           <form method="POST" action="/management/settings/backup-restore/upload" enctype="multipart/form-data" class="mb-3">
             <div class="mb-3">
               <input type="file" name="backup_file" class="form-control form-control-sm" accept=".tar.gz,.db,.sqlite,.sqlite3" required>
@@ -91,10 +76,7 @@
               <i class="bi bi-cloud-arrow-up me-1"></i> Upload File
             </button>
           </form>
-          <p class="text-muted small mb-0">
-            Restore menimpa data live. Sistem membuat arsip <code>pre_restore_platform_*.tar.gz</code> sebelum restore penuh.
-            Layanan WireGuard tidak di-restart otomatis.
-          </p>
+          <p class="km-backup-warn mb-0"><i class="bi bi-exclamation-triangle"></i> Restore menimpa data live.</p>
         </div>
       </div>
       <div class="col-lg-7">
@@ -133,7 +115,6 @@
             </tbody>
           </table>
         </div>
-        <p class="text-muted small mt-2 mb-0">Sistem menyimpan maksimal <%= keepCount || 5 %> arsip terbaru (termasuk pre_restore).</p>
       </div>
     </div>
   </div>
@@ -141,7 +122,6 @@
   <% if (legacyBackups && legacyBackups.length) { %>
   <div class="km-card km-master-backup-card mt-4">
     <h3 class="km-master-backup-card__title mb-2"><i class="bi bi-database me-2"></i>Backup lama (billing.db saja)</h3>
-    <p class="text-muted small">File ini dibuat sebelum backup penuh. Restore hanya mengembalikan billing.db.</p>
     <div class="table-responsive">
       <table class="table table-sm table-hover align-middle mb-0 km-tenant-table">
         <thead>

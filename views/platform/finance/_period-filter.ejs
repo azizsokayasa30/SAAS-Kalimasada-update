@@ -1,0 +1,60 @@
+<%
+  const pfMonths = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+  const pfYearOnly = typeof yearOnly !== 'undefined' && !!yearOnly;
+  const pfNow = new Date();
+  const pfYear = Number(filters.year) || pfNow.getFullYear();
+  const pfMonth = Number(filters.month) || (pfNow.getMonth() + 1);
+  const pfExtras = typeof extraSelects !== 'undefined' && Array.isArray(extraSelects) ? extraSelects : [];
+  const pfKeep = pfExtras
+    .filter(function (s) { return s.selected !== undefined && s.selected !== null && String(s.selected) !== ''; })
+    .map(function (s) { return '&' + encodeURIComponent(s.name) + '=' + encodeURIComponent(s.selected); })
+    .join('');
+  let pfPrev;
+  let pfNext;
+  if (pfYearOnly) {
+    pfPrev = '?year=' + (pfYear - 1) + pfKeep;
+    pfNext = '?year=' + (pfYear + 1) + pfKeep;
+  } else {
+    pfPrev = '?month=' + (pfMonth === 1 ? 12 : pfMonth - 1) + '&year=' + (pfMonth === 1 ? pfYear - 1 : pfYear) + pfKeep;
+    pfNext = '?month=' + (pfMonth === 12 ? 1 : pfMonth + 1) + '&year=' + (pfMonth === 12 ? pfYear + 1 : pfYear) + pfKeep;
+  }
+  const pfLabel = pfYearOnly ? 'Tahun ' + pfYear : pfMonths[pfMonth - 1] + ' ' + pfYear;
+  const pfStep = pfYearOnly ? 'Tahun' : 'Bulan';
+  const pfMinY = Math.min(pfNow.getFullYear() - 3, pfYear);
+  const pfMaxY = Math.max(pfNow.getFullYear() + 1, pfYear);
+%>
+<form method="GET" class="km-card km-fin-filter js-period-form mb-3">
+  <div class="km-fin-filter__label">
+    <span class="km-fin-icon"><i class="bi bi-calendar3"></i></span>
+    <div>
+      <small>Periode</small>
+      <strong><%= pfLabel %></strong>
+    </div>
+  </div>
+  <div class="km-fin-filter__controls">
+    <% pfExtras.forEach(function (s) { %>
+      <select name="<%= s.name %>" class="form-select form-select-sm js-autosubmit <%= s.wide ? 'km-fin-filter__wide' : '' %>" aria-label="<%= s.label %>">
+        <option value=""><%= s.allLabel || 'Semua' %></option>
+        <% (s.options || []).forEach(function (o) { %>
+          <option value="<%= o.value %>" <%= String(s.selected) === String(o.value) ? 'selected' : '' %>><%= o.label %></option>
+        <% }); %>
+      </select>
+    <% }); %>
+    <% if (pfExtras.length) { %><span class="km-fin-filter__sep" aria-hidden="true"></span><% } %>
+    <a href="<%= pfPrev %>" class="km-fin-filter__nav" title="<%= pfStep %> sebelumnya" aria-label="<%= pfStep %> sebelumnya"><i class="bi bi-chevron-left"></i></a>
+    <% if (!pfYearOnly) { %>
+      <select name="month" class="form-select form-select-sm js-autosubmit" aria-label="Bulan">
+        <% for (let m = 1; m <= 12; m++) { %>
+          <option value="<%= m %>" <%= pfMonth === m ? 'selected' : '' %>><%= pfMonths[m - 1] %></option>
+        <% } %>
+      </select>
+    <% } %>
+    <select name="year" class="form-select form-select-sm js-autosubmit" aria-label="Tahun">
+      <% for (let y = pfMinY; y <= pfMaxY; y++) { %>
+        <option value="<%= y %>" <%= pfYear === y ? 'selected' : '' %>><%= y %></option>
+      <% } %>
+    </select>
+    <a href="<%= pfNext %>" class="km-fin-filter__nav" title="<%= pfStep %> berikutnya" aria-label="<%= pfStep %> berikutnya"><i class="bi bi-chevron-right"></i></a>
+    <noscript><button type="submit" class="btn btn-km-primary btn-sm">Tampilkan</button></noscript>
+  </div>
+</form>

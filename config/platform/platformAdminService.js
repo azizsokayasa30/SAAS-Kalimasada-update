@@ -169,10 +169,51 @@ const ACTION_LABELS = {
     platform_finance_settings_updated: 'Update pengaturan finance',
     platform_finance_backup: 'Backup data finance platform',
     platform_finance_restore: 'Restore data finance platform',
+    platform_finance_invoice_updated: 'Update invoice rekap tenant',
+    platform_full_backup_created: 'Backup penuh platform',
+    platform_full_backup_auto: 'Backup penuh otomatis',
+    platform_full_backup_settings: 'Update jadwal backup',
+    tenant_created: 'Buat tenant',
+    tenant_updated: 'Update tenant',
+    tenant_deleted: 'Hapus tenant',
+    tenant_renamed: 'Ganti nama tenant',
+    tenant_credentials_updated: 'Update kredensial tenant',
+    tenant_excel_import: 'Import Excel tenant',
+    tenant_registry_backup: 'Backup registry tenant',
+    tenant_registry_restore: 'Restore registry tenant',
+    master_tenant_created: 'Buat master tenant',
+    master_customer_copied: 'Salin pelanggan master',
+    master_customer_copy_cancelled: 'Batal salin pelanggan master',
+    pop_created: 'Buat POP/cabang',
+    pop_updated: 'Update POP/cabang',
+    pop_deleted: 'Hapus POP/cabang',
+    pop_switch_created: 'Tambah switch',
+    pop_switch_updated: 'Update switch',
+    pop_switch_deleted: 'Hapus switch',
+    pop_radius_created: 'Tambah radius',
+    pop_radius_updated: 'Update radius',
+    pop_radius_deleted: 'Hapus radius',
+    vpn_server_updated: 'Update VPN server',
+    vpn_server_restarted: 'Restart VPN server',
+    vpn_keys_generated: 'Generate keypair WireGuard',
+    vpn_ipsec_psk_generated: 'Generate IPsec PSK',
+    vpn_peer_created: 'Tambah perangkat VPN',
+    vpn_peer_updated: 'Update perangkat VPN',
+    vpn_peer_deleted: 'Hapus perangkat VPN',
+    nginx_config_applied: 'Terapkan config Nginx',
+    nginx_tenants_synced: 'Sinkron proxy tenant',
+    nginx_custom_proxy_added: 'Tambah custom proxy',
+    nginx_custom_proxy_removed: 'Hapus custom proxy',
+    mobile_app_config_saved: 'Simpan konfigurasi mobile app',
+    mobile_app_build_started: 'Build APK',
+    mobile_app_keystore_adopted: 'Pakai keystore mobile app',
+    mobile_app_keystore_bootstrap: 'Buat keystore mobile app',
 };
 
 function formatActionLabel(action) {
-    return ACTION_LABELS[action] || action;
+    if (ACTION_LABELS[action]) return ACTION_LABELS[action];
+    const text = String(action || '').replace(/_/g, ' ').trim();
+    return text ? text.charAt(0).toUpperCase() + text.slice(1) : '—';
 }
 
 module.exports = {

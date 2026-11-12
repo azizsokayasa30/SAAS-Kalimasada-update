@@ -1,10 +1,9 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main">
+<main class="km-main km-set">
   <div class="km-topbar">
     <div>
-      <h2>Master Paket Internet</h2>
-      <p class="km-subtitle">Katalog paket untuk semua tenant — tenant hanya bisa memilih, tidak membuat sendiri</p>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-box-seam"></i></span>Master Paket Internet</h2>
     </div>
     <div class="d-flex flex-wrap gap-2">
       <a href="#backup-restore" class="btn btn-outline-secondary btn-sm px-3">
@@ -15,8 +14,6 @@
       </button>
     </div>
   </div>
-
-  <%- include('../settings/_nav', { settingsSection }) %>
 
   <% if (flash && flash.success === 'created') { %>
     <div class="alert alert-success">Master paket berhasil ditambahkan.</div>
@@ -103,7 +100,6 @@
     <div class="km-master-backup-card__head">
       <div>
         <h3 class="km-master-backup-card__title"><i class="bi bi-cloud-arrow-up me-2"></i>Backup &amp; Restore</h3>
-        <p class="km-subtitle mb-0">Cadangkan katalog master paket dan pemilihan tenant ke file JSON</p>
       </div>
       <a href="<%= basePath %>/backup/download" class="btn btn-km-primary btn-sm px-3">
         <i class="bi bi-download me-1"></i> Backup Sekarang
@@ -113,7 +109,6 @@
       <div class="col-lg-5">
         <div class="km-form-section km-form-section--flat h-100">
           <h6 class="km-form-section__title mb-2"><i class="bi bi-arrow-counterclockwise me-1"></i> Restore dari File</h6>
-          <p class="text-muted small mb-3">Unggah file JSON backup untuk mengembalikan katalog paket.</p>
           <form method="POST" action="<%= basePath %>/backup/restore" enctype="multipart/form-data">
             <div class="mb-3">
               <input type="file" name="backup_file" class="form-control form-control-sm" accept=".json,application/json" required>

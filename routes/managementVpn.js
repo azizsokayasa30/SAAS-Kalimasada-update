@@ -45,7 +45,8 @@ router.get('/', async (req, res) => {
         const l2tpPeers = (peers || []).filter((p) => vpnService.normalizeProtocol(p.protocol) === 'l2tp');
         res.render('platform/vpn/index', {
             title: 'VPN Server',
-            active: 'vpn-server',
+            active: 'settings-vpn-server',
+            settingsSection: 'vpn',
             vpnSection: 'server',
             server,
             peers,
@@ -160,7 +161,8 @@ router.get('/devices', async (req, res) => {
         ]);
         res.render('platform/vpn/devices', {
             title: 'Perangkat VPN',
-            active: 'vpn-devices',
+            active: 'settings-vpn-devices',
+            settingsSection: 'vpn',
             vpnSection: 'devices',
             server,
             status,

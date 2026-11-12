@@ -18,16 +18,26 @@ tenants.forEach(function(t) {
 %>
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active: 'tenants', adminName }) %>
-<main class="km-main">
+<main class="km-main km-set km-tenants">
   <div class="km-topbar">
     <div>
-      <h2>Kelola Tenant</h2>
-      <p class="km-subtitle">Kelola unit operasional billing Kalimasada</p>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-buildings"></i></span>Daftar Tenant</h2>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+      <button type="button" class="btn btn-outline-secondary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#backupRestoreModal">
+        <i class="bi bi-cloud-arrow-up me-1"></i> Backup &amp; Restore
+      </button>
+      <a href="/management/tenants/new" class="btn btn-km-primary btn-sm px-3">
+        <i class="bi bi-plus-lg me-1"></i> Tambah Tenant
+      </a>
     </div>
   </div>
 
   <% if (flash && flash.success === 'deleted') { %>
     <div class="alert alert-success">Tenant berhasil dihapus.</div>
+  <% } %>
+  <% if (flash && flash.success === 'renamed') { %>
+    <div class="alert alert-success">Nama tenant berhasil diubah.</div>
   <% } %>
   <% if (flash && flash.success === 'restored') { %>
     <div class="alert alert-success">
@@ -53,101 +63,157 @@ tenants.forEach(function(t) {
     const monthNamesId = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
     const cyFilter = new Date().getFullYear();
   %>
-  <div class="km-card km-card--toolbar mb-3">
-    <form method="GET" action="/management/tenants" class="km-tenant-toolbar">
-      <div class="km-tenant-toolbar__filters">
-        <select name="month" class="form-select form-select-sm" aria-label="Bulan" title="Bulan">
+  <%
+    const paidPct = summary.invoices.total > 0 ? Math.round((summary.invoices.paid / summary.invoices.total) * 100) : 0;
+  %>
+  <div class="row g-3 mb-3">
+    <div class="col-sm-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-blue"><i class="bi bi-buildings"></i></span>
+        <div>
+          <div class="km-set-stat__label">Total Tenant</div>
+          <div class="km-set-stat__value"><%= tenants.length %></div>
+          <div class="km-set-stat__sub">ISP terdaftar</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-green"><i class="bi bi-people"></i></span>
+        <div>
+          <div class="km-set-stat__label">Pelanggan</div>
+          <div class="km-set-stat__value"><%= summary.customers.total.toLocaleString('id-ID') %></div>
+          <div class="km-set-stat__sub"><%= summary.customers.active.toLocaleString('id-ID') %> aktif · <%= summary.customers.new.toLocaleString('id-ID') %> baru</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-purple"><i class="bi bi-receipt"></i></span>
+        <div>
+          <div class="km-set-stat__label">Tagihan</div>
+          <div class="km-set-stat__value"><%= formatRupiah(summary.invoices.total) %></div>
+          <div class="km-set-stat__sub"><%= paidPct %>% lunas</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-orange"><i class="bi bi-hourglass-split"></i></span>
+        <div>
+          <div class="km-set-stat__label">Belum Lunas</div>
+          <div class="km-set-stat__value"><%= formatRupiah(summary.invoices.unpaid) %></div>
+          <div class="km-set-stat__sub">Isolir <%= formatRupiah(summary.invoices.isolir) %></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="km-card km-tl-toolbar mb-3">
+    <form method="GET" action="/management/tenants" class="km-tl-toolbar__form">
+      <div class="km-tl-search">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input type="search" id="tenantSearchInput" class="form-control"
+               placeholder="Cari tenant…" title="Cari nama, subdomain, atau owner" autocomplete="off"
+               aria-label="Cari tenant">
+      </div>
+      <div class="km-tl-period">
+        <span class="km-tl-period__label"><i class="bi bi-calendar3"></i> Periode</span>
+        <select name="month" class="form-select" aria-label="Bulan" title="Bulan">
           <option value="all" <%= String(selectedMonth) === 'all' ? 'selected' : '' %>>Satu tahun</option>
           <% for (let m = 1; m <= 12; m++) { %>
             <option value="<%= m %>" <%= String(selectedMonth) === String(m) ? 'selected' : '' %>><%= monthNamesId[m - 1] %></option>
           <% } %>
         </select>
-        <select name="year" class="form-select form-select-sm" aria-label="Tahun" title="Tahun">
+        <select name="year" class="form-select" aria-label="Tahun" title="Tahun">
           <% for (let y = cyFilter - 3; y <= cyFilter + 1; y++) { %>
             <option value="<%= y %>" <%= selectedYear === y ? 'selected' : '' %>><%= y %></option>
           <% } %>
         </select>
-        <button type="submit" class="btn btn-km-primary btn-sm" title="Filter statistik">
-          <i class="bi bi-funnel"></i><span class="km-tenant-toolbar__btn-text"> Filter</span>
+        <button type="submit" class="btn btn-km-primary" title="Terapkan periode">
+          <i class="bi bi-funnel"></i> Terapkan
         </button>
-        <% if (periodLabel) { %>
-          <span class="km-tenant-toolbar__period"><%= periodLabel %></span>
-        <% } %>
-      </div>
-      <div class="km-tenant-toolbar__actions">
-        <div class="km-tenant-toolbar__search">
-          <i class="bi bi-search" aria-hidden="true"></i>
-          <input type="search" id="tenantSearchInput" class="form-control form-control-sm"
-                 placeholder="Cari tenant…" autocomplete="off"
-                 aria-label="Cari tenant" title="Cari nama, subdomain, atau owner">
-        </div>
-        <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#backupRestoreModal" title="Backup &amp; Restore">
-          <i class="bi bi-cloud-arrow-up"></i><span class="km-tenant-toolbar__btn-text"> Backup</span>
-        </button>
-        <a href="/management/tenants/new" class="btn btn-km-primary btn-sm" title="Tambah Tenant">
-          <i class="bi bi-plus-lg"></i><span class="km-tenant-toolbar__btn-text"> Tambah</span>
-        </a>
       </div>
     </form>
   </div>
 
   <div class="km-card km-card--flush">
+    <div class="km-set-head km-tl-head">
+      <h5><i class="bi bi-list-ul"></i> Semua Tenant <span class="km-tl-count" id="tenantVisibleCount"><%= tenants.length %></span></h5>
+      <% if (periodLabel) { %><span class="km-tl-period-chip"><i class="bi bi-calendar3"></i> <%= periodLabel %></span><% } %>
+    </div>
     <div class="table-responsive">
-      <table class="table table-hover align-middle mb-0 km-tenant-table">
+      <table class="table table-hover align-middle mb-0 km-tl-table">
         <thead>
-          <tr class="km-tenant-table__head-main">
-            <th rowspan="2" class="km-tenant-table__sticky-col">ID</th>
-            <th rowspan="2">Nama Tenant</th>
-            <th rowspan="2">Subdomain</th>
-            <th rowspan="2">Owner</th>
-            <th colspan="4" class="km-th-group km-th-group--customers">Pelanggan</th>
-            <th colspan="4" class="km-th-group km-th-group--invoices">Tagihan <span class="fw-normal" style="opacity:.75;font-size:.75em">(<%= periodLabel %>)</span></th>
-            <th rowspan="2" class="text-end km-tenant-table__actions-col">Aksi</th>
-          </tr>
-          <tr class="km-tenant-table__head-sub">
-            <th class="km-metric-th">Total</th>
-            <th class="km-metric-th">Aktif</th>
-            <th class="km-metric-th">Nonaktif</th>
-            <th class="km-metric-th km-th-group--customers-end">Baru</th>
-            <th class="km-metric-th">Total</th>
-            <th class="km-metric-th">Lunas</th>
-            <th class="km-metric-th">Belum Lunas</th>
-            <th class="km-metric-th km-th-group--invoices-end">Isolir</th>
+          <tr>
+            <th>Tenant</th>
+            <th class="d-none d-xl-table-cell">Owner</th>
+            <th>Pelanggan</th>
+            <th>Tagihan</th>
+            <th class="text-end">Aksi</th>
           </tr>
         </thead>
         <tbody>
           <% if (!tenants.length) { %>
-            <tr id="tenantEmptyRow"><td colspan="13" class="text-center py-4" style="color: var(--text-muted)">Belum ada tenant. Klik "Tambah Tenant" untuk memulai.</td></tr>
+            <tr id="tenantEmptyRow"><td colspan="5">
+              <div class="km-tl-empty">
+                <span class="km-tl-empty__icon"><i class="bi bi-buildings"></i></span>
+                <div class="km-tl-empty__title">Belum ada tenant</div>
+                <a href="/management/tenants/new" class="btn btn-km-primary btn-sm px-3"><i class="bi bi-plus-lg me-1"></i> Tambah Tenant</a>
+              </div>
+            </td></tr>
           <% } %>
-          <tr id="tenantSearchEmptyRow" class="d-none"><td colspan="13" class="text-center py-4" style="color: var(--text-muted)">Tidak ada tenant yang cocok dengan pencarian.</td></tr>
+          <tr id="tenantSearchEmptyRow" class="d-none"><td colspan="5">
+            <div class="km-tl-empty">
+              <span class="km-tl-empty__icon"><i class="bi bi-search"></i></span>
+              <div class="km-tl-empty__title">Tidak ada tenant yang cocok</div>
+            </div>
+          </td></tr>
           <% tenants.forEach(function(t) {
             const c = t.usage.customers || {};
             const inv = t.usage.invoices || {};
+            const invTotal = Number(inv.total) || 0;
+            const rowPaidPct = invTotal > 0 ? Math.min(100, Math.round(((Number(inv.paid) || 0) / invTotal) * 100)) : 0;
             const searchBlob = [t.id, t.name, t.subdomain, t.owner_name, t.owner_email].filter(Boolean).join(' ').toLowerCase();
           %>
             <tr class="tenant-data-row" data-search="<%= searchBlob.replace(/"/g, '&quot;') %>">
-              <td class="km-tenant-table__sticky-col">#<%= t.id %></td>
-              <td class="fw-semibold"><%= t.name %></td>
-              <td><code><%= t.subdomain %></code></td>
               <td>
-                <div><%= t.owner_name %></div>
-                <small style="color: var(--text-muted)"><%= t.owner_email %></small>
-              </td>
-              <td class="km-metric-cell km-metric-cell--num"><%= c.total || 0 %></td>
-              <td class="km-metric-cell km-metric-cell--num km-metric-cell--success"><%= c.active || 0 %></td>
-              <td class="km-metric-cell km-metric-cell--num km-metric-cell--muted"><%= c.inactive || 0 %></td>
-              <td class="km-metric-cell km-metric-cell--num km-metric-cell--accent km-th-group--customers-end"><%= c.new || 0 %></td>
-              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(inv.total) %></td>
-              <td class="km-metric-cell km-metric-cell--money km-metric-cell--success"><%= formatRupiah(inv.paid) %></td>
-              <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning"><%= formatRupiah(inv.unpaid) %></td>
-              <td class="km-metric-cell km-metric-cell--money km-metric-cell--danger km-th-group--invoices-end"><%= formatRupiah(inv.isolir) %></td>
-              <td class="text-end">
-                <div class="km-actions">
-                  <a href="/management/tenants/<%= t.id %>" class="btn btn-sm btn-outline-secondary" title="Detail"><i class="bi bi-eye"></i></a>
-                  <a href="/management/tenants/<%= t.id %>/edit" class="btn btn-sm btn-outline-primary" title="Edit"><i class="bi bi-pencil"></i></a>
-                  <button type="button" class="btn btn-sm btn-outline-danger" title="Hapus"
-                    data-bs-toggle="modal" data-bs-target="#deleteModal-<%= t.id %>"><i class="bi bi-trash"></i></button>
+                <div class="km-set-user">
+                  <span class="km-set-avatar"><%= String(t.name || '?').trim().charAt(0).toUpperCase() %></span>
+                  <div class="lh-sm" style="min-width:0">
+                    <a href="/management/tenants/<%= t.id %>" class="km-tl-name"><%= t.name %></a>
+                    <div class="km-tl-sub"><code><%= t.subdomain %></code> <span class="text-muted">#<%= t.id %></span></div>
+                    <div class="km-tl-sub d-xl-none text-muted"><%= t.owner_email %></div>
+                  </div>
                 </div>
+              </td>
+              <td class="d-none d-xl-table-cell">
+                <div class="fw-semibold small"><%= t.owner_name %></div>
+                <small class="text-muted"><%= t.owner_email %></small>
+              </td>
+              <td>
+                <div class="km-tl-metric"><%= (Number(c.total) || 0).toLocaleString('id-ID') %></div>
+                <div class="km-tl-dots">
+                  <span title="Aktif"><i class="km-dot km-dot--green"></i><%= c.active || 0 %></span>
+                  <span title="Nonaktif"><i class="km-dot km-dot--gray"></i><%= c.inactive || 0 %></span>
+                  <span title="Baru"><i class="km-dot km-dot--blue"></i><%= c.new || 0 %></span>
+                </div>
+              </td>
+              <td>
+                <div class="km-tl-metric"><%= formatRupiah(inv.total) %></div>
+                <div class="km-tl-progress" title="<%= rowPaidPct %>% lunas"><span style="width: <%= rowPaidPct %>%"></span></div>
+                <div class="km-tl-dots">
+                  <span title="Belum lunas"><i class="km-dot km-dot--orange"></i><%= formatRupiah(inv.unpaid) %></span>
+                  <% if (Number(inv.isolir) > 0) { %><span title="Isolir"><i class="km-dot km-dot--red"></i><%= formatRupiah(inv.isolir) %></span><% } %>
+                </div>
+              </td>
+              <td class="text-end text-nowrap">
+                <a href="/management/tenants/<%= t.id %>" class="btn btn-sm btn-outline-secondary" title="Detail"><i class="bi bi-eye"></i></a>
+                <button type="button" class="btn btn-sm btn-outline-info" title="Rename"
+                  data-bs-toggle="modal" data-bs-target="#renameModal-<%= t.id %>"><i class="bi bi-input-cursor-text"></i></button>
+                <a href="/management/tenants/<%= t.id %>/edit" class="btn btn-sm btn-outline-primary" title="Edit"><i class="bi bi-pencil"></i></a>
+                <button type="button" class="btn btn-sm btn-outline-danger" title="Hapus"
+                  data-bs-toggle="modal" data-bs-target="#deleteModal-<%= t.id %>"><i class="bi bi-trash"></i></button>
               </td>
             </tr>
           <% }); %>
@@ -155,59 +221,35 @@ tenants.forEach(function(t) {
       </table>
     </div>
   </div>
-
-  <% if (tenants.length) { %>
-  <section class="km-report-summary" aria-label="Ringkasan keseluruhan tenant">
-    <div class="km-report-summary__header">
-      <div>
-        <h5 class="km-report-summary__title">Ringkasan Keseluruhan</h5>
-        <p class="km-report-summary__subtitle">Total agregat dari <%= tenants.length %> tenant aktif · periode <%= periodLabel %></p>
-      </div>
-      <span class="km-report-summary__badge"><%= tenants.length %> tenant</span>
-    </div>
-
-    <div class="table-responsive">
-      <table class="table mb-0 km-report-summary__table">
-        <thead>
-          <tr>
-            <th colspan="4" class="km-report-summary__label-col">Pelanggan</th>
-            <th colspan="4" class="km-report-summary__label-col">Tagihan</th>
-          </tr>
-          <tr class="km-report-summary__subhead">
-            <th>Total</th>
-            <th>Aktif</th>
-            <th>Nonaktif</th>
-            <th>Baru</th>
-            <th>Total</th>
-            <th>Lunas</th>
-            <th>Belum Lunas</th>
-            <th>Isolir</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr class="km-report-summary__total-row">
-            <td class="km-metric-cell km-metric-cell--num"><%= summary.customers.total %></td>
-            <td class="km-metric-cell km-metric-cell--num km-metric-cell--success"><%= summary.customers.active %></td>
-            <td class="km-metric-cell km-metric-cell--num km-metric-cell--muted"><%= summary.customers.inactive %></td>
-            <td class="km-metric-cell km-metric-cell--num km-metric-cell--accent"><%= summary.customers.new %></td>
-            <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(summary.invoices.total) %></td>
-            <td class="km-metric-cell km-metric-cell--money km-metric-cell--success"><%= formatRupiah(summary.invoices.paid) %></td>
-            <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning"><%= formatRupiah(summary.invoices.unpaid) %></td>
-            <td class="km-metric-cell km-metric-cell--money km-metric-cell--danger"><%= formatRupiah(summary.invoices.isolir) %></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
-  <% } %>
 </main>
 
 <%- include('_backup-restore', { backups }) %>
 
 <% tenants.forEach(function(t) { %>
+  <div class="modal fade km-modal" id="renameModal-<%= t.id %>" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <form method="POST" action="/management/tenants/<%= t.id %>/rename" class="modal-content">
+        <input type="hidden" name="redirect" value="list">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-input-cursor-text me-1"></i> Rename Tenant</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+        </div>
+        <div class="modal-body">
+          <label class="form-label" for="renameInput-<%= t.id %>">Nama tenant</label>
+          <input type="text" id="renameInput-<%= t.id %>" name="name" class="form-control js-rename-input"
+                 value="<%= t.name %>" maxlength="120" required autocomplete="off">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+          <button type="submit" class="btn btn-km-primary"><i class="bi bi-check-lg me-1"></i> Simpan Nama</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div class="modal fade km-modal" id="deleteModal-<%= t.id %>" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
-      <form method="POST" action="/management/tenants/<%= t.id %>/delete" class="modal-content">
+      <form method="POST" action="/management/tenants/<%= t.id %>/delete" class="modal-content js-delete-form">
         <input type="hidden" name="redirect" value="list">
         <div class="modal-header">
           <h5 class="modal-title text-danger"><i class="bi bi-exclamation-triangle me-1"></i> Hapus Tenant</h5>
@@ -220,13 +262,18 @@ tenants.forEach(function(t) {
             <li>Subdomain: <code><%= t.subdomain %></code></li>
             <li>Owner: <%= t.owner_email %></li>
           </ul>
-          <p class="mb-0" style="color: var(--badge-warning-text); background: var(--badge-warning-bg); padding: 0.65rem 0.85rem; border-radius: 8px; font-size: 0.9rem;">
-            Soft delete — data bisnis tenant tetap di database tetapi tenant tidak bisa diakses.
+          <p class="mb-3" style="color: var(--badge-danger-text, #dc2626); background: var(--badge-danger-bg, rgba(220,38,38,.1)); padding: 0.65rem 0.85rem; border-radius: 8px; font-size: 0.9rem;">
+            Data billing tenant ini (pelanggan, tagihan, pembayaran, paket, router, kolektor, dll) ikut dihapus permanen dan tidak bisa dikembalikan. Buat backup dulu jika perlu.
           </p>
+          <label class="form-label small" for="deleteConfirm-<%= t.id %>">
+            Ketik <strong>YES</strong> untuk konfirmasi
+          </label>
+          <input type="text" id="deleteConfirm-<%= t.id %>" name="confirm_text" class="form-control js-delete-confirm"
+                 placeholder="YES" autocomplete="off" required>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
-          <button type="submit" class="btn btn-danger">Ya, Hapus Tenant</button>
+          <button type="submit" class="btn btn-danger js-delete-submit" disabled>Ya, Hapus Tenant</button>
         </div>
       </form>
     </div>
@@ -235,11 +282,34 @@ tenants.forEach(function(t) {
 
 <script>
 (function () {
+  document.querySelectorAll('.js-delete-form').forEach(function (form) {
+    var input = form.querySelector('.js-delete-confirm');
+    var submit = form.querySelector('.js-delete-submit');
+    input.addEventListener('input', function () {
+      submit.disabled = input.value.trim().toUpperCase() !== 'YES';
+    });
+    form.closest('.modal').addEventListener('hidden.bs.modal', function () {
+      input.value = '';
+      submit.disabled = true;
+    });
+    form.closest('.modal').addEventListener('shown.bs.modal', function () { input.focus(); });
+  });
+
+  document.querySelectorAll('.js-rename-input').forEach(function (input) {
+    var original = input.value;
+    var modal = input.closest('.modal');
+    modal.addEventListener('shown.bs.modal', function () { input.focus(); input.select(); });
+    modal.addEventListener('hidden.bs.modal', function () { input.value = original; });
+  });
+})();
+
+(function () {
   var input = document.getElementById('tenantSearchInput');
   if (!input) return;
 
   var rows = Array.prototype.slice.call(document.querySelectorAll('.tenant-data-row'));
   var emptySearch = document.getElementById('tenantSearchEmptyRow');
+  var visibleCount = document.getElementById('tenantVisibleCount');
   var totalCount = rows.length;
 
   function applyFilter() {
@@ -252,6 +322,7 @@ tenants.forEach(function(t) {
       if (match) visible += 1;
     });
     if (emptySearch) emptySearch.classList.toggle('d-none', !(q && visible === 0 && totalCount > 0));
+    if (visibleCount) visibleCount.textContent = visible;
   }
 
   input.addEventListener('input', applyFilter);
