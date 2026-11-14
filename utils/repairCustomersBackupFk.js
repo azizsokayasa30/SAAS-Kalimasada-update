@@ -154,9 +154,11 @@ async function migrateCustomersPhoneNonUniqueSafe(db, logger = console) {
     );
     const seqRow = await dbGet(db, `SELECT seq FROM sqlite_sequence WHERE name = 'customers'`);
 
+    // Harus di luar transaksi: di dalam transaksi PRAGMA ini diabaikan SQLite, dan
+    // DROP TABLE dengan FK aktif memicu ON DELETE CASCADE ke tabel anak.
+    await dbRun(db, 'PRAGMA foreign_keys = OFF');
     await dbRun(db, 'BEGIN IMMEDIATE');
     try {
-        await dbRun(db, 'PRAGMA foreign_keys = OFF');
         await dbRun(db, newTableSql);
 
         const cols = await dbAll(db, 'PRAGMA table_info(customers)');
@@ -178,8 +180,8 @@ async function migrateCustomersPhoneNonUniqueSafe(db, logger = console) {
             if (trg.sql) await dbRun(db, trg.sql);
         }
 
-        await dbRun(db, 'PRAGMA foreign_keys = ON');
         await dbRun(db, 'COMMIT');
+        await dbRun(db, 'PRAGMA foreign_keys = ON');
         return { migrated: true };
     } catch (err) {
         try { await dbRun(db, 'ROLLBACK'); } catch (_) {}

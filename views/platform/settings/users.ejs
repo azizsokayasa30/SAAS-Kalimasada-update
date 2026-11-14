@@ -1,90 +1,186 @@
+<%
+const activeCount = users.filter(function (u) { return u.is_active; }).length;
+const inactiveCount = users.length - activeCount;
+const fmtDate = function (v) {
+  if (!v) return '—';
+  const d = new Date(String(v).replace(' ', 'T'));
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+};
+const avatarTone = function (u) {
+  const s = String(u.name || u.email || '');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % 6;
+};
+const initials = function (u) {
+  const parts = String(u.name || u.email || '?').trim().split(/\s+/).filter(Boolean);
+  return ((parts[0] || '?').charAt(0) + (parts[1] ? parts[1].charAt(0) : '')).toUpperCase();
+};
+%>
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main km-set">
-  <div class="km-topbar">
-    <div>
-      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-people"></i></span>User Manager</h2>
+<main class="km-main km-set km-users">
+  <div class="km-sx-hero km-sx-hero--violet">
+    <div class="km-sx-hero__main">
+      <span class="km-sx-hero__icon"><i class="bi bi-people"></i></span>
+      <div>
+        <div class="km-sx-hero__eyebrow">Pengaturan</div>
+        <h2 class="km-sx-hero__title">User Manager</h2>
+        <p class="km-sx-hero__desc">Kelola akun yang bisa masuk ke portal management. User nonaktif tidak bisa login.</p>
+      </div>
     </div>
-    <button type="button" class="btn btn-km-primary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#addUserModal">
-      <i class="bi bi-person-plus me-1"></i> Tambah User
-    </button>
+    <div class="km-sx-hero__actions">
+      <button type="button" class="btn btn-km-primary px-3" data-bs-toggle="modal" data-bs-target="#addUserModal">
+        <i class="bi bi-person-plus me-1"></i> Tambah User
+      </button>
+    </div>
   </div>
 
-  <% if (flash && flash.success === 'created') { %><div class="alert alert-success">User berhasil ditambahkan.</div><% } %>
-  <% if (flash && flash.success === 'updated') { %><div class="alert alert-success">User berhasil diperbarui.</div><% } %>
-  <% if (flash && flash.success === 'deactivated') { %><div class="alert alert-success">User berhasil dinonaktifkan.</div><% } %>
-  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+  <% if (flash && flash.success === 'created') { %><div class="alert alert-success alert-dismissible fade show km-users-alert"><i class="bi bi-check-circle-fill me-2"></i>User berhasil ditambahkan.<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
+  <% if (flash && flash.success === 'updated') { %><div class="alert alert-success alert-dismissible fade show km-users-alert"><i class="bi bi-check-circle-fill me-2"></i>User berhasil diperbarui.<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
+  <% if (flash && flash.success === 'deactivated') { %><div class="alert alert-success alert-dismissible fade show km-users-alert"><i class="bi bi-check-circle-fill me-2"></i>User berhasil dinonaktifkan.<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
+  <% if (flash && flash.error) { %><div class="alert alert-danger alert-dismissible fade show km-users-alert"><i class="bi bi-exclamation-triangle-fill me-2"></i><%= flash.error %><button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
+
+  <div class="row g-3 mb-3">
+    <div class="col-4">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-blue"><i class="bi bi-people"></i></span>
+        <div>
+          <div class="km-set-stat__label">Total User</div>
+          <div class="km-set-stat__value"><%= users.length %></div>
+          <div class="km-set-stat__sub">Akun management</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-4">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-green"><i class="bi bi-person-check"></i></span>
+        <div>
+          <div class="km-set-stat__label">Aktif</div>
+          <div class="km-set-stat__value"><%= activeCount %></div>
+          <div class="km-set-stat__sub">Bisa login</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-4">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-orange"><i class="bi bi-person-slash"></i></span>
+        <div>
+          <div class="km-set-stat__label">Nonaktif</div>
+          <div class="km-set-stat__value"><%= inactiveCount %></div>
+          <div class="km-set-stat__sub">Akses diblokir</div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <div class="km-card km-card--flush">
+    <div class="km-users-toolbar">
+      <div>
+        <h5 class="km-users-toolbar__title">Daftar User</h5>
+        <div class="km-users-toolbar__sub" id="kmUsersCount"><%= users.length %> user terdaftar</div>
+      </div>
+      <div class="km-users-toolbar__tools">
+        <div class="km-users-search">
+          <i class="bi bi-search"></i>
+          <input type="search" id="kmUsersSearch" class="form-control form-control-sm" placeholder="Cari nama atau email…" autocomplete="off" aria-label="Cari user">
+        </div>
+        <div class="km-users-chips" role="group" aria-label="Filter status">
+          <button type="button" class="km-users-chip active" data-status="all">Semua</button>
+          <button type="button" class="km-users-chip" data-status="active">Aktif</button>
+          <button type="button" class="km-users-chip" data-status="inactive">Nonaktif</button>
+        </div>
+      </div>
+    </div>
     <div class="table-responsive">
-      <table class="table table-hover align-middle mb-0 km-tenant-table">
+      <table class="table table-hover align-middle mb-0 km-tenant-table km-users-table">
         <thead>
           <tr>
-            <th>Nama</th>
-            <th>Email</th>
+            <th>User</th>
+            <th class="d-none d-md-table-cell">Email</th>
             <th>Status</th>
+            <th class="d-none d-xxl-table-cell">Dibuat</th>
             <th class="d-none d-xl-table-cell">Terakhir diubah</th>
             <th class="text-end">Aksi</th>
           </tr>
         </thead>
         <tbody>
           <% if (!users.length) { %>
-            <tr><td colspan="5" class="text-center py-4 text-muted">Belum ada user.</td></tr>
+            <tr><td colspan="6" class="km-users-empty"><i class="bi bi-people"></i><div>Belum ada user.</div></td></tr>
           <% } %>
-          <% users.forEach(function(u) { %>
-            <tr class="<%= u.is_active ? '' : 'opacity-50' %>">
+          <% users.forEach(function(u) { const isSelf = Number(u.id) === Number(currentAdminId); %>
+            <tr class="km-users-row<%= u.is_active ? '' : ' is-inactive' %>"
+                data-status="<%= u.is_active ? 'active' : 'inactive' %>"
+                data-search="<%= String((u.name || '') + ' ' + (u.email || '')).toLowerCase() %>">
               <td>
                 <div class="km-set-user">
-                  <span class="km-set-avatar"><%= String(u.name || u.email || '?').trim().charAt(0).toUpperCase() %></span>
-                  <span class="fw-semibold"><%= u.name %></span>
-                  <% if (Number(u.id) === Number(currentAdminId)) { %><span class="badge bg-primary">Anda</span><% } %>
+                  <span class="km-set-avatar km-ava-<%= u.is_active ? avatarTone(u) : 'off' %>"><%= initials(u) %></span>
+                  <div class="km-users-ident">
+                    <div class="km-users-name">
+                      <span class="fw-semibold"><%= u.name %></span>
+                      <% if (isSelf) { %><span class="km-users-you">Anda</span><% } %>
+                    </div>
+                    <div class="km-users-email d-md-none"><%= u.email %></div>
+                  </div>
                 </div>
               </td>
-              <td><%= u.email %></td>
+              <td class="d-none d-md-table-cell km-users-email-cell"><%= u.email %></td>
               <td>
-                <% if (u.is_active) { %><span class="badge bg-success">Aktif</span>
-                <% } else { %><span class="badge bg-secondary">Nonaktif</span><% } %>
+                <% if (u.is_active) { %><span class="km-users-status km-users-status--on">Aktif</span>
+                <% } else { %><span class="km-users-status km-users-status--off">Nonaktif</span><% } %>
               </td>
-              <td class="text-muted small text-nowrap d-none d-xl-table-cell"><%= u.updated_at ? new Date(u.updated_at).toLocaleString('id-ID') : '—' %></td>
+              <td class="text-muted small text-nowrap d-none d-xxl-table-cell"><%= fmtDate(u.created_at) %></td>
+              <td class="text-muted small text-nowrap d-none d-xl-table-cell"><%= fmtDate(u.updated_at) %></td>
               <td class="text-end text-nowrap">
-                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editUserModal-<%= u.id %>">
-                  <i class="bi bi-pencil"></i>
-                </button>
-                <% if (u.is_active && Number(u.id) !== Number(currentAdminId)) { %>
-                  <form method="POST" action="/management/settings/users/<%= u.id %>/deactivate" class="d-inline" onsubmit="return confirm('Nonaktifkan user ini?')">
-                    <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-person-x"></i></button>
-                  </form>
-                <% } %>
+                <div class="km-users-actions">
+                  <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editUserModal-<%= u.id %>" title="Edit user" aria-label="Edit <%= u.name %>">
+                    <i class="bi bi-pencil"></i>
+                  </button>
+                  <% if (u.is_active && !isSelf) { %>
+                    <form method="POST" action="/management/settings/users/<%= u.id %>/deactivate" class="d-inline" onsubmit="return confirm('Nonaktifkan user <%= String(u.name || '').replace(/['\\]/g, '') %>? User ini tidak akan bisa login lagi.')">
+                      <button type="submit" class="btn btn-sm btn-outline-danger" title="Nonaktifkan user" aria-label="Nonaktifkan <%= u.name %>"><i class="bi bi-person-x"></i></button>
+                    </form>
+                  <% } %>
+                </div>
               </td>
             </tr>
           <% }); %>
+          <tr class="km-users-noresult d-none"><td colspan="6" class="km-users-empty"><i class="bi bi-search"></i><div>Tidak ada user yang cocok.</div></td></tr>
         </tbody>
       </table>
     </div>
   </div>
 </main>
 
-<div class="modal fade km-modal" id="addUserModal" tabindex="-1">
+<div class="modal fade km-modal km-users-modal" id="addUserModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered">
     <form method="POST" action="/management/settings/users" class="modal-content km-package-modal">
       <div class="modal-header km-package-modal__header">
-        <div>
-          <h5 class="modal-title mb-0">Tambah User Management</h5>
+        <div class="km-users-modal-head">
+          <span class="km-users-modal-icon km-tone-blue"><i class="bi bi-person-plus"></i></span>
+          <div>
+            <h5 class="modal-title mb-0">Tambah User Management</h5>
+            <div class="km-users-modal-sub">Akun baru untuk mengakses portal management</div>
+          </div>
         </div>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
       </div>
       <div class="modal-body km-package-modal__body">
         <div class="mb-3">
           <label class="form-label">Nama</label>
-          <input type="text" name="name" class="form-control" required>
+          <input type="text" name="name" class="form-control" required placeholder="Nama lengkap">
         </div>
         <div class="mb-3">
           <label class="form-label">Email</label>
-          <input type="email" name="email" class="form-control" required>
+          <input type="email" name="email" class="form-control" required placeholder="nama@domain.com" autocomplete="off">
         </div>
         <div class="mb-0">
           <label class="form-label">Password</label>
-          <input type="password" name="password" class="form-control" required minlength="6">
+          <div class="input-group km-users-pass">
+            <input type="password" name="password" class="form-control" required minlength="6" autocomplete="new-password">
+            <button type="button" class="btn btn-outline-secondary" data-km-pass-toggle title="Tampilkan password" aria-label="Tampilkan password"><i class="bi bi-eye"></i></button>
+          </div>
           <small class="text-muted">Minimal 6 karakter</small>
         </div>
       </div>
@@ -96,13 +192,19 @@
   </div>
 </div>
 
-<% users.forEach(function(u) { %>
-<div class="modal fade km-modal" id="editUserModal-<%= u.id %>" tabindex="-1">
+<% users.forEach(function(u) { const isSelf = Number(u.id) === Number(currentAdminId); %>
+<div class="modal fade km-modal km-users-modal" id="editUserModal-<%= u.id %>" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered">
     <form method="POST" action="/management/settings/users/<%= u.id %>" class="modal-content km-package-modal">
       <div class="modal-header km-package-modal__header">
-        <h5 class="modal-title mb-0">Edit User</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        <div class="km-users-modal-head">
+          <span class="km-set-avatar km-ava-<%= u.is_active ? avatarTone(u) : 'off' %>"><%= initials(u) %></span>
+          <div>
+            <h5 class="modal-title mb-0">Edit User</h5>
+            <div class="km-users-modal-sub"><%= u.email %></div>
+          </div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
       </div>
       <div class="modal-body km-package-modal__body">
         <div class="mb-3">
@@ -115,15 +217,21 @@
         </div>
         <div class="mb-3">
           <label class="form-label">Password baru <span class="text-muted fw-normal">(kosongkan jika tidak diubah)</span></label>
-          <input type="password" name="password" class="form-control" minlength="6">
+          <div class="input-group km-users-pass">
+            <input type="password" name="password" class="form-control" minlength="6" autocomplete="new-password">
+            <button type="button" class="btn btn-outline-secondary" data-km-pass-toggle title="Tampilkan password" aria-label="Tampilkan password"><i class="bi bi-eye"></i></button>
+          </div>
         </div>
-        <div class="form-check">
-          <input class="form-check-input" type="checkbox" name="is_active" value="1" id="isActiveUser-<%= u.id %>"
-            <%= u.is_active ? 'checked' : '' %>
-            <%= Number(u.id) === Number(currentAdminId) ? 'disabled' : '' %>>
-          <label class="form-check-label" for="isActiveUser-<%= u.id %>">User aktif</label>
+        <div class="km-users-switch">
+          <div class="form-check form-switch mb-0">
+            <input class="form-check-input" type="checkbox" role="switch" name="is_active" value="1" id="isActiveUser-<%= u.id %>"
+              <%= u.is_active ? 'checked' : '' %>
+              <%= isSelf ? 'disabled' : '' %>>
+            <label class="form-check-label" for="isActiveUser-<%= u.id %>">User aktif</label>
+          </div>
+          <small class="text-muted"><%= isSelf ? 'Akun Anda sendiri tidak bisa dinonaktifkan.' : 'Matikan untuk memblokir akses login user ini.' %></small>
         </div>
-        <% if (Number(u.id) === Number(currentAdminId)) { %>
+        <% if (isSelf) { %>
           <input type="hidden" name="is_active" value="1">
         <% } %>
       </div>
@@ -135,5 +243,48 @@
   </div>
 </div>
 <% }); %>
+
+<script>
+(function () {
+  var search = document.getElementById('kmUsersSearch');
+  var chips = document.querySelectorAll('.km-users-chip');
+  var rows = document.querySelectorAll('.km-users-row');
+  var noResult = document.querySelector('.km-users-noresult');
+  var countEl = document.getElementById('kmUsersCount');
+  var total = rows.length;
+  var status = 'all';
+
+  function apply() {
+    var q = (search.value || '').trim().toLowerCase();
+    var shown = 0;
+    rows.forEach(function (row) {
+      var ok = (status === 'all' || row.dataset.status === status) && (!q || row.dataset.search.indexOf(q) !== -1);
+      row.classList.toggle('d-none', !ok);
+      if (ok) shown++;
+    });
+    noResult.classList.toggle('d-none', shown > 0 || total === 0);
+    countEl.textContent = shown === total ? total + ' user terdaftar' : shown + ' dari ' + total + ' user';
+  }
+
+  search.addEventListener('input', apply);
+  chips.forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      chips.forEach(function (c) { c.classList.toggle('active', c === chip); });
+      status = chip.dataset.status;
+      apply();
+    });
+  });
+
+  document.querySelectorAll('.km-modal').forEach(function (modal) {
+    modal.addEventListener('hidden.bs.modal', function () {
+      modal.querySelectorAll('input[type="text"][name="password"]').forEach(function (input) {
+        input.type = 'password';
+        var icon = input.parentElement.querySelector('[data-km-pass-toggle] i');
+        if (icon) icon.className = 'bi bi-eye';
+      });
+    });
+  });
+})();
+</script>
 
 <%- include('../partials/footer') %>

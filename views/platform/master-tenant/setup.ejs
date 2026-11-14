@@ -1,37 +1,59 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active: 'master-tenant', adminName }) %>
-<main class="km-main">
+<main class="km-main km-set km-mt">
   <div class="km-topbar">
     <div>
-      <h2>Setup Master Tenant</h2>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-diagram-3"></i></span>Master Tenant</h2>
     </div>
   </div>
 
   <% if (error) { %>
-    <div class="alert alert-danger"><%= error %></div>
+    <div class="alert alert-danger km-mt-setup__alert"><i class="bi bi-exclamation-triangle me-1"></i> <%= error %></div>
   <% } %>
 
-  <div class="km-card" style="max-width: 560px;">
-    <form method="POST" action="/management/master-tenant/setup">
-      <div class="mb-3">
-        <label class="form-label">Nama Master Tenant</label>
-        <input type="text" name="name" class="form-control" required placeholder="Kalimasada Master">
+  <section class="km-card km-mt-setup">
+    <div class="km-mt-setup__head">
+      <span class="km-mt-setup__icon"><i class="bi bi-diagram-3-fill"></i></span>
+      <div>
+        <h3>Buat Master Tenant</h3>
+        <p>Tenant induk untuk menampung pelanggan dari semua tenant child.</p>
       </div>
-      <div class="mb-3">
-        <label class="form-label">Nama Owner</label>
-        <input type="text" name="owner_name" class="form-control" required>
+    </div>
+
+    <form method="POST" action="/management/master-tenant/setup" class="km-mt-setup__form">
+      <div class="km-mt-field km-mt-field--full">
+        <label for="mtName">Nama Master Tenant</label>
+        <div class="km-mt-input">
+          <i class="bi bi-buildings"></i>
+          <input type="text" id="mtName" name="name" class="form-control" required placeholder="Kalimasada Master">
+        </div>
       </div>
-      <div class="mb-3">
-        <label class="form-label">Email Owner</label>
-        <input type="email" name="owner_email" class="form-control" required>
+      <div class="km-mt-field km-mt-field--full">
+        <label for="mtOwner">Nama Owner</label>
+        <div class="km-mt-input">
+          <i class="bi bi-person"></i>
+          <input type="text" id="mtOwner" name="owner_name" class="form-control" required placeholder="Nama lengkap">
+        </div>
       </div>
-      <div class="mb-3">
-        <label class="form-label">Telepon Owner</label>
-        <input type="text" name="owner_phone" class="form-control" required>
+      <div class="km-mt-field">
+        <label for="mtEmail">Email Owner</label>
+        <div class="km-mt-input">
+          <i class="bi bi-envelope"></i>
+          <input type="email" id="mtEmail" name="owner_email" class="form-control" required placeholder="owner@email.com">
+        </div>
       </div>
-      <button type="submit" class="btn btn-km-primary">Buat Master Tenant</button>
+      <div class="km-mt-field">
+        <label for="mtPhone">Telepon Owner</label>
+        <div class="km-mt-input">
+          <i class="bi bi-whatsapp"></i>
+          <input type="text" id="mtPhone" name="owner_phone" class="form-control" required placeholder="08xxxxxxxxxx" inputmode="tel">
+        </div>
+      </div>
+      <div class="km-mt-setup__actions">
+        <button type="submit" class="btn btn-km-primary px-4"><i class="bi bi-check2-circle me-1"></i> Buat Master Tenant</button>
+      </div>
     </form>
-  </div>
+  </section>
 </main>
 
 <%- include('../partials/footer') %>

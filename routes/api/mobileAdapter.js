@@ -688,6 +688,50 @@ function clampWorkDurationSeconds(raw) {
     return Math.min(n, maxSec);
 }
 
+/** Teks penanganan tanpa baris header `[...]` dan lampiran foto / panjang kabel. */
+function cleanCompletionText(text) {
+    return String(text || '')
+        .split('\n')
+        .filter((line) => {
+            const t = line.trim();
+            return t && !/^\[.*\]$/.test(t) && !t.startsWith('\u{1F4F7}') && !t.startsWith('\u{1F4CF}');
+        })
+        .join('\n')
+        .trim();
+}
+
+/** Penyelesaian PSB dari blok `[Selesai ...]` terakhir di `installation_jobs.notes`. */
+function extractInstallCompletionNote(row) {
+    const notes = String(row.notes || '');
+    const idx = notes.lastIndexOf('[Selesai');
+    if (idx >= 0) {
+        const text = cleanCompletionText(notes.slice(idx));
+        if (text) return text;
+    }
+    return cleanCompletionText(row.completion_notes) || null;
+}
+
+/** Penyelesaian tiket dari entri `notes` (JSON) terakhir berstatus resolved/closed. */
+function extractTroubleCompletion(row) {
+    let entries = [];
+    try {
+        const parsed = JSON.parse(row.notes || '[]');
+        if (Array.isArray(parsed)) entries = parsed;
+    } catch (_) {
+        return { note: null, at: null };
+    }
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const e = entries[i] || {};
+        const st = String(e.status || '').toLowerCase();
+        const content = String(e.content || '');
+        if (st === 'resolved' || st === 'closed' || content.startsWith('[Penyelesaian')) {
+            const note = cleanCompletionText(content);
+            if (note) return { note, at: e.timestamp || null };
+        }
+    }
+    return { note: null, at: null };
+}
+
 function parseCompletionLatLng(body) {
     if (!body || typeof body !== 'object') return { lat: null, lng: null };
     const lat = parseFloat(
@@ -1669,7 +1713,7 @@ router.get('/customers', verifyToken, allowFieldOps, async (req, res) => {
 
     const sql = `
         SELECT c.id, c.customer_id, c.name, c.phone, c.email, c.status, c.address,
-               c.username,
+               c.username, c.join_date, c.created_at,
                c.area_id, c.latitude, c.longitude, c.pppoe_username,
                COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, '') AS area,
                ar.nama_area AS nama_area,
@@ -1775,7 +1819,7 @@ router.get('/customers/:customerId/ppp-session', verifyToken, requireTechnician,
     try {
         const customer = await new Promise((resolve, reject) => {
             const params = [customerId];
-            let sql = 'SELECT id, pppoe_username, username FROM customers WHERE id = ?';
+            let sql = 'SELECT id, pppoe_username, username, join_date, created_at FROM customers WHERE id = ?';
             if (tenantId != null) {
                 sql += ' AND tenant_id = ?';
                 params.push(tenantId);
@@ -1785,6 +1829,7 @@ router.get('/customers/:customerId/ppp-session', verifyToken, requireTechnician,
         if (!customer) {
             return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
         }
+        const joinDate = customer.join_date || customer.created_at || null;
         const login =
             (customer.pppoe_username && String(customer.pppoe_username).trim()) ||
             (customer.username && String(customer.username).trim()) ||
@@ -1794,6 +1839,7 @@ router.get('/customers/:customerId/ppp-session', verifyToken, requireTechnician,
                 success: true,
                 data: {
                     online: false,
+                    join_date: joinDate,
                     login_checked: '',
                     mac_address: null,
                     ip_address: null,
@@ -1892,6 +1938,7 @@ router.get('/customers/:customerId/ppp-session', verifyToken, requireTechnician,
             success: true,
             data: {
                 online: Boolean(session || mikrotikSession),
+                join_date: joinDate,
                 auth_mode: authMode || 'unknown',
                 login_checked: login,
                 mac_address: macAddress,
@@ -1936,6 +1983,73 @@ router.get('/customers/:customerId/traffic', verifyToken, requireTechnician, req
     } catch (error) {
         logger.error('[mobile-adapter] customers/:id/traffic', error);
         return res.status(500).json({ success: false, message: error.message || 'Gagal memuat trafik' });
+    }
+});
+
+/** Hapus sesi /ppp/active pelanggan di semua NAS tenant agar CPE dial ulang PPPoE. */
+router.post('/customers/:customerId/ppp-reconnect', verifyToken, requireTechnician, requireAreaManagerCustomerParam, async (req, res) => {
+    const customerId = parseInt(String(req.params.customerId), 10);
+    if (!Number.isFinite(customerId) || customerId <= 0) {
+        return res.status(400).json({ success: false, message: 'ID pelanggan tidak valid' });
+    }
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
+    try {
+        const customer = await dbGetP(
+            'SELECT id, pppoe_username, username FROM customers WHERE id = ? AND tenant_id = ?',
+            [customerId, tenantId]
+        );
+        if (!customer) {
+            return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+        }
+        const login =
+            (customer.pppoe_username && String(customer.pppoe_username).trim()) ||
+            (customer.username && String(customer.username).trim()) ||
+            '';
+        if (!login) {
+            return res.status(400).json({ success: false, message: 'Login PPPoE pelanggan belum diatur' });
+        }
+
+        const { disconnectPPPoEUser } = require('../../config/mikrotik');
+        const routers = await dbAllP('SELECT * FROM routers WHERE tenant_id = ? ORDER BY id', [tenantId]);
+        if (!routers || routers.length === 0) {
+            return res.status(400).json({ success: false, message: 'Tidak ada router yang dikonfigurasi' });
+        }
+
+        let disconnected = 0;
+        const routersHit = [];
+        const failures = [];
+        for (const r of routers) {
+            const result = await disconnectPPPoEUser(login, r);
+            if (result && result.success === false) {
+                failures.push(r.name || r.nas_ip || String(r.id));
+            } else if (result && result.disconnected > 0) {
+                disconnected += result.disconnected;
+                routersHit.push(r.name || r.nas_ip || String(r.id));
+            }
+        }
+
+        logger.info(
+            `[mobile-adapter] ppp-reconnect ${login} by ${req.user && (req.user.username || req.user.id)}: ` +
+            `${disconnected} sesi diputus (${routersHit.join(', ') || '-'})`
+        );
+
+        if (disconnected === 0 && failures.length === routers.length) {
+            return res.status(502).json({ success: false, message: 'Gagal terhubung ke router' });
+        }
+        return res.json({
+            success: true,
+            disconnected,
+            routers: routersHit,
+            message: disconnected > 0
+                ? `Sesi PPPoE ${login} diputus, menunggu modem konek ulang`
+                : `${login} tidak sedang online`
+        });
+    } catch (error) {
+        logger.error('[mobile-adapter] customers/:id/ppp-reconnect', error);
+        return res.status(500).json({ success: false, message: error.message || 'Gagal reconnect PPPoE' });
     }
 });
 
@@ -3944,6 +4058,7 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
 
     const installSql = `
         SELECT ij.*, p.name AS package_name,
+            (SELECT t.name FROM technicians t WHERE t.id = ij.assigned_technician_id) AS technician_name,
             COALESCE(
                 (SELECT COALESCE(NULLIF(TRIM(pppoe_username), ''), NULLIF(TRIM(username), ''))
                  FROM customers WHERE id = ij.customer_id AND NULLIF(ij.customer_id, 0) IS NOT NULL
@@ -4003,7 +4118,9 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
             return res.status(500).json({ success: false, message: 'Gagal memuat tugas instalasi' });
         }
         db.all(
-            `SELECT * FROM trouble_reports
+            `SELECT trouble_reports.*,
+                    (SELECT t.name FROM technicians t WHERE t.id = trouble_reports.assigned_technician_id) AS technician_name
+             FROM trouble_reports
              WHERE ${troubleWhere}
              ORDER BY updated_at DESC, created_at DESC
              LIMIT 200`,
@@ -4050,10 +4167,17 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
                         status: mapDisplayStatusInstall(row.status),
                         priority: mapInstallPriority(row.priority),
                         description: row.notes || row.package_name || '',
+                        package_name: row.package_name || null,
                         sector: 'PSB',
                         created_at: row.created_at || '',
                         activity_at: activityAt,
                         work_started_at: ws,
+                        scheduled_date: row.installation_date || null,
+                        assigned_technician_id: row.assigned_technician_id || null,
+                        technician_name: row.technician_name || null,
+                        work_duration_seconds: row.work_duration_seconds ?? null,
+                        completed_at: row.completed_at || (stLow === 'completed' ? row.updated_at || null : null),
+                        completion_note: stLow === 'completed' ? extractInstallCompletionNote(row) : null,
                         pppoe_username: pppUser || null,
                         pppoe_password: pppPass
                     });
@@ -4064,6 +4188,8 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
                     const ws =
                         row.work_started_at ||
                         (stLow === 'in_progress' ? row.updated_at || null : null);
+                    const trDone = stLow === 'resolved' || stLow === 'closed';
+                    const trCompletion = trDone ? extractTroubleCompletion(row) : { note: null, at: null };
                     tasks.push({
                         id: row.id,
                         type: 'TR',
@@ -4081,7 +4207,12 @@ router.get('/tasks', verifyToken, requireTechnician, (req, res) => {
                         sector: 'TIKET',
                         created_at: row.created_at || '',
                         activity_at: activityAt,
-                        work_started_at: ws
+                        work_started_at: ws,
+                        assigned_technician_id: row.assigned_technician_id || null,
+                        technician_name: row.technician_name || null,
+                        work_duration_seconds: row.work_duration_seconds ?? null,
+                        completed_at: trDone ? trCompletion.at || row.updated_at || null : null,
+                        completion_note: trCompletion.note
                     });
                 }
                 tasks.sort((a, b) => String(b.activity_at || '').localeCompare(String(a.activity_at || '')));
@@ -6017,6 +6148,108 @@ router.get('/network-status', verifyToken, requireTechnician, async (req, res) =
     }
 });
 
+router.get('/network-status/routers/:routerId/pppoe-active', verifyToken, requireTechnician, async (req, res) => {
+    const routerIdParam = String(req.params.routerId || '').trim();
+    try {
+        const { getMikrotikConnectionForRouter, getMikrotikConnection } = require('../../config/mikrotik');
+
+        let routerRow = null;
+        if (routerIdParam !== 'default') {
+            const routerId = parseInt(routerIdParam, 10);
+            if (!Number.isFinite(routerId) || routerId <= 0) {
+                return res.status(400).json({ success: false, message: 'ID router tidak valid' });
+            }
+            const _rt = billingManager._tenantWhere('');
+            routerRow = await new Promise((resolve, reject) => {
+                db.get(
+                    `SELECT * FROM routers WHERE id = ?${_rt.sql}`,
+                    [routerId, ..._rt.params],
+                    (err, row) => (err ? reject(err) : resolve(row || null))
+                );
+            });
+            if (!routerRow) {
+                return res.status(404).json({ success: false, message: 'Router tidak ditemukan' });
+            }
+        }
+
+        const conn = await Promise.race([
+            routerRow ? getMikrotikConnectionForRouter(routerRow) : getMikrotikConnection(),
+            new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Koneksi router timeout')), 8000)
+            ),
+        ]);
+        if (!conn) {
+            return res.status(502).json({ success: false, message: 'Koneksi router gagal' });
+        }
+
+        const actives = await conn.write('/ppp/active/print', [
+            '=.proplist=name,address,uptime,caller-id,service'
+        ]);
+        const sessions = (Array.isArray(actives) ? actives : [])
+            .map((s) => ({
+                name: s && s.name != null ? String(s.name).trim() : '',
+                address: (s && s.address) || null,
+                uptime: (s && s.uptime) || null,
+                caller_id: (s && s['caller-id']) || null,
+                service: (s && s.service) || null
+            }))
+            .filter((s) => s.name);
+
+        const _ct = billingManager._tenantWhere('');
+        const customers = await new Promise((resolve) => {
+            db.all(
+                `SELECT id, name, phone, pppoe_username, username FROM customers
+                 WHERE (COALESCE(pppoe_username, '') != '' OR COALESCE(username, '') != '')${_ct.sql}`,
+                _ct.params,
+                (err, rows) => {
+                    if (err) {
+                        logger.warn('[mobile-adapter] pppoe-active customers:', err.message || err);
+                        return resolve([]);
+                    }
+                    resolve(Array.isArray(rows) ? rows : []);
+                }
+            );
+        });
+        const customerByLogin = new Map();
+        for (const c of customers) {
+            for (const login of [c.pppoe_username, c.username]) {
+                const key = String(login || '').trim().toLowerCase();
+                if (key && !customerByLogin.has(key)) customerByLogin.set(key, c);
+            }
+        }
+
+        const data = sessions
+            .map((s) => {
+                const c = customerByLogin.get(s.name.toLowerCase()) || null;
+                return {
+                    ...s,
+                    customer_id: c ? c.id : null,
+                    customer_name: c ? c.name : null,
+                    customer_phone: c ? c.phone : null
+                };
+            })
+            .sort((a, b) => a.name.localeCompare(b.name, 'id', { sensitivity: 'base' }));
+
+        return res.json({
+            success: true,
+            router: {
+                id: routerRow ? routerRow.id : 'default',
+                name: routerRow
+                    ? (routerRow.name || routerRow.nas_identifier || routerRow.nas_ip || `Router ${routerRow.id}`)
+                    : 'Mikrotik Default'
+            },
+            total: data.length,
+            data
+        });
+    } catch (e) {
+        logger.warn('[mobile-adapter] pppoe-active router failed:', e.message || e);
+        return res.status(500).json({
+            success: false,
+            message: e.message || 'Gagal memuat PPPoE aktif'
+        });
+    }
+});
+
 router.get('/odps/:odpId', verifyToken, requireTechnician, (req, res) => {
     const odpId = req.params.odpId;
     const tenantId = resolveReqTenantId(req);
@@ -6440,10 +6673,24 @@ router.get('/collector/overview', verifyToken, requireCollector, async (req, res
     }
     const { month, year } = parseCollectorPeriodQuery(req);
     try {
-        const [collector, dashboardStats, allMappedCustomers] = await Promise.all([
+        const overviewTenantId = resolveReqTenantId(req);
+        const [collector, dashboardStats, allMappedCustomers, areaRows] = await Promise.all([
             billingManager.getCollectorById(collectorId),
             billingManager.getCollectorDashboardStats(collectorId, month, year),
-            billingManager.getCollectorCustomers(collectorId, month, year)
+            billingManager.getCollectorCustomers(collectorId, month, year, { skipRadius: true }),
+            new Promise((resolve, reject) => {
+                if (overviewTenantId == null) {
+                    return resolve([]);
+                }
+                db.all(
+                    'SELECT DISTINCT COALESCE(area, area_name) AS area FROM collector_areas WHERE collector_id = ? AND tenant_id = ? AND COALESCE(area, area_name) IS NOT NULL AND COALESCE(area, area_name) != "" LIMIT 8',
+                    [collectorId, overviewTenantId],
+                    (err, rows) => {
+                        if (err) reject(err);
+                        else resolve(rows || []);
+                    }
+                );
+            })
         ]);
         const list = allMappedCustomers || [];
         const baruCount = list.filter((c) => matchesCollectorPelangganBaru(c)).length;
@@ -6474,20 +6721,6 @@ router.get('/collector/overview', verifyToken, requireCollector, async (req, res
         const progressPct = targetMonth > 0 ? Math.min(100, Math.round((terkumpul / targetMonth) * 100)) : 0;
         const sisaTarget = Math.max(0, targetMonth - terkumpul);
 
-        const areaRows = await new Promise((resolve, reject) => {
-            const overviewTenantId = resolveReqTenantId(req);
-            if (overviewTenantId == null) {
-                return resolve([]);
-            }
-            db.all(
-                'SELECT DISTINCT COALESCE(area, area_name) AS area FROM collector_areas WHERE collector_id = ? AND tenant_id = ? AND COALESCE(area, area_name) IS NOT NULL AND COALESCE(area, area_name) != "" LIMIT 8',
-                [collectorId, overviewTenantId],
-                (err, rows) => {
-                    if (err) reject(err);
-                    else resolve(rows || []);
-                }
-            );
-        });
         const areaLabel =
             areaRows.map((r) => r.area).filter(Boolean).join(', ') ||
             collector?.address ||

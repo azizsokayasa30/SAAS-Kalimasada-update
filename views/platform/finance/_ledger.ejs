@@ -19,7 +19,7 @@
 <main class="km-main km-inv-page km-fin-page km-fin-page--<%= cfg.mod %>">
   <div class="km-topbar">
     <div>
-      <h2><%= cfg.title %></h2>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi <%= isIncome ? 'bi-arrow-down-circle' : 'bi-arrow-up-circle' %>"></i></span><%= cfg.title %></h2>
     </div>
     <button type="button" class="btn btn-km-primary btn-sm" data-bs-toggle="modal" data-bs-target="#<%= cfg.modalId %>">
       <i class="bi bi-plus-lg"></i> Tambah <%= cfg.noun %>
@@ -211,7 +211,7 @@
             <label class="form-label">Jumlah</label>
             <div class="input-group"><span class="input-group-text">Rp</span><input name="amount" type="number" min="0" class="form-control" placeholder="0" required></div>
           </div>
-          <div class="col-sm-6"><label class="form-label">Tanggal</label><input name="transaction_date" type="date" class="form-control" value="<%= new Date().toISOString().slice(0,10) %>" required></div>
+          <div class="col-sm-6"><label class="form-label">Tanggal</label><input name="transaction_date" type="date" class="form-control" value="<%= (function () { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); })() %>" required></div>
         </div>
         <div class="row g-3 mb-3">
           <div class="col-sm-6">

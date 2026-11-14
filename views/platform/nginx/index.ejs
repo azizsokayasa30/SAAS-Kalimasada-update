@@ -1,23 +1,31 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main km-set">
-  <div class="km-topbar">
-    <div>
-      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-diagram-3"></i></span>Reverse Proxy</h2>
-    </div>
-    <div class="d-flex gap-2 flex-wrap">
-      <form method="POST" action="/management/settings/reverse-proxy/sync" class="d-inline">
-        <button type="submit" class="btn btn-km-primary btn-sm" <%= !status.nginx_installed ? 'disabled' : '' %>>
-          <i class="bi bi-arrow-repeat"></i> Sync Tenant
-        </button>
-      </form>
-      <form method="POST" action="/management/settings/reverse-proxy/reload" class="d-inline">
-        <button type="submit" class="btn btn-outline-secondary btn-sm" <%= !status.nginx_installed ? 'disabled' : '' %>>
-          <i class="bi bi-arrow-clockwise"></i> Reload
-        </button>
-      </form>
-    </div>
-  </div>
+<main class="km-main km-set km-infra km-infra--proxy">
+  <%
+    const pxDisabled = !status.nginx_installed ? ' disabled' : '';
+    const pxNginxChip = !status.nginx_installed
+      ? { tone: 'muted', dot: true, label: 'Nginx belum terinstall' }
+      : (status.nginx_active ? { tone: 'ok', dot: true, label: 'Nginx aktif' } : { tone: 'warn', dot: true, label: 'Nginx tidak aktif' });
+    const pxSslChip = config.ssl_enabled
+      ? ((typeof sslStatus !== 'undefined' && sslStatus && !sslStatus.ok) ? { tone: 'warn', icon: 'bi-shield-exclamation', label: 'SSL bermasalah' } : { tone: 'ok', icon: 'bi-lock-fill', label: 'HTTPS aktif' })
+      : { tone: 'muted', icon: 'bi-unlock', label: 'HTTP saja' };
+    const pxCustomCount = (typeof customProxies !== 'undefined' && customProxies) ? customProxies.length : 0;
+    const pxTenantCount = (config.tenant_subdomains || []).length;
+  %>
+  <%- include('../partials/infra-hero', {
+    tab: 'proxy',
+    icon: 'bi-signpost-split',
+    heading: 'Reverse Proxy',
+    desc: 'Atur Nginx untuk subdomain tenant, proxy ke server lain, dan sertifikat HTTPS.',
+    chips: [
+      pxNginxChip,
+      pxSslChip,
+      { tone: 'info', icon: 'bi-globe2', label: (config.central_subdomain ? config.central_subdomain + '.' : '') + config.base_domain }
+    ],
+    actions:
+      '<form method="POST" action="/management/settings/reverse-proxy/reload" class="d-inline"><button type="submit" class="btn btn-outline-secondary"' + pxDisabled + '><i class="bi bi-arrow-clockwise"></i> Reload</button></form>' +
+      '<form method="POST" action="/management/settings/reverse-proxy/sync" class="d-inline"><button type="submit" class="btn btn-km-primary"' + pxDisabled + '><i class="bi bi-arrow-repeat"></i> Sync Tenant</button></form>'
+  }) %>
 
   <% if (flash && flash.success) { %>
     <div class="alert alert-success">
@@ -44,50 +52,37 @@
 
   <% const proxyIssues = (typeof diagnostics !== 'undefined' && diagnostics.issues) ? diagnostics.issues : []; %>
   <% if (!status.nginx_installed || proxyIssues.length) { %>
-    <div class="alert alert-warning km-proxy-issues mb-4">
-      <div class="fw-semibold mb-1"><i class="bi bi-exclamation-triangle me-1"></i> Perlu perbaikan</div>
-      <ul class="mb-0">
-        <% if (!status.nginx_installed) { %>
-          <li>Nginx belum terinstall. Jalankan <code>sudo bash /var/www/billing-kalimasada/scripts/setup-nginx-proxy.sh</code></li>
-        <% } %>
-        <% proxyIssues.forEach(function(issue) { %><li><%= issue %></li><% }); %>
-      </ul>
+    <div class="km-infra-alert">
+      <span class="km-infra-alert__icon"><i class="bi bi-exclamation-triangle"></i></span>
+      <div class="min-w-0">
+        <strong>Perlu perbaikan</strong>
+        <ul>
+          <% if (!status.nginx_installed) { %>
+            <li>Nginx belum terinstall. Jalankan <code>sudo bash /var/www/billing-kalimasada/scripts/setup-nginx-proxy.sh</code></li>
+          <% } %>
+          <% proxyIssues.forEach(function(issue) { %><li><%= issue %></li><% }); %>
+        </ul>
+      </div>
     </div>
   <% } %>
 
-  <div class="row g-3 mb-4">
-    <div class="col-md-4 col-6">
-      <div class="km-card km-set-stat">
-        <span class="km-set-stat__icon <%= status.nginx_active ? 'km-tone-green' : 'km-tone-orange' %>"><i class="bi bi-server"></i></span>
-        <div>
-          <div class="km-set-stat__label">Status Nginx</div>
-          <div class="mt-1">
-            <% if (!status.nginx_installed) { %>
-              <span class="badge bg-secondary">Belum install</span>
-            <% } else if (status.nginx_active) { %>
-              <span class="badge bg-success">Aktif</span>
-            <% } else { %>
-              <span class="badge bg-warning text-dark">Tidak aktif</span>
-            <% } %>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="col-md-4 col-6">
-      <div class="km-card km-set-stat">
-        <span class="km-set-stat__icon km-tone-blue"><i class="bi bi-buildings"></i></span>
-        <div><div class="km-set-stat__label">Tenant</div><div class="km-set-stat__value"><%= (config.tenant_subdomains || []).length %></div></div>
-      </div>
-    </div>
-    <div class="col-md-4 col-12">
-      <div class="km-card km-set-stat">
-        <span class="km-set-stat__icon km-tone-purple"><i class="bi bi-arrow-left-right"></i></span>
-        <div><div class="km-set-stat__label">Upstream</div><div class="km-set-stat__value"><code><%= config.upstream_host %>:<%= config.upstream_port %></code></div></div>
-      </div>
-    </div>
-  </div>
+  <%- include('../partials/infra-stats', { stats: [
+    {
+      tone: !status.nginx_installed ? 'slate' : (status.nginx_active ? 'green' : 'amber'),
+      icon: 'bi-server',
+      label: 'Status Nginx',
+      value: !status.nginx_installed ? 'Belum install' : (status.nginx_active ? 'Aktif' : 'Tidak aktif'),
+      small: true,
+      meta: config.ssl_enabled ? 'HTTPS diaktifkan' : 'HTTPS nonaktif'
+    },
+    { tone: 'blue', icon: 'bi-buildings', label: 'Subdomain Tenant', value: pxTenantCount, meta: 'Diproksikan otomatis' },
+    { tone: 'amber', icon: 'bi-hdd-network', label: 'Proxy Eksternal', value: pxCustomCount, meta: 'Ke server lain' },
+    { tone: 'violet', icon: 'bi-arrow-left-right', label: 'Upstream', value: config.upstream_host + ':' + config.upstream_port, code: true, meta: 'Port listen ' + (config.listen_port || 80) }
+  ] }) %>
 
-  <div class="km-card mb-4">
+  <div class="row g-3 mb-4">
+  <div class="col-xl-7">
+  <div class="km-card h-100">
     <div class="km-vpn-card__head"><h5><i class="bi bi-buildings"></i> Tenant</h5></div>
     <% if (typeof tenantProxyRows !== 'undefined' && tenantProxyRows.length) { %>
     <div class="table-responsive">
@@ -98,17 +93,17 @@
         <tbody>
           <% tenantProxyRows.forEach(function(t) { %>
             <tr>
-              <td><%= t.name %></td>
+              <td class="fw-semibold"><%= t.name %></td>
               <td>
-                <a href="<%= t.url %>" target="_blank" rel="noopener" class="text-decoration-none" style="color: var(--accent)">
-                  <%= t.hostname %>
+                <a href="<%= t.url %>" target="_blank" rel="noopener" class="text-decoration-none" style="color: var(--ix-tone)">
+                  <i class="bi bi-box-arrow-up-right me-1 small"></i><%= t.hostname %>
                 </a>
               </td>
               <td>
                 <% if (t.proxyActive) { %>
-                  <span class="badge bg-success">Aktif</span>
+                  <span class="km-infra-pill km-infra-pill--ok">Aktif</span>
                 <% } else { %>
-                  <span class="badge bg-secondary">Pending</span>
+                  <span class="km-infra-pill km-infra-pill--warn">Pending</span>
                 <% } %>
               </td>
             </tr>
@@ -117,11 +112,17 @@
       </table>
     </div>
     <% } else { %>
-      <p class="text-muted small mb-0">Belum ada tenant.</p>
+      <div class="km-infra-empty">
+        <span class="km-infra-empty__icon"><i class="bi bi-buildings"></i></span>
+        <strong>Belum ada tenant</strong>
+        <span>Subdomain tenant akan muncul di sini setelah tenant dibuat dan disinkronkan.</span>
+      </div>
     <% } %>
   </div>
+  </div>
 
-  <div class="km-card mb-4">
+  <div class="col-xl-5">
+  <div class="km-card h-100">
     <div class="km-vpn-card__head"><h5><i class="bi bi-hdd-network"></i> Proxy ke Server Lain</h5></div>
     <% if (typeof customProxies !== 'undefined' && customProxies.length) { %>
     <div class="table-responsive mb-3">
@@ -148,82 +149,86 @@
         </tbody>
       </table>
     </div>
+    <% } else { %>
+      <p class="small text-muted mb-3"><i class="bi bi-info-circle me-1"></i>Belum ada proxy eksternal. Tambahkan subdomain yang diteruskan ke server lain.</p>
     <% } %>
     <form method="POST" action="/management/settings/reverse-proxy/proxies/add" class="row g-2 align-items-end">
-      <div class="col-lg-6">
+      <div class="col-12">
         <label class="form-label small mb-1">Subdomain</label>
-        <div class="input-group input-group-sm">
+        <div class="input-group input-group-sm flex-nowrap">
           <input type="text" name="hostname" class="form-control" placeholder="bna" required>
           <span class="input-group-text">.<%= config.base_domain %></span>
         </div>
       </div>
-      <div class="col-lg-6">
+      <div class="col-12">
         <label class="form-label small mb-1">Target (IP:port)</label>
-        <div class="input-group input-group-sm">
+        <div class="input-group input-group-sm flex-nowrap">
           <input type="text" name="upstream_host" class="form-control" placeholder="192.168.1.10" required>
           <span class="input-group-text">:</span>
-          <input type="number" name="upstream_port" class="form-control" value="3003" min="1" max="65535" required style="max-width:5rem;">
+          <input type="number" name="upstream_port" class="form-control" value="3003" min="1" max="65535" required style="max-width:6rem;">
         </div>
       </div>
-      <div class="col-lg-8">
+      <div class="col-sm-8">
         <label class="form-label small mb-1">Label <span class="text-muted">(opsional)</span></label>
         <input type="text" name="label" class="form-control form-control-sm" placeholder="Cabang BNA">
       </div>
-      <div class="col-lg-4">
+      <div class="col-sm-4">
         <button type="submit" class="btn btn-outline-primary btn-sm w-100" <%= !status.nginx_installed ? 'disabled' : '' %>>
           <i class="bi bi-plus-lg"></i> Tambah
         </button>
       </div>
     </form>
   </div>
+  </div>
+  </div>
 
   <div class="km-card">
     <div class="km-vpn-card__head"><h5><i class="bi bi-gear"></i> Pengaturan</h5></div>
     <form method="POST" action="/management/settings/reverse-proxy/save">
       <div class="row g-3">
-        <div class="col-md-6">
+        <div class="col-md-6 col-xl-4">
           <label class="form-label">Domain Utama</label>
           <input type="text" name="base_domain" class="form-control form-control-sm" value="<%= config.base_domain %>" required>
         </div>
-        <div class="col-md-6">
+        <div class="col-md-6 col-xl-4">
           <label class="form-label">Subdomain Management</label>
           <input type="text" name="central_subdomain" class="form-control form-control-sm" value="<%= config.central_subdomain %>" required>
         </div>
-        <div class="col-md-4">
-          <label class="form-label">Upstream Host</label>
-          <input type="text" name="upstream_host" class="form-control form-control-sm" value="<%= config.upstream_host %>" required>
-        </div>
-        <div class="col-md-2">
-          <label class="form-label">Port</label>
-          <input type="number" name="upstream_port" class="form-control form-control-sm" value="<%= config.upstream_port %>" min="1" max="65535" required>
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">IP Server (LAN)</label>
-          <input type="text" name="server_ip" class="form-control form-control-sm" value="<%= config.server_ip %>">
-        </div>
-        <div class="col-md-3">
+        <div class="col-md-6 col-xl-4">
           <label class="form-label">IP Publik (DNS)</label>
           <input type="text" name="public_ip" class="form-control form-control-sm" value="<%= config.public_ip || '' %>">
         </div>
+        <div class="col-md-6 col-xl-4">
+          <label class="form-label">Upstream Host</label>
+          <input type="text" name="upstream_host" class="form-control form-control-sm" value="<%= config.upstream_host %>" required>
+        </div>
+        <div class="col-md-6 col-xl-4">
+          <label class="form-label">Upstream Port</label>
+          <input type="number" name="upstream_port" class="form-control form-control-sm" value="<%= config.upstream_port %>" min="1" max="65535" required>
+        </div>
+        <div class="col-md-6 col-xl-4">
+          <label class="form-label">IP Server (LAN)</label>
+          <input type="text" name="server_ip" class="form-control form-control-sm" value="<%= config.server_ip %>">
+        </div>
         <div class="col-12">
-          <div class="form-check form-switch">
+          <div class="form-check form-switch mb-0">
             <input class="form-check-input" type="checkbox" name="ssl_enabled" id="ssl_enabled" <%= config.ssl_enabled ? 'checked' : '' %>>
             <label class="form-check-label" for="ssl_enabled">Aktifkan HTTPS (SSL)</label>
           </div>
           <% if (typeof sslStatus !== 'undefined' && !sslStatus.ok) { %>
-            <div class="form-text text-warning small"><%= sslStatus.error %></div>
+            <div class="form-text text-warning small mt-1"><i class="bi bi-exclamation-triangle me-1"></i><%= sslStatus.error %></div>
           <% } %>
         </div>
       </div>
 
-      <details class="mt-3">
-        <summary class="small text-muted" style="cursor:pointer;">Pengaturan lanjutan</summary>
-        <div class="row g-3 mt-1">
-          <div class="col-md-3">
+      <details class="km-infra-details">
+        <summary><i class="bi bi-sliders"></i> Pengaturan lanjutan</summary>
+        <div class="row g-3 km-infra-details__body">
+          <div class="col-md-4">
             <label class="form-label">Listen Port</label>
             <input type="number" name="listen_port" class="form-control form-control-sm" value="<%= config.listen_port %>" min="1" max="65535">
           </div>
-          <div class="col-md-9">
+          <div class="col-md-8">
             <label class="form-label">Domain Tambahan</label>
             <input type="text" name="custom_hosts" class="form-control form-control-sm"
                    value="<%= (config.custom_hosts || []).join(', ') %>" placeholder="billing.example.com">
@@ -245,21 +250,23 @@
       </details>
 
       <input type="hidden" name="auto_sync_on_tenant_change" value="on">
-      <div class="km-proxy-actions">
-        <button type="submit" class="btn btn-km-primary btn-sm" <%= !status.nginx_installed ? 'disabled' : '' %>>
-          <i class="bi bi-check-lg me-1"></i> Simpan & Terapkan
-        </button>
-        <button type="submit" formaction="/management/settings/reverse-proxy/test" class="btn btn-outline-info btn-sm" <%= !status.nginx_installed ? 'disabled' : '' %>>
-          <i class="bi bi-clipboard-check me-1"></i> Test nginx -t
-        </button>
-        <a href="/management/settings/reverse-proxy/preview" target="_blank" class="btn btn-outline-secondary btn-sm"><i class="bi bi-file-earmark-code me-1"></i> Preview config</a>
-      </div>
       <% const sslErr = (typeof sslStatus !== 'undefined' && sslStatus && !sslStatus.ok && sslStatus.error) ? String(sslStatus.error) : ''; %>
-      <% if (config.last_apply_message && !(sslErr && String(config.last_apply_message).indexOf(sslErr) === 0)) { %>
-        <p class="small mt-3 mb-0 <%= config.last_apply_ok ? 'text-success' : 'text-danger' %>">
-          <%= config.last_apply_message %>
-        </p>
-      <% } %>
+      <div class="km-infra-formbar">
+        <% if (config.last_apply_message && !(sslErr && String(config.last_apply_message).indexOf(sslErr) === 0)) { %>
+          <span class="km-infra-formbar__hint <%= config.last_apply_ok ? 'text-success' : 'text-danger' %>">
+            <i class="bi <%= config.last_apply_ok ? 'bi-check-circle' : 'bi-x-circle' %> me-1"></i><%= config.last_apply_message %>
+          </span>
+        <% } %>
+        <div class="km-infra-formbar__end">
+          <button type="submit" class="btn btn-km-primary btn-sm px-3" <%= !status.nginx_installed ? 'disabled' : '' %>>
+            <i class="bi bi-check-lg"></i> Simpan &amp; Terapkan
+          </button>
+          <button type="submit" formaction="/management/settings/reverse-proxy/test" class="btn btn-outline-info btn-sm" <%= !status.nginx_installed ? 'disabled' : '' %>>
+            <i class="bi bi-clipboard-check"></i> Test nginx -t
+          </button>
+          <a href="/management/settings/reverse-proxy/preview" target="_blank" class="btn btn-outline-secondary btn-sm"><i class="bi bi-file-earmark-code"></i> Preview config</a>
+        </div>
+      </div>
     </form>
   </div>
 </main>

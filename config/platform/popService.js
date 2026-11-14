@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
 const tenantStore = require('./tenantStore');
 
 let schemaReady = false;
@@ -24,6 +25,23 @@ async function ensurePopSchema() {
         }
     }
     schemaReady = true;
+}
+
+const HOSTNAME_RE = /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/i;
+
+function assertValidHost(value, label) {
+    const ok = net.isIP(value)
+        || (!/^[\d.]+$/.test(value) && HOSTNAME_RE.test(value));
+    if (!ok) throw new Error(`${label} tidak valid: ${value}`);
+}
+
+function parsePort(value, fallback, label) {
+    if (value === undefined || value === null || String(value).trim() === '') return fallback;
+    const port = Number(value);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error(`${label} harus angka 1–65535.`);
+    }
+    return port;
 }
 
 function normalizeCode(code) {
@@ -159,6 +177,7 @@ async function createSwitch(data) {
     if (!Number.isFinite(popId) || popId <= 0) throw new Error('POP/CABANG wajib dipilih.');
     if (!name) throw new Error('Nama switch wajib diisi.');
     if (!ip) throw new Error('IP address switch wajib diisi.');
+    assertValidHost(ip, 'IP address switch');
 
     const pop = await getPopById(popId);
     if (!pop) throw new Error('POP/CABANG tidak ditemukan.');
@@ -195,6 +214,7 @@ async function updateSwitch(id, data) {
     if (!Number.isFinite(popId) || popId <= 0) throw new Error('POP/CABANG wajib dipilih.');
     if (!name) throw new Error('Nama switch wajib diisi.');
     if (!ip) throw new Error('IP address switch wajib diisi.');
+    assertValidHost(ip, 'IP address switch');
 
     const pop = await getPopById(popId);
     if (!pop) throw new Error('POP/CABANG tidak ditemukan.');
@@ -268,6 +288,9 @@ async function createRadiusServer(data) {
     if (!Number.isFinite(popId) || popId <= 0) throw new Error('POP/CABANG wajib dipilih.');
     if (!name) throw new Error('Nama radius manager wajib diisi.');
     if (!host) throw new Error('Host/IP radius manager wajib diisi.');
+    assertValidHost(host, 'Host/IP radius manager');
+    const authPort = parsePort(data.auth_port, 1812, 'Port auth');
+    const acctPort = parsePort(data.acct_port, 1813, 'Port accounting');
 
     const pop = await getPopById(popId);
     if (!pop) throw new Error('POP/CABANG tidak ditemukan.');
@@ -280,8 +303,8 @@ async function createRadiusServer(data) {
             popId,
             name,
             host,
-            Number(data.auth_port) || 1812,
-            Number(data.acct_port) || 1813,
+            authPort,
+            acctPort,
             String(data.radius_secret || '').trim() || null,
             String(data.description || '').trim() || null,
             data.is_active === '1' || data.is_active === 1 ? 1 : 0,
@@ -301,6 +324,9 @@ async function updateRadiusServer(id, data) {
     if (!Number.isFinite(popId) || popId <= 0) throw new Error('POP/CABANG wajib dipilih.');
     if (!name) throw new Error('Nama radius manager wajib diisi.');
     if (!host) throw new Error('Host/IP radius manager wajib diisi.');
+    assertValidHost(host, 'Host/IP radius manager');
+    const authPort = parsePort(data.auth_port, Number(existing.auth_port) || 1812, 'Port auth');
+    const acctPort = parsePort(data.acct_port, Number(existing.acct_port) || 1813, 'Port accounting');
 
     const pop = await getPopById(popId);
     if (!pop) throw new Error('POP/CABANG tidak ditemukan.');
@@ -318,8 +344,8 @@ async function updateRadiusServer(id, data) {
             popId,
             name,
             host,
-            Number(data.auth_port ?? existing.auth_port) || 1812,
-            Number(data.acct_port ?? existing.acct_port) || 1813,
+            authPort,
+            acctPort,
             secret,
             String(data.description ?? existing.description ?? '').trim() || null,
             data.is_active === '1' || data.is_active === 1 ? 1 : 0,

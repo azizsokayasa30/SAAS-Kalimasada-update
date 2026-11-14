@@ -1,5 +1,10 @@
+import 'dart:async' show unawaited;
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/foundation.dart'
     show ChangeNotifier, debugPrint, kDebugMode;
+import 'package:path_provider/path_provider.dart';
 import '../services/api_client.dart';
 
 class CollectorProvider extends ChangeNotifier {
@@ -30,6 +35,38 @@ class CollectorProvider extends ChangeNotifier {
   /// Periode aktif (dashboard) — dipakai overview, pelanggan, dan setoran.
   int? _overviewMonth;
   int? _overviewYear;
+
+  DateTime? _overviewFetchedAt;
+  String? _overviewFetchedKey;
+  bool _collectorAreasLoaded = false;
+
+  /// Hanya respons dari request terakhir yang boleh mengganti daftar pelanggan.
+  int _customersRequestId = 0;
+  String? _customersLatestQuery;
+  final Map<String, List<dynamic>> _customersCache = {};
+
+  final Map<String, Map<String, dynamic>> _overviewCache = {};
+
+  /// Request yang sedang berjalan per kunci; pemanggil kedua menunggu future yang sama.
+  final Map<String, Future<void>> _inflight = {};
+
+  /// Pemilik cache overview di disk (tenant + user) agar tidak tertukar antar akun.
+  String? _diskCacheOwner;
+
+  Future<void> _once(
+    String key,
+    Future<void> Function() run, {
+    bool reuse = true,
+  }) {
+    final existing = _inflight[key];
+    if (reuse && existing != null) return existing;
+    late final Future<void> future;
+    future = run().whenComplete(() {
+      if (identical(_inflight[key], future)) _inflight.remove(key);
+    });
+    _inflight[key] = future;
+    return future;
+  }
 
   Map<String, dynamic>? get overview => _overview;
   List<dynamic> get customers => _customers;
@@ -74,7 +111,73 @@ class CollectorProvider extends ChangeNotifier {
     _meLoading = false;
     _overviewMonth = null;
     _overviewYear = null;
+    _overviewFetchedAt = null;
+    _overviewFetchedKey = null;
+    _collectorAreasLoaded = false;
+    _customersRequestId++;
+    _customersLatestQuery = null;
+    _customersCache.clear();
+    _overviewCache.clear();
+    _inflight.clear();
+    _diskCacheOwner = null;
+    unawaited(_deleteDiskOverview());
     notifyListeners();
+  }
+
+  Future<File> _diskOverviewFile() async {
+    final dir = await getApplicationSupportDirectory();
+    return File('${dir.path}/collector_overview_cache.json');
+  }
+
+  Future<void> _deleteDiskOverview() async {
+    try {
+      final f = await _diskOverviewFile();
+      if (await f.exists()) await f.delete();
+    } catch (_) {}
+  }
+
+  Future<void> _saveDiskOverview(int? month, int? year) async {
+    final owner = _diskCacheOwner;
+    final data = _overview;
+    if (owner == null || data == null) return;
+    try {
+      final f = await _diskOverviewFile();
+      await f.writeAsString(
+        jsonEncode({
+          'owner': owner,
+          'month': month,
+          'year': year,
+          'data': data,
+        }),
+      );
+    } catch (_) {}
+  }
+
+  /// Tampilkan overview terakhir dari disk selagi request ke server berjalan.
+  Future<void> restoreOverviewFromDisk({
+    required String owner,
+    required int month,
+    required int year,
+  }) async {
+    _diskCacheOwner = owner;
+    try {
+      final f = await _diskOverviewFile();
+      if (!await f.exists()) return;
+      final decoded = jsonDecode(await f.readAsString());
+      if (decoded is! Map ||
+          decoded['owner'] != owner ||
+          decoded['month'] != month ||
+          decoded['year'] != year ||
+          decoded['data'] is! Map) {
+        return;
+      }
+      if (_overview != null) return;
+      _overview = Map<String, dynamic>.from(decoded['data'] as Map);
+      _overviewCache['$month/$year'] = _overview!;
+      _overviewMonth ??= month;
+      _overviewYear ??= year;
+      notifyListeners();
+    } catch (_) {}
   }
 
   List<String> _periodQueryParts({int? month, int? year}) {
@@ -93,26 +196,37 @@ class CollectorProvider extends ChangeNotifier {
     _overviewMonth = month;
     _overviewYear = year;
     notifyListeners();
-    await Future.wait([
-      fetchOverview(month: month, year: year),
-      fetchSettlement(month: month, year: year),
-      fetchCustomers(
-        status: _lastCustomersFetchStatus,
-        q: _lastCustomersFetchQ,
-        area: _lastCustomersFetchArea,
-        month: month,
-        year: year,
-      ),
-    ]);
+    // Dashboard dulu; setoran & pelanggan menyusul supaya tidak berebut server.
+    await fetchOverview(month: month, year: year);
+    unawaited(
+      Future.wait([
+        fetchSettlement(month: month, year: year),
+        fetchCustomers(
+          status: _lastCustomersFetchStatus,
+          q: _lastCustomersFetchQ,
+          area: _lastCustomersFetchArea,
+          month: month,
+          year: year,
+        ),
+      ]),
+    );
   }
 
-  Future<void> fetchOverview({int? month, int? year}) async {
+  Future<void> fetchOverview({int? month, int? year}) {
+    final m = month ?? _overviewMonth;
+    final y = year ?? _overviewYear;
+    return _once('overview|$m/$y', () => _fetchOverview(m, y));
+  }
+
+  Future<void> _fetchOverview(int? m, int? y) async {
+    final cached = _overviewCache['$m/$y'];
+    if (cached != null && _overviewFetchedKey != '$m/$y') {
+      _overview = cached;
+    }
     _overviewLoading = true;
     _overviewError = null;
     notifyListeners();
     try {
-      final m = month ?? _overviewMonth;
-      final y = year ?? _overviewYear;
       final q = _periodQueryParts(month: m, year: y);
       final path =
           '/api/mobile-adapter/collector/overview${q.isEmpty ? '' : '?${q.join('&')}'}';
@@ -121,22 +235,55 @@ class CollectorProvider extends ChangeNotifier {
         r,
         debugLabel: 'collector/overview',
       );
+      // Periode sudah diganti selama request berjalan: simpan ke cache saja.
+      final stale =
+          _overviewMonth != null && (m != _overviewMonth || y != _overviewYear);
       if (r.statusCode == 200 && body['success'] == true) {
-        _overview = Map<String, dynamic>.from(body['data'] as Map);
-        _overviewMonth = m;
-        _overviewYear = y;
-      } else {
+        final data = Map<String, dynamic>.from(body['data'] as Map);
+        _overviewCache['$m/$y'] = data;
+        if (!stale) {
+          _overview = data;
+          _overviewMonth = m;
+          _overviewYear = y;
+          _overviewFetchedAt = DateTime.now();
+          _overviewFetchedKey = '$m/$y';
+          unawaited(_saveDiskOverview(m, y));
+        }
+      } else if (!stale) {
         _overviewError = body['message']?.toString() ?? 'Gagal memuat';
       }
     } catch (e) {
-      _overviewError = e.toString();
+      final stale =
+          _overviewMonth != null && (m != _overviewMonth || y != _overviewYear);
+      if (!stale) _overviewError = e.toString();
     } finally {
-      _overviewLoading = false;
+      _overviewLoading = _inflight.keys.any(
+        (k) => k.startsWith('overview|') && k != 'overview|$m/$y',
+      );
       notifyListeners();
     }
   }
 
-  Future<void> fetchCollectorAreas() async {
+  /// Muat ulang overview hanya jika periode berubah atau data sudah lebih dari [maxAge].
+  Future<void> refreshOverviewIfStale({
+    int? month,
+    int? year,
+    Duration maxAge = const Duration(seconds: 60),
+  }) async {
+    if (_overviewLoading) return;
+    final key = '${month ?? _overviewMonth}/${year ?? _overviewYear}';
+    final at = _overviewFetchedAt;
+    if (_overview != null &&
+        at != null &&
+        _overviewFetchedKey == key &&
+        DateTime.now().difference(at) < maxAge) {
+      return;
+    }
+    await fetchOverview(month: month, year: year);
+  }
+
+  Future<void> fetchCollectorAreas({bool force = false}) async {
+    if (_collectorAreasLoaded && !force) return;
     try {
       final r = await ApiClient.get('/api/mobile-adapter/collector/areas');
       final body = ApiClient.decodeJsonObject(r, debugLabel: 'collector/areas');
@@ -149,6 +296,7 @@ class CollectorProvider extends ChangeNotifier {
         } else {
           _collectorAreas = [];
         }
+        _collectorAreasLoaded = true;
       } else {
         _collectorAreas = [];
       }
@@ -164,23 +312,55 @@ class CollectorProvider extends ChangeNotifier {
     String area = '',
     int? month,
     int? year,
+  }) {
+    final params = <String>[];
+    if (status.isNotEmpty) {
+      params.add('status=${Uri.encodeComponent(status)}');
+    }
+    if (q.trim().isNotEmpty) params.add('q=${Uri.encodeComponent(q.trim())}');
+    if (area.trim().isNotEmpty) {
+      params.add('area=${Uri.encodeComponent(area.trim())}');
+    }
+    params.addAll(_periodQueryParts(month: month, year: year));
+    final query = params.join('&');
+    final isLatest = _customersLatestQuery == query;
+    _customersLatestQuery = query;
+    return _once(
+      'customers|$query',
+      () => _fetchCustomers(query, status: status, q: q, area: area),
+      reuse: isLatest,
+    );
+  }
+
+  Future<void> _fetchCustomers(
+    String query, {
+    required String status,
+    required String q,
+    required String area,
   }) async {
+    final requestId = ++_customersRequestId;
+    final cached = _customersCache[query];
+    final sameQuery =
+        status == _lastCustomersFetchStatus &&
+        q.trim() == _lastCustomersFetchQ &&
+        area.trim() == _lastCustomersFetchArea;
+    if (cached != null) {
+      _customers = cached;
+      _lastCustomersFetchStatus = status;
+      _lastCustomersFetchArea = area.trim();
+      _lastCustomersFetchQ = q.trim();
+    } else if (!sameQuery) {
+      // Jangan tampilkan daftar filter lama selama filter baru dimuat.
+      _customers = [];
+    }
     _customersLoading = true;
     _customersError = null;
     notifyListeners();
     try {
-      final params = <String>[];
-      if (status.isNotEmpty) {
-        params.add('status=${Uri.encodeComponent(status)}');
-      }
-      if (q.trim().isNotEmpty) params.add('q=${Uri.encodeComponent(q.trim())}');
-      if (area.trim().isNotEmpty) {
-        params.add('area=${Uri.encodeComponent(area.trim())}');
-      }
-      params.addAll(_periodQueryParts(month: month, year: year));
       final path =
-          '/api/mobile-adapter/collector/customers${params.isEmpty ? '' : '?${params.join('&')}'}';
+          '/api/mobile-adapter/collector/customers${query.isEmpty ? '' : '?$query'}';
       final r = await ApiClient.get(path);
+      if (requestId != _customersRequestId) return;
       final body = ApiClient.decodeJsonObject(
         r,
         debugLabel: 'collector/customers',
@@ -189,6 +369,7 @@ class CollectorProvider extends ChangeNotifier {
         final raw = body['data'];
         if (raw is List) {
           _customers = List<dynamic>.from(raw);
+          _customersCache[query] = _customers;
           _lastCustomersFetchStatus = status;
           _lastCustomersFetchArea = area.trim();
           _lastCustomersFetchQ = q.trim();
@@ -205,14 +386,23 @@ class CollectorProvider extends ChangeNotifier {
         _customersError = body['message']?.toString() ?? 'Gagal memuat';
       }
     } catch (e) {
+      if (requestId != _customersRequestId) return;
       _customersError = e.toString();
     } finally {
-      _customersLoading = false;
-      notifyListeners();
+      if (requestId == _customersRequestId) {
+        _customersLoading = false;
+        notifyListeners();
+      }
     }
   }
 
-  Future<void> fetchSettlement({int? month, int? year}) async {
+  Future<void> fetchSettlement({int? month, int? year}) {
+    final m = month ?? _overviewMonth;
+    final y = year ?? _overviewYear;
+    return _once('settlement|$m/$y', () => _fetchSettlement(m, y));
+  }
+
+  Future<void> _fetchSettlement(int? month, int? year) async {
     _settlementLoading = true;
     _settlementError = null;
     notifyListeners();
@@ -240,6 +430,8 @@ class CollectorProvider extends ChangeNotifier {
 
   void bumpCustomersReload() {
     customersReloadNonce++;
+    _overviewFetchedAt = null;
+    _customersCache.clear();
     notifyListeners();
   }
 
@@ -344,7 +536,9 @@ class CollectorProvider extends ChangeNotifier {
     return [];
   }
 
-  Future<void> fetchMe() async {
+  Future<void> fetchMe() => _once('me', _fetchMe);
+
+  Future<void> _fetchMe() async {
     _meLoading = true;
     _meError = null;
     notifyListeners();
@@ -384,7 +578,7 @@ class CollectorProvider extends ChangeNotifier {
           _me = {..._me!, 'photo_url': photoUrl};
           notifyListeners();
         }
-        await fetchMe();
+        await _once('me', _fetchMe, reuse: false);
         return null;
       }
       return body['message']?.toString() ?? 'Gagal mengunggah foto';
@@ -457,7 +651,7 @@ class CollectorProvider extends ChangeNotifier {
         debugLabel: 'collector/me/update',
       );
       if (r.statusCode == 200 && body['success'] == true) {
-        await fetchMe();
+        await _once('me', _fetchMe, reuse: false);
         return null;
       }
       return body['message']?.toString() ?? 'Gagal menyimpan';

@@ -12,6 +12,35 @@
     <link href="/css/admin-mobile.css" rel="stylesheet">
 
     <%- include('../../partials/theme-head') %>
+    <style>
+        .customer-profile-compact {
+            padding: 10px 14px;
+        }
+        .customer-profile-avatar {
+            width: 40px;
+            height: 40px;
+            flex-shrink: 0;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 1rem;
+            color: #2e9deb;
+            background: rgba(46, 157, 235, 0.15);
+        }
+        .customer-profile-name {
+            font-size: 1rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+        .customer-profile-id {
+            font-size: 0.8rem;
+            opacity: 0.7;
+        }
+        .customer-profile-compact .min-w-0 { min-width: 0; }
+        .customer-profile-compact .badge.bg-register { background-color: #9900CC !important; color: #fff !important; }
+    </style>
 </head>
 <body>
     <%- include('../../partials/format-jakarta-db') %>
@@ -52,14 +81,33 @@
                             <i class="bi bi-check-circle-fill me-2"></i> Accept Pelanggan
                         </button>
                     </div>
-                <% } else if (customer) { %>
-                    <!-- Info: Tombol Accept hanya muncul untuk status 'register' -->
-                    <div class="alert alert-info mb-3">
-                        <i class="bi bi-info-circle-fill me-2"></i> 
-                        <strong>Info:</strong> Tombol "Accept Pelanggan" hanya muncul untuk pelanggan dengan status <strong>Register</strong>. 
-                        Status saat ini: <strong><%= customer.status || 'N/A' %></strong>
-                    </div>
                 <% } %>
+
+                <!-- Profil Ringkas -->
+                <%
+                const profileName = (customer && customer.name ? String(customer.name).trim() : '') || 'Pelanggan';
+                const profileId = customer ? (customer.customer_id || customer.id || '-') : '-';
+                let profileStatusLabel = 'Nonaktif';
+                let profileStatusClass = 'bg-secondary';
+                let profileStatusIcon = 'bi-x-circle-fill';
+                if (customer && customer.status === 'active') {
+                    profileStatusLabel = 'Aktif'; profileStatusClass = 'bg-success'; profileStatusIcon = 'bi-check-circle-fill';
+                } else if (customer && (customer.status === 'suspended' || customer.status === 'isolir')) {
+                    profileStatusLabel = 'Isolir'; profileStatusClass = 'bg-danger'; profileStatusIcon = 'bi-slash-circle-fill';
+                } else if (isRegister) {
+                    profileStatusLabel = 'Register'; profileStatusClass = 'bg-register'; profileStatusIcon = 'bi-hourglass-split';
+                }
+                %>
+                <div class="card customer-profile-compact flex-row align-items-center gap-3 mb-3">
+                    <div class="customer-profile-avatar"><%= profileName.charAt(0).toUpperCase() %></div>
+                    <div class="flex-grow-1 min-w-0">
+                        <div class="customer-profile-name text-truncate"><%= profileName %></div>
+                        <div class="customer-profile-id text-truncate">ID: <%= profileId %></div>
+                    </div>
+                    <span class="badge rounded-pill <%= profileStatusClass %>">
+                        <i class="bi <%= profileStatusIcon %> me-1"></i><%= profileStatusLabel %>
+                    </span>
+                </div>
 
                 <!-- Customer Info Card -->
                 <div class="row">
@@ -102,9 +150,6 @@
                                 </div>
                                 <% } %>
                                 <div class="mb-3">
-                                    <strong>Nama:</strong> <%= customer ? customer.name : 'N/A' %>
-                                </div>
-                                <div class="mb-3">
                                     <strong>Telepon:</strong> <%= customer && customer.phone ? customer.phone : '-' %>
                                 </div>
                                 <div class="mb-3">
@@ -112,20 +157,6 @@
                                 </div>
                                 <div class="mb-3">
                                     <strong>Alamat:</strong> <%= customer && customer.address ? customer.address : '-' %>
-                                </div>
-                                <div class="mb-3">
-                                    <strong>Status:</strong> 
-                                    <% if (customer && customer.status === 'active') { %>
-                                        <span class="badge bg-success">Aktif</span>
-                                    <% } else if (customer && customer.status === 'inactive') { %>
-                                        <span class="badge bg-secondary">Tidak Aktif</span>
-                                    <% } else if (customer && customer.status === 'suspended') { %>
-                                        <span class="badge bg-warning">Ditangguhkan</span>
-                                    <% } else if (customer && (customer.status === 'register' || customer.status === 'Register')) { %>
-                                        <span class="badge" style="background-color: #9900CC; color: white;">Register</span>
-                                    <% } else { %>
-                                        <span class="badge bg-secondary">Tidak Diketahui (<%= customer ? customer.status : 'N/A' %>)</span>
-                                    <% } %>
                                 </div>
                                 <div class="mb-3">
                                     <strong>Bergabung:</strong> <%= customer && customer.join_date ? formatDbUtcToJakartaDate(customer.join_date) : 'N/A' %>

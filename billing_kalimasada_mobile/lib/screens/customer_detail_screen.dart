@@ -255,27 +255,35 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   bool _isCopyableIp(String ip) =>
       RegExp(r'^[0-9a-fA-F.:]+$').hasMatch(ip) && ip.contains(RegExp(r'\d'));
 
-  Future<void> _copyIp(String ip) async {
-    await Clipboard.setData(ClipboardData(text: ip));
+  Future<void> _copyText(String value, String label) async {
+    await Clipboard.setData(ClipboardData(text: value));
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text('IP $ip disalin'),
+          content: Text('$label $value disalin'),
           duration: const Duration(seconds: 2),
         ),
       );
   }
 
-  Widget _buildIpText(String ip, Color color) {
+  Widget _buildIpText(String ip, Color color) =>
+      _buildCopyableText(ip, color, 'IP', copyable: _isCopyableIp(ip));
+
+  Widget _buildCopyableText(
+    String value,
+    Color color,
+    String label, {
+    bool copyable = true,
+  }) {
     final text = Text(
-      ip,
+      value,
       style: TextStyle(fontSize: 13, color: color, fontFamily: 'monospace'),
     );
-    if (!_isCopyableIp(ip)) return text;
+    if (!copyable) return text;
     return InkWell(
-      onTap: () => _copyIp(ip),
+      onTap: () => _copyText(value, label),
       borderRadius: BorderRadius.circular(4),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 2),
@@ -790,25 +798,30 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     final status = customer['status']?.toString().toLowerCase() ?? 'active';
     final customerLat = _toDouble(customer['latitude']);
     final customerLng = _toDouble(customer['longitude']);
+    final subscribedSince = [
+      _pickString(customer, const ['join_date']),
+      _pickString(_pppSession, const ['join_date']),
+      _pickString(customer, const ['created_at']),
+    ].firstWhere((s) => s.isNotEmpty, orElse: () => '');
 
     // Default to active colors
     Color statusColor = const Color(0xFF0D5930); // Dark Green text
     Color statusBgColor = const Color(0xFFD3F5E4); // Light green bg
     Color statusBorderColor = const Color(0xFFB2E9CD);
-    String statusLabel = 'Status langganan: Aktif';
+    String statusLabel = 'Aktif';
     IconData statusIcon = Icons.check_circle;
 
     if (status == 'suspended') {
       statusColor = const Color(0xFFB45309);
       statusBgColor = const Color(0xFFFFF7ED);
       statusBorderColor = const Color(0xFFFED7AA);
-      statusLabel = 'Status langganan: Isolir';
+      statusLabel = 'Isolir';
       statusIcon = Icons.block;
     } else if (status == 'isolated') {
       statusColor = const Color(0xFF93000A); // on-error-container
       statusBgColor = const Color(0xFFFFDAD6); // error-container
       statusBorderColor = const Color(0xFFFFB4AB);
-      statusLabel = 'Status langganan: Nonaktif';
+      statusLabel = 'Nonaktif';
       statusIcon = Icons.error;
     }
 
@@ -866,119 +879,106 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
           children: [
             // Profile Header Area
             Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 color: bgSurfaceContainer,
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: outlineVariant),
               ),
-              child: Stack(
+              child: Row(
                 children: [
-                  Container(
-                    height: 54,
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          surfaceTint.withValues(alpha: 0.16),
-                          Colors.transparent,
-                        ],
-                      ),
-                      borderRadius: const BorderRadius.vertical(
-                        top: Radius.circular(12),
+                  CircleAvatar(
+                    radius: 20,
+                    backgroundColor: surfaceTint.withValues(alpha: 0.15),
+                    child: Text(
+                      () {
+                        final name = customer['name']?.toString().trim() ?? '';
+                        return name.isEmpty ? '?' : name[0].toUpperCase();
+                      }(),
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: surfaceTint,
                       ),
                     ),
                   ),
-                  SizedBox(
-                    width: double.infinity,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Container(
-                            width: 74,
-                            height: 74,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: bgSurfaceContainerLowest,
-                                width: 3,
-                              ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.05),
-                                  blurRadius: 4,
-                                  offset: const Offset(0, 2),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          customer['name'] ?? 'Unknown Customer',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: textOnBackground,
+                          ),
+                        ),
+                        Text(
+                          'ID: ${customer['customer_id'] ?? '-'}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: textOnSurfaceVariant,
+                          ),
+                        ),
+                        if (subscribedSince.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.event_available,
+                                  size: 13,
+                                  color: textOnSurfaceVariant,
+                                ),
+                                const SizedBox(width: 4),
+                                Flexible(
+                                  child: Text(
+                                    'Berlangganan sejak ${_formatDate(subscribedSince)}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: textOnSurfaceVariant,
+                                    ),
+                                  ),
                                 ),
                               ],
-                              image: const DecorationImage(
-                                image: NetworkImage(
-                                  'https://via.placeholder.com/150',
-                                ), // Placeholder avatar
-                                fit: BoxFit.cover,
-                              ),
                             ),
                           ),
-                          const SizedBox(height: 10),
-                          Text(
-                            customer['name'] ?? 'Unknown Customer',
-                            style: const TextStyle(
-                              fontSize: 19,
-                              fontWeight: FontWeight.w700,
-                              color: textOnBackground,
-                            ),
-                            textAlign: TextAlign.center,
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: statusBgColor,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: statusBorderColor),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(statusIcon, size: 12, color: statusColor),
+                        const SizedBox(width: 4),
+                        Text(
+                          statusLabel,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: statusColor,
                           ),
-                          const SizedBox(height: 2),
-                          Text(
-                            'ID: ${customer['customer_id'] ?? '-'}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: textOnSurfaceVariant,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            alignment: WrapAlignment.center,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 4,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: statusBgColor,
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(color: statusBorderColor),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      statusIcon,
-                                      size: 13,
-                                      color: statusColor,
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      statusLabel,
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold,
-                                        color: statusColor,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -1342,7 +1342,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const Text(
-                              'ASSIGNED IP',
+                              'PPPOE NAME',
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.bold,
@@ -1350,12 +1350,18 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                                 letterSpacing: 1.1,
                               ),
                             ),
-                            _buildIpText(
-                              _pppSession?['ip_address']?.toString() ??
-                                  customer['ip_address']?.toString() ??
-                                  'DHCP/Dynamic',
-                              textOnBackground,
-                            ),
+                            () {
+                              final pppoeName = _pickString(customer, const [
+                                'pppoe_username',
+                                'username',
+                              ]);
+                              return _buildCopyableText(
+                                pppoeName.isEmpty ? '-' : pppoeName,
+                                textOnBackground,
+                                'PPPoE',
+                                copyable: pppoeName.isNotEmpty,
+                              );
+                            }(),
                           ],
                         ),
                       ),
@@ -1469,6 +1475,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
               PppoeTrafficCard(
                 endpoint:
                     '/api/mobile-adapter/customers/${customer['id']}/traffic',
+                reconnectEndpoint:
+                    '/api/mobile-adapter/customers/${customer['id']}/ppp-reconnect',
+                onReconnected: _loadPppSession,
               ),
             ],
 

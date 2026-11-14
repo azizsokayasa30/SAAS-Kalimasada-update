@@ -201,11 +201,14 @@ function summarizeManualInvoiceItems(items) {
 
 function defaultDateRange(filters = {}) {
     const now = new Date();
-    const year = filters.year ? Number(filters.year) : now.getFullYear();
-    const month = filters.month ? Number(filters.month) : now.getMonth() + 1;
-    const start = filters.startDate || `${year}-${String(month).padStart(2, '0')}-01`;
+    const rawYear = Number.parseInt(filters.year, 10);
+    const rawMonth = Number.parseInt(filters.month, 10);
+    const year = rawYear >= 2000 && rawYear <= 2100 ? rawYear : now.getFullYear();
+    const month = rawMonth >= 1 && rawMonth <= 12 ? rawMonth : now.getMonth() + 1;
+    const isIsoDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+    const start = isIsoDate(filters.startDate) ? filters.startDate : `${year}-${String(month).padStart(2, '0')}-01`;
     const lastDay = new Date(year, month, 0).getDate();
-    const end = filters.endDate || `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    const end = isIsoDate(filters.endDate) ? filters.endDate : `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
     return { startDate: start, endDate: end, year, month };
 }
 
@@ -252,6 +255,15 @@ async function saveFinanceSettings(data) {
         management_fee_value: roundMoney(data.management_fee_value ?? DEFAULT_FINANCE_SETTINGS.management_fee_value),
         default_tax_rate: roundMoney(data.default_tax_rate ?? DEFAULT_FINANCE_SETTINGS.default_tax_rate),
     };
+    const inPercentRange = (v) => Number.isFinite(v) && v >= 0 && v <= 100;
+    if (!inPercentRange(next.bhp_uso_rate)) throw new Error('Tarif BHP/USO harus 0–100%.');
+    if (!inPercentRange(next.default_tax_rate)) throw new Error('Tarif pajak harus 0–100%.');
+    if (!Number.isFinite(next.management_fee_value) || next.management_fee_value < 0) {
+        throw new Error('Nilai management fee tidak boleh negatif.');
+    }
+    if (next.management_fee_type === 'percent' && next.management_fee_value > 100) {
+        throw new Error('Management fee persen maksimal 100%.');
+    }
     await writeFinanceSetting(next);
     return next;
 }
@@ -904,19 +916,31 @@ async function listIncome(filters = {}) {
     );
 }
 
+function ledgerParams(data = {}) {
+    const description = String(data.description || '').trim();
+    const amount = roundMoney(data.amount);
+    const transactionDate = String(data.transaction_date || '').trim().slice(0, 10);
+    if (!description) throw new Error('Deskripsi wajib diisi.');
+    if (!(amount > 0)) throw new Error('Jumlah harus lebih dari 0.');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(transactionDate) || Number.isNaN(Date.parse(transactionDate))) {
+        throw new Error('Tanggal transaksi tidak valid.');
+    }
+    return [
+        description,
+        amount,
+        String(data.category || 'Lainnya').trim() || 'Lainnya',
+        transactionDate,
+        String(data.payment_method || '').trim() || null,
+        String(data.notes || '').trim() || null,
+    ];
+}
+
 async function createIncome(data) {
     await ensureFinanceSchema();
     const result = await tenantStore.dbRun(
         `INSERT INTO platform_finance_income (description, amount, category, transaction_date, payment_method, notes)
          VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-            String(data.description || '').trim(),
-            roundMoney(data.amount),
-            String(data.category || 'Lainnya').trim(),
-            data.transaction_date,
-            data.payment_method || null,
-            data.notes || null,
-        ]
+        ledgerParams(data)
     );
     return tenantStore.dbGet('SELECT * FROM platform_finance_income WHERE id = ?', [result.id]);
 }
@@ -928,15 +952,7 @@ async function updateIncome(id, data) {
             description = ?, amount = ?, category = ?, transaction_date = ?,
             payment_method = ?, notes = ?, updated_at = datetime('now','localtime')
          WHERE id = ?`,
-        [
-            String(data.description || '').trim(),
-            roundMoney(data.amount),
-            String(data.category || 'Lainnya').trim(),
-            data.transaction_date,
-            data.payment_method || null,
-            data.notes || null,
-            id,
-        ]
+        [...ledgerParams(data), id]
     );
     return tenantStore.dbGet('SELECT * FROM platform_finance_income WHERE id = ?', [id]);
 }
@@ -963,14 +979,7 @@ async function createExpense(data) {
     const result = await tenantStore.dbRun(
         `INSERT INTO platform_finance_expenses (description, amount, category, transaction_date, payment_method, notes)
          VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-            String(data.description || '').trim(),
-            roundMoney(data.amount),
-            String(data.category || 'Lainnya').trim(),
-            data.transaction_date,
-            data.payment_method || null,
-            data.notes || null,
-        ]
+        ledgerParams(data)
     );
     return tenantStore.dbGet('SELECT * FROM platform_finance_expenses WHERE id = ?', [result.id]);
 }
@@ -982,15 +991,7 @@ async function updateExpense(id, data) {
             description = ?, amount = ?, category = ?, transaction_date = ?,
             payment_method = ?, notes = ?, updated_at = datetime('now','localtime')
          WHERE id = ?`,
-        [
-            String(data.description || '').trim(),
-            roundMoney(data.amount),
-            String(data.category || 'Lainnya').trim(),
-            data.transaction_date,
-            data.payment_method || null,
-            data.notes || null,
-            id,
-        ]
+        [...ledgerParams(data), id]
     );
     return tenantStore.dbGet('SELECT * FROM platform_finance_expenses WHERE id = ?', [id]);
 }

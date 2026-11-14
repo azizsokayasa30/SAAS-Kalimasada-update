@@ -8,21 +8,62 @@
   if (!canvas || !canvas.getContext) return;
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
-  var ctx = canvas.getContext('2d');
+  var root = document.documentElement;
+  var ctx = canvas.getContext('2d', { alpha: true });
   var nodes = [];
   var width = 0;
   var height = 0;
   var frameId = 0;
-  var running = true;
-  var CONNECT_DIST = 130;
+  var running = false;
+  var lastFrame = 0;
+  var resizeTimer = 0;
 
-  function themeIsDark() {
-    return document.documentElement.getAttribute('data-theme') === 'dark';
+  var CONNECT_DIST = 135;
+  var CONNECT_DIST_SQ = CONNECT_DIST * CONNECT_DIST;
+  var ALPHA_STEPS = 4;
+  var TWO_PI = Math.PI * 2;
+
+  // Perangkat lemah / layar kecil langsung pakai mode ringan.
+  var cores = navigator.hardwareConcurrency || 4;
+  var memory = navigator.deviceMemory || 8;
+  var lite = cores <= 4 || memory <= 4 || window.matchMedia('(max-width: 767.98px)').matches;
+
+  var fps = 30;
+  var frameInterval = 1000 / fps;
+  var speedScale = 60 / fps;
+  var costSum = 0;
+  var costCount = 0;
+
+  var dark = root.getAttribute('data-theme') === 'dark';
+  var palette = {};
+
+  function buildPalette() {
+    palette = {
+      line: dark ? '96, 165, 250' : '37, 99, 235',
+      lineMax: dark ? 0.13 : 0.1,
+      dot: dark ? 'rgb(56, 189, 248)' : 'rgb(14, 165, 233)',
+      dotMax: dark ? 1 : 0.85,
+      core: dark ? 'rgb(186, 230, 253)' : 'rgb(255, 255, 255)',
+      coreMax: dark ? 0.35 : 0.5
+    };
+    palette.lineStyles = [];
+    for (var s = 0; s < ALPHA_STEPS; s++) {
+      var alpha = ((s + 0.5) / ALPHA_STEPS) * palette.lineMax;
+      palette.lineStyles.push('rgba(' + palette.line + ', ' + alpha.toFixed(3) + ')');
+    }
+  }
+
+  function applyMode() {
+    fps = lite ? 20 : 30;
+    frameInterval = 1000 / fps;
+    speedScale = 60 / fps;
+    root.classList.toggle('km-bg-lite', lite);
   }
 
   function nodeCount() {
     var area = width * height;
-    return Math.min(160, Math.max(95, Math.floor(area / 8500)));
+    if (lite) return Math.min(55, Math.max(30, Math.floor(area / 30000)));
+    return Math.min(90, Math.max(50, Math.floor(area / 18000)));
   }
 
   function resize() {
@@ -41,7 +82,7 @@
         vx: (Math.random() - 0.5) * (isSmall ? 0.22 : 0.3),
         vy: (Math.random() - 0.5) * (isSmall ? 0.22 : 0.3),
         r: isSmall ? Math.random() * 0.9 + 0.5 : Math.random() * 1.2 + 1.1,
-        twinkle: Math.random() * Math.PI * 2,
+        twinkle: Math.random() * TWO_PI,
         twinkleSpeed: 0.015 + Math.random() * 0.025,
         linked: !isSmall || Math.random() > 0.35
       });
@@ -49,83 +90,131 @@
   }
 
   function draw() {
-    if (!running) return;
+    var i;
+    var j;
+    var a;
+    var b;
+    var n = nodes.length;
+    var buckets = [];
+    for (i = 0; i < ALPHA_STEPS; i++) buckets.push([]);
 
-    var dark = themeIsDark();
-    ctx.clearRect(0, 0, width, height);
-
-    for (var i = 0; i < nodes.length; i++) {
-      var a = nodes[i];
-      a.x += a.vx;
-      a.y += a.vy;
-      a.twinkle += a.twinkleSpeed;
-
+    for (i = 0; i < n; i++) {
+      a = nodes[i];
+      a.x += a.vx * speedScale;
+      a.y += a.vy * speedScale;
+      a.twinkle += a.twinkleSpeed * speedScale;
       if (a.x <= 0 || a.x >= width) a.vx *= -1;
       if (a.y <= 0 || a.y >= height) a.vy *= -1;
+    }
 
-      if (a.linked) {
-        for (var j = i + 1; j < nodes.length; j++) {
-          var b = nodes[j];
-          if (!b.linked) continue;
-
-          var dx = a.x - b.x;
-          var dy = a.y - b.y;
-          var dist = Math.sqrt(dx * dx + dy * dy);
-
-          if (dist < CONNECT_DIST) {
-            var alpha = 1 - dist / CONNECT_DIST;
-            ctx.strokeStyle = dark
-              ? 'rgba(96, 165, 250, ' + (alpha * 0.13).toFixed(3) + ')'
-              : 'rgba(37, 99, 235, ' + (alpha * 0.1).toFixed(3) + ')';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(a.x, a.y);
-            ctx.lineTo(b.x, b.y);
-            ctx.stroke();
-          }
-        }
+    for (i = 0; i < n; i++) {
+      a = nodes[i];
+      if (!a.linked) continue;
+      for (j = i + 1; j < n; j++) {
+        b = nodes[j];
+        if (!b.linked) continue;
+        var dx = a.x - b.x;
+        if (dx > CONNECT_DIST || dx < -CONNECT_DIST) continue;
+        var dy = a.y - b.y;
+        var distSq = dx * dx + dy * dy;
+        if (distSq >= CONNECT_DIST_SQ) continue;
+        var strength = 1 - Math.sqrt(distSq) / CONNECT_DIST;
+        var step = Math.min(ALPHA_STEPS - 1, Math.floor(strength * ALPHA_STEPS));
+        buckets[step].push(a.x, a.y, b.x, b.y);
       }
+    }
 
-      var glow = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(a.twinkle));
-      ctx.fillStyle = dark
-        ? 'rgba(56, 189, 248, ' + glow.toFixed(3) + ')'
-        : 'rgba(14, 165, 233, ' + (glow * 0.85).toFixed(3) + ')';
+    ctx.clearRect(0, 0, width, height);
+
+    ctx.lineWidth = 1;
+    for (var s = 0; s < ALPHA_STEPS; s++) {
+      var segs = buckets[s];
+      if (!segs.length) continue;
+      ctx.strokeStyle = palette.lineStyles[s];
       ctx.beginPath();
-      ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2);
-      ctx.fill();
+      for (var k = 0; k < segs.length; k += 4) {
+        ctx.moveTo(segs[k], segs[k + 1]);
+        ctx.lineTo(segs[k + 2], segs[k + 3]);
+      }
+      ctx.stroke();
+    }
 
-      if (a.r > 1.2) {
-        ctx.fillStyle = dark
-          ? 'rgba(186, 230, 253, ' + (glow * 0.35).toFixed(3) + ')'
-          : 'rgba(255, 255, 255, ' + (glow * 0.5).toFixed(3) + ')';
+    ctx.fillStyle = palette.dot;
+    for (i = 0; i < n; i++) {
+      a = nodes[i];
+      a.glow = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(a.twinkle));
+      ctx.globalAlpha = a.glow * palette.dotMax;
+      ctx.beginPath();
+      ctx.arc(a.x, a.y, a.r, 0, TWO_PI);
+      ctx.fill();
+    }
+
+    if (!lite) {
+      ctx.fillStyle = palette.core;
+      for (i = 0; i < n; i++) {
+        a = nodes[i];
+        if (a.r <= 1.2) continue;
+        ctx.globalAlpha = a.glow * palette.coreMax;
         ctx.beginPath();
-        ctx.arc(a.x, a.y, a.r * 0.45, 0, Math.PI * 2);
+        ctx.arc(a.x, a.y, a.r * 0.45, 0, TWO_PI);
         ctx.fill();
       }
     }
+    ctx.globalAlpha = 1;
+  }
 
-    frameId = window.requestAnimationFrame(draw);
+  function switchToLite() {
+    lite = true;
+    applyMode();
+    seedNodes();
+  }
+
+  function loop(now) {
+    if (!running) return;
+    frameId = window.requestAnimationFrame(loop);
+    var elapsed = now - lastFrame;
+    if (elapsed < frameInterval) return;
+    lastFrame = now - (elapsed % frameInterval);
+
+    var t0 = performance.now();
+    draw();
+    if (!lite) {
+      costSum += performance.now() - t0;
+      costCount++;
+      // Rata-rata > 6 ms per frame menandakan perangkat kewalahan.
+      if (costCount >= 90) {
+        if (costSum / costCount > 6) switchToLite();
+        costSum = 0;
+        costCount = 0;
+      }
+    }
   }
 
   function start() {
-    if (!running) {
-      running = true;
-      draw();
-    }
+    if (running) return;
+    running = true;
+    lastFrame = 0;
+    frameId = window.requestAnimationFrame(loop);
   }
 
   function stop() {
     running = false;
     if (frameId) window.cancelAnimationFrame(frameId);
+    frameId = 0;
   }
 
+  applyMode();
+  buildPalette();
   resize();
   seedNodes();
-  draw();
+  start();
 
   window.addEventListener('resize', function () {
-    resize();
-    seedNodes();
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () {
+      resize();
+      seedNodes();
+    }, 200);
   });
 
   document.addEventListener('visibilitychange', function () {
@@ -133,11 +222,12 @@
     else start();
   });
 
-  window.addEventListener('storage', function (e) {
-    if (e.key === 'kalimasada_theme') {
-      ctx.clearRect(0, 0, width, height);
-    }
-  });
+  new MutationObserver(function () {
+    var next = root.getAttribute('data-theme') === 'dark';
+    if (next === dark) return;
+    dark = next;
+    buildPalette();
+  }).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
 })();
 
 /**

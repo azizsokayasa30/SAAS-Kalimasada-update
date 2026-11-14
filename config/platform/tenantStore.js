@@ -62,6 +62,12 @@ function isReservedSubdomain(subdomain) {
     return RESERVED_SUBDOMAINS.has(String(subdomain || '').toLowerCase());
 }
 
+function assertValidSubdomain(subdomain) {
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(subdomain)) {
+        throw new Error('Subdomain wajib diisi: huruf kecil, angka, atau strip (tidak boleh diawali/diakhiri strip).');
+    }
+}
+
 function resolveAdminCredentials(data, existing = null) {
     const username = String(data.admin_username ?? existing?.admin_username ?? 'admin').trim();
     if (!username) {
@@ -699,8 +705,15 @@ async function releaseDeletedTenantSlugs() {
     }
 }
 
+function localSqlDateTime(d) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 async function createTenant(data) {
-    const subdomain = String(data.subdomain).toLowerCase().trim();
+    const subdomain = String(data.subdomain || '').toLowerCase().trim();
+    if (!String(data.name || '').trim()) throw new Error('Nama ISP wajib diisi.');
+    assertValidSubdomain(subdomain);
     if (isReservedSubdomain(subdomain)) {
         throw new Error(`Subdomain "${subdomain}" tidak boleh digunakan.`);
     }
@@ -720,7 +733,7 @@ async function createTenant(data) {
         ? (() => {
             const endsAt = new Date();
             endsAt.setMonth(endsAt.getMonth() + Number(data.subscription_months));
-            return endsAt.toISOString().slice(0, 19).replace('T', ' ');
+            return localSqlDateTime(endsAt);
         })()
         : null;
     const settings = defaultTenantSettings({
@@ -776,8 +789,11 @@ async function updateTenant(id, data) {
     const tenant = await getTenantById(id);
     if (!tenant) throw new Error('Tenant tidak ditemukan.');
     if (tenant.is_master) throw new Error('Master tenant tidak bisa diedit dari halaman tenant operasional.');
+    const newName = String(data.name ?? tenant.name ?? '').trim();
+    if (!newName) throw new Error('Nama ISP wajib diisi.');
 
     let subdomain = data.subdomain ? String(data.subdomain).toLowerCase().trim() : tenant.subdomain;
+    if (subdomain !== tenant.subdomain) assertValidSubdomain(subdomain);
     if (isReservedSubdomain(subdomain)) {
         throw new Error(`Subdomain "${subdomain}" tidak boleh digunakan.`);
     }
@@ -791,10 +807,9 @@ async function updateTenant(id, data) {
     if (months) {
         const endsAt = new Date();
         endsAt.setMonth(endsAt.getMonth() + months);
-        endsAtSql = endsAt.toISOString().slice(0, 19).replace('T', ' ');
+        endsAtSql = localSqlDateTime(endsAt);
     }
 
-    const newName = data.name ?? tenant.name;
     await dbRun(
         `UPDATE tenants SET
             name = ?, subdomain = ?, slug = ?, owner_name = ?, owner_email = ?, owner_phone = ?,

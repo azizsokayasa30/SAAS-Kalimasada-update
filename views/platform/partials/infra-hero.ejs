@@ -1,0 +1,42 @@
+<%
+  const ihTabs = [
+    { key: 'vpn', href: '/management/vpn', icon: 'bi-shield-lock', label: 'VPN Server' },
+    { key: 'vpn-devices', href: '/management/vpn/devices', icon: 'bi-router', label: 'Perangkat VPN' },
+    { key: 'switch', href: '/management/pop/switches', icon: 'bi-hdd-network', label: 'Switch' },
+    { key: 'radius', href: '/management/pop/radius', icon: 'bi-shield-check', label: 'Radius' },
+    { key: 'proxy', href: '/management/settings/reverse-proxy', icon: 'bi-signpost-split', label: 'Reverse Proxy' },
+    { key: 'api', href: '/management/settings/api', icon: 'bi-plug', label: 'API' },
+    { key: 'mrtg', href: '/management/settings/mrtg', icon: 'bi-graph-up', label: 'MRTG' }
+  ];
+  const ihChips = typeof chips !== 'undefined' && Array.isArray(chips) ? chips : [];
+  const ihActions = typeof actions !== 'undefined' && actions ? actions : '';
+%>
+<link rel="stylesheet" href="/css/infra-modern.css?v=7">
+<header class="km-infra-hero">
+  <div class="km-infra-hero__main">
+    <span class="km-infra-hero__icon"><i class="bi <%= icon %>"></i></span>
+    <div class="km-infra-hero__text">
+      <span class="km-infra-hero__eyebrow">Infrastruktur</span>
+      <h2><%= heading %></h2>
+      <p><%= desc %></p>
+    </div>
+    <% if (ihActions) { %><div class="km-infra-hero__actions"><%- ihActions %></div><% } %>
+    <% if (ihChips.length) { %>
+      <div class="km-infra-hero__chips">
+        <% ihChips.forEach(function (c) { %>
+          <span class="km-infra-chip km-infra-chip--<%= c.tone || 'muted' %>" title="<%= c.label %>">
+            <% if (c.dot) { %><i class="km-infra-chip__dot"></i><% } else if (c.icon) { %><i class="bi <%= c.icon %>"></i><% } %>
+            <span class="km-infra-chip__text"><%= c.label %></span>
+          </span>
+        <% }); %>
+      </div>
+    <% } %>
+  </div>
+  <nav class="km-infra-tabs" aria-label="Menu infrastruktur">
+    <% ihTabs.forEach(function (t) { %>
+      <a href="<%= t.href %>" class="km-infra-tab <%= t.key === tab ? 'is-active' : '' %>" <% if (t.key === tab) { %>aria-current="page"<% } %>>
+        <i class="bi <%= t.icon %>"></i> <%= t.label %>
+      </a>
+    <% }); %>
+  </nav>
+</header>

@@ -1,0 +1,133 @@
+<%
+  const draft = typeof createDraft !== 'undefined' && createDraft ? createDraft : null;
+  const dv = draft ? draft.values || {} : {};
+  const baseDomain = typeof tenantBaseDomain !== 'undefined' && tenantBaseDomain ? tenantBaseDomain : 'kalimasada-app.com';
+%>
+<div class="modal fade km-modal" id="createTenantModal" tabindex="-1" aria-labelledby="createTenantModalLabel" aria-hidden="true"
+     <% if (draft) { %>data-auto-open="1"<% } %>>
+  <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
+    <form method="POST" action="/management/tenants" class="modal-content km-package-modal" id="createTenantForm">
+      <input type="hidden" name="from" value="modal">
+      <div class="modal-header km-package-modal__header">
+        <div>
+          <h5 class="modal-title mb-0" id="createTenantModalLabel"><i class="bi bi-buildings me-1"></i> Tambah Tenant</h5>
+          <p class="km-package-modal__subtitle mb-0">Daftarkan ISP baru beserta akun admin tenant-nya.</p>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+      </div>
+      <div class="modal-body km-package-modal__body">
+        <% if (draft && draft.error) { %>
+          <div class="alert alert-danger py-2 small mb-3"><i class="bi bi-x-circle me-1"></i><%= draft.error %></div>
+        <% } %>
+        <div class="row g-3">
+          <div class="col-lg-6">
+            <label class="form-label" for="ctName">Nama Tenant *</label>
+            <input type="text" id="ctName" name="name" class="form-control" value="<%= dv.name || '' %>" required placeholder="ISP Nusantara">
+          </div>
+          <div class="col-lg-6">
+            <label class="form-label" for="ctSubdomain">Subdomain *</label>
+            <div class="input-group flex-nowrap">
+              <input type="text" id="ctSubdomain" name="subdomain" class="form-control" value="<%= dv.subdomain || '' %>" required
+                     pattern="[a-z0-9-]+" title="huruf kecil, angka, strip" autocapitalize="off" spellcheck="false" placeholder="nusantara">
+              <span class="input-group-text small">.<%= baseDomain %></span>
+            </div>
+          </div>
+          <div class="col-lg-4">
+            <label class="form-label" for="ctOwnerName">Nama Owner *</label>
+            <input type="text" id="ctOwnerName" name="owner_name" class="form-control" value="<%= dv.owner_name || '' %>" required>
+          </div>
+          <div class="col-lg-4">
+            <label class="form-label" for="ctOwnerEmail">Email Owner *</label>
+            <input type="email" id="ctOwnerEmail" name="owner_email" class="form-control" value="<%= dv.owner_email || '' %>" required>
+          </div>
+          <div class="col-lg-4">
+            <label class="form-label" for="ctOwnerPhone">WhatsApp Owner *</label>
+            <input type="text" id="ctOwnerPhone" name="owner_phone" class="form-control" value="<%= dv.owner_phone || '' %>" required placeholder="62812...">
+          </div>
+
+          <div class="col-12 mt-2">
+            <hr class="my-2">
+            <h6 class="mb-1"><i class="bi bi-shield-lock me-1"></i> Kredensial Login Admin Tenant</h6>
+          </div>
+          <div class="col-lg-6">
+            <label class="form-label" for="ctAdminUser">Username Admin *</label>
+            <input type="text" id="ctAdminUser" name="admin_username" class="form-control" required
+                   pattern="[a-zA-Z0-9._-]+" title="huruf, angka, titik, strip, underscore"
+                   value="<%= dv.admin_username || 'admin' %>" placeholder="admin">
+          </div>
+          <div class="col-lg-6">
+            <label class="form-label" for="ctAdminPass">Password Admin</label>
+            <div class="input-group">
+              <input type="password" id="ctAdminPass" name="admin_password" class="form-control" autocomplete="new-password"
+                     placeholder="Kosongkan = otomatis" minlength="4">
+              <button type="button" class="btn btn-outline-secondary" id="ctTogglePass" title="Tampilkan/sembunyikan">
+                <i class="bi bi-eye"></i>
+              </button>
+              <button type="button" class="btn btn-outline-secondary" id="ctGenPass" title="Generate password">
+                <i class="bi bi-shuffle"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer km-package-modal__footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button type="submit" class="btn btn-km-primary px-4" id="ctSubmit">
+          <i class="bi bi-check2-circle me-1"></i> Buat Tenant
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  var modalEl = document.getElementById('createTenantModal');
+  if (!modalEl) return;
+  var form = document.getElementById('createTenantForm');
+  var pass = document.getElementById('ctAdminPass');
+  var toggle = document.getElementById('ctTogglePass');
+  var gen = document.getElementById('ctGenPass');
+  var sub = document.getElementById('ctSubdomain');
+  var submit = document.getElementById('ctSubmit');
+
+  function setPassVisible(show) {
+    pass.type = show ? 'text' : 'password';
+    toggle.innerHTML = show ? '<i class="bi bi-eye-slash"></i>' : '<i class="bi bi-eye"></i>';
+  }
+
+  toggle.addEventListener('click', function () { setPassVisible(pass.type === 'password'); });
+
+  gen.addEventListener('click', function () {
+    var chars = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    var pwd = '';
+    for (var i = 0; i < 12; i++) pwd += chars[Math.floor(Math.random() * chars.length)];
+    pass.value = pwd;
+    setPassVisible(true);
+  });
+
+  sub.addEventListener('input', function () {
+    var pos = this.selectionStart;
+    this.value = this.value.toLowerCase().replace(/\s+/g, '-');
+    this.setSelectionRange(pos, pos);
+  });
+
+  form.addEventListener('submit', function () {
+    submit.disabled = true;
+    submit.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Membuat tenant…';
+  });
+
+  modalEl.addEventListener('shown.bs.modal', function () {
+    document.getElementById('ctName').focus();
+  });
+
+  function autoOpen() {
+    if (!window.bootstrap || !bootstrap.Modal) return;
+    if (modalEl.getAttribute('data-auto-open') === '1' || /[?&]create=1\b/.test(location.search)) {
+      bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    }
+  }
+  if (document.readyState === 'complete') autoOpen();
+  else window.addEventListener('load', autoOpen);
+})();
+</script>

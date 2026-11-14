@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../store/task_provider.dart';
 import '../store/auth_provider.dart';
+import '../utils/task_work_summary.dart';
 import 'add_trouble_ticket_screen.dart';
 import 'new_task_screen.dart';
 import 'job_execution_screen.dart';
@@ -45,6 +46,7 @@ class _TaskListScreenState extends State<TaskListScreen> {
   String _selectedStatus = 'Aktif'; // 'Semua', 'Aktif', 'Selesai'
   late int _selectedMonth;
   late int _selectedYear;
+  bool _todayOnly = false;
   final TextEditingController _searchController = TextEditingController();
 
   @override
@@ -87,15 +89,44 @@ class _TaskListScreenState extends State<TaskListScreen> {
   }
 
   Future<void> _selectMonth(int? month) async {
-    if (month == null || month == _selectedMonth) return;
-    setState(() => _selectedMonth = month);
+    if (month == null) return;
+    if (month == _selectedMonth) {
+      if (_todayOnly) setState(() => _todayOnly = false);
+      return;
+    }
+    setState(() {
+      _selectedMonth = month;
+      _todayOnly = false;
+    });
     await _fetchTasksForSelectedPeriod(refresh: true);
   }
 
   Future<void> _selectYear(int? year) async {
-    if (year == null || year == _selectedYear) return;
-    setState(() => _selectedYear = year);
+    if (year == null) return;
+    if (year == _selectedYear) {
+      if (_todayOnly) setState(() => _todayOnly = false);
+      return;
+    }
+    setState(() {
+      _selectedYear = year;
+      _todayOnly = false;
+    });
     await _fetchTasksForSelectedPeriod(refresh: true);
+  }
+
+  Future<void> _toggleToday() async {
+    final now = DateTime.now();
+    final periodChanged =
+        !_todayOnly &&
+        (_selectedMonth != now.month || _selectedYear != now.year);
+    setState(() {
+      _todayOnly = !_todayOnly;
+      if (_todayOnly) {
+        _selectedMonth = now.month;
+        _selectedYear = now.year;
+      }
+    });
+    if (periodChanged) await _fetchTasksForSelectedPeriod(refresh: true);
   }
 
   @override
@@ -374,6 +405,8 @@ class _TaskListScreenState extends State<TaskListScreen> {
     final currentYear = DateTime.now().year;
     return Row(
       children: [
+        _buildTodayPill(loading),
+        const SizedBox(width: 8),
         Expanded(
           flex: 3,
           child: _buildPeriodPill(
@@ -399,7 +432,6 @@ class _TaskListScreenState extends State<TaskListScreen> {
         Expanded(
           flex: 2,
           child: _buildPeriodPill(
-            icon: Icons.event_rounded,
             child: _buildPeriodDropdown(
               value: _selectedYear,
               items: [
@@ -418,7 +450,48 @@ class _TaskListScreenState extends State<TaskListScreen> {
     );
   }
 
-  Widget _buildPeriodPill({required IconData icon, required Widget child}) {
+  Widget _buildTodayPill(bool loading) {
+    const primaryBlue = Color(0xFF2563EB);
+    final selected = _todayOnly;
+    return InkWell(
+      borderRadius: BorderRadius.circular(999),
+      onTap: loading ? null : _toggleToday,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        height: 42,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? primaryBlue : Colors.white,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected ? primaryBlue : const Color(0xFFBFDBFE),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.today_rounded,
+              size: 16,
+              color: selected ? Colors.white : primaryBlue,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'Hari ini',
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+                color: selected ? Colors.white : primaryBlue,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPeriodPill({IconData? icon, required Widget child}) {
     return Container(
       height: 42,
       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -436,8 +509,10 @@ class _TaskListScreenState extends State<TaskListScreen> {
       ),
       child: Row(
         children: [
-          Icon(icon, size: 17, color: const Color(0xFF2563EB)),
-          const SizedBox(width: 8),
+          if (icon != null) ...[
+            Icon(icon, size: 17, color: const Color(0xFF2563EB)),
+            const SizedBox(width: 8),
+          ],
           Expanded(child: child),
         ],
       ),
@@ -486,11 +561,34 @@ class _TaskListScreenState extends State<TaskListScreen> {
   }
 
   List<dynamic> _filterBySelectedPeriod(List<dynamic> source) {
+    if (_todayOnly) return source.where(_isTaskToday).toList();
     return source.where((task) {
       final date = _taskPeriodDate(task);
       if (date == null || date.year != _selectedYear) return false;
       return _selectedMonth == 0 || date.month == _selectedMonth;
     }).toList();
+  }
+
+  /// Dijadwalkan, dibuat, dikerjakan, atau selesai hari ini.
+  bool _isTaskToday(dynamic raw) {
+    if (raw is! Map) return false;
+    final now = DateTime.now();
+    for (final key in const [
+      'scheduled_date',
+      'activity_at',
+      'created_at',
+      'work_started_at',
+      'completed_at',
+    ]) {
+      final d = parseTaskWorkStarted(raw[key]?.toString());
+      if (d != null &&
+          d.year == now.year &&
+          d.month == now.month &&
+          d.day == now.day) {
+        return true;
+      }
+    }
+    return false;
   }
 
   bool _isTaskActive(dynamic raw) {
@@ -653,6 +751,50 @@ class _TaskListScreenState extends State<TaskListScreen> {
       provider.fetchTasks(refresh: true);
       provider.fetchTaskHistory(refresh: true);
     }
+  }
+
+  Widget _buildTechnicianLine(Map<String, dynamic> task, bool isCompleted) {
+    final name = taskTechnicianName(task);
+    final duration = isCompleted ? taskWorkDuration(task) : null;
+    final hasName = name.isNotEmpty;
+    return Row(
+      children: [
+        Icon(
+          Icons.engineering_rounded,
+          size: 15,
+          color: hasName ? const Color(0xFF2563EB) : const Color(0xFF94A3B8),
+        ),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(
+            hasName ? name : 'Belum ada teknisi',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: hasName ? FontWeight.w700 : FontWeight.w500,
+              color: hasName
+                  ? const Color(0xFF1E3A8A)
+                  : const Color(0xFF94A3B8),
+              fontStyle: hasName ? FontStyle.normal : FontStyle.italic,
+            ),
+          ),
+        ),
+        if (duration != null) ...[
+          const SizedBox(width: 8),
+          const Icon(Icons.timer_outlined, size: 14, color: Color(0xFF16A34A)),
+          const SizedBox(width: 3),
+          Text(
+            formatWorkDuration(duration),
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF16A34A),
+            ),
+          ),
+        ],
+      ],
+    );
   }
 
   Widget _buildTaskCard(Map<String, dynamic> task) {
@@ -900,6 +1042,8 @@ class _TaskListScreenState extends State<TaskListScreen> {
                           ],
                         ),
                       ],
+                      const SizedBox(height: 6),
+                      _buildTechnicianLine(task, isCompleted),
                       const SizedBox(height: 8),
                       const Divider(height: 1, color: Color(0xFFDBEAFE)),
                       const SizedBox(height: 6),

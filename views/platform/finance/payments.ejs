@@ -16,7 +16,7 @@
 <main class="km-main km-inv-page km-fin-page">
   <div class="km-topbar">
     <div>
-      <h2>Riwayat Pembayaran Gateway</h2>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-credit-card-2-front"></i></span>Riwayat Pembayaran Gateway</h2>
     </div>
   </div>
 
@@ -29,9 +29,9 @@
     filters,
     yearOnly: false,
     extraSelects: [
-      { name: 'tenant_id', label: 'Tenant', allLabel: 'Semua tenant', selected: filters.tenantId, wide: true,
+      { name: 'tenant_id', label: 'Tenant', allLabel: 'Semua tenant', selected: filters.tenantId, wide: true, icon: 'bi-buildings',
         options: tenants.map(function (t) { return { value: t.id, label: t.name }; }) },
-      { name: 'gateway', label: 'Gateway', allLabel: 'Semua gateway', selected: filters.gateway,
+      { name: 'gateway', label: 'Gateway', allLabel: 'Semua gateway', selected: filters.gateway, icon: 'bi-credit-card-2-front',
         options: gateways.map(function (g) { return { value: g, label: g.charAt(0).toUpperCase() + g.slice(1) }; }) }
     ]
   }) %>
@@ -160,5 +160,5 @@
     <% } %>
   </div>
 </main>
-<script src="/js/platform-finance.js?v=1"></script>
+<script src="/js/platform-finance.js?v=3"></script>
 <%- include('../partials/footer') %>

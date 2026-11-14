@@ -11,6 +11,8 @@ class PppoeTrafficCard extends StatefulWidget {
     super.key,
     required this.endpoint,
     this.framed = true,
+    this.reconnectEndpoint,
+    this.onReconnected,
   });
 
   /// Endpoint mobile-adapter, mis. `/api/mobile-adapter/customers/12/traffic`.
@@ -18,6 +20,11 @@ class PppoeTrafficCard extends StatefulWidget {
 
   /// `false` bila kartu sudah dibungkus section card milik layar induk.
   final bool framed;
+
+  /// Endpoint POST untuk memutus sesi aktif; tombol Reconnect hanya tampil bila diisi.
+  final String? reconnectEndpoint;
+
+  final VoidCallback? onReconnected;
 
   @override
   State<PppoeTrafficCard> createState() => _PppoeTrafficCardState();
@@ -33,11 +40,14 @@ class _PppoeTrafficCardState extends State<PppoeTrafficCard> {
   static const _textMuted = Color(0xFF474551);
   static const _outline = Color(0xFFC7D7FE);
   static const _surfaceTint = Color(0xFF2E9DEB);
+  static const _reconnectColor = Color(0xFFDC2626);
+  static const _redialWait = Duration(seconds: 8);
 
   Timer? _timer;
   DateTime? _liveStartedAt;
   bool _loading = true;
   bool _fetching = false;
+  bool _reconnecting = false;
   String? _error;
   Map<String, dynamic>? _data;
 
@@ -114,6 +124,71 @@ class _PppoeTrafficCardState extends State<PppoeTrafficCard> {
     }
   }
 
+  Future<void> _reconnect() async {
+    final endpoint = widget.reconnectEndpoint;
+    if (endpoint == null || _reconnecting) return;
+    final login = _data?['login']?.toString() ?? '';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reconnect PPPoE?'),
+        content: Text(
+          'Sesi aktif${login.isEmpty ? '' : ' $login'} akan diputus di router. '
+          'Internet pelanggan terputus beberapa detik sampai modem konek ulang.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _reconnectColor),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Reconnect'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _reconnecting = true);
+    final messenger = ScaffoldMessenger.of(context);
+    String message;
+    bool ok = false;
+    try {
+      final res = await ApiClient.post(endpoint, const {});
+      final body = ApiClient.decodeJsonObject(res, debugLabel: 'ppp-reconnect');
+      ok = res.statusCode == 200 && ApiClient.jsonSuccess(body['success']);
+      message =
+          body['message']?.toString() ??
+          (ok ? 'Sesi PPPoE diputus' : 'Gagal reconnect PPPoE');
+    } catch (_) {
+      message = 'Gagal reconnect PPPoE';
+    }
+    if (!mounted) return;
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: ok ? null : _reconnectColor,
+        ),
+      );
+    if (!ok) {
+      setState(() => _reconnecting = false);
+      return;
+    }
+
+    _timer?.cancel();
+    _timer = null;
+    setState(() => _loading = true);
+    await Future<void>.delayed(_redialWait);
+    if (!mounted) return;
+    setState(() => _reconnecting = false);
+    _startLive();
+    widget.onReconnected?.call();
+  }
+
   static double _num(dynamic v) {
     if (v is num) return v.toDouble();
     return double.tryParse(v?.toString() ?? '') ?? 0;
@@ -162,12 +237,48 @@ class _PppoeTrafficCardState extends State<PppoeTrafficCard> {
                   ),
                 ),
               ),
+              _reconnectButton(),
               _liveBadge(),
             ],
           ),
           const Divider(height: 16),
           content,
         ],
+      ),
+    );
+  }
+
+  Widget _reconnectButton() {
+    final online = _data?['online'] == true;
+    if (widget.reconnectEndpoint == null || (!online && !_reconnecting)) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: OutlinedButton.icon(
+        onPressed: _reconnecting ? null : _reconnect,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: _reconnectColor,
+          side: const BorderSide(color: _reconnectColor),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          minimumSize: const Size(0, 30),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          visualDensity: VisualDensity.compact,
+        ),
+        icon: _reconnecting
+            ? const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: _reconnectColor,
+                ),
+              )
+            : const Icon(Icons.restart_alt, size: 16),
+        label: Text(
+          _reconnecting ? 'Menunggu…' : 'Reconnect',
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+        ),
       ),
     );
   }

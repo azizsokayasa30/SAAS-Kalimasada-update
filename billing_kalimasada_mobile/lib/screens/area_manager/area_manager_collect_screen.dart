@@ -2,14 +2,17 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 
 import '../../services/api_client.dart';
+import '../../store/auth_provider.dart';
 import '../customer_detail_screen.dart';
 import 'area_manager_collect_history_screen.dart';
 import 'area_manager_receive_payment_screen.dart';
 import 'area_manager_theme.dart';
 
-/// Tagih pelanggan di wilayah Manager Area (pembayaran langsung, tanpa komisi).
+/// Tagih pelanggan: Manager Area untuk wilayahnya, admin utama untuk semua pelanggan
+/// (pembayaran langsung, tanpa komisi).
 class AreaManagerCollectScreen extends StatefulWidget {
   const AreaManagerCollectScreen({super.key});
 
@@ -268,7 +271,8 @@ class _AreaManagerCollectScreenState extends State<AreaManagerCollectScreen> {
         if (r.statusCode != 200 || !ApiClient.jsonSuccess(body['success'])) {
           continue;
         }
-        for (final row in (body['data'] as List? ?? const []).whereType<Map>()) {
+        for (final row
+            in (body['data'] as List? ?? const []).whereType<Map>()) {
           if (_num(row['id']).toInt() == id) {
             return {...c, ...Map<String, dynamic>.from(row)};
           }
@@ -283,9 +287,8 @@ class _AreaManagerCollectScreenState extends State<AreaManagerCollectScreen> {
     showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => const Center(
-        child: CircularProgressIndicator(color: Colors.white),
-      ),
+      builder: (_) =>
+          const Center(child: CircularProgressIndicator(color: Colors.white)),
     );
     final full = await _fetchFullCustomer(c);
     if (!mounted) return;
@@ -298,10 +301,7 @@ class _AreaManagerCollectScreenState extends State<AreaManagerCollectScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Theme(
-      data: areaManagerTheme,
-      child: _buildScaffold(context),
-    );
+    return Theme(data: areaManagerTheme, child: _buildScaffold(context));
   }
 
   Widget _buildScaffold(BuildContext context) {
@@ -411,9 +411,7 @@ class _AreaManagerCollectScreenState extends State<AreaManagerCollectScreen> {
       color: selected ? Colors.white : Colors.white.withValues(alpha: 0.18),
       shape: StadiumBorder(
         side: BorderSide(
-          color: selected
-              ? Colors.white
-              : Colors.white.withValues(alpha: 0.55),
+          color: selected ? Colors.white : Colors.white.withValues(alpha: 0.55),
         ),
       ),
       child: InkWell(
@@ -539,7 +537,8 @@ class _AreaManagerCollectScreenState extends State<AreaManagerCollectScreen> {
       ),
     );
     if (picked == null || !mounted) return;
-    final unchanged = picked.month == _month &&
+    final unchanged =
+        picked.month == _month &&
         (picked.month == null || picked.year == _year);
     if (unchanged) return;
     setState(() {
@@ -673,6 +672,8 @@ class _AreaManagerCollectScreenState extends State<AreaManagerCollectScreen> {
                       ? 'Pelanggan tidak ditemukan.'
                       : _month != null
                       ? 'Tidak ada tagihan belum lunas untuk $_periodLabel.'
+                      : context.read<AuthProvider>().role == 'admin'
+                      ? 'Semua pelanggan sudah lunas.'
                       : 'Semua pelanggan di wilayah Anda sudah lunas.',
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: _textMuted),

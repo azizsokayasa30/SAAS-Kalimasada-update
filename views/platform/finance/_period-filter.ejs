@@ -1,60 +1,132 @@
 <%
   const pfMonths = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+  const pfMonthsShort = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
   const pfYearOnly = typeof yearOnly !== 'undefined' && !!yearOnly;
+  const pfTitle = typeof periodTitle !== 'undefined' && periodTitle ? periodTitle : 'Periode';
   const pfNow = new Date();
-  const pfYear = Number(filters.year) || pfNow.getFullYear();
-  const pfMonth = Number(filters.month) || (pfNow.getMonth() + 1);
+  const pfNowY = pfNow.getFullYear();
+  const pfNowM = pfNow.getMonth() + 1;
+  const pfYear = Number(filters.year) || pfNowY;
+  const pfMonth = Number(filters.month) || pfNowM;
   const pfExtras = typeof extraSelects !== 'undefined' && Array.isArray(extraSelects) ? extraSelects : [];
   const pfKeep = pfExtras
     .filter(function (s) { return s.selected !== undefined && s.selected !== null && String(s.selected) !== ''; })
     .map(function (s) { return '&' + encodeURIComponent(s.name) + '=' + encodeURIComponent(s.selected); })
     .join('');
+  const pfHref = function (m, y) { return pfYearOnly ? '?year=' + y + pfKeep : '?month=' + m + '&year=' + y + pfKeep; };
+  const pfWith = function (name, value) {
+    let q = pfYearOnly ? '?year=' + pfYear : '?month=' + pfMonth + '&year=' + pfYear;
+    pfExtras.forEach(function (s) {
+      const v = s.name === name ? value : s.selected;
+      if (v !== undefined && v !== null && String(v) !== '') q += '&' + encodeURIComponent(s.name) + '=' + encodeURIComponent(v);
+    });
+    return q;
+  };
   let pfPrev;
   let pfNext;
   if (pfYearOnly) {
-    pfPrev = '?year=' + (pfYear - 1) + pfKeep;
-    pfNext = '?year=' + (pfYear + 1) + pfKeep;
+    pfPrev = pfHref(null, pfYear - 1);
+    pfNext = pfHref(null, pfYear + 1);
   } else {
-    pfPrev = '?month=' + (pfMonth === 1 ? 12 : pfMonth - 1) + '&year=' + (pfMonth === 1 ? pfYear - 1 : pfYear) + pfKeep;
-    pfNext = '?month=' + (pfMonth === 12 ? 1 : pfMonth + 1) + '&year=' + (pfMonth === 12 ? pfYear + 1 : pfYear) + pfKeep;
+    pfPrev = pfHref(pfMonth === 1 ? 12 : pfMonth - 1, pfMonth === 1 ? pfYear - 1 : pfYear);
+    pfNext = pfHref(pfMonth === 12 ? 1 : pfMonth + 1, pfMonth === 12 ? pfYear + 1 : pfYear);
   }
-  const pfLabel = pfYearOnly ? 'Tahun ' + pfYear : pfMonths[pfMonth - 1] + ' ' + pfYear;
+  const pfIsCurrent = pfYearOnly ? pfYear === pfNowY : (pfYear === pfNowY && pfMonth === pfNowM);
+  const pfLabelMain = pfYearOnly ? 'Tahun ' + pfYear : pfMonths[pfMonth - 1];
+  const pfLabelYear = pfYearOnly ? '' : pfYear;
+  const pfLastDay = new Date(pfYear, pfMonth, 0).getDate();
+  const pfRange = pfYearOnly
+    ? '1 Jan – 31 Des ' + pfYear + ' · 12 bulan'
+    : '1 – ' + pfLastDay + ' ' + pfMonthsShort[pfMonth - 1] + ' ' + pfYear + ' · ' + pfLastDay + ' hari';
   const pfStep = pfYearOnly ? 'Tahun' : 'Bulan';
-  const pfMinY = Math.min(pfNow.getFullYear() - 3, pfYear);
-  const pfMaxY = Math.max(pfNow.getFullYear() + 1, pfYear);
+  const pfGridEnd = pfYear < pfNowY - 7 ? pfYear + 4 : Math.max(pfNowY + 1, pfYear + 1);
+  const pfGridYears = [];
+  for (let y = pfGridEnd - 8; y <= pfGridEnd; y++) pfGridYears.push(y);
 %>
-<form method="GET" class="km-card km-fin-filter js-period-form mb-3">
-  <div class="km-fin-filter__label">
-    <span class="km-fin-icon"><i class="bi bi-calendar3"></i></span>
-    <div>
-      <small>Periode</small>
-      <strong><%= pfLabel %></strong>
+<form method="GET" class="km-card km-pp js-period-form mb-3" data-pp data-pp-keep="<%= pfKeep %>" data-pp-year="<%= pfYear %>">
+  <% if (!pfYearOnly) { %><input type="hidden" name="month" value="<%= pfMonth %>"><% } %>
+  <input type="hidden" name="year" value="<%= pfYear %>">
+
+  <div class="km-pp__period">
+    <div class="km-pp__stepper">
+      <a href="<%= pfPrev %>" class="km-pp__nav" title="<%= pfStep %> sebelumnya" aria-label="<%= pfStep %> sebelumnya"><i class="bi bi-chevron-left"></i></a>
+      <details class="km-pp__picker js-pp-picker js-pp-pop">
+        <summary class="km-pp__trigger" aria-label="Pilih <%= pfStep.toLowerCase() %>">
+          <i class="bi bi-calendar3 km-pp__cal"></i>
+          <span class="km-pp__value"><%= pfLabelMain %><% if (pfLabelYear) { %> <em><%= pfLabelYear %></em><% } %></span>
+          <i class="bi bi-chevron-down km-pp__caret"></i>
+        </summary>
+        <div class="km-pp__panel" role="dialog" aria-label="Pilih <%= pfStep.toLowerCase() %>">
+          <% if (pfYearOnly) { %>
+            <div class="km-pp__panel-head"><strong>Pilih Tahun</strong></div>
+            <div class="km-pp__grid">
+              <% pfGridYears.forEach(function (y) { %>
+                <a href="<%= pfHref(null, y) %>" class="km-pp__chip <%= y === pfYear ? 'is-active' : '' %> <%= y === pfNowY ? 'is-now' : '' %>"><%= y %></a>
+              <% }); %>
+            </div>
+          <% } else { %>
+            <div class="km-pp__panel-head">
+              <button type="button" class="km-pp__ynav js-pp-year" data-step="-1" aria-label="Tahun sebelumnya"><i class="bi bi-chevron-left"></i></button>
+              <strong class="js-pp-year-label"><%= pfYear %></strong>
+              <button type="button" class="km-pp__ynav js-pp-year" data-step="1" aria-label="Tahun berikutnya"><i class="bi bi-chevron-right"></i></button>
+            </div>
+            <div class="km-pp__grid">
+              <% for (let m = 1; m <= 12; m++) { %>
+                <a href="<%= pfHref(m, pfYear) %>" class="km-pp__chip js-pp-month <%= m === pfMonth ? 'is-active' : '' %> <%= m === pfNowM && pfYear === pfNowY ? 'is-now' : '' %>" data-month="<%= m %>" title="<%= pfMonths[m - 1] %>"><%= pfMonthsShort[m - 1] %></a>
+              <% } %>
+            </div>
+          <% } %>
+          <div class="km-pp__panel-foot">
+            <a href="<%= pfHref(pfNowM, pfNowY) %>" class="km-pp__today"><i class="bi bi-crosshair"></i> <%= pfYearOnly ? 'Tahun ini' : 'Bulan ini' %></a>
+          </div>
+        </div>
+      </details>
+      <a href="<%= pfNext %>" class="km-pp__nav" title="<%= pfStep %> berikutnya" aria-label="<%= pfStep %> berikutnya"><i class="bi bi-chevron-right"></i></a>
+    </div>
+    <div class="km-pp__meta">
+      <span class="km-pp__label">
+        <%= pfTitle %>
+        <% if (pfIsCurrent) { %><span class="km-pp__live"><span></span> <%= pfYearOnly ? 'Tahun berjalan' : 'Bulan berjalan' %></span><% } %>
+      </span>
+      <span class="km-pp__range"><%= pfRange %></span>
     </div>
   </div>
-  <div class="km-fin-filter__controls">
-    <% pfExtras.forEach(function (s) { %>
-      <select name="<%= s.name %>" class="form-select form-select-sm js-autosubmit <%= s.wide ? 'km-fin-filter__wide' : '' %>" aria-label="<%= s.label %>">
-        <option value=""><%= s.allLabel || 'Semua' %></option>
-        <% (s.options || []).forEach(function (o) { %>
-          <option value="<%= o.value %>" <%= String(s.selected) === String(o.value) ? 'selected' : '' %>><%= o.label %></option>
-        <% }); %>
-      </select>
+
+  <div class="km-pp__side">
+    <% pfExtras.forEach(function (s) {
+         const sel = String(s.selected === undefined || s.selected === null ? '' : s.selected);
+         const opts = [{ value: '', label: s.allLabel || 'Semua' }].concat(s.options || []);
+         const cur = opts.find(function (o) { return String(o.value) === sel; }) || opts[0];
+    %>
+      <details class="km-pp__dd js-pp-pop <%= s.wide ? 'km-pp__dd--wide' : '' %>">
+        <summary class="km-pp__field <%= sel !== '' ? 'is-set' : '' %>" aria-label="Pilih <%= s.label %>" aria-haspopup="listbox">
+          <i class="bi <%= s.icon || 'bi-funnel' %> km-pp__field-icon"></i>
+          <span class="km-pp__field-label"><%= s.label %></span>
+          <span class="km-pp__field-value"><%= cur.label %></span>
+          <i class="bi bi-chevron-down km-pp__field-caret"></i>
+        </summary>
+        <div class="km-pp__menu">
+          <% if (opts.length > 7) { %>
+            <div class="km-pp__menu-search">
+              <i class="bi bi-search"></i>
+              <input type="search" class="js-pp-menu-search" placeholder="Cari <%= s.label.toLowerCase() %>…" autocomplete="off" aria-label="Cari <%= s.label.toLowerCase() %>">
+            </div>
+          <% } %>
+          <div class="km-pp__menu-list" role="listbox" aria-label="<%= s.label %>">
+            <% opts.forEach(function (o, i) { const active = String(o.value) === sel; %>
+              <a href="<%= pfWith(s.name, o.value) %>" class="km-pp__opt <%= active ? 'is-active' : '' %> <%= i === 0 ? 'km-pp__opt--all' : '' %>" role="option" aria-selected="<%= active %>" data-search="<%= String(o.label).toLowerCase() %>">
+                <span><%= o.label %></span>
+                <% if (active) { %><i class="bi bi-check2"></i><% } %>
+              </a>
+            <% }); %>
+            <div class="km-pp__menu-empty d-none">Tidak ditemukan</div>
+          </div>
+        </div>
+      </details>
     <% }); %>
-    <% if (pfExtras.length) { %><span class="km-fin-filter__sep" aria-hidden="true"></span><% } %>
-    <a href="<%= pfPrev %>" class="km-fin-filter__nav" title="<%= pfStep %> sebelumnya" aria-label="<%= pfStep %> sebelumnya"><i class="bi bi-chevron-left"></i></a>
-    <% if (!pfYearOnly) { %>
-      <select name="month" class="form-select form-select-sm js-autosubmit" aria-label="Bulan">
-        <% for (let m = 1; m <= 12; m++) { %>
-          <option value="<%= m %>" <%= pfMonth === m ? 'selected' : '' %>><%= pfMonths[m - 1] %></option>
-        <% } %>
-      </select>
+    <% if (!pfIsCurrent) { %>
+      <a href="<%= pfHref(pfNowM, pfNowY) %>" class="km-pp__reset" title="Kembali ke <%= pfYearOnly ? 'tahun' : 'bulan' %> berjalan"><i class="bi bi-arrow-counterclockwise"></i> <%= pfYearOnly ? 'Tahun ini' : 'Bulan ini' %></a>
     <% } %>
-    <select name="year" class="form-select form-select-sm js-autosubmit" aria-label="Tahun">
-      <% for (let y = pfMinY; y <= pfMaxY; y++) { %>
-        <option value="<%= y %>" <%= pfYear === y ? 'selected' : '' %>><%= y %></option>
-      <% } %>
-    </select>
-    <a href="<%= pfNext %>" class="km-fin-filter__nav" title="<%= pfStep %> berikutnya" aria-label="<%= pfStep %> berikutnya"><i class="bi bi-chevron-right"></i></a>
     <noscript><button type="submit" class="btn btn-km-primary btn-sm">Tampilkan</button></noscript>
   </div>
 </form>

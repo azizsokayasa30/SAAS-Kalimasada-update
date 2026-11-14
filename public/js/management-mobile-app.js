@@ -15,6 +15,21 @@
         });
     }
 
+    var toastTimer = null;
+    function notify(message, ok) {
+        var box = el('mobToast');
+        if (!box) { alert(message); return; }
+        box.className = 'km-mob2-toast is-show ' + (ok === false ? 'is-err' : 'is-ok');
+        box.innerHTML = '<i class="bi ' + (ok === false ? 'bi-x-circle-fill' : 'bi-check-circle-fill') + '"></i><span>' + escapeHtml(message) + '</span>';
+        if (toastTimer) clearTimeout(toastTimer);
+        toastTimer = setTimeout(function () { box.classList.remove('is-show'); }, 4000);
+    }
+
+    function setText(id, value) {
+        var node = el(id);
+        if (node) node.textContent = value;
+    }
+
     function setChip(chip, tone, icon, label) {
         if (!chip) return;
         chip.className = 'km-mob-chip is-' + tone;
@@ -163,11 +178,13 @@
         etaEl.textContent = eta;
         setBuildControls(s);
 
-        var statBuild = el('statBuildStatus');
-        if (statBuild) {
-            var labels = { idle: 'Siap', running: 'Berjalan', success: 'Sukses', failed: 'Gagal', cancelled: 'Dibatalkan' };
-            statBuild.textContent = labels[s] || s;
-        }
+        var labels = { idle: 'Siap', running: 'Berjalan', success: 'Sukses', failed: 'Gagal', cancelled: 'Dibatalkan' };
+        var subs = { idle: 'Tidak ada proses', running: pct + '% selesai', success: 'Build terakhir berhasil', failed: 'Build terakhir gagal', cancelled: 'Build terakhir dibatalkan' };
+        var tones = { idle: 'purple', running: 'blue', success: 'green', failed: 'red', cancelled: 'orange' };
+        setText('statBuildStatus', labels[s] || s);
+        setText('statBuildSub', subs[s] || '');
+        var statIcon = el('statBuildIcon');
+        if (statIcon) statIcon.className = 'km-set-stat__icon km-tone-' + (tones[s] || 'purple');
     }
 
     function startEtaTicker() {
@@ -200,23 +217,35 @@
     function renderApkList(files) {
         var ul = el('apkList');
         if (!files || !files.length) {
-            ul.innerHTML = '<li class="km-apk-empty"><i class="bi bi-inbox"></i><span>Belum ada APK.</span></li>';
+            ul.classList.remove('km-sx-filelist');
+            ul.innerHTML = '<li class="km-sx-empty km-sx-empty--sm km-sx-boxed">' +
+                '<span class="km-sx-empty__icon"><i class="bi bi-android2"></i></span>' +
+                '<h4 class="km-sx-empty__title">Belum ada APK</h4>' +
+                '<p class="km-sx-empty__text mb-0">Tekan <strong>Build APK</strong> setelah server siap. Hasil build akan muncul di sini.</p>' +
+                '</li>';
             return;
         }
+        var newest = files.reduce(function (m, f) { return Math.max(m, new Date(f.mtime).getTime() || 0); }, 0);
         ul.innerHTML = files.map(function (f) {
             var href = '/mobile-app/' + encodeURIComponent(f.name);
             var when = '';
             try { when = new Date(f.mtime).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }); } catch (_) {}
-            return '<li>' +
-                '<span class="km-apk-icon"><i class="bi bi-android2"></i></span>' +
-                '<span class="km-apk-meta">' +
-                '<strong>' + escapeHtml(f.name) + '</strong>' +
-                '<small>' + escapeHtml(f.size_mb) + ' MB' + (when ? ' · ' + escapeHtml(when) : '') + '</small>' +
-                '</span>' +
-                '<a class="btn btn-sm btn-outline-success" href="' + href + '" download="' + escapeHtml(f.name) + '">' +
-                '<i class="bi bi-download"></i> Unduh</a>' +
+            var isNewest = (new Date(f.mtime).getTime() || 0) === newest;
+            return '<li class="km-sx-filelist__row">' +
+                '<div class="km-sx-file">' +
+                '<span class="km-sx-file__icon km-tone-green"><i class="bi bi-android2"></i></span>' +
+                '<div class="min-w-0">' +
+                '<div class="km-sx-file__name">' + escapeHtml(f.name) +
+                (isNewest ? '<span class="km-sx-filelist__badge km-sx-filelist__badge--new">Terbaru</span>' : '') + '</div>' +
+                '<div class="km-sx-file__meta">' + escapeHtml(f.size_mb) + ' MB' + (when ? ' · ' + escapeHtml(when) : '') + '</div>' +
+                '</div></div>' +
+                '<div class="km-sx-iconbtns">' +
+                '<button type="button" class="btn btn-sm btn-outline-secondary" data-copy-url="' + escapeHtml(location.origin + href) + '" title="Salin link" aria-label="Salin link ' + escapeHtml(f.name) + '"><i class="bi bi-link-45deg"></i></button>' +
+                '<a class="btn btn-sm btn-outline-success" href="' + href + '" download="' + escapeHtml(f.name) + '" title="Unduh" aria-label="Unduh ' + escapeHtml(f.name) + '"><i class="bi bi-download"></i></a>' +
+                '</div>' +
                 '</li>';
         }).join('');
+        ul.classList.add('km-sx-filelist');
     }
 
     function renderReadiness(readiness) {
@@ -236,9 +265,12 @@
             panel.className = 'km-mob-ready ' + (ready ? 'is-ready' : 'is-missing');
         }
         if (text) text.textContent = ready ? 'Server siap build' : 'Server belum siap build';
-        if (el('readinessCount')) {
-            el('readinessCount').textContent = items.length ? readyCount + ' dari ' + items.length + ' komponen siap' : '';
-        }
+        setText('readinessCount', items.length ? readyCount + ' dari ' + items.length + ' komponen siap' : '');
+        setText('statReady', items.length ? readyCount + '/' + items.length : '—');
+        var bar = el('readinessBar');
+        if (bar) bar.style.width = (items.length ? Math.round(readyCount * 100 / items.length) : 0) + '%';
+        var readyIcon = el('statReadyIcon');
+        if (readyIcon) readyIcon.className = 'km-set-stat__icon km-tone-' + (ready ? 'green' : 'orange');
         if (icon) {
             icon.className = ready ? 'bi bi-check-circle-fill' : 'bi bi-exclamation-triangle-fill';
         }
@@ -250,10 +282,13 @@
         var list = el('readinessList');
         if (list) {
             list.innerHTML = items.map(function (item) {
+                var detail = item.detail ? shortPublicPath(item.detail).replace(/^.*[\\\/](billing_kalimasada_mobile)$/, '$1') : '';
+                if (detail && String(item.label).indexOf(detail) !== -1) detail = '';
                 return '<li class="' + (item.ready ? 'is-ok' : 'is-missing') + '"' +
                     (item.detail ? ' title="' + escapeHtml(item.detail) + '"' : '') + '>' +
                     '<i class="bi ' + (item.ready ? 'bi-check-circle-fill' : 'bi-x-circle-fill') + '"></i>' +
-                    '<div><strong>' + escapeHtml(item.label) + '</strong></div></li>';
+                    '<div><strong>' + escapeHtml(item.label) + '</strong>' +
+                    (detail ? '<small>' + escapeHtml(detail) + '</small>' : '') + '</div></li>';
             }).join('');
         }
 
@@ -269,6 +304,9 @@
         } else {
             el('btnBuildApk').disabled = !(readiness && readiness.can_build);
         }
+        el('btnBuildApk').title = (readiness && readiness.can_build)
+            ? ''
+            : 'Server belum siap build. Lengkapi komponen di panel Kesiapan Server.';
     }
 
     function renderKeystoreStatus(ks) {
@@ -308,9 +346,13 @@
         if (data.apk_url) el('otaApkUrl').textContent = data.apk_url;
 
         var det = data.flutter_detected || {};
-        el('flutterDetectHint').textContent = det.exists
-            ? 'Flutter terdeteksi: ' + det.path
-            : 'Flutter belum terdeteksi — pasang SDK ke path default atau isi path lain.';
+        var detHint = el('flutterDetectHint');
+        if (detHint) {
+            detHint.className = 'km-sx-hint ' + (det.exists ? 'is-ok' : 'is-warn');
+            detHint.innerHTML = det.exists
+                ? '<i class="bi bi-check-circle-fill"></i> Flutter terdeteksi di path ini.'
+                : '<i class="bi bi-exclamation-triangle-fill"></i> Flutter belum ditemukan. Pasang SDK ke path default atau isi path lain.';
+        }
 
         setChip(el('flutterStatusBadge'), det.exists ? 'ok' : 'warn',
             det.exists ? 'bi-check-circle' : 'bi-exclamation-triangle',
@@ -320,17 +362,17 @@
 
         if (data.min_build_number) {
             el('versionCode').min = data.min_build_number;
-            el('versionCodeHint').textContent = 'Minimal ' + data.min_build_number + ' untuk update dari app 5.9.2+91';
-            if (parseInt(el('versionCode').value, 10) < data.min_build_number) {
-            if (el('versionCodeHint')) {
-                el('versionCodeHint').textContent = 'Minimal ' + data.min_build_number + ' untuk update dari app 5.9.2+91';
-            }
+            if ((parseInt(el('versionCode').value, 10) || 0) < data.min_build_number) {
+                el('versionCode').value = data.min_build_number;
+                setText('versionCodeHint', 'Dinaikkan ke ' + data.min_build_number + ' untuk rilis baru.');
+            } else {
+                setText('versionCodeHint', 'Minimal ' + data.min_build_number + '.');
             }
         }
 
-        el('statVersion').textContent = data.version_name || '—';
-        el('statBuild').textContent = data.version_code || '—';
-        el('statApkCount').textContent = (data.latest_apk_files || []).length;
+        setText('statVersion', data.version_name || '—');
+        setText('statBuild', data.version_code || '—');
+        setText('statApkCount', (data.latest_apk_files || []).length);
 
         renderKeystoreStatus(data.keystore);
         renderReadiness(data.readiness);
@@ -389,10 +431,10 @@
                 body: JSON.stringify(formPayload())
             });
             var j = await r.json();
-            alert(j.message || (j.success ? 'Tersimpan' : 'Gagal'));
+            notify(j.message || (j.success ? 'Konfigurasi tersimpan' : 'Gagal menyimpan'), !!j.success);
             if (j.success) loadConfig();
         } catch (err) {
-            alert('Error: ' + err.message);
+            notify('Error: ' + err.message, false);
         }
     });
 
@@ -406,7 +448,7 @@
             });
             var j = await r.json();
             if (!j.success) {
-                alert(j.message || 'Gagal memulai build');
+                notify(j.message || 'Gagal memulai build', false);
                 if (j.data) renderReadiness(j.data);
                 return;
             }
@@ -415,7 +457,7 @@
             pollStatus();
             if (!pollTimer) pollTimer = setInterval(pollStatus, 2500);
         } catch (err) {
-            alert('Error: ' + err.message);
+            notify('Error: ' + err.message, false);
         }
     });
 
@@ -438,10 +480,10 @@
                 body: JSON.stringify({ force: false })
             });
             var j = await r.json();
-            alert(j.message || (j.success ? 'OK' : 'Gagal'));
+            notify(j.message || (j.success ? 'Berhasil' : 'Gagal'), !!j.success);
             if (j.success) loadConfig();
         } catch (err) {
-            alert('Error: ' + err.message);
+            notify('Error: ' + err.message, false);
         }
     });
 
@@ -450,10 +492,10 @@
         try {
             var r = await fetch(API_BASE + '/keystore/adopt', { method: 'POST' });
             var j = await r.json();
-            alert(j.message || (j.success ? 'OK' : 'Gagal'));
+            notify(j.message || (j.success ? 'Berhasil' : 'Gagal'), !!j.success);
             if (j.success) loadConfig();
         } catch (err) {
-            alert('Error: ' + err.message);
+            notify('Error: ' + err.message, false);
         }
     });
 
@@ -470,5 +512,16 @@
         });
     });
 
-    loadConfig().then(pollStatus).catch(function (e) { alert(e.message); });
+    el('apkList').addEventListener('click', function (e) {
+        var btn = e.target.closest('[data-copy-url]');
+        if (!btn || !navigator.clipboard) return;
+        navigator.clipboard.writeText(btn.getAttribute('data-copy-url')).then(function () {
+            var iconEl = btn.querySelector('i');
+            iconEl.className = 'bi bi-check2';
+            setTimeout(function () { iconEl.className = 'bi bi-link-45deg'; }, 1500);
+            notify('Link APK disalin');
+        });
+    });
+
+    loadConfig().then(pollStatus).catch(function (e) { notify(e.message, false); });
 })();

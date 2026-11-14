@@ -42,14 +42,6 @@ class _CollectorProfileTabState extends State<CollectorProfileTab>
   @override
   bool get wantKeepAlive => true;
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<CollectorProvider>().fetchMe();
-    });
-  }
-
   String _tenantName() {
     const keys = [
       'tenant_name',

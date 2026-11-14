@@ -34,13 +34,29 @@
   const copiedTotal = (typeof copyStats !== 'undefined' && copyStats) ? (copyStats.copied || 0) : 0;
   const notCopiedTotal = Math.max(0, customersAllTotal - copiedTotal);
   const copiedPercent = customersAllTotal > 0 ? Math.round((copiedTotal / customersAllTotal) * 1000) / 10 : 0;
+  const num = function (n) { return (Number(n) || 0).toLocaleString('id-ID'); };
+  const invPeriodLabel = typeof period !== 'undefined' && period && period.label ? period.label : 'Bulan Ini';
+  const invTotalAmt = Number(usage.invoices.total) || 0;
+  const invPaidPct = invTotalAmt > 0 ? Math.round((Number(usage.invoices.paid) || 0) / invTotalAmt * 100) : 0;
+  const statusTone = function (s) {
+    const v = String(s || '').toLowerCase();
+    if (v === 'active' || v === 'aktif') return 'green';
+    if (v === 'isolir' || v === 'suspended' || v === 'terminated') return 'red';
+    if (v === 'inactive' || v === 'nonaktif') return 'gray';
+    return 'blue';
+  };
 %>
-<main class="km-main">
+<main class="km-main km-set km-tenants km-mt">
   <div class="km-topbar">
-    <div>
-      <h2><%= child.name %></h2>
+    <div class="km-mt-childhead">
+      <span class="km-mt-childhead__avatar"><%= String(child.name || '?').trim().charAt(0).toUpperCase() %></span>
+      <div>
+        <a href="/management/master-tenant" class="km-mt-childhead__crumb"><i class="bi bi-diagram-3"></i> Master Tenant</a>
+        <h2 class="km-mt-childhead__title"><%= child.name %></h2>
+        <div class="km-mt-childhead__meta"><code><%= child.subdomain %></code><span>#<%= child.id %></span><% if (child.owner_name) { %><span><i class="bi bi-person"></i> <%= child.owner_name %></span><% } %></div>
+      </div>
     </div>
-    <a href="/management/master-tenant" class="btn btn-outline-secondary btn-sm">← Master Tenant</a>
+    <a href="/management/master-tenant" class="btn btn-outline-secondary btn-sm px-3"><i class="bi bi-arrow-left me-1"></i> Kembali</a>
   </div>
 
   <% if (flashCopied > 0) { %>
@@ -73,70 +89,86 @@
     <div class="alert alert-danger"><%= flash.error %></div>
   <% } %>
 
-  <div class="row g-3 mb-4">
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pelanggan Total</div><div class="value"><%= usage.customers.total || 0 %></div></div></div>
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pelanggan Aktif</div><div class="value text-success"><%= usage.customers.active || 0 %></div></div></div>
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Nonaktif</div><div class="value text-muted"><%= usage.customers.inactive || 0 %></div></div></div>
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Baru Bulan Ini</div><div class="value" style="color: var(--accent)"><%= usage.customers.new || 0 %></div></div></div>
-  </div>
-
-  <div class="row g-3 mb-4">
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Tagihan <%= typeof period !== 'undefined' && period && period.label ? period.label : 'Bulan Ini' %></div><div class="value"><%= formatRupiah(usage.invoices.total) %></div></div></div>
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Lunas</div><div class="value text-success"><%= formatRupiah(usage.invoices.paid) %></div></div></div>
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Belum Lunas</div><div class="value text-warning"><%= formatRupiah(usage.invoices.unpaid) %></div></div></div>
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Isolir</div><div class="value text-danger"><%= formatRupiah(usage.invoices.isolir) %></div></div></div>
-  </div>
-
-  <div class="row g-3 mb-4">
-    <div class="col-md-4 col-6">
-      <a href="<%= customersUrl({ copy_status: 'yes', page: null }) %>" class="text-decoration-none d-block">
-        <div class="km-stat">
-          <div class="label"><i class="bi bi-clipboard-check me-1"></i>Sudah di-copy</div>
-          <div class="value text-success"><%= copiedTotal %> <small style="font-size: .55em; color: var(--text-muted)">/ <%= customersAllTotal %> pelanggan</small></div>
+  <div class="row g-3 mb-3">
+    <div class="col-sm-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-blue"><i class="bi bi-people"></i></span>
+        <div>
+          <div class="km-set-stat__label">Pelanggan</div>
+          <div class="km-set-stat__value"><%= num(usage.customers.total) %></div>
+          <div class="km-set-stat__sub"><%= num(usage.customers.active) %> aktif · <%= num(usage.customers.inactive) %> nonaktif · <%= num(usage.customers.new) %> baru</div>
         </div>
-      </a>
+      </div>
     </div>
-    <div class="col-md-4 col-6">
-      <a href="<%= customersUrl({ copy_status: 'no', page: null }) %>" class="text-decoration-none d-block">
-        <div class="km-stat">
-          <div class="label"><i class="bi bi-clipboard me-1"></i>Belum di-copy</div>
-          <div class="value text-warning"><%= notCopiedTotal %></div>
+    <div class="col-sm-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-purple"><i class="bi bi-receipt"></i></span>
+        <div>
+          <div class="km-set-stat__label">Tagihan <%= invPeriodLabel %></div>
+          <div class="km-set-stat__value"><%= formatRupiah(usage.invoices.total) %></div>
+          <div class="km-set-stat__sub"><%= invPaidPct %>% lunas</div>
         </div>
-      </a>
+      </div>
     </div>
-    <div class="col-md-4 col-12">
-      <div class="km-stat">
-        <div class="label">Progres Copy</div>
-        <div class="value" style="color: var(--accent)"><%= copiedPercent %>%</div>
-        <div class="progress mt-2" style="height: 6px;">
-          <div class="progress-bar bg-success" role="progressbar" style="width: <%= copiedPercent %>%" aria-valuenow="<%= copiedPercent %>" aria-valuemin="0" aria-valuemax="100"></div>
+    <div class="col-sm-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-green"><i class="bi bi-check2-circle"></i></span>
+        <div>
+          <div class="km-set-stat__label">Lunas</div>
+          <div class="km-set-stat__value"><%= formatRupiah(usage.invoices.paid) %></div>
+          <div class="km-set-stat__sub">Sudah dibayar</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-orange"><i class="bi bi-hourglass-split"></i></span>
+        <div>
+          <div class="km-set-stat__label">Belum Lunas</div>
+          <div class="km-set-stat__value"><%= formatRupiah(usage.invoices.unpaid) %></div>
+          <div class="km-set-stat__sub">Isolir <%= formatRupiah(usage.invoices.isolir) %></div>
         </div>
       </div>
     </div>
   </div>
 
-  <ul class="nav nav-tabs km-master-tabs mb-3">
-    <li class="nav-item">
-      <a class="nav-link <%= tab === 'customers' ? 'active' : '' %>" href="/management/master-tenant/children/<%= child.id %>?tab=customers&amp;limit=<%= customersLimit %>">Pelanggan</a>
-    </li>
-    <li class="nav-item">
-      <a class="nav-link <%= tab === 'invoices' ? 'active' : '' %>" href="/management/master-tenant/children/<%= child.id %>?tab=invoices">Tagihan</a>
-    </li>
-  </ul>
+  <section class="km-card km-mt-copy mb-3">
+    <div class="km-mt-copy__ring" style="--p: <%= copiedPercent %>">
+      <span><%= copiedPercent %>%</span>
+    </div>
+    <div class="km-mt-copy__body">
+      <div class="km-mt-copy__title">Progres Copy ke Master</div>
+      <div class="km-mt-copy__bar"><span style="width: <%= copiedPercent %>%"></span></div>
+      <div class="km-mt-copy__legend">
+        <a href="<%= customersUrl({ copy_status: 'yes', page: null }) %>" class="km-mt-copy__chip km-mt-copy__chip--done <%= listQuery.copy_status === 'yes' ? 'is-active' : '' %>">
+          <i class="bi bi-clipboard-check"></i> Sudah di master <strong><%= num(copiedTotal) %></strong>
+        </a>
+        <a href="<%= customersUrl({ copy_status: 'no', page: null }) %>" class="km-mt-copy__chip km-mt-copy__chip--todo <%= listQuery.copy_status === 'no' ? 'is-active' : '' %>">
+          <i class="bi bi-clipboard"></i> Belum di-copy <strong><%= num(notCopiedTotal) %></strong>
+        </a>
+        <span class="km-mt-copy__total">dari <%= num(customersAllTotal) %> pelanggan</span>
+      </div>
+    </div>
+  </section>
 
-  <div class="km-card km-card--flush">
+  <div class="km-mt-tabs mb-3" role="tablist">
+    <a class="km-mt-tabs__item <%= tab === 'customers' ? 'is-active' : '' %>" href="/management/master-tenant/children/<%= child.id %>?tab=customers&amp;limit=<%= customersLimit %>"><i class="bi bi-people"></i> Pelanggan</a>
+    <a class="km-mt-tabs__item <%= tab === 'invoices' ? 'is-active' : '' %>" href="/management/master-tenant/children/<%= child.id %>?tab=invoices"><i class="bi bi-receipt"></i> Tagihan</a>
+  </div>
+
+  <div class="km-card km-card--flush km-mt-list">
     <% if (tab === 'customers' && customers) { %>
-    <div class="d-flex flex-wrap gap-2 align-items-center justify-content-between p-3 border-bottom">
+    <div class="km-mt-bulk">
       <form id="bulkCopyForm" method="POST" action="/management/master-tenant/children/<%= child.id %>/customers/copy-selected" class="d-flex flex-wrap gap-2 align-items-center mb-0" onsubmit="return window.confirmMasterBulkCopy();">
         <input type="hidden" name="limit" value="<%= customersLimit %>">
         <input type="hidden" name="page" value="<%= customers.page %>">
         <% listStateKeys.forEach(function (key) { if (listQuery[key]) { %>
           <input type="hidden" name="<%= key %>" value="<%= listQuery[key] %>">
         <% } }); %>
-        <button type="submit" class="btn btn-sm btn-primary">
+        <button type="submit" class="btn btn-sm btn-km-primary">
           <i class="bi bi-clipboard-plus"></i> Copy yang ditandai
         </button>
-        <small id="bulkCopyHint" style="color: var(--text-muted)">0 untuk di-copy</small>
+        <span id="bulkCopyHint" class="km-mt-bulk__hint">0 untuk di-copy</span>
       </form>
       <form id="bulkCancelForm" method="POST" action="/management/master-tenant/children/<%= child.id %>/customers/cancel-selected" class="d-flex flex-wrap gap-2 align-items-center mb-0" onsubmit="return window.confirmMasterBulkCancel();">
         <input type="hidden" name="limit" value="<%= customersLimit %>">
@@ -147,33 +179,31 @@
         <button type="submit" class="btn btn-sm btn-outline-danger">
           <i class="bi bi-x-circle"></i> Batalkan yang ditandai
         </button>
-        <small id="bulkCancelHint" style="color: var(--text-muted)">0 untuk dibatalkan</small>
+        <span id="bulkCancelHint" class="km-mt-bulk__hint km-mt-bulk__hint--danger">0 untuk dibatalkan</span>
       </form>
     </div>
-    <form method="GET" action="/management/master-tenant/children/<%= child.id %>" class="d-flex flex-wrap gap-2 align-items-end p-3 border-bottom mb-0">
+    <form method="GET" action="/management/master-tenant/children/<%= child.id %>" class="km-mt-filters mb-0">
       <input type="hidden" name="tab" value="customers">
       <input type="hidden" name="sort" value="<%= listQuery.sort || 'id' %>">
       <input type="hidden" name="dir" value="<%= listQuery.dir || 'desc' %>">
-      <div style="min-width: 16rem; flex: 1 1 16rem; max-width: 24rem;">
-        <label class="small mb-1 d-block" style="color: var(--text-muted)" for="customerSearch">Cari pelanggan</label>
-        <div class="input-group input-group-sm">
-          <input id="customerSearch" type="search" name="q" value="<%= listQuery.q || '' %>" class="form-control" placeholder="Nama, telepon, atau ID" autocomplete="off">
-          <button type="submit" class="btn btn-outline-secondary" title="Cari">
-            <i class="bi bi-search"></i>
-          </button>
+      <div class="km-mt-filters__search">
+        <label for="customerSearch">Cari pelanggan</label>
+        <div class="km-tl-search">
+          <i class="bi bi-search" aria-hidden="true"></i>
+          <input id="customerSearch" type="search" name="q" value="<%= listQuery.q || '' %>" class="form-control" placeholder="Nama, telepon, atau ID — tekan Enter" autocomplete="off">
         </div>
       </div>
       <div>
-        <label class="small mb-1 d-block" style="color: var(--text-muted)" for="filterCopyStatus">Status copy</label>
-        <select id="filterCopyStatus" name="copy_status" class="form-select form-select-sm" style="width: auto;" onchange="this.form.submit()">
+        <label for="filterCopyStatus">Status copy</label>
+        <select id="filterCopyStatus" name="copy_status" class="form-select form-select-sm" onchange="this.form.submit()">
           <option value="" <%= !listQuery.copy_status ? 'selected' : '' %>>Semua</option>
           <option value="no" <%= listQuery.copy_status === 'no' ? 'selected' : '' %>>Belum di-copy (<%= notCopiedTotal %>)</option>
           <option value="yes" <%= listQuery.copy_status === 'yes' ? 'selected' : '' %>>Sudah di master (<%= copiedTotal %>)</option>
         </select>
       </div>
       <div>
-        <label class="small mb-1 d-block" style="color: var(--text-muted)" for="filterArea">Area</label>
-        <select id="filterArea" name="area" class="form-select form-select-sm" style="width: auto; max-width: 14rem;" onchange="this.form.submit()">
+        <label for="filterArea">Area</label>
+        <select id="filterArea" name="area" class="form-select form-select-sm" onchange="this.form.submit()">
           <option value="">Semua area</option>
           <% (customers.filterOptions.areas || []).forEach(function (opt) {
                const value = opt.area == null ? emptyFilterValue : opt.area; %>
@@ -182,8 +212,8 @@
         </select>
       </div>
       <div>
-        <label class="small mb-1 d-block" style="color: var(--text-muted)" for="filterPackage">Paket</label>
-        <select id="filterPackage" name="package" class="form-select form-select-sm" style="width: auto; max-width: 16rem;" onchange="this.form.submit()">
+        <label for="filterPackage">Paket</label>
+        <select id="filterPackage" name="package" class="form-select form-select-sm" onchange="this.form.submit()">
           <option value="">Semua paket</option>
           <% (customers.filterOptions.packages || []).forEach(function (opt) {
                const value = opt.id == null ? emptyFilterValue : String(opt.id);
@@ -193,8 +223,8 @@
         </select>
       </div>
       <div>
-        <label class="small mb-1 d-block" style="color: var(--text-muted)" for="filterStatus">Status pelanggan</label>
-        <select id="filterStatus" name="status" class="form-select form-select-sm" style="width: auto;" onchange="this.form.submit()">
+        <label for="filterStatus">Status pelanggan</label>
+        <select id="filterStatus" name="status" class="form-select form-select-sm" onchange="this.form.submit()">
           <option value="">Semua status</option>
           <% (customers.filterOptions.statuses || []).forEach(function (opt) {
                const value = opt.status == null ? emptyFilterValue : opt.status; %>
@@ -203,84 +233,97 @@
         </select>
       </div>
       <div>
-        <label class="small mb-1 d-block" style="color: var(--text-muted)" for="customersPerPage">Per halaman</label>
-        <select id="customersPerPage" name="limit" class="form-select form-select-sm" style="width: auto;" onchange="this.form.submit()">
+        <label for="customersPerPage">Per halaman</label>
+        <select id="customersPerPage" name="limit" class="form-select form-select-sm" onchange="this.form.submit()">
           <option value="50" <%= customersLimit === 50 ? 'selected' : '' %>>50</option>
           <option value="100" <%= customersLimit === 100 ? 'selected' : '' %>>100</option>
         </select>
       </div>
       <% if (hasActiveFilter) { %>
-        <a href="<%= customersUrl({ copy_status: null, area: null, package: null, status: null, q: null, page: null }) %>" class="btn btn-sm btn-outline-secondary">
+        <a href="<%= customersUrl({ copy_status: null, area: null, package: null, status: null, q: null, page: null }) %>" class="btn btn-sm btn-outline-secondary km-mt-filters__reset">
           <i class="bi bi-x-circle"></i> Reset filter
         </a>
       <% } %>
     </form>
     <div class="table-responsive">
-      <table class="table table-hover align-middle mb-0">
+      <table class="table table-hover align-middle mb-0 km-mt-table">
         <thead>
           <tr>
-            <th style="width: 2.5rem">
+            <th class="km-mt-table__check">
               <input type="checkbox" id="selectAllCustomers" class="form-check-input" title="Tandai semua di halaman ini">
             </th>
-            <th><a href="<%= sortHref('id') %>" class="text-reset text-decoration-none text-nowrap">ID <i class="bi <%= sortIcon('id') %>"></i></a></th>
-            <th><a href="<%= sortHref('name') %>" class="text-reset text-decoration-none text-nowrap">Nama <i class="bi <%= sortIcon('name') %>"></i></a></th>
-            <th>Telepon</th>
-            <th><a href="<%= sortHref('package') %>" class="text-reset text-decoration-none text-nowrap">Paket <i class="bi <%= sortIcon('package') %>"></i></a></th>
-            <th><a href="<%= sortHref('area') %>" class="text-reset text-decoration-none text-nowrap">Area <i class="bi <%= sortIcon('area') %>"></i></a></th>
-            <th><a href="<%= sortHref('status') %>" class="text-reset text-decoration-none text-nowrap">Status <i class="bi <%= sortIcon('status') %>"></i></a></th>
-            <th><a href="<%= sortHref('join_date') %>" class="text-reset text-decoration-none text-nowrap">Bergabung <i class="bi <%= sortIcon('join_date') %>"></i></a></th>
-            <th class="text-end"><a href="<%= sortHref('copied') %>" class="text-reset text-decoration-none text-nowrap">Copy <i class="bi <%= sortIcon('copied') %>"></i></a></th>
+            <th>
+              <a href="<%= sortHref('name') %>" class="km-mt-sort">Pelanggan <i class="bi <%= sortIcon('name') %>"></i></a>
+              <a href="<%= sortHref('id') %>" class="km-mt-sort km-mt-sort--sub">ID <i class="bi <%= sortIcon('id') %>"></i></a>
+            </th>
+            <th><a href="<%= sortHref('package') %>" class="km-mt-sort">Paket <i class="bi <%= sortIcon('package') %>"></i></a></th>
+            <th class="d-none d-xl-table-cell"><a href="<%= sortHref('area') %>" class="km-mt-sort">Area <i class="bi <%= sortIcon('area') %>"></i></a></th>
+            <th><a href="<%= sortHref('status') %>" class="km-mt-sort">Status <i class="bi <%= sortIcon('status') %>"></i></a></th>
+            <th class="d-none d-xl-table-cell"><a href="<%= sortHref('join_date') %>" class="km-mt-sort">Bergabung <i class="bi <%= sortIcon('join_date') %>"></i></a></th>
+            <th class="text-end"><a href="<%= sortHref('copied') %>" class="km-mt-sort">Copy <i class="bi <%= sortIcon('copied') %>"></i></a></th>
           </tr>
         </thead>
         <tbody>
           <% if (!customers.rows.length) { %>
-            <tr><td colspan="9" class="text-center py-4" style="color: var(--text-muted)"><%= hasActiveFilter ? 'Tidak ada pelanggan yang cocok dengan pencarian atau filter.' : 'Tidak ada pelanggan.' %></td></tr>
+            <tr><td colspan="7">
+              <div class="km-tl-empty">
+                <span class="km-tl-empty__icon"><i class="bi <%= hasActiveFilter ? 'bi-search' : 'bi-people' %>"></i></span>
+                <div class="km-tl-empty__title"><%= hasActiveFilter ? 'Tidak ada pelanggan yang cocok' : 'Tidak ada pelanggan' %></div>
+              </div>
+            </td></tr>
           <% } %>
           <% customers.rows.forEach(function(row) { %>
-            <tr>
-              <td>
+            <tr class="<%= row.copied_to_master ? 'is-copied' : '' %>">
+              <td class="km-mt-table__check">
                 <% if (!row.copied_to_master) { %>
                   <input type="checkbox" class="form-check-input js-copy-customer" name="customer_ids" value="<%= row.id %>" form="bulkCopyForm" title="Tandai untuk di-copy">
                 <% } else { %>
                   <input type="checkbox" class="form-check-input js-cancel-customer" name="customer_ids" value="<%= row.id %>" form="bulkCancelForm" title="Tandai untuk dibatalkan dari master">
                 <% } %>
               </td>
-              <td>#<%= row.id %></td>
-              <td><%= row.name %></td>
-              <td><%= row.phone || '—' %></td>
+              <td>
+                <div class="km-set-user">
+                  <span class="km-set-avatar km-mt-avatar"><%= String(row.name || '?').trim().charAt(0).toUpperCase() %></span>
+                  <div class="lh-sm" style="min-width:0">
+                    <div class="km-mt-cust-name"><%= row.name %></div>
+                    <div class="km-tl-sub text-muted">#<%= row.id %><% if (row.phone) { %> · <%= row.phone %><% } %></div>
+                    <% if (row.area) { %><div class="km-tl-sub text-muted d-xl-none"><i class="bi bi-geo-alt-fill"></i> <%= row.area %></div><% } %>
+                  </div>
+                </div>
+              </td>
               <td>
                 <% if (row.package_name) { %>
-                  <div class="fw-semibold"><%= row.package_name %></div>
-                  <small style="color: var(--text-muted)">
+                  <div class="fw-semibold small text-nowrap"><%= row.package_name %></div>
+                  <small class="text-muted text-nowrap">
                     <% if (row.package_speed && row.package_speed !== '-') { %><%= row.package_speed %> · <% } %><%= formatRupiah(row.package_price || 0) %>
                   </small>
                 <% } else if (row.package_id) { %>
-                  <span style="color: var(--text-muted)">Paket #<%= row.package_id %></span>
+                  <span class="text-muted">Paket #<%= row.package_id %></span>
                 <% } else { %>
-                  <span style="color: var(--text-muted)">—</span>
+                  <span class="text-muted">—</span>
                 <% } %>
               </td>
-              <td>
+              <td class="d-none d-xl-table-cell">
                 <% if (row.area) { %>
-                  <span class="badge bg-light text-dark"><i class="bi bi-geo-alt-fill me-1"></i><%= row.area %></span>
+                  <span class="km-mt-chip"><i class="bi bi-geo-alt-fill"></i><%= row.area %></span>
                 <% } else { %>
-                  <span style="color: var(--text-muted)">—</span>
+                  <span class="text-muted">—</span>
                 <% } %>
               </td>
-              <td><span class="badge bg-secondary"><%= row.status %></span></td>
-              <td><%= row.join_date || row.created_at || '—' %></td>
+              <td><span class="km-mt-status km-mt-status--<%= statusTone(row.status) %>"><i class="km-dot km-dot--<%= statusTone(row.status) %>"></i><%= row.status || '—' %></span></td>
+              <td class="d-none d-xl-table-cell small text-muted text-nowrap"><%= row.join_date || row.created_at || '—' %></td>
               <td class="text-end">
                 <% if (row.copied_to_master) { %>
-                  <div class="d-inline-flex align-items-center justify-content-end gap-2 flex-wrap">
-                    <span class="badge bg-success">Sudah di master</span>
+                  <div class="d-inline-flex align-items-center justify-content-end gap-2 text-nowrap">
+                    <span class="km-mt-status km-mt-status--green"><i class="bi bi-check2-circle"></i> Di master</span>
                     <form method="POST" action="/management/master-tenant/children/<%= child.id %>/customers/<%= row.id %>/cancel" class="d-inline mb-0" onsubmit="return confirm('Batalkan salinan pelanggan ini? Salinan pelanggan, tagihan, dan pembayaran di master akan dihapus.');">
                       <input type="hidden" name="limit" value="<%= customersLimit %>">
                       <input type="hidden" name="page" value="<%= customers.page %>">
                       <% listStateKeys.forEach(function (key) { if (listQuery[key]) { %>
                         <input type="hidden" name="<%= key %>" value="<%= listQuery[key] %>">
                       <% } }); %>
-                      <button type="submit" class="btn btn-sm btn-outline-danger" title="Batalkan salinan di master tenant">
-                        <i class="bi bi-x-circle"></i> Batalkan
+                      <button type="submit" class="btn btn-sm btn-outline-danger km-mt-iconbtn" title="Batalkan salinan di master tenant" aria-label="Batalkan salinan">
+                        <i class="bi bi-x-lg"></i>
                       </button>
                     </form>
                   </div>
@@ -291,7 +334,7 @@
                     <% listStateKeys.forEach(function (key) { if (listQuery[key]) { %>
                       <input type="hidden" name="<%= key %>" value="<%= listQuery[key] %>">
                     <% } }); %>
-                    <button type="submit" class="btn btn-sm btn-primary" title="Copy ke master tenant">
+                    <button type="submit" class="btn btn-sm btn-km-primary text-nowrap" title="Copy ke master tenant">
                       <i class="bi bi-clipboard-plus"></i> Copy
                     </button>
                   </form>
@@ -301,17 +344,21 @@
           <% }); %>
         </tbody>
       </table>
-      <div class="d-flex justify-content-between align-items-center p-3 border-top">
-        <small style="color: var(--text-muted)">
-          Menampilkan <%= customers.rows.length %> dari <%= customers.total %> pelanggan<% if (hasActiveFilter) { %> (difilter dari <%= customersAllTotal %>)<% } %>
-          · Halaman <%= customers.page %> / <%= customers.totalPages %>
-        </small>
-        <div class="btn-group btn-group-sm">
+      <div class="km-mt-pager">
+        <span>
+          Menampilkan <strong><%= customers.rows.length %></strong> dari <strong><%= customers.total %></strong> pelanggan<% if (hasActiveFilter) { %> (difilter dari <%= customersAllTotal %>)<% } %>
+        </span>
+        <div class="km-mt-pager__nav">
           <% if (customers.page > 1) { %>
-            <a class="btn btn-outline-secondary" href="<%= customersUrl({ page: customers.page - 1 }) %>">←</a>
+            <a class="km-mt-pager__btn" href="<%= customersUrl({ page: customers.page - 1 }) %>" title="Sebelumnya"><i class="bi bi-chevron-left"></i></a>
+          <% } else { %>
+            <span class="km-mt-pager__btn is-disabled"><i class="bi bi-chevron-left"></i></span>
           <% } %>
+          <span class="km-mt-pager__page"><%= customers.page %> / <%= customers.totalPages %></span>
           <% if (customers.page < customers.totalPages) { %>
-            <a class="btn btn-outline-secondary" href="<%= customersUrl({ page: customers.page + 1 }) %>">→</a>
+            <a class="km-mt-pager__btn" href="<%= customersUrl({ page: customers.page + 1 }) %>" title="Berikutnya"><i class="bi bi-chevron-right"></i></a>
+          <% } else { %>
+            <span class="km-mt-pager__btn is-disabled"><i class="bi bi-chevron-right"></i></span>
           <% } %>
         </div>
       </div>
@@ -320,7 +367,7 @@
 
     <% if (tab === 'invoices' && invoices) { %>
     <div class="table-responsive">
-      <table class="table table-hover align-middle mb-0">
+      <table class="table table-hover align-middle mb-0 km-mt-table">
         <thead>
           <tr>
             <th>No. Invoice</th>
@@ -332,28 +379,40 @@
         </thead>
         <tbody>
           <% if (!invoices.rows.length) { %>
-            <tr><td colspan="5" class="text-center py-4" style="color: var(--text-muted)">Tidak ada tagihan.</td></tr>
+            <tr><td colspan="5">
+              <div class="km-tl-empty">
+                <span class="km-tl-empty__icon"><i class="bi bi-receipt"></i></span>
+                <div class="km-tl-empty__title">Tidak ada tagihan</div>
+              </div>
+            </td></tr>
           <% } %>
-          <% invoices.rows.forEach(function(row) { %>
+          <% invoices.rows.forEach(function(row) {
+               const paid = row.status === 'paid';
+          %>
             <tr>
-              <td><code><%= row.invoice_number %></code></td>
-              <td><%= row.customer_name || '—' %></td>
-              <td class="text-end fw-semibold"><%= formatRupiah(row.amount) %></td>
-              <td><span class="badge <%= row.status === 'paid' ? 'bg-success' : 'bg-warning text-dark' %>"><%= row.status %></span></td>
-              <td><%= row.due_date || '—' %></td>
+              <td><code class="km-mt-invno"><%= row.invoice_number %></code></td>
+              <td class="fw-semibold small"><%= row.customer_name || '—' %></td>
+              <td class="text-end fw-bold text-nowrap"><%= formatRupiah(row.amount) %></td>
+              <td><span class="km-mt-status km-mt-status--<%= paid ? 'green' : 'orange' %>"><i class="bi <%= paid ? 'bi-check2-circle' : 'bi-hourglass-split' %>"></i><%= paid ? 'Lunas' : (row.status === 'unpaid' ? 'Belum lunas' : row.status) %></span></td>
+              <td class="small text-muted text-nowrap"><%= row.due_date || '—' %></td>
             </tr>
           <% }); %>
         </tbody>
       </table>
       <% if (invoices.totalPages > 1) { %>
-      <div class="d-flex justify-content-between align-items-center p-3 border-top">
-        <small style="color: var(--text-muted)">Halaman <%= invoices.page %> / <%= invoices.totalPages %> (<%= invoices.total %> tagihan)</small>
-        <div class="btn-group btn-group-sm">
+      <div class="km-mt-pager">
+        <span><strong><%= invoices.total %></strong> tagihan</span>
+        <div class="km-mt-pager__nav">
           <% if (invoices.page > 1) { %>
-            <a class="btn btn-outline-secondary" href="?tab=invoices&page=<%= invoices.page - 1 %>">←</a>
+            <a class="km-mt-pager__btn" href="?tab=invoices&page=<%= invoices.page - 1 %>" title="Sebelumnya"><i class="bi bi-chevron-left"></i></a>
+          <% } else { %>
+            <span class="km-mt-pager__btn is-disabled"><i class="bi bi-chevron-left"></i></span>
           <% } %>
+          <span class="km-mt-pager__page"><%= invoices.page %> / <%= invoices.totalPages %></span>
           <% if (invoices.page < invoices.totalPages) { %>
-            <a class="btn btn-outline-secondary" href="?tab=invoices&page=<%= invoices.page + 1 %>">→</a>
+            <a class="km-mt-pager__btn" href="?tab=invoices&page=<%= invoices.page + 1 %>" title="Berikutnya"><i class="bi bi-chevron-right"></i></a>
+          <% } else { %>
+            <span class="km-mt-pager__btn is-disabled"><i class="bi bi-chevron-right"></i></span>
           <% } %>
         </div>
       </div>

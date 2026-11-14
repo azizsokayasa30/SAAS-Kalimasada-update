@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../services/api_client.dart';
+import 'router_pppoe_active_screen.dart';
 
 class NetworkStatusScreen extends StatefulWidget {
   const NetworkStatusScreen({super.key});
@@ -294,11 +295,7 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
             final rid = '${r['id'] ?? r['name'] ?? 'router'}';
             final isMain =
                 i == 0 ||
-                [
-                  r['name'],
-                  r['nas_identifier'],
-                  r['router_name'],
-                ].any(
+                [r['name'], r['nas_identifier'], r['router_name']].any(
                   (v) => (v?.toString().toLowerCase() ?? '').contains(
                     _trafficRouterName.toLowerCase(),
                   ),
@@ -642,20 +639,13 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
     final isOnline = status == 'online';
     final routerIndex = _routers.indexOf(router);
     final isMainRouter =
-        [
-          router['name'],
-          router['nas_identifier'],
-          router['router_name'],
-        ].any(
+        [router['name'], router['nas_identifier'], router['router_name']].any(
           (v) => (v?.toString().toLowerCase() ?? '').contains(
             _trafficRouterName.toLowerCase(),
           ),
         ) ||
         routerIndex <= 0;
-    final traffic = _trafficForRouter(
-      router,
-      useMainInterface: isMainRouter,
-    );
+    final traffic = _trafficForRouter(router, useMainInterface: isMainRouter);
     final rxMbps = traffic.rx;
     final txMbps = traffic.tx;
     final ifaceLabel = isMainRouter
@@ -669,190 +659,234 @@ class _NetworkStatusScreenState extends State<NetworkStatusScreen>
     final statusLabel = isOnline ? 'ONLINE' : 'OFFLINE';
     final samples = _trafficHistory[id] ?? const <_TrafficPoint>[];
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isOnline
-              ? _outline
-              : const Color(0xFFBA1A1A).withValues(alpha: 0.25),
-        ),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      name,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: _text,
-                      ),
-                    ),
-                    Text(
-                      'ID: $id',
-                      style: const TextStyle(fontSize: 12, color: _subtleText),
-                    ),
-                  ],
-                ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: isOnline
+              ? () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        RouterPppoeActiveScreen(routerId: id, routerName: name),
+                  ),
+                )
+              : null,
+          child: Ink(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isOnline
+                    ? _outline
+                    : const Color(0xFFBA1A1A).withValues(alpha: 0.25),
               ),
-              FadeTransition(
-                opacity: _blinkController,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
+            ),
+            child: Column(
+              children: [
+                Row(
                   children: [
-                    Text(
-                      statusLabel,
-                      style: TextStyle(
-                        color: dotColor,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 0.4,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            name,
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: _text,
+                            ),
+                          ),
+                          Text(
+                            'ID: $id',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: _subtleText,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 7),
-                    Container(
-                      width: 10,
-                      height: 10,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: dotColor,
-                        boxShadow: [
-                          BoxShadow(
-                            color: dotColor.withValues(alpha: 0.55),
-                            blurRadius: 8,
+                    FadeTransition(
+                      opacity: _blinkController,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            statusLabel,
+                            style: TextStyle(
+                              color: dotColor,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 0.4,
+                            ),
+                          ),
+                          const SizedBox(width: 7),
+                          Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: dotColor,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: dotColor.withValues(alpha: 0.55),
+                                  blurRadius: 8,
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                       ),
                     ),
                   ],
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: Row(
+                const SizedBox(height: 12),
+                Row(
                   children: [
-                    const Icon(Icons.lan, size: 18, color: _primary),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Aktif: $active',
-                      style: const TextStyle(
-                        color: _primary,
-                        fontWeight: FontWeight.w700,
+                    Expanded(
+                      child: Row(
+                        children: [
+                          const Icon(Icons.lan, size: 18, color: _primary),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Aktif: $active',
+                            style: const TextStyle(
+                              color: _primary,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.wifi_off,
-                      size: 18,
-                      color: Color(0xFFBA1A1A),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Nonaktif: $offline',
-                      style: const TextStyle(
-                        color: Color(0xFFBA1A1A),
-                        fontWeight: FontWeight.w700,
+                    Expanded(
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.wifi_off,
+                            size: 18,
+                            color: Color(0xFFBA1A1A),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Nonaktif: $offline',
+                            style: const TextStyle(
+                              color: Color(0xFFBA1A1A),
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
-              ),
-              Text(
-                'Total: $total',
-                style: const TextStyle(
-                  color: _subtleText,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              'Interface: $ifaceLabel',
-              style: const TextStyle(
-                color: _subtleText,
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              Expanded(
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.download_rounded,
-                      size: 16,
-                      color: _primary,
-                    ),
-                    const SizedBox(width: 4),
                     Text(
-                      '${rxMbps.toStringAsFixed(2)} Mbps',
-                      style: const TextStyle(
-                        color: _primary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    const Icon(
-                      Icons.upload_rounded,
-                      size: 16,
-                      color: _subtleText,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${txMbps.toStringAsFixed(2)} Mbps',
+                      'Total: $total',
                       style: const TextStyle(
                         color: _subtleText,
-                        fontSize: 12,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
                   ],
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              height: 72,
-              color: const Color(0xFFDCE9FF),
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-              child: _MrtgMiniChart(samples: samples),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Interface: $ifaceLabel',
+                    style: const TextStyle(
+                      color: _subtleText,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.download_rounded,
+                            size: 16,
+                            color: _primary,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${rxMbps.toStringAsFixed(2)} Mbps',
+                            style: const TextStyle(
+                              color: _primary,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          const Icon(
+                            Icons.upload_rounded,
+                            size: 16,
+                            color: _subtleText,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${txMbps.toStringAsFixed(2)} Mbps',
+                            style: const TextStyle(
+                              color: _subtleText,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    height: 72,
+                    color: const Color(0xFFDCE9FF),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 4,
+                    ),
+                    child: _MrtgMiniChart(samples: samples),
+                  ),
+                ),
+                if (isOnline) ...[
+                  const SizedBox(height: 10),
+                  const Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Text(
+                        'Lihat PPPoE aktif',
+                        style: TextStyle(
+                          color: Color(0xFF2563EB),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Icon(
+                        Icons.chevron_right,
+                        size: 18,
+                        color: Color(0xFF2563EB),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }

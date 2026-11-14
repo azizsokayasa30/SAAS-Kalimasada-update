@@ -1,21 +1,27 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main km-set">
-  <div class="km-topbar">
-    <div>
-      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-router"></i></span>Perangkat VPN</h2>
-    </div>
-    <div class="d-flex gap-2">
-      <button type="button" class="btn btn-outline-secondary btn-sm px-3" id="refreshStatusBtn">
-        <i class="bi bi-arrow-clockwise me-1"></i> Refresh Status
-      </button>
-      <button type="button" class="btn btn-km-primary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#addPeerModal">
-        <i class="bi bi-plus-lg me-1"></i> Tambah Perangkat
-      </button>
-    </div>
-  </div>
-
-  <%- include('_nav', { vpnSection }) %>
+<main class="km-main km-set km-infra km-infra--vpn">
+  <%
+    const dvOnline = devices.filter(function(d) { return d.connectionStatus === 'online'; }).length;
+    const dvStale = devices.filter(function(d) { return d.connectionStatus === 'stale'; }).length;
+    const dvOffline = devices.filter(function(d) { return d.connectionStatus === 'offline'; }).length;
+    const dvL2tp = devices.filter(function(d) { return d.protocol === 'l2tp'; }).length;
+    const dvWg = devices.length - dvL2tp;
+  %>
+  <%- include('../partials/infra-hero', {
+    tab: 'vpn-devices',
+    icon: 'bi-router',
+    heading: 'Perangkat VPN',
+    desc: 'Router MikroTik yang terhubung lewat WireGuard atau L2TP/IPsec beserta status koneksinya.',
+    chips: [
+      status.wgAvailable ? { tone: 'ok', dot: true, label: 'WireGuard terdeteksi' } : { tone: 'warn', dot: true, label: 'WireGuard tidak terdeteksi' },
+      { tone: 'info', icon: 'bi-hdd-network', label: 'Interface ' + (status.interfaceName || 'wg0') },
+      { tone: 'info', icon: 'bi-signpost', label: 'IP berikutnya ' + (nextTunnelIp || '—') }
+    ],
+    actions:
+      '<button type="button" class="btn btn-outline-secondary" id="refreshStatusBtn"><i class="bi bi-arrow-clockwise"></i> Refresh Status</button>' +
+      '<button type="button" class="btn btn-km-primary" data-bs-toggle="modal" data-bs-target="#addPeerModal"><i class="bi bi-plus-lg"></i> Tambah Perangkat</button>'
+  }) %>
 
   <% if (!status.wgAvailable) { %>
     <div class="alert alert-warning">
@@ -35,7 +41,18 @@
     </div>
   <% } %>
 
+  <%- include('../partials/infra-stats', { stats: [
+    { tone: 'violet', icon: 'bi-router', label: 'Total Perangkat', value: devices.length, meta: devices.filter(function(d) { return d.is_active; }).length + ' aktif' },
+    { tone: 'green', icon: 'bi-wifi', label: 'Online', value: dvOnline, meta: 'Handshake terbaru' },
+    { tone: dvOffline ? 'red' : 'amber', icon: 'bi-wifi-off', label: 'Offline / Stale', value: dvOffline + dvStale, meta: dvOffline + ' offline · ' + dvStale + ' stale' },
+    { tone: 'blue', icon: 'bi-diagram-2', label: 'Protokol', value: dvWg + ' / ' + dvL2tp, meta: 'WireGuard / L2TP' }
+  ] }) %>
+
   <div class="km-card km-card--flush">
+    <div class="km-infra-panel-head">
+      <h5><i class="bi bi-list-ul"></i> Daftar Perangkat</h5>
+      <small><%= devices.length %> perangkat</small>
+    </div>
     <div class="table-responsive">
       <table class="table table-hover align-middle mb-0 km-tenant-table" id="vpnDevicesTable">
         <thead>
@@ -43,9 +60,7 @@
             <th>Nama</th>
             <th>Tenant</th>
             <th>Protokol</th>
-            <th>RouterOS</th>
             <th>Tunnel IP</th>
-            <th>Identitas</th>
             <th>Koneksi</th>
             <th>Handshake</th>
             <th>Ping</th>
@@ -55,7 +70,16 @@
         </thead>
         <tbody>
           <% if (!devices.length) { %>
-            <tr id="emptyDevicesRow"><td colspan="11" class="text-center py-4 text-muted">Belum ada perangkat terdaftar.</td></tr>
+            <tr id="emptyDevicesRow">
+              <td colspan="9" class="km-infra-empty-cell">
+                <div class="km-infra-empty">
+                  <span class="km-infra-empty__icon"><i class="bi bi-router"></i></span>
+                  <strong>Belum ada perangkat terdaftar</strong>
+                  <span>Tambahkan router MikroTik, lalu unduh script konfigurasinya untuk langsung terhubung ke VPN.</span>
+                  <button type="button" class="btn btn-km-primary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#addPeerModal"><i class="bi bi-plus-lg"></i> Tambah Perangkat</button>
+                </div>
+              </td>
+            </tr>
           <% } %>
           <% devices.forEach(function(d) {
             const protocol = (d.protocol || 'wireguard');
@@ -77,10 +101,17 @@
             const tenantLabel = d.tenant_subdomain || d.tenant_name || null;
           %>
             <tr data-peer-id="<%= d.id %>" class="<%= d.is_active ? '' : 'opacity-50' %>">
-              <td class="fw-semibold">
-                <%= d.name %>
-                <% if (!d.is_active) { %><span class="badge bg-secondary ms-1">Nonaktif</span><% } %>
-                <% if (d.notes) { %><div class="small text-muted"><%= d.notes %></div><% } %>
+              <td>
+                <div class="km-infra-device">
+                  <span class="km-infra-device__icon"><i class="bi bi-router"></i></span>
+                  <div>
+                    <div class="km-infra-device__name">
+                      <%= d.name %>
+                      <% if (!d.is_active) { %><span class="badge bg-secondary ms-1">Nonaktif</span><% } %>
+                    </div>
+                    <% if (d.notes) { %><div class="km-infra-device__sub"><%= d.notes %></div><% } %>
+                  </div>
+                </div>
               </td>
               <td>
                 <% if (tenantLabel) { %>
@@ -93,15 +124,21 @@
                 <% } %>
               </td>
               <td>
-                <% if (isL2tp) { %>
-                  <span class="badge bg-warning text-dark">L2TP</span>
-                <% } else { %>
-                  <span class="badge bg-primary">WireGuard</span>
-                <% } %>
+                <div class="km-infra-stack">
+                  <% if (isL2tp) { %>
+                    <span class="badge bg-warning text-dark">L2TP</span>
+                  <% } else { %>
+                    <span class="badge bg-primary">WireGuard</span>
+                  <% } %>
+                  <small>RouterOS <%= d.routeros_version || (isL2tp ? 'v6' : 'v7') %></small>
+                </div>
               </td>
-              <td><code><%= d.routeros_version || (isL2tp ? 'v6' : 'v7') %></code></td>
-              <td><code class="peer-tunnel-ip"><%= d.tunnel_ip %></code></td>
-              <td><code class="small" title="<%= isL2tp ? (d.l2tp_username || '') : (d.peer_public_key || '') %>"><%= keyShort %></code></td>
+              <td>
+                <div class="km-infra-stack">
+                  <code class="peer-tunnel-ip"><%= d.tunnel_ip %></code>
+                  <small title="<%= isL2tp ? (d.l2tp_username || '') : (d.peer_public_key || '') %>"><i class="bi <%= isL2tp ? 'bi-person' : 'bi-key' %> me-1"></i><%= keyShort %></small>
+                </div>
+              </td>
               <td class="peer-conn"><span class="badge <%= connBadge %>"><%= d.connectionLabel %></span></td>
               <td class="peer-handshake small text-muted"><%= isL2tp ? '—' : (d.handshakeAgeLabel || '—') %></td>
               <td class="peer-ping">

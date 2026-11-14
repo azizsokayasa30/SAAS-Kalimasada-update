@@ -5,6 +5,7 @@ const path = require('path');
 const tenantStore = require('./tenantStore');
 const { isCopiedOrigin } = require('./masterRecordGuard');
 const { loadSchema, purgeForeignKeyDependents } = require('../../utils/customerDelete');
+const { migrateCustomersPhoneNonUniqueSafe } = require('../../utils/repairCustomersBackupFk');
 
 let schemaReady = false;
 let schemaPromise = null;
@@ -44,6 +45,8 @@ async function ensureMasterMirrorSchema() {
                 }
             }
         }
+        // Salinan di master memakai nomor HP yang sama dengan sumbernya.
+        await migrateCustomersPhoneNonUniqueSafe(tenantStore.getDb(), console);
         schemaReady = true;
     })();
     try {

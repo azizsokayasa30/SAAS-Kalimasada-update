@@ -33,7 +33,7 @@ router.use((req, res, next) => {
 router.get('/', (req, res) => res.redirect('/management/finance/payments'));
 
 function parsePagination(query) {
-    const page = Math.max(Number(query.page) || 1, 1);
+    const page = Math.max(Number.parseInt(query.page, 10) || 1, 1);
     const limit = 50;
     return { page, limit, offset: (page - 1) * limit };
 }
@@ -41,7 +41,7 @@ function parsePagination(query) {
 function flashFromQuery(query) {
     return {
         success: query.success || null,
-        error: query.error ? decodeURIComponent(query.error) : null,
+        error: query.error ? String(query.error) : null,
         count: query.count || null,
     };
 }
@@ -440,7 +440,7 @@ router.post('/invoices/:id/delete', async (req, res) => {
 router.get('/tax-fees', async (req, res) => {
     try {
         const settings = await platformFinanceService.getFinanceSettings();
-        const year = req.query.year ? Number(req.query.year) : new Date().getFullYear();
+        const { year } = platformFinanceService.defaultDateRange({ year: req.query.year });
         const breakdown = await platformFinanceService.getTaxFeeBreakdownByMonth({ year });
 
         res.render('platform/finance/tax-fees', financeLocals(req, {
@@ -496,30 +496,49 @@ router.get('/income', async (req, res) => {
     }
 });
 
+function ledgerUrl(req, kind, flash, transactionDate) {
+    const qs = new URLSearchParams();
+    const match = /^(\d{4})-(\d{2})/.exec(String(transactionDate || ''));
+    if (match) {
+        qs.set('month', String(Number(match[2])));
+        qs.set('year', match[1]);
+    } else {
+        try {
+            const ref = new URL(req.get('referer') || '', 'http://localhost');
+            ['month', 'year'].forEach((key) => {
+                const value = ref.searchParams.get(key);
+                if (value) qs.set(key, value);
+            });
+        } catch (_) { /* referer tidak valid */ }
+    }
+    Object.entries(flash).forEach(([key, value]) => qs.set(key, value));
+    return `/management/finance/${kind}?${qs.toString()}`;
+}
+
 router.post('/income', async (req, res) => {
     try {
-        await platformFinanceService.createIncome(req.body);
-        res.redirect('/management/finance/income?success=created');
+        const row = await platformFinanceService.createIncome(req.body);
+        res.redirect(ledgerUrl(req, 'income', { success: 'created' }, row?.transaction_date));
     } catch (err) {
-        res.redirect(`/management/finance/income?error=${encodeURIComponent(err.message)}`);
+        res.redirect(ledgerUrl(req, 'income', { error: err.message }));
     }
 });
 
 router.post('/income/:id', async (req, res) => {
     try {
-        await platformFinanceService.updateIncome(req.params.id, req.body);
-        res.redirect('/management/finance/income?success=updated');
+        const row = await platformFinanceService.updateIncome(req.params.id, req.body);
+        res.redirect(ledgerUrl(req, 'income', { success: 'updated' }, row?.transaction_date));
     } catch (err) {
-        res.redirect(`/management/finance/income?error=${encodeURIComponent(err.message)}`);
+        res.redirect(ledgerUrl(req, 'income', { error: err.message }));
     }
 });
 
 router.post('/income/:id/delete', async (req, res) => {
     try {
         await platformFinanceService.deleteIncome(req.params.id);
-        res.redirect('/management/finance/income?success=deleted');
+        res.redirect(ledgerUrl(req, 'income', { success: 'deleted' }));
     } catch (err) {
-        res.redirect(`/management/finance/income?error=${encodeURIComponent(err.message)}`);
+        res.redirect(ledgerUrl(req, 'income', { error: err.message }));
     }
 });
 
@@ -547,28 +566,28 @@ router.get('/expenses', async (req, res) => {
 
 router.post('/expenses', async (req, res) => {
     try {
-        await platformFinanceService.createExpense(req.body);
-        res.redirect('/management/finance/expenses?success=created');
+        const row = await platformFinanceService.createExpense(req.body);
+        res.redirect(ledgerUrl(req, 'expenses', { success: 'created' }, row?.transaction_date));
     } catch (err) {
-        res.redirect(`/management/finance/expenses?error=${encodeURIComponent(err.message)}`);
+        res.redirect(ledgerUrl(req, 'expenses', { error: err.message }));
     }
 });
 
 router.post('/expenses/:id', async (req, res) => {
     try {
-        await platformFinanceService.updateExpense(req.params.id, req.body);
-        res.redirect('/management/finance/expenses?success=updated');
+        const row = await platformFinanceService.updateExpense(req.params.id, req.body);
+        res.redirect(ledgerUrl(req, 'expenses', { success: 'updated' }, row?.transaction_date));
     } catch (err) {
-        res.redirect(`/management/finance/expenses?error=${encodeURIComponent(err.message)}`);
+        res.redirect(ledgerUrl(req, 'expenses', { error: err.message }));
     }
 });
 
 router.post('/expenses/:id/delete', async (req, res) => {
     try {
         await platformFinanceService.deleteExpense(req.params.id);
-        res.redirect('/management/finance/expenses?success=deleted');
+        res.redirect(ledgerUrl(req, 'expenses', { success: 'deleted' }));
     } catch (err) {
-        res.redirect(`/management/finance/expenses?error=${encodeURIComponent(err.message)}`);
+        res.redirect(ledgerUrl(req, 'expenses', { error: err.message }));
     }
 });
 

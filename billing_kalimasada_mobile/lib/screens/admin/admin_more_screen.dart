@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../services/api_client.dart';
 import '../../store/auth_provider.dart';
 import '../../store/customer_provider.dart';
 import '../../widgets/logout_confirm_dialog.dart';
@@ -131,6 +133,96 @@ class _AdminMoreScreenState extends State<AdminMoreScreen> {
     }
   }
 
+  String _portalBaseDomain() {
+    final host = Uri.tryParse(ApiClient.apiOrigin)?.host ?? '';
+    final parts = host.split('.');
+    final isIp = RegExp(r'^\d+$').hasMatch(parts.last);
+    if (parts.length >= 3 && !isIp) return parts.sublist(1).join('.');
+    return 'kalimasada-app.com';
+  }
+
+  String? _tenantSlug(Map<String, dynamic>? user) {
+    final slug =
+        ApiClient.apiTenant ??
+        (user?['tenant'] ?? user?['tenant_slug'])?.toString().trim();
+    if (slug == null || slug.isEmpty) return null;
+    return slug.toLowerCase();
+  }
+
+  Future<void> _openPortal(BuildContext context, String url) async {
+    final ok = await launchUrl(
+      Uri.parse(url),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Tidak bisa membuka $url')));
+    }
+  }
+
+  Future<void> _copyPortal(BuildContext context, String url) async {
+    await Clipboard.setData(ClipboardData(text: url));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Disalin: $url')));
+  }
+
+  Widget _portalTile(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required String url,
+  }) {
+    return _settingsTile(
+      icon: icon,
+      title: title,
+      subtitle: url.replaceFirst('https://', ''),
+      trailing: IconButton(
+        tooltip: 'Salin URL',
+        visualDensity: VisualDensity.compact,
+        icon: const Icon(Icons.copy_rounded, color: _muted, size: 18),
+        onPressed: () => _copyPortal(context, url),
+      ),
+      onTap: () => _openPortal(context, url),
+    );
+  }
+
+  List<Widget> _portalSection(
+    BuildContext context,
+    Map<String, dynamic>? user,
+  ) {
+    final base = _portalBaseDomain();
+    final tenant = _tenantSlug(user);
+    return [
+      _sectionTitle('URL PORTAL'),
+      _settingsGroup([
+        _portalTile(
+          context,
+          icon: Icons.dashboard_customize_rounded,
+          title: 'Portal Management',
+          url: 'https://manage.$base/management/login',
+        ),
+        if (tenant != null) ...[
+          _portalTile(
+            context,
+            icon: Icons.receipt_long_rounded,
+            title: 'Portal Billing',
+            url: 'https://$tenant.$base/login',
+          ),
+          _portalTile(
+            context,
+            icon: Icons.people_alt_rounded,
+            title: 'Portal Pelanggan',
+            url: 'https://$tenant.$base/portal-pelanggan',
+          ),
+        ],
+      ]),
+      const SizedBox(height: 20),
+    ];
+  }
+
   void _openArticle(
     BuildContext context, {
     required String title,
@@ -143,7 +235,10 @@ class _AdminMoreScreenState extends State<AdminMoreScreen> {
     );
   }
 
-  Future<void> _showLogoutDialog(BuildContext context, AuthProvider auth) async {
+  Future<void> _showLogoutDialog(
+    BuildContext context,
+    AuthProvider auth,
+  ) async {
     final ok = await confirmLogout(
       context,
       title: 'Logout',
@@ -183,13 +278,12 @@ class _AdminMoreScreenState extends State<AdminMoreScreen> {
             subtitle: subtitle,
             user: user,
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 20),
           _sectionTitle('PENGATURAN'),
-          const SizedBox(height: 8),
           _settingsGroup([
             _settingsTile(
               icon: Icons.sync_rounded,
-              title: 'Sync Offline Data',
+              title: 'Sinkronisasi Data',
               subtitle: _syncSubtitle(),
               trailing: _syncingOffline
                   ? const SizedBox(
@@ -197,14 +291,13 @@ class _AdminMoreScreenState extends State<AdminMoreScreen> {
                       height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
-                  : const Icon(Icons.chevron_right_rounded, color: _muted),
+                  : null,
               onTap: () => _syncOfflineData(context),
             ),
             _settingsTile(
               icon: Icons.system_update_rounded,
-              title: 'Update aplikasi',
-              subtitle: 'Cek versi dan unduh update aplikasi',
-              trailing: const Icon(Icons.chevron_right_rounded, color: _muted),
+              title: 'Update Aplikasi',
+              subtitle: 'Cek versi terbaru aplikasi',
               onTap: () {
                 Navigator.of(context).push<void>(
                   MaterialPageRoute<void>(
@@ -214,39 +307,43 @@ class _AdminMoreScreenState extends State<AdminMoreScreen> {
               },
             ),
           ]),
-          const SizedBox(height: 18),
-          _sectionTitle('SUPPORT & LEGAL'),
-          const SizedBox(height: 8),
+          const SizedBox(height: 20),
+          ..._portalSection(context, user),
+          _sectionTitle('BANTUAN & LEGAL'),
           _settingsGroup([
             _settingsTile(
               icon: Icons.help_center_rounded,
-              title: 'Help Center',
-              trailing: const Icon(Icons.open_in_new_rounded, color: _muted),
+              title: 'Pusat Bantuan',
+              subtitle: 'Grup WhatsApp bantuan',
+              trailing: const Icon(
+                Icons.open_in_new_rounded,
+                color: _muted,
+                size: 18,
+              ),
               onTap: () => _openHelpCenter(context),
             ),
             _settingsTile(
               icon: Icons.description_rounded,
-              title: 'Terms of Service',
-              subtitle: 'Ketentuan penggunaan aplikasi Billing Kalimasada',
+              title: 'Syarat & Ketentuan',
+              subtitle: 'Ketentuan penggunaan aplikasi',
               onTap: () => _openArticle(
                 context,
-                title: 'Terms of Service',
+                title: 'Syarat & Ketentuan',
                 sections: _termsSections,
               ),
             ),
             _settingsTile(
               icon: Icons.privacy_tip_rounded,
-              title: 'Privacy Policy',
-              subtitle: 'Cara aplikasi mengelola data pengguna dan pelanggan',
+              title: 'Kebijakan Privasi',
+              subtitle: 'Pengelolaan data pengguna',
               onTap: () => _openArticle(
                 context,
-                title: 'Privacy Policy',
+                title: 'Kebijakan Privasi',
                 sections: _privacySections,
               ),
-              isLast: true,
             ),
           ]),
-          const SizedBox(height: 18),
+          const SizedBox(height: 20),
           _settingsGroup([
             _settingsTile(
               icon: Icons.logout_rounded,
@@ -254,19 +351,19 @@ class _AdminMoreScreenState extends State<AdminMoreScreen> {
               title: 'Logout',
               subtitle: 'Keluar dari sesi admin',
               titleColor: _danger,
+              trailing: const SizedBox.shrink(),
               onTap: () => _showLogoutDialog(context, auth),
-              isLast: true,
             ),
           ]),
-          const SizedBox(height: 18),
+          const SizedBox(height: 24),
           const Text(
             'Aplikasi ini dibuat oleh\nJenderale skynet mamas ajizs',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: Color(0xFF3B82F6),
-              fontSize: 12,
+              color: _muted,
+              fontSize: 11,
               height: 1.4,
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ],
@@ -282,24 +379,17 @@ class _AdminMoreScreenState extends State<AdminMoreScreen> {
   }) {
     final id = user?['id']?.toString() ?? '-';
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: _surface,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: _border),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 16,
-            offset: const Offset(0, 8),
-          ),
-        ],
       ),
       child: Row(
         children: [
           Container(
-            width: 64,
-            height: 64,
+            width: 52,
+            height: 52,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: _primary.withValues(alpha: 0.12),
@@ -307,54 +397,43 @@ class _AdminMoreScreenState extends State<AdminMoreScreen> {
             child: const Icon(
               Icons.admin_panel_settings_rounded,
               color: _primary,
-              size: 34,
+              size: 28,
             ),
           ),
-          const SizedBox(width: 14),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Tenant $tenantName',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: _primary,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 4),
                 Text(
                   name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: _text,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w900,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 2),
                 Text(
                   subtitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: _muted,
-                    fontSize: 13,
+                    fontSize: 12,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
+                const SizedBox(height: 8),
+                Row(
                   children: [
                     _chip(Icons.verified_rounded, 'ADMIN'),
-                    _chip(Icons.apartment_rounded, 'TENANT'),
-                    _chip(Icons.badge_rounded, 'ID $id'),
+                    const SizedBox(width: 6),
+                    Flexible(child: _chip(Icons.apartment_rounded, tenantName)),
+                    const SizedBox(width: 6),
+                    Flexible(child: _chip(Icons.badge_rounded, 'ID $id')),
                   ],
                 ),
               ],
@@ -367,7 +446,7 @@ class _AdminMoreScreenState extends State<AdminMoreScreen> {
 
   Widget _chip(IconData icon, String label) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(999),
@@ -376,14 +455,18 @@ class _AdminMoreScreenState extends State<AdminMoreScreen> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: _primary),
+          Icon(icon, size: 12, color: _primary),
           const SizedBox(width: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              color: _text,
-              fontSize: 11,
-              fontWeight: FontWeight.w800,
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: _text,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],
@@ -392,25 +475,45 @@ class _AdminMoreScreenState extends State<AdminMoreScreen> {
   }
 
   Widget _sectionTitle(String title) {
-    return Text(
-      title,
-      style: const TextStyle(
-        color: _muted,
-        fontSize: 12,
-        fontWeight: FontWeight.w900,
-        letterSpacing: 0.8,
+    return Padding(
+      padding: const EdgeInsets.only(left: 4, bottom: 8),
+      child: Text(
+        title,
+        style: const TextStyle(
+          color: _muted,
+          fontSize: 11.5,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.8,
+        ),
       ),
     );
   }
 
   Widget _settingsGroup(List<Widget> children) {
     return Container(
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: _border),
       ),
-      child: Column(children: children),
+      child: Material(
+        color: Colors.transparent,
+        child: Column(
+          children: [
+            for (var i = 0; i < children.length; i++) ...[
+              if (i > 0)
+                const Divider(
+                  height: 1,
+                  thickness: 1,
+                  indent: 62,
+                  color: _border,
+                ),
+              children[i],
+            ],
+          ],
+        ),
+      ),
     );
   }
 
@@ -420,33 +523,23 @@ class _AdminMoreScreenState extends State<AdminMoreScreen> {
     String? subtitle,
     Widget? trailing,
     VoidCallback? onTap,
-    bool isLast = false,
     Color iconColor = _primary,
     Color titleColor = _text,
   }) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.vertical(
-        top: const Radius.circular(18),
-        bottom: isLast ? const Radius.circular(18) : Radius.zero,
-      ),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-        decoration: BoxDecoration(
-          border: isLast
-              ? null
-              : const Border(bottom: BorderSide(color: _border)),
-        ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         child: Row(
           children: [
             Container(
-              width: 38,
-              height: 38,
+              width: 36,
+              height: 36,
               decoration: BoxDecoration(
                 color: iconColor.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(icon, color: iconColor, size: 21),
+              child: Icon(icon, color: iconColor, size: 20),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -455,16 +548,20 @@ class _AdminMoreScreenState extends State<AdminMoreScreen> {
                 children: [
                   Text(
                     title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: titleColor,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                   if (subtitle != null) ...[
                     const SizedBox(height: 2),
                     Text(
                       subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: _muted,
                         fontSize: 12,
@@ -475,7 +572,13 @@ class _AdminMoreScreenState extends State<AdminMoreScreen> {
                 ],
               ),
             ),
-            trailing ?? const Icon(Icons.chevron_right_rounded, color: _muted),
+            const SizedBox(width: 8),
+            trailing ??
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: _muted,
+                  size: 22,
+                ),
           ],
         ),
       ),

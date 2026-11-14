@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:provider/provider.dart';
 import '../store/task_provider.dart';
 import '../utils/pppoe_password_display.dart';
+import '../utils/task_work_summary.dart';
 import 'job_execution_screen.dart';
 
 class TaskDetailScreen extends StatefulWidget {
@@ -48,6 +50,12 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
         s == 'cancelled' ||
         s == 'resolved' ||
         s == 'closed';
+  }
+
+  /// Final dan berhasil dikerjakan (bukan dibatalkan).
+  bool get _isDone {
+    final s = (_task['status'] ?? '').toString().toLowerCase().trim();
+    return s == 'completed' || s == 'resolved' || s == 'closed';
   }
 
   /// Nilai string dari map tugas (API JSON).
@@ -199,7 +207,9 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
     if (_isFinal) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Tiket sudah selesai/ditutup. Hubungi admin bila perlu dibuka kembali.'),
+          content: Text(
+            'Tiket sudah selesai/ditutup. Hubungi admin bila perlu dibuka kembali.',
+          ),
         ),
       );
       return;
@@ -246,7 +256,9 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
     if (_isFinal) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Tugas sudah selesai/dibatalkan. Hubungi admin bila perlu dibuka kembali.'),
+          content: Text(
+            'Tugas sudah selesai/dibatalkan. Hubungi admin bila perlu dibuka kembali.',
+          ),
         ),
       );
       return;
@@ -326,7 +338,24 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
     const text = Color(0xFF0F172A);
     const muted = Color(0xFF64748B);
     const border = Color(0xFFE2E8F0);
-    final durLabel = _workActive ? _formatDuration(_elapsed) : '00:00';
+    final doneDuration = _isFinal ? taskWorkDuration(_task) : null;
+    final durLabel = _workActive
+        ? _formatDuration(_elapsed)
+        : doneDuration != null
+        ? _formatDuration(doneDuration)
+        : (_isFinal ? '--:--' : '00:00');
+    final heroColors = _workActive
+        ? const [Color(0xFF059669), Color(0xFF047857)]
+        : _isDone
+        ? const [Color(0xFF0F766E), Color(0xFF115E59)]
+        : const [Color(0xFF2563EB), Color(0xFF1D4ED8)];
+    final (heroIcon, heroBadge) = _workActive
+        ? (Icons.play_circle_fill_rounded, 'Dalam proses')
+        : _isDone
+        ? (Icons.check_circle_rounded, 'Selesai')
+        : _isFinal
+        ? (Icons.cancel_rounded, 'Dibatalkan')
+        : (Icons.hourglass_top_rounded, 'Menunggu');
 
     return Scaffold(
       backgroundColor: bg,
@@ -362,15 +391,12 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                     gradient: LinearGradient(
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
-                      colors: _workActive
-                          ? const [Color(0xFF059669), Color(0xFF047857)]
-                          : const [Color(0xFF2563EB), Color(0xFF1D4ED8)],
+                      colors: heroColors,
                     ),
                     borderRadius: BorderRadius.circular(22),
                     boxShadow: [
                       BoxShadow(
-                        color: (_workActive ? const Color(0xFF059669) : primary)
-                            .withValues(alpha: 0.28),
+                        color: heroColors.first.withValues(alpha: 0.28),
                         blurRadius: 18,
                         offset: const Offset(0, 8),
                       ),
@@ -420,16 +446,10 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(
-                              _workActive
-                                  ? Icons.play_circle_fill_rounded
-                                  : Icons.hourglass_top_rounded,
-                              size: 16,
-                              color: Colors.white,
-                            ),
+                            Icon(heroIcon, size: 16, color: Colors.white),
                             const SizedBox(width: 6),
                             Text(
-                              _workActive ? 'Dalam proses' : 'Menunggu',
+                              heroBadge,
                               style: const TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w800,
@@ -442,6 +462,10 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                     ],
                   ),
                 ),
+                if (_isDone) ...[
+                  const SizedBox(height: 14),
+                  _buildWorkSummaryCard(doneDuration, border, text),
+                ],
                 const SizedBox(height: 14),
                 _freshCard(
                   border: border,
@@ -468,6 +492,17 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                       _buildDetailRow(
                         'Alamat',
                         _task['address']?.toString() ?? '-',
+                      ),
+                      const SizedBox(height: 10),
+                      if (!_isDone && _createdAt != null) ...[
+                        _buildDetailRow('Dibuat', _formatDateTime(_createdAt!)),
+                        const SizedBox(height: 10),
+                      ],
+                      _buildDetailRow(
+                        'Teknisi',
+                        taskTechnicianName(_task).isNotEmpty
+                            ? taskTechnicianName(_task)
+                            : 'Belum ditentukan',
                       ),
                       const SizedBox(height: 14),
                       Row(
@@ -648,8 +683,8 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                           ),
                         ],
                       ),
-                      const SizedBox(height: 14),
                       if (_isInstall) ...[
+                        const SizedBox(height: 14),
                         Text(
                           'Detail PPPoE',
                           style: TextStyle(
@@ -784,34 +819,6 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                             ],
                           ),
                         ),
-                      ] else ...[
-                        Text(
-                          'Catatan Diagnosa',
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w800,
-                            color: muted,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFEFF6FF),
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: const Color(0xFFBFDBFE)),
-                          ),
-                          child: Text(
-                            _task['description']?.toString() ?? '-',
-                            style: const TextStyle(
-                              fontSize: 14,
-                              height: 1.4,
-                              fontWeight: FontWeight.w600,
-                              color: text,
-                            ),
-                          ),
-                        ),
                       ],
                     ],
                   ),
@@ -888,11 +895,14 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                             ),
                             const SizedBox(width: 10),
                           ] else
-                            const Icon(
-                              Icons.play_arrow_rounded,
-                              size: 26,
+                            Icon(
+                              _isFinal
+                                  ? Icons.check_circle_rounded
+                                  : Icons.play_arrow_rounded,
+                              size: _isFinal ? 22 : 26,
                               color: Colors.white,
                             ),
+                          if (_isFinal) const SizedBox(width: 8),
                           Text(
                             _isFinal
                                 ? 'Tugas selesai'
@@ -950,6 +960,153 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
                   ],
                 ),
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWorkSummaryCard(Duration? duration, Color border, Color text) {
+    const accent = Color(0xFF0F766E);
+    final technician = taskTechnicianName(_task);
+    final completedAt = taskCompletedAt(_task);
+    final createdAt = _createdAt;
+    final installWork = [
+      'Pemasangan baru',
+      if (_taskStr('package_name').isNotEmpty)
+        'Paket ${_taskStr('package_name')}',
+    ].join(' · ');
+    final handling = _taskStr('completion_note');
+
+    return _freshCard(
+      border: border,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionHeader(
+            Icons.assignment_turned_in_rounded,
+            'Ringkasan Kerja',
+            accent,
+            text,
+          ),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: _infoMiniCard(
+                  label: 'WAKTU PENGERJAAN',
+                  value: duration != null ? formatWorkDuration(duration) : '-',
+                  valueColor: accent,
+                  icon: Icons.timer_outlined,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _infoMiniCard(
+                  label: 'TEKNISI',
+                  value: technician.isNotEmpty ? technician : '-',
+                  icon: Icons.engineering_rounded,
+                ),
+              ),
+            ],
+          ),
+          if (createdAt != null || completedAt != null)
+            const SizedBox(height: 10),
+          if (createdAt != null)
+            _dateLine(Icons.edit_calendar_rounded, 'Dibuat', createdAt),
+          if (createdAt != null && completedAt != null)
+            const SizedBox(height: 6),
+          if (completedAt != null)
+            _dateLine(Icons.event_available_rounded, 'Selesai', completedAt),
+          const SizedBox(height: 14),
+          if (!_isTr) ...[
+            _summaryBlock('Pekerjaan', installWork),
+            const SizedBox(height: 10),
+          ],
+          _summaryBlock(
+            'Penanganan',
+            handling.isNotEmpty ? handling : 'Tidak ada catatan penanganan.',
+            muted: handling.isEmpty,
+          ),
+        ],
+      ),
+    );
+  }
+
+  DateTime? get _createdAt => parseTaskWorkStarted(_taskStr('created_at'));
+
+  String _formatDateTime(DateTime d) =>
+      DateFormat('dd MMM yyyy, HH:mm', 'id_ID').format(d);
+
+  Widget _dateLine(IconData icon, String label, DateTime value) {
+    const muted = Color(0xFF64748B);
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: muted),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 52,
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: muted,
+            ),
+          ),
+        ),
+        const Text(
+          ':  ',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: muted,
+          ),
+        ),
+        Text(
+          _formatDateTime(value),
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF0F172A),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _summaryBlock(String label, String value, {bool muted = false}) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0FDFA),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFCCFBF1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.4,
+              color: Color(0xFF64748B),
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 14,
+              height: 1.4,
+              fontWeight: muted ? FontWeight.w500 : FontWeight.w600,
+              fontStyle: muted ? FontStyle.italic : FontStyle.normal,
+              color: muted ? const Color(0xFF94A3B8) : const Color(0xFF0F172A),
             ),
           ),
         ],
@@ -1103,6 +1260,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen>
     );
   }
 }
+
 /// Tombol Hubungi / Peta: gradien + sudut sangat membulat.
 class _GradientActionChip extends StatelessWidget {
   const _GradientActionChip({

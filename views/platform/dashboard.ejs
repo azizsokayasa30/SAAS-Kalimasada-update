@@ -190,7 +190,7 @@
   <div class="km-quick-grid mb-4">
     <a href="/management/tenants/new" class="km-quick km-quick--violet">
       <span class="km-quick__icon"><i class="bi bi-building-add"></i></span>
-      <span class="km-quick__text"><strong>Tambah Tenant</strong><small>Daftarkan ISP baru</small></span>
+      <span class="km-quick__text"><strong>Tambah Tenant</strong><small>Daftarkan PIC baru</small></span>
       <i class="bi bi-chevron-right km-quick__arrow"></i>
     </a>
     <a href="/management/finance/invoices" class="km-quick km-quick--blue">
@@ -269,12 +269,12 @@
       <div class="km-gcard__bars" aria-hidden="true"><span style="height:90%"></span><span style="height:70%"></span><span style="height:80%"></span><span style="height:55%"></span><span style="height:65%"></span><span style="height:45%"></span><span style="height:50%"></span><span style="height:35%"></span></div>
       <a href="/management/finance/invoices" class="km-gcard__link">Lihat Detail <i class="bi bi-chevron-right"></i></a>
     </div>
-    <div class="km-gcard km-gcard--indigo">
-      <div class="km-gcard__top"><span class="km-gcard__label">FreeRADIUS</span><span class="km-gcard__icon"><i class="bi bi-shield-check"></i></span></div>
-      <div class="km-gcard__value" id="kpiRadiusTotal">—</div>
-      <div class="km-gcard__meta"><span id="kpiRadiusUp">— up</span> · <span id="kpiRadiusDown">— down</span></div>
-      <svg class="km-gcard__wave" viewBox="0 0 120 24" preserveAspectRatio="none" aria-hidden="true"><path d="M0,12 L20,12 L26,4 L32,20 L38,12 L60,12 L66,6 L72,18 L78,12 L120,12"/></svg>
-      <a href="/management/pop/radius" class="km-gcard__link">Lihat Detail <i class="bi bi-chevron-right"></i></a>
+    <div class="km-gcard km-gcard--green">
+      <div class="km-gcard__top"><span class="km-gcard__label">Sudah Lunas</span><span class="km-gcard__icon"><i class="bi bi-check2-circle"></i></span></div>
+      <div class="km-gcard__value km-money"><%= formatRupiah(inv.paidAmount) %></div>
+      <div class="km-gcard__meta"><%= fmt(inv.paid) %> invoice lunas · <%= paidPct %>% tenant</div>
+      <div class="km-gcard__bars" aria-hidden="true"><span style="height:35%"></span><span style="height:50%"></span><span style="height:45%"></span><span style="height:60%"></span><span style="height:70%"></span><span style="height:65%"></span><span style="height:85%"></span><span style="height:100%"></span></div>
+      <a href="/management/finance/invoices" class="km-gcard__link">Lihat Detail <i class="bi bi-chevron-right"></i></a>
     </div>
     <div class="km-gcard km-gcard--cyan">
       <div class="km-gcard__top"><span class="km-gcard__label">Trafik Uplink</span><span class="km-gcard__icon"><i class="bi bi-activity"></i></span></div>
@@ -605,87 +605,6 @@
           </div>
         </div>
       </div>
-    </div>
-  </div>
-
-  <div class="row g-3 mb-4">
-    <div class="col-xl-7">
-      <div class="km-card km-dash-panel h-100">
-        <div class="km-dash-panel-head">
-          <h5 class="mb-0"><span class="km-dash-panel-icon km-dash-panel-icon--teal"><i class="bi bi-diagram-3"></i></span>NAS per Tenant</h5>
-          <span class="badge bg-secondary" id="nasTableCount">—</span>
-        </div>
-        <div class="table-responsive km-dash-table-wrap">
-          <table class="table table-sm table-hover mb-0" id="tenantNasTable">
-            <thead>
-              <tr>
-                <th>Tenant</th>
-                <th>Pelanggan</th>
-                <th>NAS</th>
-                <th>Online</th>
-                <th>Sesi PPPoE</th>
-                <th class="text-end">RX</th>
-                <th class="text-end">TX</th>
-              </tr>
-            </thead>
-            <tbody id="tenantNasBody">
-              <tr><td colspan="7" class="text-center py-4 text-muted">Memuat status jaringan…</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-    <div class="col-xl-5">
-      <div class="km-card km-dash-panel h-100">
-        <div class="km-dash-panel-head">
-          <h5 class="mb-0"><span class="km-dash-panel-icon km-dash-panel-icon--indigo"><i class="bi bi-clock-history"></i></span>Tenant Terbaru</h5>
-          <a href="/management/tenants" class="km-dash-link">Lihat Semua <i class="bi bi-arrow-right"></i></a>
-        </div>
-        <% if (!recentTenants.length) { %>
-          <div class="km-dash-empty">
-            <i class="bi bi-inbox"></i>
-            <p class="mb-0">Belum ada tenant.</p>
-          </div>
-        <% } else { %>
-          <ul class="km-dash-tenant-list">
-            <% recentTenants.forEach(function(t) { %>
-              <li>
-                <a href="/management/tenants/<%= t.id %>" class="km-dash-tenant">
-                  <span class="km-dash-avatar"><%= initials(t.name) %></span>
-                  <span class="km-dash-tenant-info">
-                    <strong><%= t.name %></strong>
-                    <small><%= t.subdomain %> · <%= t.usage?.customers?.total ?? 0 %> pelanggan</small>
-                  </span>
-                  <span class="badge <%= t.status === 'active' ? 'badge-status-active' : 'badge-status-suspended' %>"><%= statusLabels[t.status] || t.status %></span>
-                </a>
-              </li>
-            <% }); %>
-          </ul>
-        <% } %>
-      </div>
-    </div>
-  </div>
-
-  <div class="km-card km-dash-panel">
-    <div class="km-dash-panel-head">
-      <h5 class="mb-0"><span class="km-dash-panel-icon km-dash-panel-icon--green"><i class="bi bi-router"></i></span>Status NAS (Live)</h5>
-    </div>
-    <div class="table-responsive km-dash-table-wrap">
-      <table class="table table-sm table-hover mb-0" id="nasLiveTable">
-        <thead>
-          <tr>
-            <th>NAS</th>
-            <th>Tenant</th>
-            <th>IP</th>
-            <th>Status</th>
-            <th class="text-end">RX Mbps</th>
-            <th class="text-end">TX Mbps</th>
-          </tr>
-        </thead>
-        <tbody id="nasLiveBody">
-          <tr><td colspan="6" class="text-center py-4 text-muted">Memuat probe MikroTik…</td></tr>
-        </tbody>
-      </table>
     </div>
   </div>
 

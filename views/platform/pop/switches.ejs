@@ -1,16 +1,30 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main km-set">
-  <div class="km-topbar">
-    <div>
-      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-hdd-network"></i></span>Switch Manager</h2>
-    </div>
-    <button type="button" class="btn btn-km-primary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#addSwitchModal">
-      <i class="bi bi-plus-lg me-1"></i> Tambah Switch
-    </button>
-  </div>
+<main class="km-main km-set km-infra km-infra--switch">
+  <%
+    const activePopCount = pops.filter(function(p) { return p.is_active; }).length;
+    const swActive = switches.filter(function(s) { return s.is_active; }).length;
+    const swAggregate = switches.filter(function(s) { return s.include_in_aggregate; }).length;
+    const swPops = new Set(switches.map(function(s) { return s.pop_id; })).size;
+  %>
+  <%- include('../partials/infra-hero', {
+    tab: 'switch',
+    icon: 'bi-hdd-network',
+    heading: 'Switch Manager',
+    desc: 'Kelola switch distribusi di setiap POP/CABANG beserta interface uplink dan trafik aggregate.',
+    chips: [
+      { tone: swActive ? 'ok' : 'muted', dot: true, label: swActive + ' switch aktif' },
+      { tone: 'info', icon: 'bi-geo-alt', label: activePopCount + ' POP aktif' }
+    ],
+    actions: '<button type="button" class="btn btn-km-primary" data-bs-toggle="modal" data-bs-target="#addSwitchModal"' + (activePopCount ? '' : ' disabled') + '><i class="bi bi-plus-lg"></i> Tambah Switch</button>'
+  }) %>
 
-  <% const activePopCount = pops.filter(function(p) { return p.is_active; }).length; %>
+  <%- include('../partials/infra-stats', { stats: [
+    { tone: 'cyan', icon: 'bi-hdd-network', label: 'Total Switch', value: switches.length, meta: 'Terdaftar di sistem' },
+    { tone: 'green', icon: 'bi-check2-circle', label: 'Aktif', value: swActive, meta: (switches.length - swActive) + ' nonaktif' },
+    { tone: 'blue', icon: 'bi-diagram-3', label: 'Aggregate', value: swAggregate, meta: 'Masuk trafik gabungan' },
+    { tone: 'violet', icon: 'bi-geo-alt', label: 'POP Terpakai', value: swPops, meta: 'dari ' + activePopCount + ' POP aktif' }
+  ] }) %>
   <% if (!activePopCount) { %>
     <div class="alert alert-warning">Buat POP/CABANG aktif terlebih dahulu di <a href="/management/pop" class="alert-link">Daftar POP/CABANG</a>.</div>
   <% } %>
@@ -21,6 +35,10 @@
   <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
 
   <div class="km-card km-card--flush">
+    <div class="km-infra-panel-head">
+      <h5><i class="bi bi-list-ul"></i> Daftar Switch</h5>
+      <small><%= switches.length %> perangkat</small>
+    </div>
     <div class="table-responsive">
       <table class="table table-hover align-middle mb-0 km-tenant-table">
         <thead>
@@ -36,32 +54,50 @@
         </thead>
         <tbody>
           <% if (!switches.length) { %>
-            <tr><td colspan="7" class="text-center py-4 text-muted">Belum ada switch terdaftar.</td></tr>
+            <tr>
+              <td colspan="7" class="km-infra-empty-cell">
+                <div class="km-infra-empty">
+                  <span class="km-infra-empty__icon"><i class="bi bi-hdd-network"></i></span>
+                  <strong>Belum ada switch terdaftar</strong>
+                  <span>Tambahkan switch pertama agar trafik uplink dan aggregate tiap POP bisa dipantau.</span>
+                  <% if (activePopCount) { %>
+                    <button type="button" class="btn btn-km-primary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#addSwitchModal"><i class="bi bi-plus-lg"></i> Tambah Switch</button>
+                  <% } %>
+                </div>
+              </td>
+            </tr>
           <% } %>
           <% switches.forEach(function(s) { %>
             <tr class="<%= s.is_active ? '' : 'opacity-50' %>">
-              <td class="fw-semibold">
-                <%= s.name %>
-                <% if (s.brand || s.model) { %>
-                  <div class="small text-muted"><%= [s.brand, s.model].filter(Boolean).join(' ') %></div>
-                <% } %>
+              <td>
+                <div class="km-infra-device">
+                  <span class="km-infra-device__icon"><i class="bi bi-hdd-network"></i></span>
+                  <div>
+                    <div class="km-infra-device__name"><%= s.name %></div>
+                    <% if (s.brand || s.model) { %>
+                      <div class="km-infra-device__sub"><%= [s.brand, s.model].filter(Boolean).join(' ') %></div>
+                    <% } %>
+                  </div>
+                </div>
               </td>
               <td>
-                <code><%= s.pop_code %></code>
-                <div class="small text-muted"><%= s.pop_name %></div>
+                <div class="km-infra-pop">
+                  <code><%= s.pop_code %></code>
+                  <small><%= s.pop_name %></small>
+                </div>
               </td>
               <td><code><%= s.ip_address %></code></td>
               <td><code><%= s.main_interface || 'SFP+1' %></code></td>
               <td>
                 <% if (s.include_in_aggregate) { %>
-                  <span class="badge bg-primary">Ya</span>
+                  <span class="km-infra-pill km-infra-pill--info">Ya</span>
                 <% } else { %>
-                  <span class="badge bg-secondary">Tidak</span>
+                  <span class="km-infra-pill km-infra-pill--off">Tidak</span>
                 <% } %>
               </td>
               <td>
-                <% if (s.is_active) { %><span class="badge bg-success">Aktif</span>
-                <% } else { %><span class="badge bg-secondary">Nonaktif</span><% } %>
+                <% if (s.is_active) { %><span class="km-infra-pill km-infra-pill--ok">Aktif</span>
+                <% } else { %><span class="km-infra-pill km-infra-pill--off">Nonaktif</span><% } %>
               </td>
               <td class="text-end">
                 <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editSwitchModal-<%= s.id %>">

@@ -5,11 +5,14 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 
 import '../../services/api_client.dart';
+import '../../store/auth_provider.dart';
+import '../../utils/whatsapp_uri.dart';
 import 'area_manager_theme.dart';
 
-/// Terima pembayaran oleh Manager Area: dicatat atas namanya, tanpa komisi kolektor.
+/// Terima pembayaran oleh Manager Area atau admin utama: dicatat atas namanya, tanpa komisi kolektor.
 class AreaManagerReceivePaymentScreen extends StatefulWidget {
   const AreaManagerReceivePaymentScreen({
     super.key,
@@ -167,7 +170,8 @@ class _AreaManagerReceivePaymentScreenState
             'Terima ${_money.format(_total)} dari $name '
             '(${_selected.length} tagihan) secara '
             '${_method == 'transfer' ? 'transfer' : (_method == 'cash' ? 'tunai' : 'metode lain')}.\n\n'
-            'Pembayaran dicatat atas nama Anda sebagai Manager Area.',
+            'Pembayaran dicatat atas nama Anda sebagai '
+            '${context.read<AuthProvider>().role == 'admin' ? 'Admin' : 'Manager Area'}.',
           ),
           actions: [
             TextButton(
@@ -270,9 +274,160 @@ class _AreaManagerReceivePaymentScreenState
 
   @override
   Widget build(BuildContext context) {
-    return Theme(
-      data: areaManagerTheme,
-      child: _buildScaffold(context),
+    return Theme(data: areaManagerTheme, child: _buildScaffold(context));
+  }
+
+  static const _waGreen = Color(0xFF16A34A);
+
+  String _str(dynamic v) => v?.toString().trim() ?? '';
+
+  Future<void> _openWhatsApp(String phone) async {
+    final ok = await launchWhatsAppChat(phone);
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Tidak dapat membuka WhatsApp')),
+      );
+    }
+  }
+
+  Widget _customerCard(Map<String, dynamic> c) {
+    final area = _str(c['area']);
+    final address = _str(c['address']);
+    final phone = _str(c['phone']);
+    final package = _str(c['package_name']);
+    return _card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _str(c['name']).isEmpty ? 'Pelanggan' : _str(c['name']),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 17,
+                  ),
+                ),
+              ),
+              if (package.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _primary.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    package,
+                    style: const TextStyle(
+                      color: _primary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          if (area.isNotEmpty || address.isNotEmpty) ...[
+            const Divider(height: 22, color: _border),
+            if (area.isNotEmpty)
+              _infoRow(Icons.location_on_outlined, 'Wilayah', area),
+            if (area.isNotEmpty && address.isNotEmpty)
+              const SizedBox(height: 8),
+            if (address.isNotEmpty)
+              _infoRow(Icons.home_outlined, 'Alamat', address),
+          ],
+          if (phone.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Material(
+              color: _waGreen.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(12),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => _openWhatsApp(phone),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: _waGreen.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.chat_rounded, color: _waGreen, size: 20),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'WhatsApp',
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                color: _waGreen,
+                              ),
+                            ),
+                            Text(
+                              phone,
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF0F172A),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Text(
+                        'Chat',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          color: _waGreen,
+                        ),
+                      ),
+                      const Icon(Icons.chevron_right_rounded, color: _waGreen),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _infoRow(IconData icon, String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 18, color: _textMuted),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 62,
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 13, color: _textMuted),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF0F172A),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -292,37 +447,7 @@ class _AreaManagerReceivePaymentScreenState
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
         children: [
-          _card(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  c['name']?.toString() ?? 'Pelanggan',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 17,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                for (final line in [
-                  [
-                    c['area'],
-                    c['package_name'],
-                  ].where((v) => '${v ?? ''}'.trim().isNotEmpty).join(' · '),
-                  c['phone']?.toString() ?? '',
-                  c['address']?.toString() ?? '',
-                ])
-                  if (line.trim().isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(
-                        line,
-                        style: const TextStyle(fontSize: 13, color: _textMuted),
-                      ),
-                    ),
-              ],
-            ),
-          ),
+          _customerCard(c),
           const SizedBox(height: 16),
           const Text(
             'Tagihan belum lunas',

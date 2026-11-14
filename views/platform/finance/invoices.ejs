@@ -29,7 +29,7 @@
 <main class="km-main km-inv-page km-bbs-page">
   <div class="km-topbar">
     <div>
-      <h2>Invoice Tenant</h2>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-receipt"></i></span>Invoice Tenant</h2>
     </div>
     <% if (sInv) { %>
       <a href="/management/finance/invoices/<%= sInv.id %>/print" target="_blank" class="btn btn-outline-primary btn-sm"><i class="bi bi-printer"></i> Cetak</a>
@@ -45,25 +45,58 @@
   <% if (flash && flash.success === 'restored') { %><div class="alert alert-success"><i class="bi bi-arrow-counterclockwise me-1"></i> Backup finance berhasil di-restore.</div><% } %>
   <% if (flash && flash.error) { %><div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-1"></i> <%= flash.error %></div><% } %>
 
-  <form method="GET" class="km-card km-bbs-picker mb-3" id="invoicePeriodForm">
-    <div class="km-bbs-picker__field">
-      <label for="pickMonth"><i class="bi bi-calendar3"></i> Periode</label>
-      <div class="d-flex gap-2">
-        <select name="month" id="pickMonth" class="form-select form-select-sm">
-          <% for (let m = 1; m <= 12; m++) { %>
-            <option value="<%= m %>" <%= Number(filters.month) === m ? 'selected' : '' %>><%= monthFull[m-1] %></option>
-          <% } %>
-        </select>
-        <select name="year" class="form-select form-select-sm" aria-label="Tahun">
-          <% for (let y = cy - 3; y <= cy + 1; y++) { %>
-            <option value="<%= y %>" <%= Number(filters.year) === y ? 'selected' : '' %>><%= y %></option>
-          <% } %>
-        </select>
+  <%
+    const pickYear = Number(filters.year) || cy;
+    const yearFrom = Math.min(cy - 3, pickYear);
+    const yearTo = Math.max(cy + 1, pickYear);
+    const tName = sRow ? String(sRow.tenant_name || '-') : '';
+    const tInitials = tName.split(/\s+/).filter(Boolean).slice(0, 2).map(function (w) { return w[0]; }).join('').toUpperCase() || 'T';
+    const tHue = tName.split('').reduce(function (h, c) { return (h * 31 + c.charCodeAt(0)) % 360; }, 7);
+    const tMeta = sRow ? [sRow.owner_name, sRow.subdomain].filter(Boolean).join(' · ') : '';
+    const invDone = rows.filter(function (r) { return r.has_invoice; }).length;
+    const invPct = rows.length ? Math.round(invDone / rows.length * 100) : 0;
+  %>
+  <form method="GET" class="km-card km-ipk mb-3" id="invoicePeriodForm">
+    <div class="km-ipk__block km-ipk__period">
+      <span class="km-ipk__icon km-ipk__icon--period"><i class="bi bi-calendar-week"></i></span>
+      <div class="km-ipk__body">
+        <span class="km-ipk__label">Periode Tagihan</span>
+        <div class="km-ipk__stepper">
+          <button type="button" class="km-ipk__nav js-period-step" data-step="-1" title="Bulan sebelumnya" aria-label="Bulan sebelumnya"><i class="bi bi-chevron-left"></i></button>
+          <span class="km-ipk__select km-ipk__select--month">
+            <select name="month" id="pickMonth" aria-label="Bulan">
+              <% for (let m = 1; m <= 12; m++) { %>
+                <option value="<%= m %>" <%= Number(filters.month) === m ? 'selected' : '' %>><%= monthFull[m-1] %></option>
+              <% } %>
+            </select>
+          </span>
+          <span class="km-ipk__select">
+            <select name="year" id="pickYear" aria-label="Tahun">
+              <% for (let y = yearFrom; y <= yearTo; y++) { %>
+                <option value="<%= y %>" <%= pickYear === y ? 'selected' : '' %>><%= y %></option>
+              <% } %>
+            </select>
+          </span>
+          <button type="button" class="km-ipk__nav js-period-step" data-step="1" title="Bulan berikutnya" aria-label="Bulan berikutnya"><i class="bi bi-chevron-right"></i></button>
+        </div>
       </div>
     </div>
-    <div class="km-bbs-picker__field km-bbs-picker__field--grow">
-      <label for="pickTenant"><i class="bi bi-buildings"></i> Kepada (Tenant)</label>
-      <select name="view" id="pickTenant" class="form-select form-select-sm" <%= rows.length ? '' : 'disabled' %>>
+
+    <label class="km-ipk__block km-ipk__tenant <%= rows.length ? '' : 'is-empty' %>" for="pickTenant">
+      <% if (sRow) { %>
+        <span class="km-ipk__avatar" style="--h: <%= tHue %>"><%= tInitials %></span>
+      <% } else { %>
+        <span class="km-ipk__icon km-ipk__icon--tenant"><i class="bi bi-buildings"></i></span>
+      <% } %>
+      <span class="km-ipk__body">
+        <span class="km-ipk__label">Kepada</span>
+        <strong class="km-ipk__name"><%= sRow ? tName : 'Belum ada tenant' %></strong>
+        <span class="km-ipk__meta"><%= sRow ? (tMeta || 'Tenant') : 'Tambahkan tenant untuk membuat invoice' %></span>
+      </span>
+      <% if (rows.length > 1) { %>
+        <span class="km-ipk__switch"><i class="bi bi-arrow-left-right"></i> Ganti</span>
+      <% } %>
+      <select name="view" id="pickTenant" class="km-ipk__overlay" <%= rows.length ? '' : 'disabled' %>>
         <% if (!rows.length) { %><option value="">Belum ada tenant</option><% } %>
         <% rows.forEach(function (r) {
              const st = r.has_invoice ? (r.status || 'draft') : 'none';
@@ -71,14 +104,17 @@
           <option value="<%= r.tenant_id %>" <%= sRow && String(sRow.tenant_id) === String(r.tenant_id) ? 'selected' : '' %>><%= r.tenant_name %> — <%= statusLabels[st] || st %></option>
         <% }); %>
       </select>
-    </div>
-    <div class="km-bbs-picker__status">
-      <% if (sStatus) { %>
+    </label>
+
+    <% if (sStatus) { %>
+      <div class="km-ipk__block km-ipk__aside">
         <span class="km-inv-pill km-inv-pill--<%= sStatus %>"><i class="bi <%= statusIcons[sStatus] %>"></i> <%= statusLabels[sStatus] %></span>
-      <% } else { %>
-        <a href="/management/tenants/new" class="btn btn-km-primary btn-sm"><i class="bi bi-plus-lg"></i> Tambah Tenant</a>
-      <% } %>
-    </div>
+        <div class="km-ipk__progress" title="<%= invDone %> dari <%= rows.length %> tenant sudah dibuatkan invoice">
+          <div class="km-ipk__progress-text"><strong><%= invDone %>/<%= rows.length %></strong> tenant ter-invoice</div>
+          <div class="km-ipk__bar"><span style="width: <%= invPct %>%"></span></div>
+        </div>
+      </div>
+    <% } %>
     <noscript><button type="submit" class="btn btn-km-primary btn-sm">Tampilkan</button></noscript>
   </form>
 
@@ -117,12 +153,21 @@
       </div>
       <div class="km-bbs-paper__doc">
         <h3 class="km-bbs-paper__title">Branch Billing<br>Statement</h3>
-        <table class="km-bbs-paper__meta">
-          <tr><th>No</th><td><%= sInv ? sInv.invoice_number : 'Otomatis' %></td></tr>
-          <tr><th>Kepada</th><td><%= sRow.tenant_name %><% if (sRow.owner_name) { %><small><%= sRow.owner_name %></small><% } %></td></tr>
-          <tr><th>Periode</th><td><%= periodLabel %></td></tr>
-          <tr><th>Tanggal</th><td><%= sInv ? fmtDate(sInv.created_at) : fmtDate(todayIso) %></td></tr>
-        </table>
+        <div class="km-bbs-billto">
+          <span class="km-bbs-billto__label">Ditagihkan kepada</span>
+          <div class="km-bbs-billto__row">
+            <span class="km-bbs-billto__avatar" style="--h: <%= tHue %>"><%= tInitials %></span>
+            <div class="km-bbs-billto__who">
+              <strong><%= sRow.tenant_name %></strong>
+              <% if (tMeta) { %><small><%= tMeta %></small><% } %>
+            </div>
+          </div>
+        </div>
+        <dl class="km-bbs-facts">
+          <div><dt>No. Invoice</dt><dd><%= sInv ? sInv.invoice_number : 'Otomatis' %></dd></div>
+          <div><dt>Periode</dt><dd><%= periodLabel %></dd></div>
+          <div><dt>Tanggal</dt><dd><%= sInv ? fmtDate(sInv.created_at) : fmtDate(todayIso) %></dd></div>
+        </dl>
       </div>
     </div>
 
@@ -237,6 +282,22 @@
   if (periodForm) {
     periodForm.querySelectorAll('select').forEach(function (sel) {
       sel.addEventListener('change', function () { periodForm.submit(); });
+    });
+    var monthSel = document.getElementById('pickMonth');
+    var yearSel = document.getElementById('pickYear');
+    periodForm.querySelectorAll('.js-period-step').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var idx = Number(yearSel.value) * 12 + Number(monthSel.value) - 1 + Number(btn.dataset.step);
+        var y = Math.floor(idx / 12);
+        if (!yearSel.querySelector('option[value="' + y + '"]')) {
+          var opt = new Option(String(y), String(y));
+          if (y < Number(yearSel.options[0].value)) yearSel.insertBefore(opt, yearSel.options[0]);
+          else yearSel.appendChild(opt);
+        }
+        monthSel.value = String(idx % 12 + 1);
+        yearSel.value = String(y);
+        periodForm.submit();
+      });
     });
   }
 

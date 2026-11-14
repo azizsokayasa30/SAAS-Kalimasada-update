@@ -152,11 +152,16 @@ router.post('/users', async (req, res) => {
 
 router.post('/users/:id', async (req, res) => {
     try {
-        const isActive = req.body.is_active === '1' || req.body.is_active === 1 ? 1 : 0;
+        const isSelf = Number(req.params.id) === Number(req.session.platformAdminId);
+        const isActive = isSelf || req.body.is_active === '1' || req.body.is_active === 1 ? 1 : 0;
         const user = await platformAdminService.updateSuperAdmin(req.params.id, {
             ...req.body,
             is_active: isActive,
         });
+        if (isSelf) {
+            req.session.platformAdminName = user.name;
+            req.session.platformAdminEmail = user.email;
+        }
         await tenantStore.auditLog({
             actorType: 'SuperAdmin',
             actorId: req.session.platformAdminId,
@@ -278,6 +283,7 @@ router.get('/activity-logs', async (req, res) => {
             to: req.query.to || '',
         });
         const users = await platformAdminService.listSuperAdmins();
+        const stats = await platformAdminService.auditLogStats();
         const totalPages = Math.max(Math.ceil(total / limit), 1);
 
         res.render('platform/settings/activity-logs', {
@@ -294,6 +300,7 @@ router.get('/activity-logs', async (req, res) => {
                 to: req.query.to || '',
             },
             pagination: { page, totalPages, total },
+            stats,
             formatActionLabel: platformAdminService.formatActionLabel,
             adminName: req.session.platformAdminName,
         });

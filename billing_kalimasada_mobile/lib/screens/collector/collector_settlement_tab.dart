@@ -37,18 +37,6 @@ class _CollectorSettlementTabState extends State<CollectorSettlementTab> with Au
   bool get wantKeepAlive => true;
 
   @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final col = context.read<CollectorProvider>();
-      col.fetchSettlement(
-        month: col.overviewMonth,
-        year: col.overviewYear,
-      );
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
     super.build(context);
     final c = context.watch<CollectorProvider>();

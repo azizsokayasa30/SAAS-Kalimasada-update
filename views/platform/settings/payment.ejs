@@ -1,74 +1,194 @@
 <%
-function gwEnabled(gw, key) { return gw && gw[key] && gw[key].enabled ? 'checked' : ''; }
-function gwProd(gw, key) { return gw && gw[key] && gw[key].production ? 'checked' : ''; }
 function gwVal(gw, key, field) { return (gw && gw[key] && gw[key][field]) ? gw[key][field] : ''; }
-const fieldLabels = {
-  server_key: 'Server Key', client_key: 'Client Key', merchant_id: 'Merchant ID', base_url: 'Base URL',
-  api_key: 'API Key', callback_token: 'Callback Token', private_key: 'Private Key', merchant_code: 'Merchant Code'
+const fieldMeta = {
+  server_key: { label: 'Server Key', secret: true, ph: 'Tempel Server Key' },
+  client_key: { label: 'Client Key', ph: 'Tempel Client Key' },
+  merchant_id: { label: 'Merchant ID', ph: 'mis. G123456789' },
+  base_url: { label: 'Base URL', ph: 'Kosongkan untuk URL bawaan', hint: 'Opsional. Isi hanya jika memakai endpoint khusus.' },
+  api_key: { label: 'API Key', secret: true, ph: 'Tempel API Key' },
+  callback_token: { label: 'Callback Token', secret: true, ph: 'Token verifikasi callback' },
+  private_key: { label: 'Private Key', secret: true, ph: 'Tempel Private Key' },
+  merchant_code: { label: 'Merchant Code', ph: 'mis. T12345' },
 };
 const gateways = [
-  { key: 'midtrans', title: 'Midtrans', fields: ['server_key','client_key','merchant_id','base_url'] },
-  { key: 'xendit', title: 'Xendit', fields: ['api_key','callback_token','base_url'] },
-  { key: 'tripay', title: 'Tripay', fields: ['api_key','private_key','merchant_code','base_url'] },
-  { key: 'duitku', title: 'Duitku', fields: ['merchant_code','api_key','base_url'] },
+  { key: 'midtrans', title: 'Midtrans', color: '#2563eb', initial: 'M', fields: ['server_key', 'client_key', 'merchant_id', 'base_url'], required: ['server_key', 'client_key'], dash: 'https://dashboard.midtrans.com' },
+  { key: 'xendit', title: 'Xendit', color: '#4f46e5', initial: 'X', fields: ['api_key', 'callback_token', 'base_url'], required: ['api_key'], dash: 'https://dashboard.xendit.co' },
+  { key: 'tripay', title: 'Tripay', color: '#ea580c', initial: 'T', fields: ['api_key', 'private_key', 'merchant_code', 'base_url'], required: ['api_key', 'private_key', 'merchant_code'], dash: 'https://tripay.co.id/member' },
+  { key: 'duitku', title: 'Duitku', color: '#059669', initial: 'D', fields: ['merchant_code', 'api_key', 'base_url'], required: ['merchant_code', 'api_key'], dash: 'https://passport.duitku.com' },
 ];
+const gwState = function (gw) {
+  const cfg = (payment && payment[gw.key]) || {};
+  const complete = gw.required.every(function (f) { return String(cfg[f] || '').trim(); });
+  return { enabled: !!cfg.enabled, production: !!cfg.production, complete: complete };
+};
+const readyCount = gateways.filter(function (g) { const s = gwState(g); return s.enabled && s.complete; }).length;
 %>
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main km-set">
-  <form method="POST" action="/management/settings/payment">
-    <div class="km-topbar">
-      <div>
-        <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-credit-card"></i></span>Payment Manager</h2>
+<main class="km-main km-set km-pay">
+  <form method="POST" action="/management/settings/payment" data-km-dirty id="paymentForm">
+    <div class="km-sx-hero km-sx-hero--green">
+      <div class="km-sx-hero__main">
+        <span class="km-sx-hero__icon"><i class="bi bi-credit-card"></i></span>
+        <div>
+          <div class="km-sx-hero__eyebrow">Pengaturan</div>
+          <h2 class="km-sx-hero__title">Payment Manager</h2>
+          <p class="km-sx-hero__desc">Atur gateway pembayaran untuk tagihan tenant. Pilih satu gateway utama, lalu isi kredensial dari dashboard penyedia.</p>
+        </div>
       </div>
-      <div class="km-pay-toolbar">
-        <label class="km-pay-toolbar__label" for="paymentActive">Gateway aktif</label>
-        <select name="active" id="paymentActive" class="form-select form-select-sm">
-          <% gateways.forEach(function(g) { %>
-            <option value="<%= g.key %>" <%= payment.active === g.key ? 'selected' : '' %>><%= g.title %></option>
-          <% }); %>
-        </select>
-        <button type="submit" class="btn btn-km-primary btn-sm px-3"><i class="bi bi-check-lg me-1"></i> Simpan</button>
+      <div class="km-sx-hero__actions">
+        <span class="km-pay-ready"><i class="bi bi-shield-check"></i><span id="payReadyCount"><%= readyCount %></span> dari <%= gateways.length %> gateway siap</span>
       </div>
     </div>
 
-    <% if (flash && flash.success === 'saved') { %><div class="alert alert-success">Pengaturan payment gateway berhasil disimpan.</div><% } %>
-    <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+    <% if (flash && flash.success === 'saved') { %><div class="alert alert-success alert-dismissible fade show km-sx-alert"><i class="bi bi-check-circle-fill"></i>Pengaturan payment gateway berhasil disimpan.<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
+    <% if (flash && flash.error) { %><div class="alert alert-danger alert-dismissible fade show km-sx-alert"><i class="bi bi-exclamation-triangle-fill"></i><%= flash.error %><button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
 
-    <div class="row g-3">
-      <% gateways.forEach(function(gw) { %>
-      <% const isDefault = payment.active === gw.key; %>
+    <section class="km-card km-sx-section mb-4">
+      <header class="km-sx-section__head">
+        <span class="km-sx-section__icon km-tone-green"><i class="bi bi-star"></i></span>
+        <div>
+          <h3 class="km-sx-section__title">Gateway Utama</h3>
+          <p class="km-sx-section__sub">Dipakai untuk membuat link pembayaran tagihan.</p>
+        </div>
+      </header>
+      <div class="km-sx-section__body">
+        <div class="km-pay-pick">
+          <% gateways.forEach(function (gw) { const s = gwState(gw); %>
+            <label class="km-pay-opt" style="--gw: <%= gw.color %>" data-gw="<%= gw.key %>">
+              <input type="radio" name="active" value="<%= gw.key %>" <%= payment.active === gw.key ? 'checked' : '' %>>
+              <span class="km-pay-logo"><%= gw.initial %></span>
+              <span class="km-pay-opt__text">
+                <span class="km-pay-opt__name"><%= gw.title %></span>
+                <span class="km-pay-state" data-state-for="<%= gw.key %>"></span>
+              </span>
+              <i class="bi bi-check-circle-fill km-pay-opt__check"></i>
+            </label>
+          <% }); %>
+        </div>
+        <div class="km-sx-callout km-sx-callout--warn mt-3 d-none" id="payActiveWarn">
+          <i class="bi bi-exclamation-triangle"></i>
+          <span>Gateway utama <strong id="payActiveName"></strong> belum aktif atau kredensialnya belum lengkap. Pembayaran online tidak akan berjalan sampai gateway ini siap.</span>
+        </div>
+      </div>
+    </section>
+
+    <div class="row g-4">
+      <% gateways.forEach(function(gw) { const s = gwState(gw); %>
       <div class="col-xl-6">
-        <div class="km-card km-pay-card h-100 <%= isDefault ? 'km-pay-card--default' : '' %>">
-          <div class="km-pay-card__head">
-            <span class="km-form-section__icon km-form-section__icon--green"><i class="bi bi-credit-card"></i></span>
-            <h6 class="km-pay-card__title"><%= gw.title %></h6>
-            <% if (isDefault) { %><span class="badge text-bg-primary">Default</span><% } %>
-            <div class="km-pay-card__switches">
-              <div class="form-check form-switch mb-0">
-                <input class="form-check-input" type="checkbox" name="<%= gw.key %>[enabled]" value="1" id="<%= gw.key %>Enabled" <%= gwEnabled(payment, gw.key) %>>
+        <section class="km-card km-sx-section km-pay-card2 h-100" style="--gw: <%= gw.color %>" data-gw-card="<%= gw.key %>" data-required="<%= gw.required.join(',') %>">
+          <header class="km-sx-section__head">
+            <span class="km-pay-logo km-pay-logo--sm"><%= gw.initial %></span>
+            <div>
+              <h3 class="km-sx-section__title d-flex align-items-center gap-2">
+                <%= gw.title %>
+                <span class="km-pay-main-badge"><i class="bi bi-star-fill"></i>Utama</span>
+              </h3>
+              <p class="km-sx-section__sub"><span class="km-pay-state" data-state-for="<%= gw.key %>"></span></p>
+            </div>
+            <div class="km-sx-section__aside">
+              <div class="form-check form-switch km-sx-toggle">
+                <input class="form-check-input" type="checkbox" role="switch" name="<%= gw.key %>[enabled]" value="1" id="<%= gw.key %>Enabled" <%= s.enabled ? 'checked' : '' %>>
                 <label class="form-check-label" for="<%= gw.key %>Enabled">Aktif</label>
               </div>
-              <div class="form-check form-switch mb-0">
-                <input class="form-check-input" type="checkbox" name="<%= gw.key %>[production]" value="1" id="<%= gw.key %>Prod" <%= gwProd(payment, gw.key) %>>
+              <div class="form-check form-switch km-sx-toggle">
+                <input class="form-check-input" type="checkbox" role="switch" name="<%= gw.key %>[production]" value="1" id="<%= gw.key %>Prod" <%= s.production ? 'checked' : '' %>>
                 <label class="form-check-label" for="<%= gw.key %>Prod">Production</label>
               </div>
             </div>
-          </div>
-          <div class="row g-2">
-            <% gw.fields.forEach(function(field) { %>
-            <div class="<%= (field === 'base_url' && gw.fields.length % 2 === 1) ? 'col-12' : 'col-sm-6' %>">
-              <label class="form-label small mb-1" for="<%= gw.key %>_<%= field %>"><%= fieldLabels[field] || field %></label>
-              <input type="text" id="<%= gw.key %>_<%= field %>" name="<%= gw.key %>[<%= field %>]" class="form-control form-control-sm"
-                value="<%= gwVal(payment, gw.key, field) %>" autocomplete="off">
+          </header>
+          <div class="km-sx-section__body">
+            <div class="row g-3">
+              <% gw.fields.forEach(function(field) { const m = fieldMeta[field] || { label: field }; const isReq = gw.required.indexOf(field) !== -1; %>
+              <div class="<%= (field === 'base_url' && gw.fields.length % 2 === 1) ? 'col-12' : 'col-sm-6' %>">
+                <label class="form-label" for="<%= gw.key %>_<%= field %>"><%= m.label %><% if (isReq) { %> <span class="text-danger">*</span><% } %></label>
+                <% if (m.secret) { %>
+                  <div class="input-group">
+                    <input type="password" id="<%= gw.key %>_<%= field %>" name="<%= gw.key %>[<%= field %>]" class="form-control"
+                      value="<%= gwVal(payment, gw.key, field) %>" autocomplete="off" spellcheck="false" placeholder="<%= m.ph %>">
+                    <button type="button" class="btn btn-outline-secondary" data-km-pass-toggle title="Tampilkan" aria-label="Tampilkan"><i class="bi bi-eye"></i></button>
+                  </div>
+                <% } else { %>
+                  <input type="text" id="<%= gw.key %>_<%= field %>" name="<%= gw.key %>[<%= field %>]" class="form-control"
+                    value="<%= gwVal(payment, gw.key, field) %>" autocomplete="off" spellcheck="false" placeholder="<%= m.ph || '' %>">
+                <% } %>
+                <% if (m.hint) { %><small class="km-sx-hint"><%= m.hint %></small><% } %>
+              </div>
+              <% }); %>
             </div>
-            <% }); %>
+            <div class="km-pay-foot">
+              <span><i class="bi bi-info-circle"></i> Matikan <strong>Production</strong> untuk mode uji coba (sandbox).</span>
+              <a href="<%= gw.dash %>" target="_blank" rel="noopener">Dashboard <%= gw.title %> <i class="bi bi-box-arrow-up-right"></i></a>
+            </div>
           </div>
-        </div>
+        </section>
       </div>
       <% }); %>
     </div>
+
+    <div class="km-sx-savebar">
+      <div class="km-sx-savebar__msg">
+        <span class="km-sx-savebar__dot"></span>
+        <span class="km-sx-savebar__clean">Semua perubahan sudah tersimpan</span>
+        <span class="km-sx-savebar__dirty">Ada perubahan yang belum disimpan</span>
+      </div>
+      <div class="d-flex gap-2">
+        <button type="reset" class="btn btn-outline-secondary px-3">Batalkan</button>
+        <button type="submit" class="btn btn-km-primary px-4"><i class="bi bi-check-lg me-1"></i> Simpan</button>
+      </div>
+    </div>
   </form>
 </main>
+
+<script>
+(function () {
+  var form = document.getElementById('paymentForm');
+  var warn = document.getElementById('payActiveWarn');
+  var warnName = document.getElementById('payActiveName');
+
+  function stateOf(key) {
+    var card = form.querySelector('[data-gw-card="' + key + '"]');
+    var enabled = form.querySelector('#' + key + 'Enabled').checked;
+    var prod = form.querySelector('#' + key + 'Prod').checked;
+    var req = (card.getAttribute('data-required') || '').split(',').filter(Boolean);
+    var complete = req.every(function (f) {
+      var el = form.querySelector('[name="' + key + '[' + f + ']"]');
+      return el && el.value.trim();
+    });
+    return { enabled: enabled, prod: prod, complete: complete, ready: enabled && complete };
+  }
+
+  function render() {
+    var active = (form.querySelector('input[name="active"]:checked') || {}).value;
+    var ready = 0;
+    form.querySelectorAll('[data-gw-card]').forEach(function (card) {
+      var key = card.getAttribute('data-gw-card');
+      var s = stateOf(key);
+      if (s.ready) ready++;
+      var html, cls;
+      if (!s.enabled) { cls = 'off'; html = '<i class="bi bi-pause-circle"></i>Nonaktif'; }
+      else if (!s.complete) { cls = 'warn'; html = '<i class="bi bi-exclamation-circle"></i>Kredensial belum lengkap'; }
+      else { cls = 'ok'; html = '<i class="bi bi-check-circle"></i>Siap dipakai'; }
+      html += '<span class="km-pay-mode km-pay-mode--' + (s.prod ? 'prod' : 'sandbox') + '">' + (s.prod ? 'Production' : 'Sandbox') + '</span>';
+      form.querySelectorAll('[data-state-for="' + key + '"]').forEach(function (el) {
+        el.className = 'km-pay-state km-pay-state--' + cls;
+        el.innerHTML = html;
+      });
+      card.classList.toggle('is-main', key === active);
+      if (key === active) {
+        warn.classList.toggle('d-none', s.ready);
+        warnName.textContent = card.querySelector('.km-sx-section__title').firstChild.textContent.trim();
+      }
+    });
+    var readyEl = document.getElementById('payReadyCount');
+    if (readyEl) readyEl.textContent = ready;
+  }
+
+  form.addEventListener('input', render);
+  form.addEventListener('change', render);
+  form.addEventListener('reset', function () { setTimeout(function () { render(); form.dispatchEvent(new Event('change')); }, 0); });
+  render();
+})();
+</script>
 
 <%- include('../partials/footer') %>

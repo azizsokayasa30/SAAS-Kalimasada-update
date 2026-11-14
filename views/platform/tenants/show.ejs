@@ -17,6 +17,7 @@
       <% if (flash.success === 'created') { %>Tenant berhasil dibuat.<% } %>
       <% if (flash.success === 'updated') { %>Perubahan tenant disimpan.<% } %>
       <% if (flash.success === 'credentials') { %>Username &amp; password admin tenant berhasil diperbarui.<% } %>
+      <% if (flash.success === 'renamed') { %>Nama tenant berhasil diubah.<% } %>
     </div>
   <% } %>
   <% if (flash && flash.nginx_warn) { %>

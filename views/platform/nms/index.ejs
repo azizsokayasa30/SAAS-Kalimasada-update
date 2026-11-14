@@ -1,13 +1,24 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active: active || 'settings-api', adminName }) %>
-<main class="km-main km-set">
-  <div class="km-topbar">
-    <div>
-      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-plug"></i></span>Pengaturan API</h2>
-    </div>
-  </div>
+<main class="km-main km-set km-infra km-infra--api">
+  <%- include('../partials/infra-hero', {
+    tab: 'api',
+    icon: 'bi-plug',
+    heading: 'Pengaturan API',
+    desc: 'Hubungkan billing dengan NMS untuk mengambil daftar perangkat dan graph monitoring.',
+    chips: [
+      { tone: 'info', icon: 'bi-hdd-network', label: 'Integrasi NMS' },
+      { tone: 'info', icon: 'bi-graph-up', label: 'Sumber data MRTG' }
+    ]
+  }) %>
 
   <div id="nmsPageAlert" class="alert d-none" role="status"></div>
+
+  <%- include('../partials/infra-stats', { stats: [
+    { tone: 'slate', icon: 'bi-key', label: 'Token API', value: 'Memeriksa…', small: true, attrs: 'data-ix-mirror="#nmsTokenState"', meta: 'Status kredensial' },
+    { tone: 'blue', icon: 'bi-hdd-network', label: 'Perangkat NMS', value: '…', attrs: 'data-ix-rows="#nmsDeviceBody"', meta: 'Terbaca dari NMS' },
+    { tone: 'violet', icon: 'bi-stopwatch', label: 'Timeout', value: '—', small: true, attrs: 'data-ix-input="#nmsTimeout" data-ix-suffix=" ms"', meta: 'Batas waktu permintaan' }
+  ] }) %>
 
   <div class="row g-3 mb-3">
     <div class="col-lg-5">
@@ -30,10 +41,10 @@
             <input id="nmsTimeout" name="timeoutMs" type="number" min="1000" max="20000" class="form-control" value="8000">
           </div>
           <div class="col-12">
-            <div class="km-proxy-actions mt-0">
-              <button type="submit" class="btn btn-km-primary btn-sm"><i class="bi bi-check-lg me-1"></i> Simpan</button>
-              <button type="button" class="btn btn-outline-secondary btn-sm" id="nmsTestBtn"><i class="bi bi-lightning-charge me-1"></i> Uji koneksi</button>
-              <span id="nmsTestResult" class="small text-muted w-100">Belum diuji.</span>
+            <div class="km-infra-formbar mt-0">
+              <button type="submit" class="btn btn-km-primary btn-sm px-3"><i class="bi bi-check-lg"></i> Simpan</button>
+              <button type="button" class="btn btn-outline-secondary btn-sm px-3" id="nmsTestBtn"><i class="bi bi-lightning-charge"></i> Uji koneksi</button>
+              <span id="nmsTestResult" class="km-infra-formbar__hint w-100">Belum diuji.</span>
             </div>
           </div>
         </form>
@@ -61,4 +72,5 @@
 </main>
 <link rel="stylesheet" href="/css/nms-mrtg.css?v=5">
 <script src="/js/management-nms.js?v=3"></script>
+<script src="/js/infra-modern.js?v=1"></script>
 <%- include('../partials/footer') %>

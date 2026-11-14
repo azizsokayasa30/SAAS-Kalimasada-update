@@ -309,10 +309,14 @@ router.get('/tenants', async (req, res) => {
             }))
         );
         const backups = tenantBackup.listTenantBackups();
+        const createDraft = req.session.tenantCreateDraft || null;
+        delete req.session.tenantCreateDraft;
         res.render('platform/tenants/index', {
             title: 'Kelola Tenant',
             tenants: withStats,
             backups,
+            createDraft,
+            tenantBaseDomain: getTenantBaseDomain(),
             filters: {
                 month: period.month,
                 year: period.year,
@@ -350,7 +354,9 @@ router.get('/tenants/backup/download', async (req, res) => {
 router.get('/tenants/backup/excel', async (req, res) => {
     try {
         const buffer = await tenantBackup.buildTenantExcelBuffer({ includeData: true });
-        const filename = `tenants_export_${new Date().toISOString().slice(0, 10)}.xlsx`;
+        const now = new Date();
+        const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        const filename = `tenants_export_${stamp}.xlsx`;
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
         res.send(Buffer.from(buffer));
@@ -547,6 +553,20 @@ router.post('/tenants', async (req, res) => {
         }
         return res.redirect(`/management/tenants/${tenant.id}?success=created${nginxQ}`);
     } catch (err) {
+        if (req.body.from === 'modal') {
+            req.session.tenantCreateDraft = {
+                values: {
+                    name: req.body.name || '',
+                    owner_name: req.body.owner_name || '',
+                    owner_email: req.body.owner_email || '',
+                    owner_phone: req.body.owner_phone || '',
+                    subdomain: req.body.subdomain || '',
+                    admin_username: req.body.admin_username || '',
+                },
+                error: err.message,
+            };
+            return res.redirect(tenantsListUrl());
+        }
         return res.status(400).render('platform/tenants/form', {
             title: 'Tambah Tenant',
             tenant: req.body,

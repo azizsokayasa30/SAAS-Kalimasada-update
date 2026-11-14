@@ -6,6 +6,7 @@ class FieldCollectorColors {
 
   static const Color background = Color(0xFFF8F9FA);
   static const Color surface = Color(0xFFFFFFFF);
+
   /// Latar kartu sedikit lebih tinggi dari [surface] (M3 surfaceContainerHigh).
   static const Color surfaceContainerHigh = Color(0xFFECEEF2);
   static const Color primaryContainer = Color(0xFF001F3F);
@@ -36,19 +37,23 @@ class FieldCollectorColors {
   // —— Dashboard home (kolektor): latar & kartu warna-warni ——
   /// Latar halaman dashboard (bukan putih polos).
   static const Color dashboardCanvas = Color(0xFFE8EEF7);
+
   /// Kartu sapaan: gradien header.
   static const Color dashWelcomeTop = Color(0xFF0F3460);
   static const Color dashWelcomeBottom = Color(0xFF1B6BA8);
   static const Color dashWelcomeOnAccent = Color(0xFFFFFFFF);
   static const Color dashWelcomeSubtitle = Color(0xFFB8D4F0);
+
   /// Target tagihan: gradien gelap + aksen progres.
   static const Color dashTargetA = Color(0xFF0D3B66);
   static const Color dashTargetB = Color(0xFF1A6CAD);
   static const Color dashTargetProgress = Color(0xFFFFD54F);
   static const Color dashTargetProgressTrack = Color(0x33FFFFFF);
+
   /// Kartu periode (filter bulan).
   static const Color dashPeriodTint = Color(0xFFF3EDFF);
   static const Color dashPeriodBorder = Color(0xFFD7C4F5);
+
   /// Ringkasan: satu warna per jenis.
   static const Color statTotalBg = Color(0xFFE3EDFF);
   static const Color statTotalIcon = Color(0xFF1565C0);
@@ -62,10 +67,20 @@ class FieldCollectorColors {
   static const Color statNonaktifIcon = Color(0xFF616161);
   static const Color statBaruBg = Color(0xFFE0F7FA);
   static const Color statBaruIcon = Color(0xFF00838F);
+
+  /// Ikon ringkasan di atas kartu biru (versi terang agar kontras).
+  static const Color statOnBlueTotal = Color(0xFF9FD3FF);
+  static const Color statOnBlueLunas = Color(0xFF7CF0A6);
+  static const Color statOnBlueBelum = Color(0xFFFFC46B);
+  static const Color statOnBlueBaru = Color(0xFF7FF0F5);
+  static const Color statOnBlueIsolir = Color(0xFFE7A8FF);
+  static const Color statOnBlueNonaktif = Color(0xFFE2E8F0);
+
   /// Aksi cepat.
   static const Color dashActionA = Color(0xFF3949AB);
   static const Color dashActionB = Color(0xFF5C6BC0);
   static const Color dashActionFg = Color(0xFFFFFFFF);
+
   /// Prioritas penagihan.
   static const Color dashPriorityRail = Color(0xFFFFB74D);
   static const Color dashPriorityBg = Color(0xFFFFFBF5);

@@ -1,83 +1,230 @@
+<%
+const p = profile || {};
+const logo = p.logo_path || '/img/logo.png';
+%>
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main km-set">
-  <div class="km-topbar">
-    <div>
-      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-building"></i></span>Company Profile</h2>
+<main class="km-main km-set km-company">
+  <div class="km-sx-hero km-sx-hero--blue">
+    <div class="km-sx-hero__main">
+      <span class="km-sx-hero__icon"><i class="bi bi-building"></i></span>
+      <div>
+        <div class="km-sx-hero__eyebrow">Pengaturan</div>
+        <h2 class="km-sx-hero__title">Company Profile</h2>
+        <p class="km-sx-hero__desc">Identitas dan kontak perusahaan yang tampil di portal management. Pratinjau berubah langsung saat Anda mengetik.</p>
+      </div>
     </div>
   </div>
 
-  <% if (flash && flash.success === 'saved') { %><div class="alert alert-success">Profil perusahaan berhasil disimpan.</div><% } %>
-  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
+  <% if (flash && flash.success === 'saved') { %><div class="alert alert-success alert-dismissible fade show km-sx-alert"><i class="bi bi-check-circle-fill"></i>Profil perusahaan berhasil disimpan.<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
+  <% if (flash && flash.error) { %><div class="alert alert-danger alert-dismissible fade show km-sx-alert"><i class="bi bi-exclamation-triangle-fill"></i><%= flash.error %><button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
 
-  <div class="km-card">
-    <div class="km-vpn-card__head">
-      <h5><i class="bi bi-card-text"></i> Identitas &amp; Kontak</h5>
-    </div>
-    <form method="POST" action="/management/settings/company" class="km-settings-form">
-      <div class="row g-4">
-        <div class="col-lg-4 text-center">
-          <div class="km-company-logo-preview mb-3">
-            <img src="<%= profile.logo_path || '/img/logo.png' %>" alt="Logo" id="logoPreview" onerror="this.src='/img/logo.png'">
+  <form method="POST" action="/management/settings/company" class="km-settings-form" data-km-dirty id="companyForm">
+    <div class="row g-4">
+      <div class="col-xl-8">
+        <section class="km-card km-sx-section">
+          <header class="km-sx-section__head">
+            <span class="km-sx-section__icon km-tone-blue"><i class="bi bi-building"></i></span>
+            <div>
+              <h3 class="km-sx-section__title">Identitas Perusahaan</h3>
+              <p class="km-sx-section__sub">Nama, brand, slogan, dan logo.</p>
+            </div>
+          </header>
+          <div class="km-sx-section__body">
+            <div class="km-company-identity">
+              <div class="km-company-logo">
+                <div class="km-company-logo__box">
+                  <img src="<%= logo %>" alt="Logo" id="logoPreview" onerror="this.src='/img/logo.png'">
+                </div>
+                <span class="km-company-logo__cap">Logo</span>
+              </div>
+              <div class="row g-3 flex-grow-1">
+                <div class="col-12">
+                  <label class="form-label" for="fCompanyName">Nama Perusahaan <span class="text-danger">*</span></label>
+                  <input type="text" id="fCompanyName" name="company_name" class="form-control" required value="<%= p.company_name || '' %>" data-preview="name" placeholder="PT. Nama Perusahaan">
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label" for="fCompanyHeader">Nama Brand / Header</label>
+                  <input type="text" id="fCompanyHeader" name="company_header" class="form-control" value="<%= p.company_header || '' %>" data-preview="brand" placeholder="Sama dengan nama perusahaan">
+                  <small class="km-sx-hint">Nama yang tampil di kop/header. Kosongkan untuk memakai nama perusahaan.</small>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label" for="fSlogan">Slogan</label>
+                  <input type="text" id="fSlogan" name="company_slogan" class="form-control" value="<%= p.company_slogan || '' %>" data-preview="slogan" placeholder="mis. Solusi Internet Terdepan">
+                </div>
+                <div class="col-12">
+                  <label class="form-label" for="logoPathInput">Path Logo</label>
+                  <div class="km-sx-input">
+                    <i class="bi bi-image"></i>
+                    <input type="text" name="logo_path" class="form-control" value="<%= logo %>" id="logoPathInput" placeholder="/img/logo.png">
+                  </div>
+                  <small class="km-sx-hint">Lokasi gambar di server. Disarankan PNG persegi berlatar transparan.</small>
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="mb-0">
-            <label class="form-label">Path Logo</label>
-            <input type="text" name="logo_path" class="form-control form-control-sm" value="<%= profile.logo_path || '/img/logo.png' %>" id="logoPathInput">
+        </section>
+
+        <section class="km-card km-sx-section">
+          <header class="km-sx-section__head">
+            <span class="km-sx-section__icon km-tone-green"><i class="bi bi-telephone"></i></span>
+            <div>
+              <h3 class="km-sx-section__title">Kontak</h3>
+              <p class="km-sx-section__sub">Cara pelanggan dan tenant menghubungi perusahaan.</p>
+            </div>
+          </header>
+          <div class="km-sx-section__body">
+            <div class="row g-3">
+              <div class="col-md-6">
+                <label class="form-label" for="fPhone">Telepon</label>
+                <div class="km-sx-input">
+                  <i class="bi bi-telephone"></i>
+                  <input type="tel" id="fPhone" name="contact_phone" class="form-control" value="<%= p.contact_phone || '' %>" data-preview="phone" placeholder="08xxxxxxxxxx">
+                </div>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label" for="fWa">WhatsApp</label>
+                <div class="km-sx-input">
+                  <i class="bi bi-whatsapp"></i>
+                  <input type="tel" id="fWa" name="contact_whatsapp" class="form-control" value="<%= p.contact_whatsapp || '' %>" data-preview="wa" placeholder="08xxxxxxxxxx">
+                </div>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label" for="fEmail">Email</label>
+                <div class="km-sx-input">
+                  <i class="bi bi-envelope"></i>
+                  <input type="email" id="fEmail" name="contact_email" class="form-control" value="<%= p.contact_email || '' %>" data-preview="email" placeholder="nama@domain.com">
+                </div>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label" for="fWeb">Website</label>
+                <div class="km-sx-input">
+                  <i class="bi bi-globe2"></i>
+                  <input type="text" id="fWeb" name="company_website" class="form-control" value="<%= p.company_website || '' %>" data-preview="web" placeholder="domain.com">
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
-        <div class="col-lg-8">
-          <div class="row g-3">
-            <div class="col-md-6">
-              <label class="form-label">Nama Perusahaan</label>
-              <input type="text" name="company_name" class="form-control" required value="<%= profile.company_name || '' %>">
+        </section>
+
+        <section class="km-card km-sx-section">
+          <header class="km-sx-section__head">
+            <span class="km-sx-section__icon km-tone-orange"><i class="bi bi-geo-alt"></i></span>
+            <div>
+              <h3 class="km-sx-section__title">Alamat &amp; Footer</h3>
+              <p class="km-sx-section__sub">Alamat kantor dan teks kecil di portal.</p>
             </div>
-            <div class="col-md-6">
-              <label class="form-label">Header / Brand</label>
-              <input type="text" name="company_header" class="form-control" value="<%= profile.company_header || '' %>">
+          </header>
+          <div class="km-sx-section__body">
+            <div class="row g-3">
+              <div class="col-12">
+                <label class="form-label" for="fAddress">Alamat</label>
+                <div class="km-sx-input km-sx-input--area">
+                  <i class="bi bi-geo-alt"></i>
+                  <textarea id="fAddress" name="company_address" class="form-control" rows="2" data-preview="address" placeholder="Jalan, kota, provinsi"><%= p.company_address || '' %></textarea>
+                </div>
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="fFooter">Footer Info</label>
+                <input type="text" id="fFooter" name="footer_info" class="form-control" value="<%= p.footer_info || '' %>" data-preview="footer" placeholder="mis. Portal Management Billing">
+                <small class="km-sx-hint">Teks kecil di bawah nama perusahaan pada sidebar portal.</small>
+              </div>
             </div>
-            <div class="col-md-6">
-              <label class="form-label">Slogan</label>
-              <input type="text" name="company_slogan" class="form-control" value="<%= profile.company_slogan || '' %>">
-            </div>
-            <div class="col-md-6">
-              <label class="form-label">Website</label>
-              <input type="text" name="company_website" class="form-control" value="<%= profile.company_website || '' %>">
-            </div>
-            <div class="col-12">
-              <label class="form-label">Alamat</label>
-              <textarea name="company_address" class="form-control" rows="2"><%= profile.company_address || '' %></textarea>
-            </div>
-            <div class="col-md-4">
-              <label class="form-label">Telepon</label>
-              <input type="text" name="contact_phone" class="form-control" value="<%= profile.contact_phone || '' %>">
-            </div>
-            <div class="col-md-4">
-              <label class="form-label">Email</label>
-              <input type="email" name="contact_email" class="form-control" value="<%= profile.contact_email || '' %>">
-            </div>
-            <div class="col-md-4">
-              <label class="form-label">WhatsApp</label>
-              <input type="text" name="contact_whatsapp" class="form-control" value="<%= profile.contact_whatsapp || '' %>">
-            </div>
-            <div class="col-12">
-              <label class="form-label">Footer Info</label>
-              <input type="text" name="footer_info" class="form-control" value="<%= profile.footer_info || '' %>">
+          </div>
+        </section>
+      </div>
+
+      <div class="col-xl-4">
+        <div class="km-company-preview-wrap">
+          <div class="km-card km-sx-section km-company-preview">
+            <header class="km-sx-section__head">
+              <span class="km-sx-section__icon km-tone-purple"><i class="bi bi-eye"></i></span>
+              <div>
+                <h3 class="km-sx-section__title">Pratinjau</h3>
+                <p class="km-sx-section__sub">Belum tersimpan sampai Anda menekan Simpan.</p>
+              </div>
+            </header>
+            <div class="km-sx-section__body">
+              <div class="km-bizcard">
+                <div class="km-bizcard__top">
+                  <span class="km-bizcard__logo"><img src="<%= logo %>" alt="" data-preview-logo onerror="this.src='/img/logo.png'"></span>
+                  <div class="km-bizcard__id">
+                    <div class="km-bizcard__name" data-out="brand"></div>
+                    <div class="km-bizcard__slogan" data-out="slogan"></div>
+                  </div>
+                </div>
+                <ul class="km-bizcard__list">
+                  <li><i class="bi bi-telephone"></i><span data-out="phone"></span></li>
+                  <li><i class="bi bi-whatsapp"></i><span data-out="wa"></span></li>
+                  <li><i class="bi bi-envelope"></i><span data-out="email"></span></li>
+                  <li><i class="bi bi-globe2"></i><span data-out="web"></span></li>
+                  <li><i class="bi bi-geo-alt"></i><span data-out="address"></span></li>
+                </ul>
+              </div>
+
+              <div class="km-company-sbprev-label">Tampilan di sidebar</div>
+              <div class="km-company-sbprev">
+                <span class="km-company-sbprev__logo"><img src="<%= logo %>" alt="" data-preview-logo onerror="this.src='/img/logo.png'"></span>
+                <div class="km-company-sbprev__text">
+                  <small>SaaS Management</small>
+                  <strong data-out="name"></strong>
+                  <span data-out="footer"></span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
-      <div class="mt-4 pt-3 border-top d-flex justify-content-end">
+    </div>
+
+    <div class="km-sx-savebar">
+      <div class="km-sx-savebar__msg">
+        <span class="km-sx-savebar__dot"></span>
+        <span class="km-sx-savebar__clean">Semua perubahan sudah tersimpan</span>
+        <span class="km-sx-savebar__dirty">Ada perubahan yang belum disimpan</span>
+      </div>
+      <div class="d-flex gap-2">
+        <button type="reset" class="btn btn-outline-secondary px-3">Batalkan</button>
         <button type="submit" class="btn btn-km-primary px-4"><i class="bi bi-check-lg me-1"></i> Simpan Profil</button>
       </div>
-    </form>
-  </div>
+    </div>
+  </form>
 </main>
 
 <script>
-document.getElementById('logoPathInput')?.addEventListener('input', function () {
-  var img = document.getElementById('logoPreview');
-  if (img && this.value.trim()) img.src = this.value.trim();
-});
+(function () {
+  var form = document.getElementById('companyForm');
+  var logoInput = document.getElementById('logoPathInput');
+  var fallback = {
+    name: 'Nama perusahaan', slogan: 'Slogan belum diisi', phone: 'Telepon belum diisi', wa: 'WhatsApp belum diisi',
+    email: 'Email belum diisi', web: 'Website belum diisi', address: 'Alamat belum diisi', footer: 'Footer belum diisi'
+  };
+  function val(key) {
+    var el = form.querySelector('[data-preview="' + key + '"]');
+    return el ? el.value.trim() : '';
+  }
+  function render() {
+    var values = {
+      name: val('name'), slogan: val('slogan'), phone: val('phone'), wa: val('wa'),
+      email: val('email'), web: val('web'), address: val('address'), footer: val('footer')
+    };
+    values.brand = val('brand') || values.name;
+    Object.keys(values).forEach(function (key) {
+      form.querySelectorAll('[data-out="' + key + '"]').forEach(function (out) {
+        var v = values[key];
+        out.textContent = v || fallback[key] || fallback.name;
+        out.classList.toggle('is-empty', !v);
+      });
+    });
+    var src = logoInput.value.trim() || '/img/logo.png';
+    document.querySelectorAll('[data-preview-logo], #logoPreview').forEach(function (img) {
+      if (img.getAttribute('src') !== src) img.src = src;
+    });
+  }
+  form.addEventListener('input', render);
+  form.addEventListener('reset', function () { setTimeout(function () { render(); form.dispatchEvent(new Event('change')); }, 0); });
+  render();
+})();
 </script>
 
 <%- include('../partials/footer') %>

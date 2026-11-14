@@ -1188,7 +1188,10 @@ async function getAllGenieacsServers() {
             db.all(`SELECT id, name, url, username, password FROM genieacs_servers ORDER BY name`, (err, rows) => {
                 db.close();
                 if (err) {
-                    console.error('Error getting GenieACS servers:', err);
+                    // Tabel dibuat saat menu GenieACS/Router admin pertama kali dibuka.
+                    if (!/no such table/i.test(String(err.message))) {
+                        console.error('Error getting GenieACS servers:', err);
+                    }
                     resolve([]);
                 } else {
                     resolve(rows || []);

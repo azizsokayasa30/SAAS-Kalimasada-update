@@ -50,6 +50,21 @@ const _kMonthShortId = [
   'Des',
 ];
 
+const _kMonthLongId = [
+  'Januari',
+  'Februari',
+  'Maret',
+  'April',
+  'Mei',
+  'Juni',
+  'Juli',
+  'Agustus',
+  'September',
+  'Oktober',
+  'November',
+  'Desember',
+];
+
 class CollectorHomeTab extends StatefulWidget {
   const CollectorHomeTab({super.key, this.onOpenCustomersList});
 
@@ -87,8 +102,9 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
 
   @override
   Widget build(BuildContext context) {
-    final c = context.watch<CollectorProvider>();
-    final data = c.overview;
+    final (data, overviewLoading, overviewError) = context.select(
+      (CollectorProvider p) => (p.overview, p.overviewLoading, p.overviewError),
+    );
     final field = data != null
         ? data['fieldUi'] as Map<String, dynamic>?
         : null;
@@ -96,7 +112,7 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
         ? data['collector'] as Map<String, dynamic>?
         : null;
 
-    if (c.overviewLoading && field == null) {
+    if (overviewLoading && field == null) {
       return ColoredBox(
         color: FieldCollectorColors.dashboardCanvas,
         child: const Center(
@@ -106,7 +122,7 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
         ),
       );
     }
-    if (c.overviewError != null && field == null) {
+    if (overviewError != null && field == null) {
       return ColoredBox(
         color: FieldCollectorColors.dashboardCanvas,
         child: Center(
@@ -115,7 +131,7 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(c.overviewError ?? '', textAlign: TextAlign.center),
+                Text(overviewError, textAlign: TextAlign.center),
                 const SizedBox(height: 12),
                 FilledButton(
                   onPressed: () => context
@@ -239,7 +255,9 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                 ],
               ),
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 14),
+            _periodBar(loading: overviewLoading),
+            const SizedBox(height: 14),
             Container(
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
@@ -292,35 +310,29 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        Text(
+                          'TARGET TAGIHAN ${_periodLabel.toUpperCase()}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.85,
+                            color: FieldCollectorColors.primaryFixedDim
+                                .withValues(alpha: 0.9),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
                             Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'TARGET TAGIHAN BULAN INI',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w700,
-                                      letterSpacing: 0.85,
-                                      color: FieldCollectorColors
-                                          .primaryFixedDim
-                                          .withValues(alpha: 0.9),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    _rupiah(target),
-                                    style: const TextStyle(
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.w800,
-                                      color: FieldCollectorColors.onPrimary,
-                                      letterSpacing: -0.5,
-                                    ),
-                                  ),
-                                ],
+                              child: Text(
+                                _rupiah(target),
+                                style: const TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w800,
+                                  color: FieldCollectorColors.onPrimary,
+                                  letterSpacing: -0.5,
+                                ),
                               ),
                             ),
                             Column(
@@ -390,212 +402,17 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
                 ],
               ),
             ),
-            const SizedBox(height: 14),
-            _Card(
-              color: FieldCollectorColors.dashPeriodTint,
-              borderColor: FieldCollectorColors.dashPeriodBorder,
-              borderRadius: 16,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Periode target',
-                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: FieldCollectorColors.onSurfaceVariant,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  LayoutBuilder(
-                    builder: (context, constraints) {
-                      const controlH = 48.0;
-                      final labelStyle = Theme.of(context).textTheme.labelMedium
-                          ?.copyWith(
-                            color: FieldCollectorColors.onSurfaceVariant,
-                            fontWeight: FontWeight.w600,
-                          );
-                      final narrow = constraints.maxWidth < 340;
-                      final yearMin = DateTime.now().year - 2;
-                      final yearMax = DateTime.now().year + 1;
-                      final yearItems = [
-                        for (var y = yearMin; y <= yearMax; y++)
-                          DropdownMenuItem<int>(value: y, child: Text('$y')),
-                      ];
-
-                      BoxDecoration fieldDeco() => BoxDecoration(
-                        color: FieldCollectorColors.surface,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: FieldCollectorColors.outlineVariant,
-                        ),
-                      );
-
-                      Widget dropdownBox({required Widget child}) {
-                        return SizedBox(
-                          height: controlH,
-                          child: DecoratedBox(
-                            decoration: fieldDeco(),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                              ),
-                              child: DropdownButtonHideUnderline(
-                                child: Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: child,
-                                ),
-                              ),
-                            ),
-                          ),
-                        );
-                      }
-
-                      final monthCtrl = dropdownBox(
-                        child: DropdownButton<int>(
-                          value: _month,
-                          isExpanded: true,
-                          isDense: true,
-                          menuMaxHeight: 280,
-                          icon: const Icon(Icons.arrow_drop_down, size: 22),
-                          style: Theme.of(context).textTheme.bodyLarge,
-                          items: [
-                            const DropdownMenuItem<int>(
-                              value: 0,
-                              child: Text('Satu tahun'),
-                            ),
-                            for (var m = 1; m <= 12; m++)
-                              DropdownMenuItem<int>(
-                                value: m,
-                                child: Text(_kMonthShortId[m - 1]),
-                              ),
-                          ],
-                          onChanged: (v) {
-                            if (v != null) setState(() => _month = v);
-                          },
-                        ),
-                      );
-                      final yearCtrl = dropdownBox(
-                        child: DropdownButton<int>(
-                          value: _year,
-                          isExpanded: true,
-                          isDense: true,
-                          menuMaxHeight: 280,
-                          icon: const Icon(Icons.arrow_drop_down, size: 22),
-                          style: Theme.of(context).textTheme.bodyLarge,
-                          items: yearItems,
-                          onChanged: (v) {
-                            if (v != null) setState(() => _year = v);
-                          },
-                        ),
-                      );
-                      final applyStyle = FilledButton.styleFrom(
-                        backgroundColor:
-                            FieldCollectorColors.periodApplyBackground,
-                        foregroundColor:
-                            FieldCollectorColors.periodApplyForeground,
-                        elevation: 0,
-                        shadowColor: Colors.transparent,
-                        padding: const EdgeInsets.symmetric(horizontal: 14),
-                        minimumSize: const Size(0, controlH),
-                        maximumSize: const Size(double.infinity, controlH),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      );
-                      final applyBtn = SizedBox(
-                        height: controlH,
-                        child: FilledButton(
-                          style: applyStyle,
-                          onPressed: () async {
-                            await context
-                                .read<CollectorProvider>()
-                                .setPeriodAndRefresh(
-                                  month: _month,
-                                  year: _year,
-                                );
-                          },
-                          child: const Text('Terapkan'),
-                        ),
-                      );
-
-                      Widget labeledColumn(String label, Widget control) {
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Text(label, style: labelStyle),
-                            const SizedBox(height: 6),
-                            control,
-                          ],
-                        );
-                      }
-
-                      if (narrow) {
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            labeledColumn('Bulan', monthCtrl),
-                            const SizedBox(height: 10),
-                            labeledColumn('Tahun', yearCtrl),
-                            const SizedBox(height: 10),
-                            applyBtn,
-                          ],
-                        );
-                      }
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                flex: 2,
-                                child: Text('Bulan', style: labelStyle),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                flex: 2,
-                                child: Text('Tahun', style: labelStyle),
-                              ),
-                              const SizedBox(width: 8),
-                              SizedBox(
-                                width: 102,
-                                child: Text('\u00A0', style: labelStyle),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Expanded(flex: 2, child: monthCtrl),
-                              const SizedBox(width: 8),
-                              Expanded(flex: 2, child: yearCtrl),
-                              const SizedBox(width: 8),
-                              SizedBox(width: 102, child: applyBtn),
-                            ],
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 6),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                'Ringkasan',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  color: FieldCollectorColors.onSurface,
-                  letterSpacing: -0.2,
-                ),
+            const SizedBox(height: 22),
+            Text(
+              'Ringkasan',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+                color: FieldCollectorColors.onSurface,
+                letterSpacing: -0.2,
               ),
             ),
             const SizedBox(height: 10),
-            _summaryGrid(
-              context,
+            _summaryCard(
               totalPlg,
               baru,
               blm,
@@ -698,8 +515,256 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
     );
   }
 
-  Widget _summaryGrid(
-    BuildContext context,
+  String get _periodLabel =>
+      _month == 0 ? 'Tahun $_year' : '${_kMonthShortId[_month - 1]} $_year';
+
+  String get _periodLongLabel =>
+      _month == 0 ? 'Satu tahun $_year' : '${_kMonthLongId[_month - 1]} $_year';
+
+  int get _yearMin => DateTime.now().year - 2;
+  int get _yearMax => DateTime.now().year + 1;
+
+  (int, int)? _shiftedPeriod(int delta) {
+    var month = _month;
+    var year = _year;
+    if (month == 0) {
+      year += delta;
+    } else {
+      month += delta;
+      if (month < 1) {
+        month = 12;
+        year--;
+      } else if (month > 12) {
+        month = 1;
+        year++;
+      }
+    }
+    if (year < _yearMin || year > _yearMax) return null;
+    return (month, year);
+  }
+
+  Future<void> _applyPeriod(int month, int year) async {
+    final provider = context.read<CollectorProvider>();
+    setState(() {
+      _month = month;
+      _year = year;
+    });
+    await provider.setPeriodAndRefresh(month: month, year: year);
+  }
+
+  Widget _periodBar({required bool loading}) {
+    Widget arrow(IconData icon, int delta) {
+      final target = _shiftedPeriod(delta);
+      final enabled = !loading && target != null;
+      return IconButton(
+        onPressed: enabled ? () => _applyPeriod(target.$1, target.$2) : null,
+        icon: Icon(icon),
+        iconSize: 24,
+        color: FieldCollectorColors.primaryContainer,
+        disabledColor: FieldCollectorColors.outlineVariant,
+        style: IconButton.styleFrom(
+          backgroundColor: FieldCollectorColors.surfaceContainerHigh,
+          disabledBackgroundColor: FieldCollectorColors.background,
+          fixedSize: const Size(40, 40),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: FieldCollectorColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0F000000),
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          arrow(Icons.chevron_left_rounded, -1),
+          Expanded(
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: loading ? null : _pickPeriod,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Column(
+                    children: [
+                      const Text(
+                        'Periode target',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: FieldCollectorColors.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              _periodLongLabel,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                                color: FieldCollectorColors.onSurface,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          if (loading)
+                            const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: FieldCollectorColors.primaryContainer,
+                              ),
+                            )
+                          else
+                            const Icon(
+                              Icons.expand_more_rounded,
+                              size: 18,
+                              color: FieldCollectorColors.onSurfaceVariant,
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          arrow(Icons.chevron_right_rounded, 1),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _pickPeriod() async {
+    final yearMin = _yearMin;
+    final yearMax = _yearMax;
+    var year = _year.clamp(yearMin, yearMax);
+
+    final picked = await showModalBottomSheet<(int, int)>(
+      context: context,
+      backgroundColor: FieldCollectorColors.surface,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, setSheet) {
+          Widget option(String text, int month) {
+            final selected = month == _month && year == _year;
+            return Material(
+              color: selected
+                  ? FieldCollectorColors.dashTargetA
+                  : FieldCollectorColors.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(12),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => Navigator.pop(sheetContext, (month, year)),
+                child: SizedBox(
+                  height: 44,
+                  child: Center(
+                    child: Text(
+                      text,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: selected
+                            ? FieldCollectorColors.onPrimary
+                            : FieldCollectorColors.onSurface,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }
+
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Periode target',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: FieldCollectorColors.onSurface,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: year > yearMin
+                            ? () => setSheet(() => year--)
+                            : null,
+                        icon: const Icon(Icons.chevron_left_rounded),
+                        color: FieldCollectorColors.onSurface,
+                        disabledColor: FieldCollectorColors.outlineVariant,
+                      ),
+                      Text(
+                        '$year',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          color: FieldCollectorColors.onSurface,
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: year < yearMax
+                            ? () => setSheet(() => year++)
+                            : null,
+                        icon: const Icon(Icons.chevron_right_rounded),
+                        color: FieldCollectorColors.onSurface,
+                        disabledColor: FieldCollectorColors.outlineVariant,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  GridView.count(
+                    crossAxisCount: 4,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    mainAxisSpacing: 8,
+                    crossAxisSpacing: 8,
+                    childAspectRatio: 1.9,
+                    children: [
+                      for (var m = 1; m <= 12; m++)
+                        option(_kMonthShortId[m - 1], m),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  option('Satu tahun $year', 0),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+
+    if (picked == null || !mounted) return;
+    await _applyPeriod(picked.$1, picked.$2);
+  }
+
+  Widget _summaryCard(
     int total,
     int baru,
     int blm,
@@ -708,176 +773,337 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
     int nonaktif,
     void Function(String status)? onOpenCustomersList,
   ) {
-    const statH = 56.0;
-    const pad = EdgeInsets.symmetric(horizontal: 14, vertical: 12);
+    final fmt = NumberFormat.decimalPattern('id_ID');
+    final billed = lunas + blm;
+    final paidRatio = billed > 0 ? lunas / billed : 0.0;
+    final paidPct = (paidRatio * 100).round();
+    final tappable = onOpenCustomersList != null;
+
+    VoidCallback? open(String label, String filterStatus) {
+      if (!tappable) return null;
+      return () {
+        collectorDbg('Dashboard: tap "$label" → filter="$filterStatus"');
+        onOpenCustomersList(filterStatus);
+      };
+    }
+
+    const softShadow = [
+      BoxShadow(color: Color(0x0F000000), blurRadius: 12, offset: Offset(0, 4)),
+    ];
+
+    Widget dot(Color color) => Container(
+      width: 7,
+      height: 7,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+    );
 
     Widget statTile({
-      required Color bg,
-      required Color iconBg,
-      required Color iconFg,
-      required Color valueColor,
       required IconData icon,
+      required Color accent,
       required String label,
-      required String value,
+      required int value,
       required String filterStatus,
     }) {
-      final card = _Card(
-        color: bg,
-        padding: pad,
-        borderRadius: 16,
-        borderColor: Colors.white.withValues(alpha: 0.65),
-        shadows: const [
-          BoxShadow(
-            color: Color(0x12000000),
-            blurRadius: 12,
-            offset: Offset(0, 5),
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x330F3460),
+              blurRadius: 14,
+              offset: Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(20),
+            onTap: open(label, filterStatus),
+            child: Ink(
+              padding: const EdgeInsets.fromLTRB(14, 14, 12, 14),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    FieldCollectorColors.dashWelcomeTop,
+                    FieldCollectorColors.dashWelcomeBottom,
+                  ],
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.22),
+                      ),
+                    ),
+                    child: Icon(icon, size: 28, color: accent),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    fmt.format(value),
+                    maxLines: 1,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      height: 1,
+                      letterSpacing: -0.3,
+                      color: FieldCollectorColors.dashWelcomeOnAccent,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                      color: FieldCollectorColors.dashWelcomeSubtitle,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
+        ),
+      );
+    }
+
+    Widget row(List<Widget> tiles) => Row(
+      children: [
+        for (var i = 0; i < tiles.length; i++) ...[
+          if (i > 0) const SizedBox(width: 10),
+          Expanded(child: tiles[i]),
         ],
-        child: SizedBox(
-          height: statH,
-          child: Row(
+      ],
+    );
+
+    Widget legend(Color color, String text) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        dot(color),
+        const SizedBox(width: 5),
+        Text(
+          text,
+          style: const TextStyle(
+            fontSize: 11.5,
+            fontWeight: FontWeight.w600,
+            color: FieldCollectorColors.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+
+    final paymentCard = Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: FieldCollectorColors.surface,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: softShadow,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
               Container(
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: iconBg,
                   borderRadius: BorderRadius.circular(14),
-                  boxShadow: [
-                    BoxShadow(
-                      color: iconBg.withValues(alpha: 0.35),
-                      blurRadius: 8,
-                      offset: const Offset(0, 3),
-                    ),
-                  ],
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      FieldCollectorColors.statLunasBg,
+                      Color.lerp(
+                        FieldCollectorColors.statLunasBg,
+                        FieldCollectorColors.statLunasIcon,
+                        0.18,
+                      )!,
+                    ],
+                  ),
                 ),
-                child: Icon(icon, color: iconFg, size: 24),
+                child: const Icon(
+                  Icons.account_balance_wallet_rounded,
+                  size: 24,
+                  color: FieldCollectorColors.statLunasIcon,
+                ),
               ),
               const SizedBox(width: 12),
-              Expanded(
+              const Expanded(
                 child: Text(
-                  label,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+                  'Status pembayaran',
                   style: TextStyle(
+                    fontSize: 13,
                     fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                    height: 1.15,
-                    color: FieldCollectorColors.onSurface.withValues(
-                      alpha: 0.88,
-                    ),
+                    color: FieldCollectorColors.onSurfaceVariant,
                   ),
                 ),
               ),
-              Text(
-                value,
-                style: TextStyle(
-                  fontWeight: FontWeight.w900,
-                  fontSize: 20,
-                  height: 1,
-                  color: valueColor,
-                  letterSpacing: -0.4,
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: FieldCollectorColors.statLunasBg,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '$paidPct% lunas',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: FieldCollectorColors.statLunasIcon,
+                  ),
                 ),
               ),
             ],
           ),
-        ),
-      );
-      if (onOpenCustomersList == null) return card;
-      return Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () {
-            collectorDbg('Dashboard: tap "$label" → filter="$filterStatus"');
-            onOpenCustomersList(filterStatus);
-          },
-          borderRadius: BorderRadius.circular(16),
-          child: card,
-        ),
-      );
-    }
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(
+                fmt.format(lunas),
+                style: const TextStyle(
+                  fontSize: 26,
+                  fontWeight: FontWeight.w900,
+                  height: 1,
+                  letterSpacing: -0.6,
+                  color: FieldCollectorColors.onSurface,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'dari ${fmt.format(billed)} pelanggan sudah bayar',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: FieldCollectorColors.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: SizedBox(
+              height: 10,
+              width: double.infinity,
+              child: billed == 0
+                  ? const ColoredBox(
+                      color: FieldCollectorColors.surfaceContainerHigh,
+                    )
+                  : Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (lunas > 0)
+                          Expanded(
+                            flex: lunas,
+                            child: const ColoredBox(
+                              color: FieldCollectorColors.statLunasIcon,
+                            ),
+                          ),
+                        if (lunas > 0 && blm > 0) const SizedBox(width: 3),
+                        if (blm > 0)
+                          Expanded(
+                            flex: blm,
+                            child: const ColoredBox(
+                              color: FieldCollectorColors.statBelumIcon,
+                            ),
+                          ),
+                      ],
+                    ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 14,
+            runSpacing: 4,
+            children: [
+              legend(
+                FieldCollectorColors.statLunasIcon,
+                'Lunas ${fmt.format(lunas)}',
+              ),
+              legend(
+                FieldCollectorColors.statBelumIcon,
+                'Belum lunas ${fmt.format(blm)}',
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
 
-    // Kiri: Total → Baru → Nonaktif | Kanan: Lunas → Belum lunas → Isolir
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Column(
       children: [
-        Expanded(
-          child: Column(
-            children: [
-              statTile(
-                bg: FieldCollectorColors.statTotalBg,
-                iconBg: FieldCollectorColors.statTotalIcon,
-                iconFg: Colors.white,
-                valueColor: FieldCollectorColors.statTotalIcon,
-                icon: Icons.groups_2_rounded,
-                label: 'Total',
-                value: '$total',
-                filterStatus: 'total',
-              ),
-              const SizedBox(height: 10),
-              statTile(
-                bg: FieldCollectorColors.statBaruBg,
-                iconBg: FieldCollectorColors.statBaruIcon,
-                iconFg: Colors.white,
-                valueColor: FieldCollectorColors.statBaruIcon,
-                icon: Icons.person_add_alt_1_rounded,
-                label: 'Baru',
-                value: '$baru',
-                filterStatus: 'baru',
-              ),
-              const SizedBox(height: 10),
-              statTile(
-                bg: FieldCollectorColors.statNonaktifBg,
-                iconBg: FieldCollectorColors.statNonaktifIcon,
-                iconFg: Colors.white,
-                valueColor: FieldCollectorColors.statNonaktifIcon,
-                icon: Icons.person_off_rounded,
-                label: 'Nonaktif',
-                value: '$nonaktif',
-                filterStatus: 'nonaktif',
-              ),
-            ],
+        paymentCard,
+        const SizedBox(height: 10),
+        row([
+          statTile(
+            icon: Icons.groups_2_rounded,
+            accent: FieldCollectorColors.statOnBlueTotal,
+            label: 'Total',
+            value: total,
+            filterStatus: 'total',
           ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            children: [
-              statTile(
-                bg: FieldCollectorColors.statLunasBg,
-                iconBg: FieldCollectorColors.statLunasIcon,
-                iconFg: Colors.white,
-                valueColor: FieldCollectorColors.statLunasIcon,
-                icon: Icons.verified_rounded,
-                label: 'Lunas',
-                value: '$lunas',
-                filterStatus: 'paid',
-              ),
-              const SizedBox(height: 10),
-              statTile(
-                bg: FieldCollectorColors.statBelumBg,
-                iconBg: FieldCollectorColors.statBelumIcon,
-                iconFg: Colors.white,
-                valueColor: FieldCollectorColors.statBelumIcon,
-                icon: Icons.pending_actions_rounded,
-                label: 'Belum lunas',
-                value: '$blm',
-                filterStatus: 'unpaid',
-              ),
-              const SizedBox(height: 10),
-              statTile(
-                bg: FieldCollectorColors.statIsolirBg,
-                iconBg: FieldCollectorColors.statIsolirIcon,
-                iconFg: Colors.white,
-                valueColor: FieldCollectorColors.statIsolirIcon,
-                icon: Icons.wifi_off_rounded,
-                label: 'Isolir',
-                value: '$isolir',
-                filterStatus: 'isolir',
-              ),
-            ],
+          statTile(
+            icon: Icons.verified_rounded,
+            accent: FieldCollectorColors.statOnBlueLunas,
+            label: 'Lunas',
+            value: lunas,
+            filterStatus: 'paid',
           ),
-        ),
+          statTile(
+            icon: Icons.pending_actions_rounded,
+            accent: FieldCollectorColors.statOnBlueBelum,
+            label: 'Belum lunas',
+            value: blm,
+            filterStatus: 'unpaid',
+          ),
+        ]),
+        const SizedBox(height: 10),
+        row([
+          statTile(
+            icon: Icons.person_add_alt_1_rounded,
+            accent: FieldCollectorColors.statOnBlueBaru,
+            label: 'Baru',
+            value: baru,
+            filterStatus: 'baru',
+          ),
+          statTile(
+            icon: Icons.wifi_off_rounded,
+            accent: FieldCollectorColors.statOnBlueIsolir,
+            label: 'Isolir',
+            value: isolir,
+            filterStatus: 'isolir',
+          ),
+          statTile(
+            icon: Icons.person_off_rounded,
+            accent: FieldCollectorColors.statOnBlueNonaktif,
+            label: 'Nonaktif',
+            value: nonaktif,
+            filterStatus: 'nonaktif',
+          ),
+        ]),
       ],
     );
   }
@@ -886,53 +1112,25 @@ class _CollectorHomeTabState extends State<CollectorHomeTab> {
 class _Card extends StatelessWidget {
   const _Card({
     required this.child,
-    this.color,
-    this.padding,
+    required this.gradient,
     this.borderRadius = 16,
-    this.borderColor,
-    this.gradient,
     this.shadows,
   });
 
   final Widget child;
-  final Color? color;
-  final EdgeInsetsGeometry? padding;
+  final Gradient gradient;
   final double borderRadius;
-  final Color? borderColor;
-  final Gradient? gradient;
   final List<BoxShadow>? shadows;
 
   @override
   Widget build(BuildContext context) {
-    final useGradient = gradient != null;
-    final bg = useGradient ? null : (color ?? FieldCollectorColors.surface);
-    final bool softSurface = !useGradient && color == null;
-    final border = useGradient
-        ? null
-        : Border.all(
-            color: borderColor ?? FieldCollectorColors.outlineVariant,
-            width: borderColor != null ? 1.2 : 1,
-          );
-
     return Container(
       width: double.infinity,
-      padding: padding ?? const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         gradient: gradient,
-        color: bg,
         borderRadius: BorderRadius.circular(borderRadius),
-        border: border,
-        boxShadow:
-            shadows ??
-            (softSurface
-                ? const [
-                    BoxShadow(
-                      color: Color(0x12000000),
-                      blurRadius: 12,
-                      offset: Offset(0, 4),
-                    ),
-                  ]
-                : null),
+        boxShadow: shadows,
       ),
       child: child,
     );

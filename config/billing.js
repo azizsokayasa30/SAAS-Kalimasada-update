@@ -3711,7 +3711,11 @@ const { deleteCustomerRecord } = require('../utils/customerDelete');
         });
     }
 
-    async getCollectorCustomers(collectorId, month = null, year = null) {
+    /**
+     * @param {object} [options]
+     * @param {boolean} [options.skipRadius] lewati lookup profil RADIUS (mis. dashboard yang hanya butuh hitungan).
+     */
+    async getCollectorCustomers(collectorId, month = null, year = null, options = {}) {
         const hasAreas = await this._hasAreasReferenceTable();
         const areaRowMatch = this._sqlCustomerMatchesCollectorAreaRow(hasAreas, 'cra');
         const isYearRange = String(month) === 'all' || String(month) === '0';
@@ -3804,14 +3808,18 @@ ${lifetimePaymentStatusSql}
                 LEFT JOIN packages p ON c.package_id = p.id
                 LEFT JOIN customer_router_map m ON m.customer_id = c.id
                 LEFT JOIN routers r ON r.id = m.router_id
-                -- Area: teks customers.area ATAU area_id → areas.nama_area/kode_area (sama seperti filter admin)
-                LEFT JOIN collector_areas cra ON (
-                    cra.collector_id = ?
-                    AND ${areaRowMatch}
-                )
-                -- Filter Manual: Ambil customer yang di-mapping manual ke collector
-                LEFT JOIN collector_assignments ca ON (c.id = ca.customer_id AND ca.collector_id = ?)
-                WHERE (cra.collector_id IS NOT NULL OR ca.collector_id IS NOT NULL)${_t.sql}
+                WHERE (
+                    -- Area: teks customers.area ATAU area_id → areas.nama_area/kode_area (sama seperti filter admin)
+                    EXISTS (
+                        SELECT 1 FROM collector_areas cra
+                        WHERE cra.collector_id = ? AND ${areaRowMatch}
+                    )
+                    -- Filter Manual: customer yang di-mapping manual ke collector
+                    OR EXISTS (
+                        SELECT 1 FROM collector_assignments ca
+                        WHERE ca.customer_id = c.id AND ca.collector_id = ?
+                    )
+                )${_t.sql}
                 ORDER BY c.name ASC
             `;
             
@@ -3827,6 +3835,10 @@ ${lifetimePaymentStatusSql}
                         return row;
                     });
                     
+                    if (options.skipRadius) {
+                        resolve(processedRows);
+                        return;
+                    }
                     // Jika menggunakan RADIUS mode, ambil profil dari RADIUS
                     try {
                         const { getUserAuthModeAsync, getRadiusConnection } = require('./mikrotik');
@@ -7124,33 +7136,39 @@ ${lifetimePaymentStatusSql}
             const paymentPeriodWhere = isYearRange
                 ? `strftime('%Y', p.payment_date) = ?`
                 : `strftime('%m', p.payment_date) = ? AND strftime('%Y', p.payment_date) = ?`;
-            const poolWhere = `
-                (cra.collector_id IS NOT NULL OR casm.collector_id IS NOT NULL)
-                AND ${invoicePeriodWhere}
-                AND CAST(i.amount AS REAL) > 0
-            `;
-            const poolJoin = `
+            // Rentang longgar (±1 hari untuk offset zona waktu) agar index created_at terpakai;
+            // filter strftime di atas tetap menentukan hasil akhirnya.
+            const periodStart = isYearRange ? `${filterYear}-01-01` : `${filterYear}-${filterMonth}-01`;
+            const periodEnd = isYearRange
+                ? `${Number(filterYear) + 1}-01-01`
+                : (filterMonth === '12'
+                    ? `${Number(filterYear) + 1}-01-01`
+                    : `${filterYear}-${String(Number(filterMonth) + 1).padStart(2, '0')}-01`);
+            /**
+             * Satu pass untuk tagihan (semua), tagihan lunas, dan belum lunas.
+             * EXISTS (bukan LEFT JOIN) agar 1 invoice tidak terjumlah 2x bila cocok >1 baris collector_areas.
+             */
+            const qTagihanPool = `
+                SELECT
+                    COUNT(*) AS tagihan_count,
+                    COALESCE(SUM(i.amount), 0) AS tagihan_total,
+                    COALESCE(SUM(CASE WHEN i.status = 'paid' THEN 1 ELSE 0 END), 0) AS lunas_count,
+                    COALESCE(SUM(CASE WHEN i.status = 'paid' THEN i.amount ELSE 0 END), 0) AS lunas_total,
+                    COUNT(DISTINCT CASE WHEN i.status = 'unpaid' THEN i.customer_id END) AS belum_count,
+                    COALESCE(SUM(CASE WHEN i.status = 'unpaid' THEN i.amount ELSE 0 END), 0) AS belum_total
                 FROM invoices i
                 INNER JOIN customers c ON i.customer_id = c.id
-                LEFT JOIN collector_areas cra ON cra.collector_id = ? AND ${areaRowMatch}
-                LEFT JOIN collector_assignments casm ON casm.customer_id = c.id AND casm.collector_id = ?
-            `;
-            /** Subquery DISTINCT agar 1 invoice tidak terjumlah 2x bila cocok >1 baris collector_areas. */
-            const poolInvoiceDistinct = `
-                SELECT DISTINCT i.id AS id, i.amount AS amount, i.status AS status, i.customer_id AS customer_id
-                ${poolJoin}
-                WHERE ${poolWhere}
-            `;
-            const qTagihan = `
-                SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total
-                FROM (${poolInvoiceDistinct})
-            `;
-
-            /** Sama kohort dengan qTagihan, hanya invoice sudah lunas (admin / portal / kolektor). Untuk progress dashboard. */
-            const qTagihanLunas = `
-                SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total
-                FROM (${poolInvoiceDistinct})
-                WHERE status = 'paid'
+                WHERE i.created_at >= date(?, '-1 day')
+                  AND i.created_at < date(?, '+1 day')
+                  AND ${invoicePeriodWhere}
+                  AND CAST(i.amount AS REAL) > 0
+                  AND (
+                      EXISTS (SELECT 1 FROM collector_areas cra WHERE cra.collector_id = ? AND ${areaRowMatch})
+                      OR EXISTS (
+                          SELECT 1 FROM collector_assignments casm
+                          WHERE casm.customer_id = c.id AND casm.collector_id = ?
+                      )
+                  )
             `;
             
             const qLunas = `
@@ -7159,12 +7177,6 @@ ${lifetimePaymentStatusSql}
                 INNER JOIN invoices i ON p.invoice_id = i.id
                 WHERE p.collector_id = ?
                 AND ${paymentPeriodWhere}
-            `;
-            
-            const qBelumLunas = `
-                SELECT COUNT(DISTINCT customer_id) as count, COALESCE(SUM(amount), 0) as total
-                FROM (${poolInvoiceDistinct})
-                WHERE status = 'unpaid'
             `;
             
             const qLunasHariIni = `
@@ -7205,18 +7217,19 @@ ${lifetimePaymentStatusSql}
             });
 
             const periodParams = isYearRange ? [filterYear] : [filterMonth, filterYear];
-            const poolParams = [collectorId, collectorId, ...periodParams];
+            const poolParams = [periodStart, periodEnd, ...periodParams, collectorId, collectorId];
             const setoranReceiptParams = isYearRange
                 ? [collectorId, filterYear, collectorId, ...periodParams]
                 : [collectorId, filterMonth, filterYear, collectorId, ...periodParams];
-            const [tagihan, tagihanLunas, lunas, belumLunas, hariIni, setoranRow] = await Promise.all([
-                runGet(qTagihan, poolParams),
-                runGet(qTagihanLunas, poolParams),
+            const [pool, lunas, hariIni, setoranRow] = await Promise.all([
+                runGet(qTagihanPool, poolParams),
                 runGet(qLunas, [collectorId, ...periodParams]),
-                runGet(qBelumLunas, poolParams),
                 runGet(qLunasHariIni, [collectorId, todayStr]),
                 runGet(qSetoran, setoranReceiptParams)
             ]);
+            const tagihan = { count: pool.tagihan_count || 0, total: pool.tagihan_total || 0 };
+            const tagihanLunas = { count: pool.lunas_count || 0, total: pool.lunas_total || 0 };
+            const belumLunas = { count: pool.belum_count || 0, total: pool.belum_total || 0 };
 
             const sudahSetor = Number(setoranRow.sudah_setor) || 0;
             const lunasTunai = Number(setoranRow.lunas_kolektor_tunai) || 0;

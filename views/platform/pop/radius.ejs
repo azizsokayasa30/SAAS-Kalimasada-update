@@ -1,17 +1,27 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main km-set">
-  <div class="km-topbar">
-    <div>
-      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-shield-check"></i></span>Radius Manager</h2>
-    </div>
-    <button type="button" class="btn btn-km-primary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#addRadiusModal">
-      <i class="bi bi-plus-lg me-1"></i> Tambah Radius Manager
-    </button>
-  </div>
-
+<main class="km-main km-set km-infra km-infra--radius">
   <% const activePopCount = pops.filter(function(p) { return p.is_active; }).length; %>
   <% const live = typeof radiusLive !== 'undefined' && radiusLive ? radiusLive : { total: 0, up: 0, down: 0 }; %>
+  <%
+    const rdTotal = live.total || 0;
+    const rdUp = live.up || 0;
+    const rdDown = live.down || 0;
+    const rdHealth = rdTotal ? Math.round((rdUp / rdTotal) * 100) : null;
+    const rdChips = [];
+    if (!rdTotal) rdChips.push({ tone: 'muted', dot: true, label: 'Belum ada server' });
+    else if (rdDown) rdChips.push({ tone: 'bad', dot: true, label: rdDown + ' server down' });
+    else rdChips.push({ tone: 'ok', dot: true, label: 'Semua server up' });
+    rdChips.push({ tone: 'info', icon: 'bi-geo-alt', label: activePopCount + ' POP aktif' });
+  %>
+  <%- include('../partials/infra-hero', {
+    tab: 'radius',
+    icon: 'bi-shield-check',
+    heading: 'Radius Manager',
+    desc: 'Pantau dan kelola server FreeRADIUS per POP/CABANG untuk autentikasi dan accounting pelanggan.',
+    chips: rdChips,
+    actions: '<button type="button" class="btn btn-km-primary" data-bs-toggle="modal" data-bs-target="#addRadiusModal"><i class="bi bi-plus-lg"></i> Tambah Radius</button>'
+  }) %>
   <% if (!activePopCount) { %>
     <div class="alert alert-warning">Buat POP/CABANG aktif terlebih dahulu di <a href="/management/pop" class="alert-link">Daftar POP/CABANG</a>.</div>
   <% } %>
@@ -21,28 +31,18 @@
   <% if (flash && flash.success === 'deleted') { %><div class="alert alert-success">Radius manager berhasil dihapus.</div><% } %>
   <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
 
-  <div class="row g-3 mb-3">
-    <div class="col-md-4 col-6">
-      <div class="km-card km-set-stat">
-        <span class="km-set-stat__icon km-tone-blue"><i class="bi bi-hdd-stack"></i></span>
-        <div><div class="km-set-stat__label">Terdaftar</div><div class="km-set-stat__value"><%= live.total || 0 %></div></div>
-      </div>
-    </div>
-    <div class="col-md-4 col-6">
-      <div class="km-card km-set-stat">
-        <span class="km-set-stat__icon km-tone-green"><i class="bi bi-arrow-up-circle"></i></span>
-        <div><div class="km-set-stat__label">Up</div><div class="km-set-stat__value"><%= live.up || 0 %></div></div>
-      </div>
-    </div>
-    <div class="col-md-4 col-6">
-      <div class="km-card km-set-stat">
-        <span class="km-set-stat__icon km-tone-red"><i class="bi bi-arrow-down-circle"></i></span>
-        <div><div class="km-set-stat__label">Down</div><div class="km-set-stat__value"><%= live.down || 0 %></div></div>
-      </div>
-    </div>
-  </div>
+  <%- include('../partials/infra-stats', { stats: [
+    { tone: 'blue', icon: 'bi-hdd-stack', label: 'Terdaftar', value: rdTotal, meta: 'Server FreeRADIUS' },
+    { tone: 'green', icon: 'bi-arrow-up-circle', label: 'Up', value: rdUp, meta: 'Merespons normal' },
+    { tone: 'red', icon: 'bi-arrow-down-circle', label: 'Down', value: rdDown, meta: rdDown ? 'Perlu dicek' : 'Tidak ada gangguan' },
+    { tone: 'violet', icon: 'bi-heart-pulse', label: 'Kesehatan', value: rdHealth === null ? '—' : rdHealth + '%', meta: 'Rasio server up' }
+  ] }) %>
 
   <div class="km-card km-card--flush">
+    <div class="km-infra-panel-head">
+      <h5><i class="bi bi-list-ul"></i> Daftar FreeRADIUS</h5>
+      <small><%= radiusServers.length %> server</small>
+    </div>
     <div class="table-responsive">
       <table class="table table-hover align-middle mb-0 km-tenant-table">
         <thead>
@@ -57,12 +57,29 @@
         </thead>
         <tbody>
           <% if (!radiusServers.length) { %>
-            <tr><td colspan="6" class="text-center py-4 text-muted">Belum ada FreeRADIUS terdaftar.</td></tr>
+            <tr>
+              <td colspan="6" class="km-infra-empty-cell">
+                <div class="km-infra-empty">
+                  <span class="km-infra-empty__icon"><i class="bi bi-shield-check"></i></span>
+                  <strong>Belum ada FreeRADIUS terdaftar</strong>
+                  <span>Daftarkan server FreeRADIUS agar status autentikasi tiap POP bisa dipantau langsung dari sini.</span>
+                  <button type="button" class="btn btn-km-primary btn-sm px-3" data-bs-toggle="modal" data-bs-target="#addRadiusModal"><i class="bi bi-plus-lg"></i> Tambah Radius</button>
+                </div>
+              </td>
+            </tr>
           <% } %>
           <% radiusServers.forEach(function(r) { %>
             <tr class="<%= r.is_active ? '' : 'opacity-50' %>">
-              <td class="fw-semibold text-nowrap" <% if (r.description) { %>title="<%= r.description %>"<% } %>><%= r.name %></td>
-              <td class="text-nowrap"><code><%= r.pop_code %></code> <span class="small text-muted d-none d-xl-inline"><%= r.pop_name %></span></td>
+              <td class="text-nowrap" <% if (r.description) { %>title="<%= r.description %>"<% } %>>
+                <div class="km-infra-device">
+                  <span class="km-infra-device__icon"><i class="bi bi-hdd-stack"></i></span>
+                  <div>
+                    <div class="km-infra-device__name"><%= r.name %></div>
+                    <% if (r.description) { %><div class="km-infra-device__sub text-truncate" style="max-width: 220px;"><%= r.description %></div><% } %>
+                  </div>
+                </div>
+              </td>
+              <td class="text-nowrap"><div class="km-infra-pop"><code><%= r.pop_code %></code><small><%= r.pop_name %></small></div></td>
               <td><code><%= r.host %></code></td>
               <td class="text-nowrap"><%= r.auth_port || 1812 %> / <%= r.acct_port || 1813 %></td>
               <td>

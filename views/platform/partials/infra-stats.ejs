@@ -1,0 +1,14 @@
+<div class="km-infra-stats-wrap">
+  <div class="km-infra-stats km-infra-stats--<%= stats.length %>">
+    <% stats.forEach(function (s) { %>
+      <div class="km-infra-stat km-infra-stat--<%= s.tone || 'blue' %>">
+        <span class="km-infra-stat__icon"><i class="bi <%= s.icon %>"></i></span>
+        <div class="km-infra-stat__body">
+          <span class="km-infra-stat__label"><%= s.label %></span>
+          <strong class="km-infra-stat__value <%= s.small ? 'km-infra-stat__value--sm' : '' %> <%= s.code ? 'km-infra-stat__value--code' : '' %>" <% if (s.id) { %>id="<%= s.id %>"<% } %> <%- s.attrs || '' %> title="<%= s.value %>"><%= s.value %></strong>
+          <% if (s.meta) { %><span class="km-infra-stat__meta" <% if (s.metaId) { %>id="<%= s.metaId %>"<% } %>><%= s.meta %></span><% } %>
+        </div>
+      </div>
+    <% }); %>
+  </div>
+</div>

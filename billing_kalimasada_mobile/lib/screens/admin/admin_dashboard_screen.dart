@@ -796,19 +796,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       );
                     },
                   ),
+                  _AdminDrawerMenuItem(
+                    label: 'Tagih Pelanggan',
+                    icon: Icons.point_of_sale_rounded,
+                    color: const Color(0xFF059669),
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const AreaManagerCollectScreen(),
+                        ),
+                      );
+                    },
+                  ),
                   if (isAreaManager) ...[
-                    _AdminDrawerMenuItem(
-                      label: 'Tagih Pelanggan',
-                      icon: Icons.point_of_sale_rounded,
-                      color: const Color(0xFF059669),
-                      onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => const AreaManagerCollectScreen(),
-                          ),
-                        );
-                      },
-                    ),
                     _AdminDrawerMenuItem(
                       label: 'Notifikasi Tugas',
                       icon: Icons.notifications_active_rounded,

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../theme/colors.dart';
+import '../services/api_client.dart';
 import '../store/auth_provider.dart';
 import '../store/notification_provider.dart';
 import '../store/customer_provider.dart';
@@ -321,8 +322,9 @@ class _CollectorTabsState extends State<_CollectorTabs> {
     final now = DateTime.now();
     final month = col.overviewMonth ?? now.month;
     final year = col.overviewYear ?? now.year;
+    // Dashboard dulu agar tidak berebut server dengan request yang lebih berat.
+    await col.fetchOverview(month: month, year: year);
     await Future.wait([
-      col.fetchOverview(month: month, year: year),
       col.fetchSettlement(month: month, year: year),
       col.fetchMe(),
       col.fetchCustomers(
@@ -346,6 +348,15 @@ class _CollectorTabsState extends State<_CollectorTabs> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      final col = context.read<CollectorProvider>();
+      final user = context.read<AuthProvider>().user;
+      final now = DateTime.now();
+      col.restoreOverviewFromDisk(
+        owner:
+            '${ApiClient.apiTenant ?? ''}|${user?['id'] ?? user?['username'] ?? ''}',
+        month: col.overviewMonth ?? now.month,
+        year: col.overviewYear ?? now.year,
+      );
       _syncAll();
       final n =
           _collectorNotif ?? context.read<CollectorNotificationProvider>();
@@ -378,8 +389,9 @@ class _CollectorTabsState extends State<_CollectorTabs> {
     final now = DateTime.now();
     final month = col.overviewMonth ?? now.month;
     final year = col.overviewYear ?? now.year;
-    if (i == 0) col.fetchOverview(month: month, year: year);
+    if (i == 0) col.refreshOverviewIfStale(month: month, year: year);
     if (i == 1) {
+      col.fetchCollectorAreas();
       col.fetchCustomers(
         status: col.lastCustomersFetchStatus,
         q: col.lastCustomersFetchQ,
@@ -548,8 +560,7 @@ class _CollectorTabsState extends State<_CollectorTabs> {
         for (final raw in col.customers) {
           if (raw is Map) {
             count++;
-            final m = Map<String, dynamic>.from(raw);
-            final p = m['package_price'];
+            final p = raw['package_price'];
             final n = p is num
                 ? p.round()
                 : int.tryParse(p?.toString() ?? '') ?? 0;

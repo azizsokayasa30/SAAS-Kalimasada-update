@@ -5,6 +5,8 @@ ALTER TABLE customers ADD COLUMN master_origin TEXT;
 ALTER TABLE customers ADD COLUMN source_tenant_id INTEGER;
 ALTER TABLE customers ADD COLUMN source_customer_id INTEGER;
 ALTER TABLE customers ADD COLUMN source_tenant_name TEXT;
+-- Biasanya dibuat oleh modul Area admin, tapi copy ke master selalu menulis kolom ini (jangan pakai titik koma di komentar: loader split per titik koma).
+ALTER TABLE customers ADD COLUMN area_id INTEGER;
 
 ALTER TABLE invoices ADD COLUMN source_invoice_id INTEGER;
 ALTER TABLE invoices ADD COLUMN source_missing INTEGER NOT NULL DEFAULT 0;

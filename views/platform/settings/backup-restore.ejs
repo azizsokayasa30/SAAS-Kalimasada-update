@@ -1,159 +1,285 @@
+<%
+const ab = autoBackup || {};
+const list = backups || [];
+const legacy = legacyBackups || [];
+const fmtSize = function (bytes) {
+  const n = Number(bytes) || 0;
+  if (n >= 1073741824) return (n / 1073741824).toFixed(2) + ' GB';
+  if (n >= 1048576) return (n / 1048576).toFixed(2) + ' MB';
+  return (n / 1024).toFixed(1) + ' KB';
+};
+const toDate = function (v) {
+  if (!v) return null;
+  const d = new Date(typeof v === 'string' ? v.replace(' ', 'T') : v);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+const fmtDate = function (v) {
+  const d = toDate(v);
+  return d ? d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) + ', ' + d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '—';
+};
+const relDays = function (d) {
+  if (!d) return '';
+  const diff = Math.round((new Date(new Date().toDateString()) - new Date(d.toDateString())) / 86400000);
+  if (diff <= 0) return 'Hari ini';
+  if (diff === 1) return 'Kemarin';
+  return diff + ' hari lalu';
+};
+const totalSize = list.reduce(function (s, b) { return s + (Number(b.size) || 0); }, 0);
+const fileTime = function (b) { const d = toDate(b.modified || b.created); return d ? d.getTime() : 0; };
+const newestTime = list.reduce(function (m, b) { return Math.max(m, fileTime(b)); }, 0);
+const lastRun = toDate(ab.last_run_at);
+const nextRun = ab.enabled && lastRun ? new Date(lastRun.getTime() + (Number(ab.interval_days) || 7) * 86400000) : null;
+%>
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main km-set">
-  <div class="km-topbar">
-    <div>
-      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-database"></i></span>Backup &amp; Restore</h2>
-    </div>
-  </div>
-
-  <% if (flash && flash.success === 'created') { %><div class="alert alert-success">Backup penuh berhasil dibuat<%= flash.filename ? ': ' + flash.filename : '' %>.</div><% } %>
-  <% if (flash && flash.success === 'restored') { %><div class="alert alert-success">Restore backup penuh berhasil.</div><% } %>
-  <% if (flash && flash.success === 'uploaded') { %><div class="alert alert-success">File backup berhasil diunggah<%= flash.filename ? ': ' + flash.filename : '' %>.</div><% } %>
-  <% if (flash && flash.success === 'auto') { %><div class="alert alert-success">Pengaturan auto backup disimpan.</div><% } %>
-  <% if (flash && flash.warnings) { %><div class="alert alert-warning"><%= flash.warnings %></div><% } %>
-  <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
-
-  <form method="POST" action="/management/settings/backup-restore/auto" class="km-card km-master-backup-card mb-4">
-    <div class="km-master-backup-card__head">
-      <h3 class="km-master-backup-card__title"><i class="bi bi-clock-history me-2"></i>Auto Backup</h3>
-      <div class="form-check form-switch mb-0">
-        <input class="form-check-input" type="checkbox" role="switch" id="autoBackupEnabled" name="enabled" value="on" <%= autoBackup && autoBackup.enabled ? 'checked' : '' %>>
-        <label class="form-check-label fw-semibold" for="autoBackupEnabled">Aktif</label>
-      </div>
-    </div>
-    <div class="row g-3 align-items-end">
-      <div class="col-sm-4">
-        <label class="form-label" for="autoBackupInterval">Interval (hari)</label>
-        <input type="number" class="form-control" id="autoBackupInterval" name="interval_days" min="1" max="365" required
-          value="<%= autoBackup && autoBackup.interval_days ? autoBackup.interval_days : 7 %>">
-      </div>
-      <div class="col-sm-4">
-        <label class="form-label" for="autoBackupKeep">Simpan maks. (file)</label>
-        <input type="number" class="form-control" id="autoBackupKeep" name="keep_count" min="1" max="30" required
-          value="<%= autoBackup && autoBackup.keep_count ? autoBackup.keep_count : 5 %>">
-      </div>
-      <div class="col-sm-4">
-        <button type="submit" class="btn btn-km-primary w-100"><i class="bi bi-check-lg me-1"></i> Simpan Jadwal</button>
-      </div>
-    </div>
-    <div class="km-backup-last">
-      <i class="bi bi-info-circle"></i>
-      <span>
-      <% if (autoBackup && autoBackup.last_filename) { %>
-        Terakhir: <code><%= autoBackup.last_filename %></code>
-        <% if (autoBackup.last_run_at) { %>· <%= new Date(autoBackup.last_run_at).toLocaleString('id-ID') %> · <%= autoBackup.last_trigger === 'auto' ? 'otomatis' : 'manual' %><% } %>
-      <% } else { %>
-        Belum ada backup penuh.
-      <% } %>
-      <% if (autoBackup && autoBackup.last_error) { %>
-        <span class="text-danger d-block"><%= autoBackup.last_error %></span>
-      <% } %>
-      </span>
-    </div>
-  </form>
-
-  <div class="km-card km-master-backup-card">
-    <div class="km-master-backup-card__head">
+<main class="km-main km-set km-bkp">
+  <div class="km-sx-hero km-sx-hero--rose">
+    <div class="km-sx-hero__main">
+      <span class="km-sx-hero__icon"><i class="bi bi-database"></i></span>
       <div>
-        <h3 class="km-master-backup-card__title"><i class="bi bi-archive me-2"></i>Backup Penuh Platform</h3>
+        <div class="km-sx-hero__eyebrow">Pengaturan</div>
+        <h2 class="km-sx-hero__title">Backup &amp; Restore</h2>
+        <p class="km-sx-hero__desc">Cadangan penuh platform: database billing, RADIUS, konfigurasi FreeRADIUS, nginx, kunci WireGuard, dan registry mobile app.</p>
       </div>
-      <form method="POST" action="/management/settings/backup-restore/create" class="d-inline">
-        <button type="submit" class="btn btn-km-primary btn-sm px-3">
+    </div>
+    <div class="km-sx-hero__actions">
+      <form method="POST" action="/management/settings/backup-restore/create" class="d-inline" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').innerHTML='<span class=&quot;spinner-border spinner-border-sm me-2&quot;></span>Membuat backup…';">
+        <button type="submit" class="btn btn-km-primary px-3">
           <i class="bi bi-download me-1"></i> Buat Backup Sekarang
         </button>
       </form>
     </div>
-    <div class="row g-4 km-master-backup-card__body">
-      <div class="col-lg-5">
-        <div class="km-form-section km-form-section--flat h-100">
-          <h6 class="km-form-section__title mb-2"><i class="bi bi-upload me-1"></i> Upload &amp; Restore</h6>
-          <form method="POST" action="/management/settings/backup-restore/upload" enctype="multipart/form-data" class="mb-3">
-            <div class="mb-3">
-              <input type="file" name="backup_file" class="form-control form-control-sm" accept=".tar.gz,.db,.sqlite,.sqlite3" required>
-            </div>
-            <button type="submit" class="btn btn-outline-secondary btn-sm px-3">
-              <i class="bi bi-cloud-arrow-up me-1"></i> Upload File
-            </button>
-          </form>
-          <p class="km-backup-warn mb-0"><i class="bi bi-exclamation-triangle"></i> Restore menimpa data live.</p>
+  </div>
+
+  <% if (flash && flash.success === 'created') { %><div class="alert alert-success alert-dismissible fade show km-sx-alert"><i class="bi bi-check-circle-fill"></i>Backup penuh berhasil dibuat<%= flash.filename ? ': ' + flash.filename : '' %>.<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
+  <% if (flash && flash.success === 'restored') { %><div class="alert alert-success alert-dismissible fade show km-sx-alert"><i class="bi bi-check-circle-fill"></i>Restore backup penuh berhasil.<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
+  <% if (flash && flash.success === 'uploaded') { %><div class="alert alert-success alert-dismissible fade show km-sx-alert"><i class="bi bi-check-circle-fill"></i>File backup berhasil diunggah<%= flash.filename ? ': ' + flash.filename : '' %>. Tekan tombol Restore pada file tersebut di daftar riwayat.<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
+  <% if (flash && flash.success === 'auto') { %><div class="alert alert-success alert-dismissible fade show km-sx-alert"><i class="bi bi-check-circle-fill"></i>Pengaturan auto backup disimpan.<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
+  <% if (flash && flash.warnings) { %><div class="alert alert-warning alert-dismissible fade show km-sx-alert"><i class="bi bi-exclamation-circle-fill"></i><%= flash.warnings %><button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
+  <% if (flash && flash.error) { %><div class="alert alert-danger alert-dismissible fade show km-sx-alert"><i class="bi bi-exclamation-triangle-fill"></i><%= flash.error %><button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
+
+  <div class="row g-3 mb-4">
+    <div class="col-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-rose"><i class="bi bi-clock-history"></i></span>
+        <div>
+          <div class="km-set-stat__label">Backup Terakhir</div>
+          <div class="km-set-stat__value km-bkp-statval"><%= lastRun ? relDays(lastRun) : 'Belum ada' %></div>
+          <div class="km-set-stat__sub"><%= lastRun ? fmtDate(lastRun) + ' · ' + (ab.last_trigger === 'auto' ? 'otomatis' : 'manual') : 'Belum pernah' %></div>
         </div>
       </div>
-      <div class="col-lg-7">
-        <h6 class="km-form-section__title mb-2"><i class="bi bi-clock-history me-1"></i> Riwayat Backup Penuh</h6>
-        <div class="table-responsive">
-          <table class="table table-sm table-hover align-middle mb-0 km-tenant-table">
-            <thead>
-              <tr>
-                <th>File</th>
-                <th>Ukuran</th>
-                <th>Tanggal</th>
-                <th class="text-end">Aksi</th>
-              </tr>
-            </thead>
-            <tbody>
-              <% if (!backups || !backups.length) { %>
-                <tr><td colspan="4" class="text-center py-3 text-muted">Belum ada backup penuh tersimpan.</td></tr>
-              <% } %>
-              <% (backups || []).forEach(function(b) { %>
-                <tr>
-                  <td><code class="small"><%= b.filename %></code></td>
-                  <td class="text-muted small"><%= (b.size / (1024 * 1024)).toFixed(2) %> MB</td>
-                  <td class="text-muted small"><%= new Date(b.modified || b.created).toLocaleString('id-ID') %></td>
-                  <td class="text-end text-nowrap">
-                    <a href="/management/settings/backup-restore/file/<%= encodeURIComponent(b.filename) %>" class="btn btn-sm btn-outline-secondary" title="Unduh">
-                      <i class="bi bi-download"></i>
-                    </a>
-                    <form method="POST" action="/management/settings/backup-restore/restore/<%= encodeURIComponent(b.filename) %>" class="d-inline">
-                      <button type="submit" class="btn btn-sm btn-outline-danger" title="Restore" onclick="return confirm('PERHATIAN: Restore akan menimpa billing.db, RADIUS, konfigurasi FreeRADIUS, nginx, kunci WireGuard, dan registry mobile app dari <%= b.filename %>. Lanjutkan?')">
-                        <i class="bi bi-arrow-counterclockwise"></i>
-                      </button>
-                    </form>
-                  </td>
-                </tr>
-              <% }); %>
-            </tbody>
-          </table>
+    </div>
+    <div class="col-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon <%= ab.enabled ? 'km-tone-green' : 'km-tone-orange' %>"><i class="bi <%= ab.enabled ? 'bi-arrow-repeat' : 'bi-pause-circle' %>"></i></span>
+        <div>
+          <div class="km-set-stat__label">Auto Backup</div>
+          <div class="km-set-stat__value km-bkp-statval"><%= ab.enabled ? 'Aktif' : 'Nonaktif' %></div>
+          <div class="km-set-stat__sub"><%= ab.enabled ? 'Tiap ' + (ab.interval_days || 7) + ' hari' : 'Tidak terjadwal' %></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-purple"><i class="bi bi-calendar-event"></i></span>
+        <div>
+          <div class="km-set-stat__label">Berikutnya</div>
+          <div class="km-set-stat__value km-bkp-statval"><%= nextRun ? nextRun.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' }) : '—' %></div>
+          <div class="km-set-stat__sub"><%= nextRun ? 'Perkiraan' : (ab.enabled ? 'Menunggu backup' : 'Tidak terjadwal') %></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-blue"><i class="bi bi-archive"></i></span>
+        <div>
+          <div class="km-set-stat__label">File Tersimpan</div>
+          <div class="km-set-stat__value km-bkp-statval"><%= list.length %> <small>/ <%= ab.keep_count || 5 %></small></div>
+          <div class="km-set-stat__sub">Total <%= fmtSize(totalSize) %></div>
         </div>
       </div>
     </div>
   </div>
 
-  <% if (legacyBackups && legacyBackups.length) { %>
-  <div class="km-card km-master-backup-card mt-4">
-    <h3 class="km-master-backup-card__title mb-2"><i class="bi bi-database me-2"></i>Backup lama (billing.db saja)</h3>
-    <div class="table-responsive">
-      <table class="table table-sm table-hover align-middle mb-0 km-tenant-table">
-        <thead>
-          <tr>
-            <th>File</th>
-            <th>Ukuran</th>
-            <th>Tanggal</th>
-            <th class="text-end">Aksi</th>
-          </tr>
-        </thead>
-        <tbody>
-          <% legacyBackups.forEach(function(b) { %>
-            <tr>
-              <td><code class="small"><%= b.filename %></code></td>
-              <td class="text-muted small"><%= (b.size / (1024 * 1024)).toFixed(2) %> MB</td>
-              <td class="text-muted small"><%= new Date(b.modified || b.created).toLocaleString('id-ID') %></td>
-              <td class="text-end text-nowrap">
-                <a href="/management/settings/backup-restore/file/<%= encodeURIComponent(b.filename) %>" class="btn btn-sm btn-outline-secondary" title="Unduh">
+  <div class="row g-4 mb-4">
+    <div class="col-lg-5">
+      <form method="POST" action="/management/settings/backup-restore/auto" class="km-card km-sx-section h-100" data-km-dirty>
+        <header class="km-sx-section__head">
+          <span class="km-sx-section__icon km-tone-purple"><i class="bi bi-calendar2-check"></i></span>
+          <div>
+            <h3 class="km-sx-section__title">Jadwal Auto Backup</h3>
+            <p class="km-sx-section__sub">Backup dibuat otomatis di server.</p>
+          </div>
+          <div class="km-sx-section__aside">
+            <div class="form-check form-switch km-sx-toggle">
+              <input class="form-check-input" type="checkbox" role="switch" id="autoBackupEnabled" name="enabled" value="on" <%= ab.enabled ? 'checked' : '' %>>
+              <label class="form-check-label" for="autoBackupEnabled" id="autoBackupEnabledLabel"><%= ab.enabled ? 'Aktif' : 'Mati' %></label>
+            </div>
+          </div>
+        </header>
+        <div class="km-sx-section__body d-flex flex-column gap-3">
+          <div class="row g-3">
+            <div class="col-6">
+              <label class="form-label" for="autoBackupInterval">Interval</label>
+              <div class="km-sx-suffix">
+                <input type="number" class="form-control" id="autoBackupInterval" name="interval_days" min="1" max="365" required value="<%= ab.interval_days || 7 %>">
+                <span>hari</span>
+              </div>
+            </div>
+            <div class="col-6">
+              <label class="form-label" for="autoBackupKeep">Simpan maksimal</label>
+              <div class="km-sx-suffix">
+                <input type="number" class="form-control" id="autoBackupKeep" name="keep_count" min="1" max="30" required value="<%= ab.keep_count || 5 %>">
+                <span>file</span>
+              </div>
+            </div>
+          </div>
+          <small class="km-sx-hint mt-0" id="autoBackupSummary"></small>
+          <% if (ab.last_error) { %>
+            <div class="km-sx-callout km-sx-callout--err"><i class="bi bi-x-octagon"></i><span><strong>Backup otomatis terakhir gagal:</strong> <%= ab.last_error %></span></div>
+          <% } %>
+          <div class="km-sx-savebar km-sx-savebar--inline mt-auto">
+            <div class="km-sx-savebar__msg">
+              <span class="km-sx-savebar__dot"></span>
+              <span class="km-sx-savebar__clean">Tersimpan</span>
+              <span class="km-sx-savebar__dirty">Belum disimpan</span>
+            </div>
+            <button type="submit" class="btn btn-km-primary px-3"><i class="bi bi-check-lg me-1"></i> Simpan Jadwal</button>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <div class="col-lg-7">
+      <section class="km-card km-sx-section h-100">
+        <header class="km-sx-section__head">
+          <span class="km-sx-section__icon km-tone-blue"><i class="bi bi-cloud-arrow-up"></i></span>
+          <div>
+            <h3 class="km-sx-section__title">Unggah File Backup</h3>
+            <p class="km-sx-section__sub">File akan masuk ke daftar riwayat di bawah, lalu bisa di-restore.</p>
+          </div>
+        </header>
+        <div class="km-sx-section__body">
+          <form method="POST" action="/management/settings/backup-restore/upload" enctype="multipart/form-data" class="km-sx-restore">
+            <label class="km-sx-drop">
+              <input type="file" name="backup_file" accept=".tar.gz,.db,.sqlite,.sqlite3" required>
+              <span class="km-sx-drop__icon"><i class="bi bi-file-earmark-zip"></i></span>
+              <span class="km-sx-drop__title">Tarik file ke sini atau <u>pilih file</u></span>
+              <span class="km-sx-drop__sub">Format .tar.gz (backup penuh) atau .db / .sqlite</span>
+              <span class="km-sx-drop__file"><i class="bi bi-file-earmark-check"></i><span></span></span>
+            </label>
+            <div class="d-flex flex-wrap align-items-center gap-3">
+              <button type="submit" class="btn btn-outline-primary px-3"><i class="bi bi-upload me-1"></i> Unggah File</button>
+              <div class="km-sx-callout km-sx-callout--warn flex-grow-1 py-2">
+                <i class="bi bi-exclamation-triangle"></i>
+                <span>Restore akan <strong>menimpa data yang sedang berjalan</strong>. Buat backup terbaru dulu sebelum restore.</span>
+              </div>
+            </div>
+          </form>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <section class="km-card km-sx-section">
+    <header class="km-sx-section__head">
+      <span class="km-sx-section__icon km-tone-rose"><i class="bi bi-archive"></i></span>
+      <div>
+        <h3 class="km-sx-section__title">Riwayat Backup Penuh</h3>
+        <p class="km-sx-section__sub"><%= list.length %> file · total <%= fmtSize(totalSize) %>. File lama dihapus otomatis bila melebihi <%= ab.keep_count || 5 %> file.</p>
+      </div>
+    </header>
+    <div class="km-sx-section__body">
+      <% if (!list.length) { %>
+        <div class="km-sx-empty km-sx-empty--sm km-sx-boxed">
+          <span class="km-sx-empty__icon km-sx-empty__icon--rose"><i class="bi bi-archive"></i></span>
+          <h4 class="km-sx-empty__title">Belum ada backup penuh</h4>
+          <p class="km-sx-empty__text mb-0">Tekan <strong>Buat Backup Sekarang</strong> di atas untuk membuat cadangan pertama.</p>
+        </div>
+      <% } else { %>
+        <div class="km-sx-filelist">
+          <% list.forEach(function(b) { const isNewest = fileTime(b) === newestTime; %>
+            <div class="km-sx-filelist__row">
+              <div class="km-sx-file">
+                <span class="km-sx-file__icon km-tone-rose"><i class="bi bi-file-earmark-zip"></i></span>
+                <div class="min-w-0">
+                  <div class="km-sx-file__name"><%= b.filename %><% if (isNewest) { %><span class="km-sx-filelist__badge km-sx-filelist__badge--new">Terbaru</span><% } %><% if (/auto/i.test(b.filename)) { %><span class="km-sx-filelist__badge km-sx-filelist__badge--auto">Otomatis</span><% } %></div>
+                  <div class="km-sx-file__meta"><%= fmtDate(b.modified || b.created) %> · <%= fmtSize(b.size) %></div>
+                </div>
+              </div>
+              <div class="km-sx-iconbtns">
+                <a href="/management/settings/backup-restore/file/<%= encodeURIComponent(b.filename) %>" class="btn btn-sm btn-outline-secondary" title="Unduh" aria-label="Unduh <%= b.filename %>">
                   <i class="bi bi-download"></i>
                 </a>
                 <form method="POST" action="/management/settings/backup-restore/restore/<%= encodeURIComponent(b.filename) %>" class="d-inline">
-                  <button type="submit" class="btn btn-sm btn-outline-danger" title="Restore" onclick="return confirm('Restore akan menimpa SELURUH billing.db dari <%= b.filename %>. RADIUS dan file konfigurasi tidak ikut. Lanjutkan?')">
+                  <button type="submit" class="btn btn-sm btn-outline-danger" title="Restore" aria-label="Restore <%= b.filename %>" onclick="return confirm('PERHATIAN: Restore akan menimpa billing.db, RADIUS, konfigurasi FreeRADIUS, nginx, kunci WireGuard, dan registry mobile app dari <%= b.filename %>. Lanjutkan?')">
                     <i class="bi bi-arrow-counterclockwise"></i>
                   </button>
                 </form>
-              </td>
-            </tr>
+              </div>
+            </div>
           <% }); %>
-        </tbody>
-      </table>
+        </div>
+      <% } %>
     </div>
-  </div>
+  </section>
+
+  <% if (legacy.length) { %>
+  <section class="km-card km-sx-section mt-4">
+    <header class="km-sx-section__head">
+      <span class="km-sx-section__icon km-tone-orange"><i class="bi bi-database"></i></span>
+      <div>
+        <h3 class="km-sx-section__title">Backup Lama (billing.db saja)</h3>
+        <p class="km-sx-section__sub">Format lama, hanya berisi database billing. RADIUS dan file konfigurasi tidak ikut.</p>
+      </div>
+    </header>
+    <div class="km-sx-section__body">
+      <div class="km-sx-filelist">
+        <% legacy.forEach(function(b) { %>
+          <div class="km-sx-filelist__row">
+            <div class="km-sx-file">
+              <span class="km-sx-file__icon km-tone-orange"><i class="bi bi-database"></i></span>
+              <div class="min-w-0">
+                <div class="km-sx-file__name"><%= b.filename %></div>
+                <div class="km-sx-file__meta"><%= fmtDate(b.modified || b.created) %> · <%= fmtSize(b.size) %></div>
+              </div>
+            </div>
+            <div class="km-sx-iconbtns">
+              <a href="/management/settings/backup-restore/file/<%= encodeURIComponent(b.filename) %>" class="btn btn-sm btn-outline-secondary" title="Unduh" aria-label="Unduh <%= b.filename %>">
+                <i class="bi bi-download"></i>
+              </a>
+              <form method="POST" action="/management/settings/backup-restore/restore/<%= encodeURIComponent(b.filename) %>" class="d-inline">
+                <button type="submit" class="btn btn-sm btn-outline-danger" title="Restore" aria-label="Restore <%= b.filename %>" onclick="return confirm('Restore akan menimpa SELURUH billing.db dari <%= b.filename %>. RADIUS dan file konfigurasi tidak ikut. Lanjutkan?')">
+                  <i class="bi bi-arrow-counterclockwise"></i>
+                </button>
+              </form>
+            </div>
+          </div>
+        <% }); %>
+      </div>
+    </div>
+  </section>
   <% } %>
 </main>
+
+<script>
+(function () {
+  var en = document.getElementById('autoBackupEnabled');
+  var iv = document.getElementById('autoBackupInterval');
+  var kp = document.getElementById('autoBackupKeep');
+  var out = document.getElementById('autoBackupSummary');
+  var lbl = document.getElementById('autoBackupEnabledLabel');
+  if (!en || !iv || !kp || !out) return;
+  function render() {
+    var days = parseInt(iv.value, 10) || 0;
+    var keep = parseInt(kp.value, 10) || 0;
+    if (lbl) lbl.textContent = en.checked ? 'Aktif' : 'Mati';
+    out.innerHTML = en.checked
+      ? '<i class="bi bi-info-circle me-1"></i>Backup dibuat tiap <strong>' + days + ' hari</strong>. Menyimpan <strong>' + keep + ' file</strong> terbaru (cakupan ±' + (days * keep) + ' hari).'
+      : '<i class="bi bi-pause-circle me-1"></i>Auto backup dimatikan. Backup hanya dibuat saat Anda menekan tombol.';
+  }
+  [en, iv, kp].forEach(function (el) { el.addEventListener('input', render); el.addEventListener('change', render); });
+  render();
+})();
+</script>
 <%- include('../partials/footer') %>

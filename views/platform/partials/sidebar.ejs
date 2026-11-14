@@ -1,12 +1,31 @@
-<aside class="km-sidebar">
-  <%
-    const company = (typeof platformCompany !== 'undefined' && platformCompany) ? platformCompany : {};
-    const brandName = company.company_name || 'PT. KALIMASADA INTI SARANA';
-    const brandLogo = company.logo_path || '/img/logo.png';
-    const settingsOpen = active && String(active).startsWith('settings');
-    const financeOpen = active && String(active).startsWith('finance');
-    const tenantsOpen = active && String(active).startsWith('tenants');
-  %>
+<%
+  const company = (typeof platformCompany !== 'undefined' && platformCompany) ? platformCompany : {};
+  const brandName = company.company_name || 'PT. KALIMASADA INTI SARANA';
+  const brandLogo = company.logo_path || '/img/logo.png';
+  const infraKeys = ['settings-vpn', 'settings-switches', 'settings-radius', 'settings-reverse-proxy', 'settings-api', 'settings-mrtg'];
+  const infraOpen = !!active && infraKeys.some(function (k) { return String(active).startsWith(k); });
+  const settingsOpen = !!active && String(active).startsWith('settings') && !infraOpen;
+  const financeOpen = active && String(active).startsWith('finance');
+  const tenantsOpen = active && String(active).startsWith('tenants');
+  const mbarTitle = (typeof title !== 'undefined' && title) ? String(title).split(' — ')[0] : 'Management';
+%>
+<header class="km-mbar">
+  <button type="button" class="km-mbar__btn" id="kmNavOpen" aria-label="Buka menu" aria-controls="kmSidebar" aria-expanded="false">
+    <i class="bi bi-list"></i>
+  </button>
+  <a href="/management/dashboard" class="km-mbar__brand">
+    <span class="km-mbar__logo"><img src="<%= brandLogo %>" alt=""></span>
+    <span class="km-mbar__text">
+      <small>SaaS Management</small>
+      <strong><%= mbarTitle %></strong>
+    </span>
+  </a>
+  <button type="button" class="km-mbar__btn" id="btnHeaderThemeToggle" aria-label="Ganti tema gelap / terang">
+    <i class="bi bi-moon-fill" id="headerThemeIcon"></i>
+  </button>
+</header>
+<div class="km-nav-backdrop" id="kmNavBackdrop"></div>
+<aside class="km-sidebar" id="kmSidebar">
   <div class="km-brand">
     <div class="km-brand-logo-wrap">
       <img src="<%= brandLogo %>" alt="Logo <%= brandName %>">
@@ -16,6 +35,9 @@
       <h1><%= brandName %></h1>
       <p><%= company.footer_info || 'portal management billing' %></p>
     </div>
+    <button type="button" class="km-sidebar__close" id="kmNavClose" aria-label="Tutup menu">
+      <i class="bi bi-x-lg"></i>
+    </button>
   </div>
   <nav class="km-nav" aria-label="Navigasi management">
     <p class="km-nav-label">Menu Utama</p>
@@ -119,6 +141,24 @@
           <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-credit-card"></i></span>
           <span>Payment Manager</span>
         </a>
+        <a href="/management/settings/activity-logs" class="km-nav-submenu__item km-nav-item--settings-logs <%= active === 'settings-logs' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-journal-text"></i></span>
+          <span>Log Aktivitas</span>
+        </a>
+        <a href="/management/settings/backup-restore" class="km-nav-submenu__item km-nav-item--settings-backup <%= active === 'settings-backup' ? 'active' : '' %>">
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-database"></i></span>
+          <span>Backup &amp; Restore</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="km-nav-group <%= infraOpen ? 'is-open' : '' %>" id="infraNavGroup">
+      <button type="button" class="km-nav-item km-nav-item--infra km-nav-btn km-nav-group__toggle <%= infraOpen ? 'active' : '' %>" aria-expanded="<%= infraOpen ? 'true' : 'false' %>" aria-controls="infraSubmenu">
+        <span class="km-nav-icon"><i class="bi bi-hdd-rack"></i></span>
+        <span class="km-nav-group__label">Infrastruktur</span>
+        <i class="bi bi-chevron-down km-nav-group__chevron" aria-hidden="true"></i>
+      </button>
+      <div class="km-nav-submenu" id="infraSubmenu">
         <a href="/management/vpn" class="km-nav-submenu__item km-nav-item--settings-vpn <%= String(active || '').startsWith('settings-vpn') ? 'active' : '' %>">
           <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-shield-lock"></i></span>
           <span>VPN Management</span>
@@ -131,16 +171,8 @@
           <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-shield-check"></i></span>
           <span>Radius Manager</span>
         </a>
-        <a href="/management/settings/activity-logs" class="km-nav-submenu__item km-nav-item--settings-logs <%= active === 'settings-logs' ? 'active' : '' %>">
-          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-journal-text"></i></span>
-          <span>Log Aktivitas</span>
-        </a>
-        <a href="/management/settings/backup-restore" class="km-nav-submenu__item km-nav-item--settings-backup <%= active === 'settings-backup' ? 'active' : '' %>">
-          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-database"></i></span>
-          <span>Backup &amp; Restore</span>
-        </a>
         <a href="/management/settings/reverse-proxy" class="km-nav-submenu__item km-nav-item--settings-proxy <%= active === 'settings-reverse-proxy' ? 'active' : '' %>">
-          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-hdd-network"></i></span>
+          <span class="km-nav-icon km-nav-icon--sub"><i class="bi bi-signpost-split"></i></span>
           <span>Reverse Proxy</span>
         </a>
         <a href="/management/settings/api" class="km-nav-submenu__item km-nav-item--settings-api <%= active === 'settings-api' ? 'active' : '' %>">
@@ -183,5 +215,36 @@
       toggle.setAttribute('aria-expanded', group.classList.contains('is-open') ? 'true' : 'false');
     });
   });
+
+  var body = document.body;
+  var openBtn = document.getElementById('kmNavOpen');
+  var closeBtn = document.getElementById('kmNavClose');
+  var backdrop = document.getElementById('kmNavBackdrop');
+  var mq = window.matchMedia('(max-width: 992px)');
+
+  function setNav(open) {
+    body.classList.toggle('km-nav-open', open);
+    if (openBtn) openBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open && closeBtn) closeBtn.focus({ preventScroll: true });
+  }
+
+  if (openBtn) openBtn.addEventListener('click', function () { setNav(true); });
+  if (closeBtn) closeBtn.addEventListener('click', function () { setNav(false); if (openBtn) openBtn.focus(); });
+  if (backdrop) backdrop.addEventListener('click', function () { setNav(false); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && body.classList.contains('km-nav-open')) setNav(false);
+  });
+  document.querySelectorAll('.km-sidebar a[href]').forEach(function (link) {
+    link.addEventListener('click', function () { if (mq.matches) setNav(false); });
+  });
+  var onChange = function () { if (!mq.matches) setNav(false); };
+  if (mq.addEventListener) mq.addEventListener('change', onChange); else mq.addListener(onChange);
+
+  var activeItem = document.querySelector('.km-sidebar .km-nav-submenu__item.active, .km-sidebar .km-nav > a.active');
+  if (activeItem && openBtn) {
+    openBtn.addEventListener('click', function () {
+      activeItem.scrollIntoView({ block: 'center' });
+    }, { once: true });
+  }
 })();
 </script>

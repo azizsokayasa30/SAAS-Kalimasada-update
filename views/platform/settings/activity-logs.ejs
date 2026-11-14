@@ -1,17 +1,145 @@
+<%
+const pad2 = function (n) { return String(n).padStart(2, '0'); };
+const isoDate = function (d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); };
+const now = new Date();
+const todayIso = isoDate(now);
+const shiftDays = function (n) { const d = new Date(now); d.setDate(d.getDate() + n); return isoDate(d); };
+const yesterdayIso = shiftDays(-1);
+const monthStartIso = isoDate(new Date(now.getFullYear(), now.getMonth(), 1));
+const presets = [
+  { key: 'today', label: 'Hari ini', from: todayIso, to: todayIso },
+  { key: '7d', label: '7 hari', from: shiftDays(-6), to: todayIso },
+  { key: '30d', label: '30 hari', from: shiftDays(-29), to: todayIso },
+  { key: 'month', label: 'Bulan ini', from: monthStartIso, to: todayIso },
+];
+const activePreset = presets.find(function (p) { return p.from === filters.from && p.to === filters.to; });
+
+const parseLocal = function (v) {
+  const d = new Date(String(v || '').replace(' ', 'T'));
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+const fmtDateLong = function (iso) {
+  const d = parseLocal(iso + 'T00:00:00');
+  return d ? d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }) : iso;
+};
+const dayLabel = function (iso) {
+  if (iso === todayIso) return 'Hari ini';
+  if (iso === yesterdayIso) return 'Kemarin';
+  const d = parseLocal(iso + 'T00:00:00');
+  return d ? d.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : iso;
+};
+
+const actionTone = function (action) {
+  const a = String(action || '');
+  if (/login/.test(a)) return { tone: 'purple', icon: 'bi-box-arrow-in-right' };
+  if (/(backup|_auto$)/.test(a)) return { tone: 'orange', icon: 'bi-cloud-arrow-up' };
+  if (/restore/.test(a)) return { tone: 'orange', icon: 'bi-arrow-counterclockwise' };
+  if (/(deleted|removed|deactivated|cancelled)/.test(a)) return { tone: 'red', icon: 'bi-trash3' };
+  if (/(created|added|generated|import|copied|bootstrap|adopted)/.test(a)) return { tone: 'green', icon: 'bi-plus-circle' };
+  if (/(build|restarted|synced|applied)/.test(a)) return { tone: 'cyan', icon: 'bi-lightning-charge' };
+  if (/(updated|renamed|saved|settings)/.test(a)) return { tone: 'blue', icon: 'bi-pencil-square' };
+  return { tone: 'slate', icon: 'bi-dot' };
+};
+
+const avatarTone = function (name) {
+  const s = String(name || '');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % 6;
+};
+
+const qs = function (extra) {
+  const p = new URLSearchParams();
+  const merged = Object.assign({ action: filters.action, actor_id: filters.actor_id, from: filters.from, to: filters.to }, extra || {});
+  Object.keys(merged).forEach(function (k) { if (merged[k] !== '' && merged[k] != null) p.set(k, merged[k]); });
+  const s = p.toString();
+  return '/management/settings/activity-logs' + (s ? '?' + s : '');
+};
+
+const pageWindow = (function () {
+  const total = pagination.totalPages, cur = pagination.page, out = [];
+  for (let p = 1; p <= total; p++) {
+    if (p === 1 || p === total || Math.abs(p - cur) <= 1) out.push(p);
+    else if (out[out.length - 1] !== '…') out.push('…');
+  }
+  return out;
+})();
+
+const hasFilter = !!(filters.action || filters.actor_id || filters.from || filters.to);
+const selectedUser = users.find(function (u) { return String(u.id) === String(filters.actor_id); });
+let lastDay = null;
+%>
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main km-set">
-  <div class="km-topbar">
-    <div>
-      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-journal-text"></i></span>Log Aktivitas</h2>
+<main class="km-main km-set km-logs">
+  <div class="km-sx-hero km-sx-hero--amber">
+    <div class="km-sx-hero__main">
+      <span class="km-sx-hero__icon"><i class="bi bi-journal-text"></i></span>
+      <div>
+        <div class="km-sx-hero__eyebrow">Pengaturan</div>
+        <h2 class="km-sx-hero__title">Log Aktivitas</h2>
+        <p class="km-sx-hero__desc">Jejak semua perubahan di portal: siapa, melakukan apa, kapan, dan dari mana.</p>
+      </div>
     </div>
   </div>
 
-  <div class="km-card mb-3">
+  <div class="row g-3 mb-3">
+    <div class="col-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-blue"><i class="bi bi-journal-text"></i></span>
+        <div>
+          <div class="km-set-stat__label">Total Log</div>
+          <div class="km-set-stat__value"><%= stats.total.toLocaleString('id-ID') %></div>
+          <div class="km-set-stat__sub">Semua aktivitas</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-green"><i class="bi bi-calendar-check"></i></span>
+        <div>
+          <div class="km-set-stat__label">Hari Ini</div>
+          <div class="km-set-stat__value"><%= stats.today.toLocaleString('id-ID') %></div>
+          <div class="km-set-stat__sub"><%= fmtDateLong(todayIso) %></div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-purple"><i class="bi bi-graph-up"></i></span>
+        <div>
+          <div class="km-set-stat__label">7 Hari Terakhir</div>
+          <div class="km-set-stat__value"><%= stats.week.toLocaleString('id-ID') %></div>
+          <div class="km-set-stat__sub">Rata-rata <%= Math.round(stats.week / 7).toLocaleString('id-ID') %>/hari</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-orange"><i class="bi bi-person-badge"></i></span>
+        <div>
+          <div class="km-set-stat__label">User Aktif</div>
+          <div class="km-set-stat__value"><%= stats.weekActors.toLocaleString('id-ID') %></div>
+          <div class="km-set-stat__sub">Dalam 7 hari</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="km-card mb-3 km-logs-filter">
+    <div class="km-logs-presets" role="group" aria-label="Rentang cepat">
+      <a href="<%= qs({ from: '', to: '', page: '' }) %>" class="km-users-chip<%= !filters.from && !filters.to ? ' active' : '' %>">Semua waktu</a>
+      <% presets.forEach(function (p) { %>
+        <a href="<%= qs({ from: p.from, to: p.to }) %>" class="km-users-chip<%= activePreset && activePreset.key === p.key ? ' active' : '' %>"><%= p.label %></a>
+      <% }); %>
+    </div>
     <form method="GET" action="/management/settings/activity-logs" class="row g-2 align-items-end">
       <div class="col-md-6 col-xl-3">
-        <label class="form-label small">Aksi</label>
-        <input type="text" name="action" class="form-control form-control-sm" value="<%= filters.action %>" placeholder="Cari aksi...">
+        <label class="form-label small">Aktivitas</label>
+        <div class="km-users-search">
+          <i class="bi bi-search"></i>
+          <input type="search" name="action" class="form-control form-control-sm" value="<%= filters.action %>" placeholder="mis. tenant, login, backup…">
+        </div>
       </div>
       <div class="col-md-6 col-xl-3">
         <label class="form-label small">User</label>
@@ -23,58 +151,104 @@
         </select>
       </div>
       <div class="col-6 col-md-4 col-xl-2">
-        <label class="form-label small">Dari tanggal</label>
-        <input type="date" name="from" class="form-control form-control-sm" value="<%= filters.from %>">
+        <label class="form-label small" for="logFrom">Dari tanggal</label>
+        <div class="km-date-id">
+          <input type="date" name="from" id="logFrom" class="form-control form-control-sm" value="<%= filters.from %>" max="<%= todayIso %>">
+          <span class="km-date-id__text" aria-hidden="true"><%= filters.from ? fmtDateLong(filters.from) : 'Pilih tanggal' %></span>
+          <i class="bi bi-calendar3" aria-hidden="true"></i>
+        </div>
       </div>
       <div class="col-6 col-md-4 col-xl-2">
-        <label class="form-label small">Sampai tanggal</label>
-        <input type="date" name="to" class="form-control form-control-sm" value="<%= filters.to %>">
+        <label class="form-label small" for="logTo">Sampai tanggal</label>
+        <div class="km-date-id">
+          <input type="date" name="to" id="logTo" class="form-control form-control-sm" value="<%= filters.to %>" max="<%= todayIso %>">
+          <span class="km-date-id__text" aria-hidden="true"><%= filters.to ? fmtDateLong(filters.to) : 'Pilih tanggal' %></span>
+          <i class="bi bi-calendar3" aria-hidden="true"></i>
+        </div>
       </div>
       <div class="col-md-4 col-xl-2 d-flex gap-2">
-        <button type="submit" class="btn btn-km-primary btn-sm flex-fill"><i class="bi bi-search me-1"></i> Filter</button>
+        <button type="submit" class="btn btn-km-primary btn-sm flex-fill"><i class="bi bi-funnel me-1"></i> Filter</button>
         <a href="/management/settings/activity-logs" class="btn btn-outline-secondary btn-sm flex-fill">Reset</a>
       </div>
     </form>
+    <% if (hasFilter) { %>
+      <div class="km-logs-active">
+        <span class="km-logs-active__label">Filter aktif:</span>
+        <% if (filters.from || filters.to) { %>
+          <a class="km-logs-tag" href="<%= qs({ from: '', to: '' }) %>" title="Hapus filter tanggal">
+            <i class="bi bi-calendar3"></i>
+            <%= filters.from && filters.to ? (filters.from === filters.to ? fmtDateLong(filters.from) : fmtDateLong(filters.from) + ' – ' + fmtDateLong(filters.to)) : (filters.from ? 'Sejak ' + fmtDateLong(filters.from) : 'Sampai ' + fmtDateLong(filters.to)) %>
+            <i class="bi bi-x"></i>
+          </a>
+        <% } %>
+        <% if (filters.actor_id) { %>
+          <a class="km-logs-tag" href="<%= qs({ actor_id: '' }) %>" title="Hapus filter user"><i class="bi bi-person"></i><%= selectedUser ? selectedUser.name : '#' + filters.actor_id %><i class="bi bi-x"></i></a>
+        <% } %>
+        <% if (filters.action) { %>
+          <a class="km-logs-tag" href="<%= qs({ action: '' }) %>" title="Hapus filter aktivitas"><i class="bi bi-search"></i>“<%= filters.action %>”<i class="bi bi-x"></i></a>
+        <% } %>
+      </div>
+    <% } %>
   </div>
 
   <div class="km-card km-card--flush">
+    <div class="km-users-toolbar">
+      <div>
+        <h5 class="km-users-toolbar__title">Riwayat Aktivitas</h5>
+        <div class="km-users-toolbar__sub"><%= pagination.total.toLocaleString('id-ID') %> log<%= hasFilter ? ' sesuai filter' : '' %><% if (pagination.totalPages > 1) { %> · halaman <%= pagination.page %> dari <%= pagination.totalPages %><% } %></div>
+      </div>
+    </div>
     <div class="table-responsive">
-      <table class="table table-hover align-middle mb-0 km-tenant-table">
+      <table class="table table-hover align-middle mb-0 km-tenant-table km-logs-table">
         <thead>
           <tr>
-            <th>Waktu</th>
-            <th>User</th>
+            <th>Jam</th>
+            <th class="d-none d-sm-table-cell">User</th>
             <th>Aktivitas</th>
-            <th>Tenant</th>
+            <th class="d-none d-md-table-cell">Tenant</th>
             <th class="d-none d-xl-table-cell">IP</th>
             <th class="text-end">Detail</th>
           </tr>
         </thead>
         <tbody>
           <% if (!logs.length) { %>
-            <tr><td colspan="6" class="text-center py-4 text-muted">Belum ada log aktivitas.</td></tr>
+            <tr><td colspan="6" class="km-users-empty">
+              <i class="bi <%= hasFilter ? 'bi-search' : 'bi-journal' %>"></i>
+              <div><%= hasFilter ? 'Tidak ada log yang cocok dengan filter.' : 'Belum ada log aktivitas.' %></div>
+              <% if (hasFilter) { %><a href="/management/settings/activity-logs" class="btn btn-sm btn-outline-secondary mt-2">Reset filter</a><% } %>
+            </td></tr>
           <% } %>
-          <% logs.forEach(function(log) { %>
+          <% logs.forEach(function(log) {
+               const logAt = parseLocal(log.created_at);
+               const dayIso = String(log.created_at || '').slice(0, 10);
+               const actorName = log.actor_name || log.actor_type || '—';
+               const t = actionTone(log.action);
+          %>
+            <% if (dayIso !== lastDay) { lastDay = dayIso; %>
+              <tr class="km-logs-day"><td colspan="6"><i class="bi bi-calendar3"></i><%= dayLabel(dayIso) %></td></tr>
+            <% } %>
             <tr>
-              <% const logAt = new Date(log.created_at); const actorName = log.actor_name || log.actor_type || '—'; %>
-              <td class="text-nowrap">
-                <div class="fw-semibold small"><%= logAt.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) %></div>
-                <div class="small text-muted"><%= logAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) %></div>
+              <td class="text-nowrap km-logs-time">
+                <%= logAt ? logAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '—' %><% if (logAt) { %><small>.<%= pad2(logAt.getSeconds()) %></small><% } %>
               </td>
-              <td>
+              <td class="d-none d-sm-table-cell">
                 <div class="km-set-user">
-                  <span class="km-set-avatar"><%= String(actorName).trim().charAt(0).toUpperCase() %></span>
-                  <div class="lh-sm">
+                  <span class="km-set-avatar km-ava-<%= log.actor_name ? avatarTone(actorName) : 'off' %>"><%= String(actorName).trim().charAt(0).toUpperCase() %></span>
+                  <div class="lh-sm km-users-ident">
                     <div class="fw-semibold small"><%= actorName %></div>
-                    <% if (log.actor_email) { %><small class="text-muted"><%= log.actor_email %></small><% } %>
+                    <% if (log.actor_email) { %><small class="text-muted d-none d-lg-block"><%= log.actor_email %></small><% } %>
                   </div>
                 </div>
               </td>
-              <td><span class="badge bg-light text-dark border"><%= formatActionLabel(log.action) %></span></td>
-              <td class="small"><%= log.tenant_name || (log.tenant_id ? '#' + log.tenant_id : '—') %></td>
+              <td>
+                <span class="km-logs-badge km-logs-badge--<%= t.tone %>"><i class="bi <%= t.icon %>"></i><%= formatActionLabel(log.action) %></span>
+                <div class="km-logs-tenant-sm d-sm-none"><i class="bi bi-person"></i><%= actorName %></div>
+                <% if (log.tenant_name || log.tenant_id) { %><div class="km-logs-tenant-sm d-md-none"><i class="bi bi-buildings"></i><%= log.tenant_name || '#' + log.tenant_id %></div><% } %>
+              </td>
+              <td class="small d-none d-md-table-cell"><%= log.tenant_name || (log.tenant_id ? '#' + log.tenant_id : '—') %></td>
               <td class="small text-muted d-none d-xl-table-cell"><code><%= log.ip_address || '—' %></code></td>
               <td class="text-end">
-                <button type="button" class="btn btn-sm btn-outline-primary btn-log-detail" data-log-id="<%= log.id %>">
+                <button type="button" class="btn btn-sm btn-outline-primary btn-log-detail km-logs-detail-btn" data-log-id="<%= log.id %>" title="Lihat detail" aria-label="Lihat detail">
                   <i class="bi bi-eye"></i>
                 </button>
               </td>
@@ -84,15 +258,23 @@
       </table>
     </div>
     <% if (pagination.totalPages > 1) { %>
-    <div class="d-flex justify-content-between align-items-center p-3 border-top">
-      <small class="text-muted">Total <%= pagination.total %> log</small>
-      <nav>
+    <div class="km-logs-pager">
+      <small class="text-muted">Menampilkan <%= ((pagination.page - 1) * 30 + 1).toLocaleString('id-ID') %>–<%= Math.min(pagination.page * 30, pagination.total).toLocaleString('id-ID') %> dari <%= pagination.total.toLocaleString('id-ID') %> log</small>
+      <nav aria-label="Halaman log">
         <ul class="pagination pagination-sm mb-0">
-          <% for (let p = 1; p <= pagination.totalPages; p++) { %>
-            <li class="page-item <%= p === pagination.page ? 'active' : '' %>">
-              <a class="page-link" href="?page=<%= p %>&action=<%= encodeURIComponent(filters.action) %>&actor_id=<%= filters.actor_id %>&from=<%= filters.from %>&to=<%= filters.to %>"><%= p %></a>
-            </li>
-          <% } %>
+          <li class="page-item <%= pagination.page <= 1 ? 'disabled' : '' %>">
+            <a class="page-link" href="<%= qs({ page: pagination.page - 1 }) %>" aria-label="Sebelumnya"><i class="bi bi-chevron-left"></i></a>
+          </li>
+          <% pageWindow.forEach(function (p) { %>
+            <% if (p === '…') { %>
+              <li class="page-item disabled"><span class="page-link">…</span></li>
+            <% } else { %>
+              <li class="page-item <%= p === pagination.page ? 'active' : '' %>"><a class="page-link" href="<%= qs({ page: p }) %>"><%= p %></a></li>
+            <% } %>
+          <% }); %>
+          <li class="page-item <%= pagination.page >= pagination.totalPages ? 'disabled' : '' %>">
+            <a class="page-link" href="<%= qs({ page: pagination.page + 1 }) %>" aria-label="Berikutnya"><i class="bi bi-chevron-right"></i></a>
+          </li>
         </ul>
       </nav>
     </div>
@@ -100,12 +282,18 @@
   </div>
 </main>
 
-<div class="modal fade km-modal" id="logDetailModal" tabindex="-1">
+<div class="modal fade km-modal km-users-modal" id="logDetailModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered modal-lg">
     <div class="modal-content km-package-modal">
       <div class="modal-header km-package-modal__header">
-        <h5 class="modal-title mb-0">Detail Aktivitas</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        <div class="km-users-modal-head">
+          <span class="km-users-modal-icon km-tone-blue"><i class="bi bi-journal-text"></i></span>
+          <div>
+            <h5 class="modal-title mb-0">Detail Aktivitas</h5>
+            <div class="km-users-modal-sub" id="logDetailSub">&nbsp;</div>
+          </div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
       </div>
       <div class="modal-body km-package-modal__body" id="logDetailBody">
         <div class="text-center py-4 text-muted">Memuat...</div>
@@ -118,34 +306,85 @@
 (function () {
   var modal = document.getElementById('logDetailModal');
   var body = document.getElementById('logDetailBody');
+  var sub = document.getElementById('logDetailSub');
   if (!modal || !body) return;
+
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function fmtTime(v) {
+    var d = new Date(String(v || '').replace(' ', 'T'));
+    if (isNaN(d.getTime())) return esc(v || '—');
+    return d.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) +
+      ', ' + d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+  function renderDetails(obj) {
+    if (!obj || typeof obj !== 'object') return '<span class="text-muted">Tidak ada detail tambahan</span>';
+    var keys = Object.keys(obj);
+    if (!keys.length) return '<span class="text-muted">Tidak ada detail tambahan</span>';
+    var flat = keys.every(function (k) { return obj[k] === null || typeof obj[k] !== 'object'; });
+    if (!flat) return '<pre class="km-log-detail-json mb-0">' + esc(JSON.stringify(obj, null, 2)) + '</pre>';
+    return '<div class="km-logs-kv">' + keys.map(function (k) {
+      var v = obj[k];
+      var val = v === true ? 'Ya' : v === false ? 'Tidak' : (v === null || v === '' ? '—' : v);
+      return '<div class="km-logs-kv__row"><span>' + esc(k.replace(/_/g, ' ')) + '</span><code>' + esc(val) + '</code></div>';
+    }).join('') + '</div>';
+  }
 
   document.querySelectorAll('.btn-log-detail').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var id = btn.getAttribute('data-log-id');
-      body.innerHTML = '<div class="text-center py-4 text-muted">Memuat...</div>';
+      body.innerHTML = '<div class="text-center py-4 text-muted"><span class="spinner-border spinner-border-sm me-2"></span>Memuat...</div>';
+      sub.textContent = 'Log #' + id;
       bootstrap.Modal.getOrCreateInstance(modal).show();
-      fetch('/management/settings/activity-logs/' + id)
+      fetch('/management/settings/activity-logs/' + encodeURIComponent(id))
         .then(function (r) { return r.json(); })
         .then(function (data) {
           if (!data.success) throw new Error(data.message || 'Gagal memuat');
           var log = data.log;
-          var details = log.details_parsed
-            ? '<pre class="km-log-detail-json mb-0">' + JSON.stringify(log.details_parsed, null, 2) + '</pre>'
-            : '<span class="text-muted">Tidak ada detail tambahan</span>';
+          sub.textContent = log.action_label || log.action;
+          var user = esc(log.actor_name || log.actor_type || '—') + (log.actor_email ? ' <span class="text-muted">&lt;' + esc(log.actor_email) + '&gt;</span>' : '');
           body.innerHTML =
             '<dl class="row km-log-detail-dl mb-3">' +
-            '<dt class="col-sm-3">Waktu</dt><dd class="col-sm-9">' + new Date(log.created_at).toLocaleString('id-ID') + '</dd>' +
-            '<dt class="col-sm-3">User</dt><dd class="col-sm-9">' + (log.actor_name || '—') + ' &lt;' + (log.actor_email || '') + '&gt;</dd>' +
-            '<dt class="col-sm-3">Aktivitas</dt><dd class="col-sm-9">' + (log.action_label || log.action) + '</dd>' +
-            '<dt class="col-sm-3">Tenant</dt><dd class="col-sm-9">' + (log.tenant_name || '—') + '</dd>' +
-            '<dt class="col-sm-3">IP</dt><dd class="col-sm-9"><code>' + (log.ip_address || '—') + '</code></dd>' +
-            '</dl><h6 class="fw-semibold mb-2">Detail</h6>' + details;
+            '<dt class="col-sm-3">Waktu</dt><dd class="col-sm-9">' + fmtTime(log.created_at) + '</dd>' +
+            '<dt class="col-sm-3">User</dt><dd class="col-sm-9">' + user + '</dd>' +
+            '<dt class="col-sm-3">Aktivitas</dt><dd class="col-sm-9">' + esc(log.action_label || log.action) + ' <code class="ms-1 small">' + esc(log.action) + '</code></dd>' +
+            '<dt class="col-sm-3">Tenant</dt><dd class="col-sm-9">' + esc(log.tenant_name || (log.tenant_id ? '#' + log.tenant_id : '—')) + '</dd>' +
+            '<dt class="col-sm-3">IP</dt><dd class="col-sm-9"><code>' + esc(log.ip_address || '—') + '</code></dd>' +
+            '</dl><h6 class="fw-semibold mb-2">Detail</h6>' + renderDetails(log.details_parsed);
         })
         .catch(function (err) {
-          body.innerHTML = '<div class="alert alert-danger mb-0">' + err.message + '</div>';
+          body.innerHTML = '<div class="alert alert-danger mb-0">' + esc(err.message) + '</div>';
         });
     });
+  });
+
+  var from = document.querySelector('input[name="from"]');
+  var to = document.querySelector('input[name="to"]');
+  if (from && to) {
+    from.addEventListener('change', function () { to.min = from.value || ''; });
+    to.addEventListener('change', function () { from.max = to.value || to.getAttribute('max') || ''; });
+    if (from.value) to.min = from.value;
+  }
+
+  document.querySelectorAll('.km-date-id').forEach(function (wrap) {
+    var input = wrap.querySelector('input');
+    var text = wrap.querySelector('.km-date-id__text');
+    function sync() {
+      var d = input.value ? new Date(input.value + 'T00:00:00') : null;
+      text.textContent = d && !isNaN(d.getTime())
+        ? d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
+        : 'Pilih tanggal';
+      wrap.classList.toggle('has-value', !!input.value);
+    }
+    input.addEventListener('change', sync);
+    input.addEventListener('input', sync);
+    input.addEventListener('click', function () {
+      if (typeof input.showPicker === 'function') { try { input.showPicker(); } catch (e) {} }
+    });
+    sync();
   });
 })();
 </script>

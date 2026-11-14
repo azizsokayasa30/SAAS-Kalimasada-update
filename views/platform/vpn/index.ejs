@@ -1,13 +1,24 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
-<main class="km-main km-set">
-  <div class="km-topbar">
-    <div>
-      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-shield-lock"></i></span>VPN Server</h2>
-    </div>
-  </div>
-
-  <%- include('_nav', { vpnSection }) %>
+<main class="km-main km-set km-infra km-infra--vpn">
+  <%
+    const heroRt = runtime || {};
+    const heroL2 = heroRt.l2tp || {};
+    const heroEndpoint = heroRt.publicEndpoint || server.public_endpoint;
+  %>
+  <%- include('../partials/infra-hero', {
+    tab: 'vpn',
+    icon: 'bi-shield-lock',
+    heading: 'VPN Server',
+    desc: 'Atur WireGuard dan L2TP/IPsec yang menghubungkan router tenant ke server billing.',
+    chips: [
+      heroRt.running ? { tone: 'ok', dot: true, label: 'WireGuard running' } : { tone: 'bad', dot: true, label: 'WireGuard stopped' },
+      (heroL2.xl2tpdActive && heroL2.strongswanActive)
+        ? { tone: 'ok', dot: true, label: 'L2TP running' }
+        : (heroL2.enabled ? { tone: 'warn', dot: true, label: 'L2TP partial' } : { tone: 'muted', dot: true, label: 'L2TP off' }),
+      { tone: 'info', icon: 'bi-globe2', label: heroEndpoint || 'Endpoint belum diatur' }
+    ]
+  }) %>
 
   <% if (flash && flash.success === 'saved') { %><div class="alert alert-success">Pengaturan VPN berhasil disimpan.</div><% } %>
   <% if (flash && flash.success === 'keys') { %><div class="alert alert-success">Keypair WireGuard berhasil digenerate.</div><% } %>
@@ -37,44 +48,42 @@
 
     <div id="vpnRestartAlert" class="alert d-none mb-3" role="alert"></div>
 
-    <div class="row g-3 mb-3">
-      <div class="col-md-3 col-6">
-        <div class="km-vpn-mon h-100">
+    <div class="km-infra-mon-wrap">
+      <div class="km-infra-mon-grid">
+        <div class="km-vpn-mon">
           <div class="km-vpn-mon__label">WireGuard</div>
-          <div class="fs-5 fw-semibold" id="monWgState">
+          <div class="km-vpn-mon__value" id="monWgState">
             <% if (rt.running) { %>
               <span class="badge bg-success">Running</span>
             <% } else { %>
               <span class="badge bg-danger">Stopped</span>
             <% } %>
           </div>
-          <div class="small text-muted mt-1"><span id="monWgUnit"><%= (rsd.wireguard && rsd.wireguard.activeState) || '—' %></span> · <code id="monIface"><%= rt.interfaceName || server.interface_name || 'wg0' %></code></div>
+          <div class="km-vpn-mon__meta">
+            <span class="km-vpn-mon__kv">Unit <b id="monWgUnit"><%= (rsd.wireguard && rsd.wireguard.activeState) || '—' %></b></span>
+            <span class="km-vpn-mon__kv">Iface <b id="monIface"><%= rt.interfaceName || server.interface_name || 'wg0' %></b></span>
+          </div>
         </div>
-      </div>
-      <div class="col-md-3 col-6">
-        <div class="km-vpn-mon h-100">
+        <div class="km-vpn-mon">
           <div class="km-vpn-mon__label">Peer Online</div>
-          <div class="fs-5 fw-semibold" id="monPeerOnline"><%= rp.wireguardOnline != null ? rp.wireguardOnline : '—' %></div>
-          <div class="small text-muted mt-1" id="monPeerBreakdown">
-            stale <span id="monPeerStale"><%= rp.wireguardStale != null ? rp.wireguardStale : 0 %></span>
-            · offline <span id="monPeerOffline"><%= rp.wireguardOffline != null ? rp.wireguardOffline : 0 %></span>
-            · aktif <span id="monPeerActive"><%= rp.wireguardActive != null ? rp.wireguardActive : 0 %></span>
+          <div class="km-vpn-mon__value" id="monPeerOnline"><%= rp.wireguardOnline != null ? rp.wireguardOnline : '—' %></div>
+          <div class="km-vpn-mon__meta" id="monPeerBreakdown">
+            <span class="km-vpn-mon__kv">Stale <b id="monPeerStale"><%= rp.wireguardStale != null ? rp.wireguardStale : 0 %></b></span>
+            <span class="km-vpn-mon__kv">Offline <b id="monPeerOffline"><%= rp.wireguardOffline != null ? rp.wireguardOffline : 0 %></b></span>
+            <span class="km-vpn-mon__kv">Aktif <b id="monPeerActive"><%= rp.wireguardActive != null ? rp.wireguardActive : 0 %></b></span>
           </div>
         </div>
-      </div>
-      <div class="col-md-3 col-6">
-        <div class="km-vpn-mon h-100">
+        <div class="km-vpn-mon">
           <div class="km-vpn-mon__label">Transfer</div>
-          <div class="fs-6 fw-semibold" id="monTransfer">↓ <%= rtx.rxLabel || '—' %> / ↑ <%= rtx.txLabel || '—' %></div>
-          <div class="small text-muted mt-1">Port <code id="monPort"><%= rt.listenPort || server.listen_port || 51820 %></code>
-            <span id="monPortBadge" class="badge <%= rt.portListening ? 'bg-success' : 'bg-secondary' %> ms-1"><%= rt.portListening ? 'listen' : 'n/a' %></span>
+          <div class="km-vpn-mon__value" id="monTransfer">↓ <%= rtx.rxLabel || '—' %> / ↑ <%= rtx.txLabel || '—' %></div>
+          <div class="km-vpn-mon__meta">
+            <span class="km-vpn-mon__kv">Port <b id="monPort"><%= rt.listenPort || server.listen_port || 51820 %></b></span>
+            <span id="monPortBadge" class="badge <%= rt.portListening ? 'bg-success' : 'bg-secondary' %>"><%= rt.portListening ? 'listen' : 'n/a' %></span>
           </div>
         </div>
-      </div>
-      <div class="col-md-3 col-6">
-        <div class="km-vpn-mon h-100">
+        <div class="km-vpn-mon">
           <div class="km-vpn-mon__label">L2TP/IPsec</div>
-          <div class="fs-6 fw-semibold" id="monL2tpState">
+          <div class="km-vpn-mon__value" id="monL2tpState">
             <% if (rl2.xl2tpdActive && rl2.strongswanActive) { %>
               <span class="badge bg-success">Running</span>
             <% } else if (rl2.enabled) { %>
@@ -83,22 +92,22 @@
               <span class="badge bg-secondary">Off</span>
             <% } %>
           </div>
-          <div class="small text-muted mt-1" id="monL2tpDetail">
-            xl2tpd <span id="monXl2tp"><%= rl2.xl2tpdActive ? 'up' : 'down' %></span>
-            · ipsec <span id="monIpsec"><%= rl2.strongswanActive ? 'up' : 'down' %></span>
-            · peer <span id="monL2tpPeers"><%= rp.l2tpActive != null ? rp.l2tpActive : 0 %></span>
+          <div class="km-vpn-mon__meta" id="monL2tpDetail">
+            <span class="km-vpn-mon__kv">xl2tpd <b id="monXl2tp"><%= rl2.xl2tpdActive ? 'up' : 'down' %></b></span>
+            <span class="km-vpn-mon__kv">IPsec <b id="monIpsec"><%= rl2.strongswanActive ? 'up' : 'down' %></b></span>
+            <span class="km-vpn-mon__kv">Peer <b id="monL2tpPeers"><%= rp.l2tpActive != null ? rp.l2tpActive : 0 %></b></span>
           </div>
         </div>
       </div>
     </div>
 
-    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 small text-muted">
-      <div>
-        Endpoint <code id="monEndpoint"><%= rt.publicEndpoint || server.public_endpoint || '—' %></code>
-        · Tunnel <code id="monTunnel"><%= rt.tunnelAddress || server.tunnel_address || '—' %></code>
-        · WAN <code id="monWan"><%= rt.wanInterface || server.wan_interface || '—' %></code>
+    <div class="km-infra-mon-foot">
+      <div class="km-infra-mon-foot__items">
+        <span>Endpoint <code id="monEndpoint"><%= rt.publicEndpoint || server.public_endpoint || '—' %></code></span>
+        <span>Tunnel <code id="monTunnel"><%= rt.tunnelAddress || server.tunnel_address || '—' %></code></span>
+        <span>WAN <code id="monWan"><%= rt.wanInterface || server.wan_interface || '—' %></code></span>
       </div>
-      <div id="monCheckedAt">Dicek: <%= rt.checkedAt ? new Date(rt.checkedAt).toLocaleString('id-ID') : '—' %></div>
+      <span id="monCheckedAt">Dicek: <%= rt.checkedAt ? new Date(rt.checkedAt).toLocaleString('id-ID') : '—' %></span>
     </div>
   </div>
 
@@ -203,9 +212,10 @@
       </div>
     </div>
 
-    <div class="mb-4 d-flex justify-content-end">
+    <div class="km-infra-savebar">
+      <span class="km-infra-savebar__text"><i class="bi bi-info-circle"></i> Perubahan pengaturan Umum, WireGuard, dan L2TP disimpan sekaligus.</span>
       <button type="submit" class="btn btn-km-primary px-4">
-        <i class="bi bi-check-lg me-1"></i> Simpan Pengaturan
+        <i class="bi bi-check-lg"></i> Simpan Pengaturan
       </button>
     </div>
   </form>
@@ -214,23 +224,29 @@
     <div class="col-lg-6">
       <div class="km-card h-100">
         <div class="km-vpn-card__head">
-          <h5><i class="bi bi-terminal"></i> Script Setup VPS — WireGuard <span class="badge text-bg-light border"><%= (wgPeers || []).filter(function(p){ return p.is_active; }).length %> peer</span></h5>
+          <h5><i class="bi bi-terminal"></i> Script WireGuard <span class="km-infra-pill km-infra-pill--info"><%= (wgPeers || []).filter(function(p){ return p.is_active; }).length %> peer</span></h5>
           <a href="/management/vpn/vps-script" class="btn btn-sm btn-km-primary">
             <i class="bi bi-download me-1"></i> Download .sh
           </a>
         </div>
-        <pre class="bg-dark text-light p-3 rounded small mb-0" style="max-height: 280px; overflow: auto;"><code><%= vpsScript %></code></pre>
+        <div class="km-infra-term">
+          <div class="km-infra-term__bar"><i></i><i></i><i></i>setup-wireguard.sh</div>
+          <pre><code><%= vpsScript %></code></pre>
+        </div>
       </div>
     </div>
     <div class="col-lg-6">
       <div class="km-card h-100">
         <div class="km-vpn-card__head">
-          <h5><i class="bi bi-terminal"></i> Script Setup VPS — L2TP/IPsec <span class="badge text-bg-light border"><%= (l2tpPeers || []).filter(function(p){ return p.is_active; }).length %> peer</span></h5>
+          <h5><i class="bi bi-terminal"></i> Script L2TP/IPsec <span class="km-infra-pill km-infra-pill--info"><%= (l2tpPeers || []).filter(function(p){ return p.is_active; }).length %> peer</span></h5>
           <a href="/management/vpn/vps-l2tp-script" class="btn btn-sm btn-km-primary">
             <i class="bi bi-download me-1"></i> Download .sh
           </a>
         </div>
-        <pre class="bg-dark text-light p-3 rounded small mb-0" style="max-height: 280px; overflow: auto;"><code><%= vpsL2tpScript %></code></pre>
+        <div class="km-infra-term">
+          <div class="km-infra-term__bar"><i></i><i></i><i></i>setup-l2tp.sh</div>
+          <pre><code><%= vpsL2tpScript %></code></pre>
+        </div>
       </div>
     </div>
   </div>

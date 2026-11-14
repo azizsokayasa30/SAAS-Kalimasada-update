@@ -1,22 +1,45 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
 <%
+  const tenantIds = new Set();
+  const monthly = Array.from({ length: 12 }, function () { return { tx: 0, gross: 0, tax: 0, bhp: 0, fee: 0, net: 0 }; });
   const totals = breakdown.reduce(function (acc, r) {
-    acc.tx += Number(r.transaction_count) || 0;
-    acc.gross += Number(r.gross) || 0;
-    acc.tax += Number(r.tax) || 0;
-    acc.bhp += Number(r.bhp_uso_amount) || 0;
-    acc.fee += Number(r.management_fee_amount) || 0;
-    acc.net += Number(r.net) || 0;
+    const row = {
+      tx: Number(r.transaction_count) || 0,
+      gross: Number(r.gross) || 0,
+      tax: Number(r.tax) || 0,
+      bhp: Number(r.bhp_uso_amount) || 0,
+      fee: Number(r.management_fee_amount) || 0,
+      net: Number(r.net) || 0
+    };
+    const m = Number(String(r.period_month || '').split('-')[1]);
+    Object.keys(row).forEach(function (k) {
+      acc[k] += row[k];
+      if (m >= 1 && m <= 12) monthly[m - 1][k] += row[k];
+    });
+    tenantIds.add(r.tenant_id);
     return acc;
   }, { tx: 0, gross: 0, tax: 0, bhp: 0, fee: 0, net: 0 });
   const isFixed = settings.management_fee_type === 'fixed';
   const feeLabel = isFixed ? formatRupiah(settings.management_fee_value) + ' / tenant per bulan' : settings.management_fee_value + '%';
+  const deductions = totals.tax + totals.bhp + totals.fee;
+  const share = function (v, base) { return base > 0 ? Math.max(0, v) / base * 100 : 0; };
+  const fmtPct = function (v) { return share(v, totals.gross).toLocaleString('id-ID', { maximumFractionDigits: 1 }) + '%'; };
+  const parts = [
+    { key: 'net', label: 'Net Tenant', icon: 'bi-wallet2', value: totals.net, meta: 'Diterima tenant' },
+    { key: 'tax', label: 'PPN', icon: 'bi-percent', value: totals.tax, meta: 'Default ' + settings.default_tax_rate + '%' },
+    { key: 'bhp', label: 'BHP USO', icon: 'bi-broadcast', value: totals.bhp, meta: 'Rate ' + settings.bhp_uso_rate + '%' },
+    { key: 'fee', label: 'Management Fee', icon: 'bi-briefcase', value: totals.fee, meta: isFixed ? feeLabel : 'Rate ' + settings.management_fee_value + '%' }
+  ];
+  const maxGross = Math.max.apply(null, monthly.map(function (m) { return m.gross; }));
+  const now = new Date();
+  const nowMonth = Number(year) === now.getFullYear() ? now.getMonth() : -1;
 %>
 <main class="km-main km-inv-page km-fin-page km-fin-page--tax">
   <div class="km-topbar">
     <div>
-      <h2>Pajak &amp; Fee Management</h2>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-percent"></i></span>Pajak &amp; Fee Management</h2>
+      <p class="km-subtitle">Pantau potongan PPN, BHP USO, dan management fee dari pembayaran gateway tenant.</p>
     </div>
   </div>
 
@@ -26,99 +49,136 @@
   <% if (flash && flash.success === 'restored') { %><div class="alert alert-success"><i class="bi bi-arrow-counterclockwise me-1"></i> Backup finance berhasil di-restore.</div><% } %>
   <% if (flash && flash.error) { %><div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-1"></i> <%= flash.error %></div><% } %>
 
-  <form method="POST" action="/management/finance/tax-fees" class="km-card km-card--flush mb-3">
-    <div class="km-fin-card-head">
-      <div class="km-fin-card-head__title">
-        <span class="km-fin-icon"><i class="bi bi-sliders"></i></span>
-        <div>
-          <h5>Pengaturan Rate Global</h5>
-          <p>Berlaku untuk perhitungan pajak dan fee di semua tenant.</p>
-        </div>
-      </div>
-    </div>
-    <div class="km-fin-card-body">
-      <div class="km-fin-settings">
-        <div class="km-fin-setting">
-          <label for="bhpUso"><i class="bi bi-broadcast"></i> BHP USO</label>
-          <small>Kontribusi BHP Telekomunikasi &amp; USO</small>
-          <div class="input-group input-group-sm">
-            <input type="number" step="0.01" min="0" id="bhpUso" name="bhp_uso_rate" class="form-control" value="<%= settings.bhp_uso_rate %>" required>
-            <span class="input-group-text">%</span>
-          </div>
-        </div>
-        <div class="km-fin-setting">
-          <label for="taxRate"><i class="bi bi-percent"></i> Default PPN</label>
-          <small>Dipakai bila invoice tidak punya tarif pajak</small>
-          <div class="input-group input-group-sm">
-            <input type="number" step="0.01" min="0" id="taxRate" name="default_tax_rate" class="form-control" value="<%= settings.default_tax_rate %>" required>
-            <span class="input-group-text">%</span>
-          </div>
-        </div>
-        <div class="km-fin-setting">
-          <label for="feeType"><i class="bi bi-diagram-3"></i> Tipe Management Fee</label>
-          <small>Persentase dari gross atau nominal tetap</small>
-          <select id="feeType" name="management_fee_type" class="form-select form-select-sm">
-            <option value="percent" <%= !isFixed ? 'selected' : '' %>>Persen (%)</option>
-            <option value="fixed" <%= isFixed ? 'selected' : '' %>>Nominal Tetap (Rp)</option>
-          </select>
-        </div>
-        <div class="km-fin-setting">
-          <label for="feeValue"><i class="bi bi-cash-stack"></i> Nilai Management Fee</label>
-          <small>Saat ini: <%= feeLabel %></small>
-          <div class="input-group input-group-sm">
-            <span class="input-group-text js-fee-prefix <%= isFixed ? '' : 'd-none' %>">Rp</span>
-            <input type="number" step="0.01" min="0" id="feeValue" name="management_fee_value" class="form-control" value="<%= settings.management_fee_value %>" required>
-            <span class="input-group-text js-fee-suffix <%= isFixed ? 'd-none' : '' %>">%</span>
-          </div>
-        </div>
-      </div>
-      <div class="km-fin-settings__foot">
-        <button type="submit" class="btn btn-km-primary btn-sm"><i class="bi bi-check-lg"></i> Simpan Pengaturan</button>
-      </div>
-    </div>
-  </form>
-
   <%- include('_period-filter', { filters: { year: year }, yearOnly: true, extraSelects: [] }) %>
 
-  <div class="km-inv-stats mb-3">
-    <div class="km-inv-stat km-inv-stat--blue">
-      <span class="km-inv-stat__icon"><i class="bi bi-cash-coin"></i></span>
-      <div class="km-inv-stat__body">
-        <div class="km-inv-stat__label">Total Gross</div>
-        <div class="km-inv-stat__value"><%= formatRupiah(totals.gross) %></div>
-        <div class="km-inv-stat__meta"><%= totals.tx %> transaksi · Tahun <%= year %></div>
+  <div class="km-tf-layout mb-3">
+    <section class="km-card km-tf-overview">
+      <header class="km-tf-head">
+        <div class="km-tf-head__main">
+          <span class="km-tf-eyebrow"><i class="bi bi-pie-chart"></i> Distribusi Pendapatan <%= year %></span>
+          <div class="km-tf-gross"><%= formatRupiah(totals.gross) %></div>
+          <div class="km-tf-gross-meta">Total gross dari <b><%= totals.tx %></b> transaksi · <b><%= tenantIds.size %></b> tenant</div>
+        </div>
+        <div class="km-tf-deduct">
+          <small>Total potongan</small>
+          <strong><%= formatRupiah(deductions) %></strong>
+          <span><%= fmtPct(deductions) %> dari gross</span>
+        </div>
+      </header>
+
+      <div class="km-tf-bar <%= totals.gross > 0 ? '' : 'is-empty' %>" role="img" aria-label="Komposisi gross: <%= parts.map(function (p) { return p.label + ' ' + fmtPct(p.value); }).join(', ') %>">
+        <% if (totals.gross > 0) { parts.forEach(function (p) { if (p.value > 0) { %>
+          <span class="km-tf-bar__seg km-tf--<%= p.key %>" style="flex-grow: <%= p.value %>" title="<%= p.label %>: <%= formatRupiah(p.value) %> (<%= fmtPct(p.value) %>)"></span>
+        <% } }); } %>
       </div>
-    </div>
-    <div class="km-inv-stat km-inv-stat--violet">
-      <span class="km-inv-stat__icon"><i class="bi bi-percent"></i></span>
-      <div class="km-inv-stat__body">
-        <div class="km-inv-stat__label">Total PPN</div>
-        <div class="km-inv-stat__value"><%= formatRupiah(totals.tax) %></div>
-        <div class="km-inv-stat__meta">Tarif default <%= settings.default_tax_rate %>%</div>
+
+      <div class="km-tf-legend">
+        <% parts.forEach(function (p) { %>
+          <div class="km-tf-legend__item km-tf--<%= p.key %>">
+            <span class="km-tf-legend__icon"><i class="bi <%= p.icon %>"></i></span>
+            <div class="km-tf-legend__body">
+              <small><%= p.label %></small>
+              <strong><%= formatRupiah(p.value) %></strong>
+              <span><b><%= fmtPct(p.value) %></b> · <%= p.meta %></span>
+            </div>
+          </div>
+        <% }); %>
       </div>
-    </div>
-    <div class="km-inv-stat km-inv-stat--amber">
-      <span class="km-inv-stat__icon"><i class="bi bi-broadcast"></i></span>
-      <div class="km-inv-stat__body">
-        <div class="km-inv-stat__label">Total BHP USO</div>
-        <div class="km-inv-stat__value"><%= formatRupiah(totals.bhp) %></div>
-        <div class="km-inv-stat__meta">Rate <%= settings.bhp_uso_rate %>%</div>
+
+      <div class="km-tf-trend">
+        <div class="km-tf-trend__head">
+          <h6>Tren Bulanan</h6>
+          <div class="km-tf-trend__keys">
+            <% parts.forEach(function (p) { %><span><i class="km-tf-dot km-tf--<%= p.key %>"></i><%= p.label %></span><% }); %>
+          </div>
+        </div>
+        <div class="km-tf-chart">
+          <% monthly.forEach(function (m, i) {
+               const h = maxGross > 0 ? Math.max(share(m.gross, maxGross), m.gross > 0 ? 4 : 0) : 0;
+          %>
+            <div class="km-tf-chart__col <%= m.gross > 0 ? '' : 'is-empty' %> <%= i === nowMonth ? 'is-now' : '' %>">
+              <div class="km-tf-chart__track">
+                <% if (m.gross > 0) { %>
+                  <div class="km-tf-chart__bar" style="height: <%= h %>%">
+                    <% parts.forEach(function (p) { const v = Math.max(0, m[p.key]); if (v > 0) { %>
+                      <span class="km-tf--<%= p.key %>" style="flex-grow: <%= v %>"></span>
+                    <% } }); %>
+                  </div>
+                  <div class="km-tf-chart__tip">
+                    <strong><%= fin.MONTHS[i] %> <%= year %></strong>
+                    <span>Gross <b><%= formatRupiah(m.gross) %></b></span>
+                    <% parts.forEach(function (p) { %><span><i class="km-tf-dot km-tf--<%= p.key %>"></i><%= p.label %> <b><%= formatRupiah(m[p.key]) %></b></span><% }); %>
+                  </div>
+                <% } %>
+              </div>
+              <span class="km-tf-chart__label"><%= fin.MONTHS_SHORT[i] %></span>
+            </div>
+          <% }); %>
+        </div>
       </div>
-    </div>
-    <div class="km-inv-stat km-inv-stat--green">
-      <span class="km-inv-stat__icon"><i class="bi bi-wallet2"></i></span>
-      <div class="km-inv-stat__body">
-        <div class="km-inv-stat__label">Total Management Fee</div>
-        <div class="km-inv-stat__value"><%= formatRupiah(totals.fee) %></div>
-        <div class="km-inv-stat__meta"><%= feeLabel %></div>
+    </section>
+
+    <form method="POST" action="/management/finance/tax-fees" class="km-card km-tf-settings">
+      <div class="km-tf-settings__head">
+        <span class="km-tf-settings__icon"><i class="bi bi-sliders"></i></span>
+        <div>
+          <h5>Rate Global</h5>
+          <p>Berlaku untuk perhitungan di semua tenant.</p>
+        </div>
       </div>
-    </div>
+
+      <div class="km-tf-fields">
+        <div class="km-tf-field">
+          <label for="bhpUso">BHP USO <small>Kontribusi BHP Tel &amp; USO</small></label>
+          <div class="km-tf-input">
+            <input type="number" step="0.01" min="0" id="bhpUso" name="bhp_uso_rate" value="<%= settings.bhp_uso_rate %>" required>
+            <span>%</span>
+          </div>
+        </div>
+        <div class="km-tf-field">
+          <label for="taxRate">Default PPN <small>Bila invoice tanpa tarif pajak</small></label>
+          <div class="km-tf-input">
+            <input type="number" step="0.01" min="0" id="taxRate" name="default_tax_rate" value="<%= settings.default_tax_rate %>" required>
+            <span>%</span>
+          </div>
+        </div>
+        <div class="km-tf-field">
+          <label>Management Fee <small class="js-fee-hint"><%= isFixed ? 'Nominal tetap per tenant / bulan' : 'Persentase dari gross' %></small></label>
+          <div class="km-tf-seg" role="radiogroup" aria-label="Tipe management fee">
+            <input type="radio" id="feeTypePercent" name="management_fee_type" value="percent" <%= !isFixed ? 'checked' : '' %>>
+            <label for="feeTypePercent"><i class="bi bi-percent"></i> Persen</label>
+            <input type="radio" id="feeTypeFixed" name="management_fee_type" value="fixed" <%= isFixed ? 'checked' : '' %>>
+            <label for="feeTypeFixed"><i class="bi bi-cash"></i> Nominal</label>
+          </div>
+          <div class="km-tf-input">
+            <span class="km-tf-input__prefix js-fee-prefix <%= isFixed ? '' : 'd-none' %>">Rp</span>
+            <input type="number" step="0.01" min="0" id="feeValue" name="management_fee_value" value="<%= settings.management_fee_value %>" aria-label="Nilai management fee" required>
+            <span class="js-fee-suffix <%= isFixed ? 'd-none' : '' %>">%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="km-tf-sim">
+        <label class="km-tf-sim__head" for="simAmount">
+          <span><i class="bi bi-calculator"></i> Simulasi</span>
+          <span class="km-tf-sim__amount">Rp <input type="number" id="simAmount" min="0" step="1000" value="1000000" inputmode="numeric"></span>
+        </label>
+        <ul class="km-tf-sim__rows">
+          <li><span><i class="km-tf-dot km-tf--tax"></i>PPN (termasuk)</span><b class="js-sim-tax">-</b></li>
+          <li><span><i class="km-tf-dot km-tf--bhp"></i>BHP USO</span><b class="js-sim-bhp">-</b></li>
+          <li><span><i class="km-tf-dot km-tf--fee"></i>Management Fee</span><b class="js-sim-fee">-</b></li>
+          <li class="km-tf-sim__net"><span><i class="km-tf-dot km-tf--net"></i>Net tenant</span><b class="js-sim-net">-</b></li>
+        </ul>
+      </div>
+
+      <button type="submit" class="btn btn-km-primary km-tf-save"><i class="bi bi-check-lg"></i> Simpan Pengaturan</button>
+    </form>
   </div>
 
   <div class="km-card km-card--flush">
     <div class="km-inv-list__head">
       <div>
-        <h5>Rincian Pajak &amp; Fee per Bulan</h5>
+        <h5>Rincian per Bulan &amp; Tenant</h5>
         <p><%= breakdown.length %> baris pada tahun <%= year %></p>
       </div>
       <% if (breakdown.length) { %>
@@ -137,17 +197,17 @@
       </div>
     <% } else { %>
       <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0 km-tenant-table km-inv-table">
+        <table class="table table-hover align-middle mb-0 km-tenant-table km-inv-table km-tf-table">
           <thead>
             <tr>
               <th>Bulan</th>
               <th>Tenant</th>
               <th class="text-end">Transaksi</th>
               <th class="text-end">Gross</th>
-              <th class="text-end">PPN</th>
-              <th class="text-end">BHP USO</th>
-              <th class="text-end">Mgmt Fee</th>
-              <th class="text-end">Net</th>
+              <th class="text-end"><i class="km-tf-dot km-tf--tax"></i>PPN</th>
+              <th class="text-end"><i class="km-tf-dot km-tf--bhp"></i>BHP USO</th>
+              <th class="text-end"><i class="km-tf-dot km-tf--fee"></i>Mgmt Fee</th>
+              <th class="text-end"><i class="km-tf-dot km-tf--net"></i>Net</th>
             </tr>
           </thead>
           <tbody id="taxBody">
@@ -198,17 +258,40 @@
     <% } %>
   </div>
 </main>
-<script src="/js/platform-finance.js?v=1"></script>
+<script src="/js/platform-finance.js?v=3"></script>
 <script>
   (function () {
-    var type = document.getElementById('feeType');
-    var prefix = document.querySelector('.js-fee-prefix');
-    var suffix = document.querySelector('.js-fee-suffix');
-    type.addEventListener('change', function () {
-      var fixed = type.value === 'fixed';
+    var form = document.querySelector('.km-tf-settings');
+    var prefix = form.querySelector('.js-fee-prefix');
+    var suffix = form.querySelector('.js-fee-suffix');
+    var hint = form.querySelector('.js-fee-hint');
+    var num = function (id) { return Math.max(0, Number(document.getElementById(id).value) || 0); };
+    var rupiah = function (v) { return (v < 0 ? '-Rp ' : 'Rp ') + Math.round(Math.abs(v)).toLocaleString('id-ID'); };
+    var out = function (cls, v) { form.querySelector(cls).textContent = rupiah(v); };
+
+    function update() {
+      var fixed = form.querySelector('input[name="management_fee_type"]:checked').value === 'fixed';
       prefix.classList.toggle('d-none', !fixed);
       suffix.classList.toggle('d-none', fixed);
+      hint.textContent = fixed ? 'Nominal tetap per tenant / bulan' : 'Persentase dari gross';
+
+      var amount = num('simAmount');
+      var taxRate = num('taxRate');
+      var tax = amount * taxRate / (100 + taxRate);
+      var bhp = amount * num('bhpUso') / 100;
+      var fee = fixed ? num('feeValue') : amount * num('feeValue') / 100;
+      out('.js-sim-tax', -tax);
+      out('.js-sim-bhp', -bhp);
+      out('.js-sim-fee', -fee);
+      out('.js-sim-net', amount - tax - bhp - fee);
+    }
+
+    document.getElementById('simAmount').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') e.preventDefault();
     });
+    form.addEventListener('input', update);
+    form.addEventListener('change', update);
+    update();
   })();
 </script>
 <%- include('../partials/footer') %>

@@ -47,6 +47,11 @@ function createAreaManagerFieldRouter({
                 await dbRun(
                     'CREATE INDEX IF NOT EXISTS idx_payments_area_manager_id ON payments(area_manager_id)'
                 );
+                try {
+                    await dbRun('ALTER TABLE payments ADD COLUMN collected_by_admin INTEGER');
+                } catch (e) {
+                    if (!/duplicate column/i.test(String(e.message))) throw e;
+                }
                 await dbRun(`CREATE TABLE IF NOT EXISTS area_manager_field_notifications (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     area_manager_id INTEGER NOT NULL,
@@ -95,6 +100,40 @@ function createAreaManagerFieldRouter({
         next();
     }
 
+    /**
+     * Penagih: Manager Area (dibatasi wilayahnya) atau admin utama (semua pelanggan tenant).
+     * Admin ditandai `isAdmin`, tanpa `amId` / `areaIds`.
+     */
+    function requireCollector(req, res, next) {
+        if (req.user && req.user.role === 'admin') {
+            const tenantId = resolveReqTenantId(req);
+            if (tenantId == null) {
+                return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+            }
+            req.am = {
+                isAdmin: true,
+                amId: null,
+                tenantId,
+                areaIds: null,
+                name: String(req.user.name || req.user.username || 'Admin').trim()
+            };
+            return next();
+        }
+        return requireAreaManager(req, res, next);
+    }
+
+    function collectorScopeSql(am, alias) {
+        return am.isAdmin ? '1 = 1' : sqlCustomerScope(alias, am.areaIds);
+    }
+
+    function collectorLabel(am) {
+        return am.isAdmin ? `Admin ${am.name}` : `Manager Area ${am.name}`;
+    }
+
+    function outOfScopeMessage(am) {
+        return am.isAdmin ? 'Pelanggan tidak ditemukan' : 'Pelanggan di luar wilayah Anda';
+    }
+
     async function findCustomerInScope(am, customerId) {
         const id = parseInt(String(customerId), 10);
         if (!Number.isFinite(id) || id <= 0) return null;
@@ -105,7 +144,7 @@ function createAreaManagerFieldRouter({
              FROM customers c
              LEFT JOIN areas ar ON ar.id = c.area_id
              LEFT JOIN packages p ON p.id = c.package_id
-             WHERE c.id = ? AND c.tenant_id = ? AND ${sqlCustomerScope('c', am.areaIds)}`,
+             WHERE c.id = ? AND c.tenant_id = ? AND ${collectorScopeSql(am, 'c')}`,
             [id, am.tenantId]
         );
     }
@@ -140,7 +179,7 @@ function createAreaManagerFieldRouter({
 
     // --- Tagih pelanggan ---
 
-    router.get('/collect/customers', verifyToken, requireAreaManager, async (req, res) => {
+    router.get('/collect/customers', verifyToken, requireCollector, async (req, res) => {
         const am = req.am;
         const page = Math.max(1, parseInt(req.query.page, 10) || 1);
         const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 30));
@@ -149,7 +188,7 @@ function createAreaManagerFieldRouter({
         const period = invoicePeriodFilter(req.query, 'i');
 
         const params = [...(period ? period.params : []), am.tenantId];
-        let where = `c.tenant_id = ? AND ${sqlCustomerScope('c', am.areaIds)}`;
+        let where = `c.tenant_id = ? AND ${collectorScopeSql(am, 'c')}`;
         if (search) {
             const like = `%${search}%`;
             where += ` AND (c.name LIKE ? OR c.phone LIKE ? OR CAST(c.customer_id AS TEXT) LIKE ?
@@ -205,11 +244,11 @@ function createAreaManagerFieldRouter({
         }
     });
 
-    router.get('/collect/customers/:customerId/invoices', verifyToken, requireAreaManager, async (req, res) => {
+    router.get('/collect/customers/:customerId/invoices', verifyToken, requireCollector, async (req, res) => {
         try {
             const customer = await findCustomerInScope(req.am, req.params.customerId);
             if (!customer) {
-                return res.status(403).json({ success: false, message: 'Pelanggan di luar wilayah Anda' });
+                return res.status(403).json({ success: false, message: outOfScopeMessage(req.am) });
             }
             const period = invoicePeriodFilter(req.query, 'i');
             const invoices = await dbAll(
@@ -243,7 +282,7 @@ function createAreaManagerFieldRouter({
         return [...new Set(list.map((v) => parseInt(String(v).trim(), 10)).filter((v) => Number.isFinite(v) && v > 0))];
     }
 
-    function restoreServiceIfSettled(customerId) {
+    function restoreServiceIfSettled(customerId, collectedBy) {
         (async () => {
             const invoices = await billingManager.getInvoicesByCustomer(customerId);
             if ((invoices || []).some((i) => i.status === 'unpaid')) return;
@@ -255,7 +294,7 @@ function createAreaManagerFieldRouter({
             if (fresh) {
                 await serviceSuspension.restoreCustomerService(
                     fresh,
-                    'Pembayaran via Manager Area — tagihan lunas, layanan dipulihkan'
+                    `Pembayaran via ${collectedBy} — tagihan lunas, layanan dipulihkan`
                 );
             }
         })().catch((e) => logger.error('[mobile-area-manager] restore after payment', e));
@@ -278,7 +317,7 @@ function createAreaManagerFieldRouter({
     router.post(
         '/collect/payment',
         verifyToken,
-        requireAreaManager,
+        requireCollector,
         collectorPaymentMulterSingle('payment_proof'),
         async (req, res) => {
             const am = req.am;
@@ -299,7 +338,7 @@ function createAreaManagerFieldRouter({
                 await ensureSchema();
                 const customer = await findCustomerInScope(am, body.customer_id);
                 if (!customer) {
-                    return res.status(403).json({ success: false, message: 'Pelanggan di luar wilayah Anda' });
+                    return res.status(403).json({ success: false, message: outOfScopeMessage(am) });
                 }
                 const invoices = [];
                 for (const id of invoiceIds) {
@@ -320,7 +359,7 @@ function createAreaManagerFieldRouter({
                     return res.status(400).json({ success: false, message: 'Diskon tidak boleh melebihi total tagihan' });
                 }
 
-                const noteParts = [`Diterima oleh Manager Area ${am.name}`];
+                const noteParts = [`Diterima oleh ${collectorLabel(am)}`];
                 if (userNotes) noteParts.push(userNotes);
                 const paymentIds = [];
                 let remainingDiscount = discountTotal;
@@ -339,21 +378,21 @@ function createAreaManagerFieldRouter({
                         notes,
                         discount_amount: disc
                     });
-                    await dbRun('UPDATE payments SET area_manager_id = ?, payment_proof = COALESCE(?, payment_proof) WHERE id = ?', [
-                        am.amId,
-                        paymentIds.length === 0 ? proofPath : null,
-                        payment.id
-                    ]);
+                    await dbRun(
+                        `UPDATE payments SET area_manager_id = ?, collected_by_admin = ?,
+                            payment_proof = COALESCE(?, payment_proof) WHERE id = ?`,
+                        [am.amId, am.isAdmin ? 1 : null, paymentIds.length === 0 ? proofPath : null, payment.id]
+                    );
                     await billingManager.updateInvoiceStatus(inv.id, 'paid', method);
                     paymentIds.push(payment.id);
                 }
 
                 notifyPaymentReceived(paymentIds);
-                restoreServiceIfSettled(customer.id);
+                restoreServiceIfSettled(customer.id, collectorLabel(am));
 
                 res.json({
                     success: true,
-                    message: 'Pembayaran tersimpan atas nama Manager Area',
+                    message: `Pembayaran tersimpan atas nama ${collectorLabel(am)}`,
                     payment_ids: paymentIds,
                     paid_invoice_ids: invoices.map((inv) => inv.id),
                     total_paid: gross - discountTotal
@@ -365,22 +404,23 @@ function createAreaManagerFieldRouter({
         }
     );
 
-    router.get('/collect/history', verifyToken, requireAreaManager, async (req, res) => {
+    router.get('/collect/history', verifyToken, requireCollector, async (req, res) => {
         const am = req.am;
         const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 31));
         try {
             await ensureSchema();
+            const collectorWhere = am.isAdmin ? 'p.collected_by_admin = 1' : 'p.area_manager_id = ?';
             const rows = await dbAll(
                 `SELECT p.id, p.invoice_id, p.amount, p.discount_amount, p.payment_method, p.payment_date, p.notes,
                         i.invoice_number, c.id AS customer_id, c.name AS customer_name, c.phone AS customer_phone
                  FROM payments p
                  JOIN invoices i ON i.id = p.invoice_id
                  LEFT JOIN customers c ON c.id = i.customer_id
-                 WHERE p.area_manager_id = ? AND p.tenant_id = ?
+                 WHERE ${collectorWhere} AND p.tenant_id = ?
                    AND datetime(p.payment_date) >= datetime('now', ?)
                  ORDER BY datetime(p.payment_date) DESC, p.id DESC
                  LIMIT 300`,
-                [am.amId, am.tenantId, `-${days} days`]
+                [...(am.isAdmin ? [] : [am.amId]), am.tenantId, `-${days} days`]
             );
             const today = getLocalTimestamp().slice(0, 10);
             const totals = { count: 0, amount: 0, today_count: 0, today_amount: 0, cash_amount: 0, transfer_amount: 0 };

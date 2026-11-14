@@ -380,35 +380,38 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
       Icons.call_made_rounded,
       Icons.inventory_rounded,
     ];
-    return Row(
-      children: List.generate(labels.length, (index) {
-        final selected = _tab == index;
-        return Expanded(
-          child: Padding(
-            padding: EdgeInsets.only(right: index == labels.length - 1 ? 0 : 8),
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Row(
+        children: List.generate(labels.length, (index) {
+          final selected = _tab == index;
+          final fg = selected ? Colors.white : const Color(0xFF475569);
+          return Expanded(
             child: InkWell(
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(10),
               onTap: () => setState(() => _tab = index),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 180),
-                padding: const EdgeInsets.symmetric(vertical: 12),
+                height: 38,
                 decoration: BoxDecoration(
-                  color: selected ? _navy : Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: selected ? _navy : const Color(0xFFE2E8F0),
-                  ),
+                  color: selected ? _navy : Colors.transparent,
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                child: Column(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(icons[index], color: selected ? Colors.white : _navy),
-                    const SizedBox(height: 4),
+                    Icon(icons[index], size: 17, color: fg),
+                    const SizedBox(width: 6),
                     Text(
                       labels[index],
                       style: TextStyle(
-                        color: selected
-                            ? Colors.white
-                            : const Color(0xFF0F172A),
+                        color: fg,
+                        fontSize: 13.5,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
@@ -416,9 +419,57 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
                 ),
               ),
             ),
+          );
+        }),
+      ),
+    );
+  }
+
+  /// `11 Nov 10:45`; tahun ditampilkan bila bukan tahun ini.
+  String _compactDate(dynamic value) {
+    final raw = value?.toString().trim() ?? '';
+    final parsed = DateTime.tryParse(
+      raw.contains('T') ? raw : raw.replaceFirst(' ', 'T'),
+    );
+    if (parsed == null) return _shortDate(raw);
+    final pattern = parsed.year == DateTime.now().year
+        ? 'dd MMM HH:mm'
+        : 'dd MMM yy HH:mm';
+    return DateFormat(pattern, 'id_ID').format(parsed);
+  }
+
+  /// Daftar rapat dalam satu kartu, dipisah garis tipis.
+  Widget _listCard(List<Widget> rows) {
+    return _Card(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+      child: Column(
+        children: [
+          for (var i = 0; i < rows.length; i++) ...[
+            if (i > 0) const Divider(height: 1, color: Color(0xFFEFF2F6)),
+            rows[i],
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _scanButton(VoidCallback? onPressed, IconData icon) {
+    return SizedBox(
+      width: 46,
+      height: 46,
+      child: IconButton.filled(
+        onPressed: onPressed,
+        style: IconButton.styleFrom(
+          backgroundColor: _navy,
+          foregroundColor: Colors.white,
+          disabledBackgroundColor: const Color(0xFFCBD5E1),
+          disabledForegroundColor: Colors.white70,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
           ),
-        );
-      }),
+        ),
+        icon: Icon(icon, size: 22),
+      ),
     );
   }
 
@@ -437,6 +488,7 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
               const SizedBox(height: 12),
               DropdownButtonFormField<int>(
                 key: const ValueKey('warehouse_inbound_item_dropdown'),
+                isExpanded: true,
                 dropdownColor: Colors.white,
                 style: const TextStyle(
                   color: Color(0xFF0F172A),
@@ -461,6 +513,8 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
                         value: _int(item['id']),
                         child: Text(
                           '${item['name'] ?? '-'}${(item['unit'] ?? '').toString().isEmpty ? '' : ' (${item['unit']})'}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             color: Color(0xFF0F172A),
                             fontWeight: FontWeight.w400,
@@ -472,28 +526,54 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
                 onChanged: (value) => setState(() => _selectedItemId = value),
                 decoration: _inputDecoration('Nama barang'),
               ),
-              const SizedBox(height: 12),
-              _Field(
-                controller: _qtyCtrl,
-                label: 'Jumlah unit',
-                keyboardType: TextInputType.number,
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 92,
+                    child: _Field(
+                      controller: _qtyCtrl,
+                      label: 'Jumlah',
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _Field(
+                      controller: _refCtrl,
+                      label: 'Referensi / supplier',
+                    ),
+                  ),
+                ],
               ),
-              _Field(controller: _refCtrl, label: 'Referensi / supplier'),
-              _Field(controller: _inNotesCtrl, label: 'Catatan', maxLines: 2),
+              _Field(controller: _inNotesCtrl, label: 'Catatan (opsional)'),
               FilledButton.icon(
                 onPressed: _saving ? null : _saveInbound,
-                icon: const Icon(Icons.save_rounded),
+                style: _primaryButtonStyle(),
+                icon: const Icon(Icons.save_rounded, size: 19),
                 label: const Text('Simpan barang masuk'),
               ),
             ],
           ),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 16),
         _sectionHeader('Riwayat masuk', trailing: '${_inbound.length} batch'),
-        ..._inbound.take(40).map(_inboundTile),
         if (_inbound.isEmpty)
-          const _EmptyState(text: 'Belum ada barang masuk.'),
+          const _EmptyState(text: 'Belum ada barang masuk.')
+        else
+          _listCard(_inbound.take(40).map(_inboundTile).toList()),
       ],
+    );
+  }
+
+  ButtonStyle _primaryButtonStyle() {
+    return FilledButton.styleFrom(
+      backgroundColor: _navy,
+      foregroundColor: Colors.white,
+      minimumSize: const Size.fromHeight(46),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      textStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
     );
   }
 
@@ -501,59 +581,88 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
     final out = _int(row['units_out']);
     final inside = _int(row['units_in_stock']);
     final locked = out > 0;
-    return _Card(
-      compact: true,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    final reference = (row['reference'] ?? '').toString().trim();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
                   row['item_name']?.toString() ?? '-',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Color(0xFF0F172A),
                     fontWeight: FontWeight.w700,
-                    fontSize: 15,
+                    fontSize: 14,
                   ),
                 ),
-              ),
-              _Badge(
-                text: locked ? '$inside stok · $out keluar' : '$inside stok',
-                color: locked ? _orange : _green,
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '${_shortDate(row['created_at'])} · Qty ${_count.format(_int(row['quantity']))}',
-            style: const TextStyle(
-              color: Color(0xFF334155),
-              fontWeight: FontWeight.w400,
+                const SizedBox(height: 2),
+                Text(
+                  [
+                    _compactDate(row['created_at']),
+                    if (reference.isNotEmpty) reference,
+                  ].join(' · '),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF64748B),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
             ),
           ),
-          if ((row['reference'] ?? '').toString().isNotEmpty)
-            Text(
-              'Ref: ${row['reference']}',
-              style: const TextStyle(
-                color: Color(0xFF334155),
-                fontWeight: FontWeight.w400,
-              ),
-            ),
-          const SizedBox(height: 8),
-          Row(
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              TextButton.icon(
-                onPressed: () => _showEditBatchSheet(row),
-                icon: const Icon(Icons.edit_rounded),
-                label: const Text('Edit'),
+              Text(
+                '+${_count.format(_int(row['quantity']))}',
+                style: const TextStyle(
+                  color: _green,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 15,
+                ),
               ),
-              TextButton.icon(
-                onPressed: locked ? null : () => _deleteBatch(row),
-                icon: const Icon(Icons.delete_outline_rounded),
-                label: const Text('Hapus'),
+              Text(
+                locked ? 'sisa $inside · keluar $out' : 'sisa $inside',
+                style: TextStyle(
+                  color: locked ? _orange : const Color(0xFF64748B),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ],
+          ),
+          SizedBox(
+            width: 32,
+            child: PopupMenuButton<String>(
+              padding: EdgeInsets.zero,
+              iconSize: 20,
+              color: Colors.white,
+              icon: const Icon(
+                Icons.more_vert_rounded,
+                color: Color(0xFF94A3B8),
+              ),
+              onSelected: (action) {
+                if (action == 'edit') _showEditBatchSheet(row);
+                if (action == 'delete') _deleteBatch(row);
+              },
+              itemBuilder: (_) => [
+                const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                PopupMenuItem(
+                  value: 'delete',
+                  enabled: !locked,
+                  child: Text(
+                    locked ? 'Hapus (sudah ada yang keluar)' : 'Hapus',
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -603,84 +712,24 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
                 )
               else ...[
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: _Field(
-                        controller: _employeeCodeCtrl,
-                        label: 'Kode QR karyawan',
-                      ),
-                    ),
+                    Expanded(child: _employeeDropdown()),
                     const SizedBox(width: 8),
-                    IconButton.filled(
-                      onPressed: _scanEmployee,
-                      style: IconButton.styleFrom(
-                        backgroundColor: _navy,
-                        foregroundColor: Colors.white,
-                      ),
-                      icon: const Icon(Icons.qr_code_scanner_rounded),
+                    _scanButton(
+                      _saving ? null : _scanEmployee,
+                      Icons.qr_code_scanner_rounded,
                     ),
                   ],
                 ),
-                if (_employeeCodeCtrl.text.trim().isNotEmpty)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton(
-                      onPressed: () =>
-                          _lookupEmployee(_employeeCodeCtrl.text.trim()),
-                      child: const Text('Pakai kode karyawan'),
-                    ),
-                  ),
-                DropdownButtonFormField<int>(
-                  key: ValueKey(
-                    'out_employee_${_selectedEmployeeId}_${_employees.length}',
-                  ),
-                  dropdownColor: Colors.white,
-                  style: const TextStyle(
-                    color: Color(0xFF0F172A),
-                    fontWeight: FontWeight.w400,
-                  ),
-                  initialValue:
-                      _employees.any(
-                        (item) => _int(item['id']) == _selectedEmployeeId,
-                      )
-                      ? _selectedEmployeeId
-                      : null,
-                  items: _employees
-                      .map(
-                        (employee) => DropdownMenuItem<int>(
-                          value: _int(employee['id']),
-                          child: Text(
-                            '${employee['nama_lengkap'] ?? '-'} (${employee['jabatan'] ?? '-'})',
-                            style: const TextStyle(
-                              color: Color(0xFF0F172A),
-                              fontWeight: FontWeight.w400,
-                            ),
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) {
-                    final found = _employees
-                        .where((e) => _int(e['id']) == value)
-                        .toList();
-                    setState(() {
-                      _selectedEmployeeId = value;
-                      _selectedEmployee = found.isEmpty ? null : found.first;
-                      if (value != null) _recipientCtrl.clear();
-                    });
-                  },
-                  decoration: _inputDecoration('Pilih karyawan aktif'),
-                ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 _Field(
                   controller: _recipientCtrl,
                   label: 'Atau nama penerima manual',
                   onChanged: (_) => setState(() {}),
                 ),
               ],
-              const Divider(height: 28),
-              _sectionTitle('Scan barang keluar', Icons.qr_code_2_rounded),
-              const SizedBox(height: 12),
+              const SizedBox(height: 4),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -691,77 +740,228 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  IconButton.filled(
-                    onPressed: _saving ? null : _scanUnit,
-                    style: IconButton.styleFrom(
-                      backgroundColor: _navy,
-                      foregroundColor: Colors.white,
-                      disabledBackgroundColor: const Color(0xFFCBD5E1),
-                      disabledForegroundColor: Colors.white70,
-                    ),
-                    icon: const Icon(Icons.document_scanner_rounded),
+                  _scanButton(
+                    _saving ? null : _scanUnit,
+                    Icons.document_scanner_rounded,
                   ),
                 ],
               ),
               _Field(
                 controller: _outNotesCtrl,
-                label: 'Catatan keluar',
-                maxLines: 2,
+                label: 'Tujuan penggunaan (mis. PSB a.n. Budi)',
               ),
               FilledButton.icon(
                 onPressed: _saving ? null : _processOutbound,
-                icon: const Icon(Icons.outbox_rounded),
+                style: _primaryButtonStyle(),
+                icon: const Icon(Icons.outbox_rounded, size: 19),
                 label: const Text('Proses barang keluar'),
               ),
             ],
           ),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 16),
         _sectionHeader('Riwayat keluar', trailing: '${_outbound.length} unit'),
-        ..._outbound.take(50).map(_outboundTile),
         if (_outbound.isEmpty)
-          const _EmptyState(text: 'Belum ada barang keluar.'),
+          const _EmptyState(text: 'Belum ada barang keluar.')
+        else
+          _listCard(
+            _groupOutbound(
+              _outbound.take(50).toList(),
+            ).map(_outboundTile).toList(),
+          ),
       ],
     );
   }
 
-  Widget _outboundTile(Map<String, dynamic> row) {
-    final employee = (row['employee_name'] ?? '').toString();
-    return _Card(
-      compact: true,
+  Widget _employeeDropdown() {
+    return DropdownButtonFormField<int>(
+      key: ValueKey('out_employee_${_selectedEmployeeId}_${_employees.length}'),
+      isExpanded: true,
+      dropdownColor: Colors.white,
+      style: const TextStyle(
+        color: Color(0xFF0F172A),
+        fontWeight: FontWeight.w400,
+      ),
+      initialValue:
+          _employees.any((item) => _int(item['id']) == _selectedEmployeeId)
+          ? _selectedEmployeeId
+          : null,
+      items: _employees
+          .map(
+            (employee) => DropdownMenuItem<int>(
+              value: _int(employee['id']),
+              child: Text(
+                '${employee['nama_lengkap'] ?? '-'} (${employee['jabatan'] ?? '-'})',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Color(0xFF0F172A),
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
+            ),
+          )
+          .toList(),
+      onChanged: (value) {
+        final found = _employees.where((e) => _int(e['id']) == value).toList();
+        setState(() {
+          _selectedEmployeeId = value;
+          _selectedEmployee = found.isEmpty ? null : found.first;
+          if (value != null) _recipientCtrl.clear();
+        });
+      },
+      decoration: _inputDecoration('Pilih karyawan aktif'),
+    );
+  }
+
+  /// Unit yang keluar bersamaan (barang, penerima, tujuan & menit sama) digabung.
+  List<List<Map<String, dynamic>>> _groupOutbound(
+    List<Map<String, dynamic>> rows,
+  ) {
+    String key(Map<String, dynamic> r) => [
+      r['item_name'],
+      _outboundTaker(r),
+      (r['outbound_notes'] ?? '').toString().trim(),
+      _shortDate(r['outbound_at']),
+    ].join('|');
+
+    final groups = <List<Map<String, dynamic>>>[];
+    for (final row in rows) {
+      if (groups.isNotEmpty && key(groups.last.first) == key(row)) {
+        groups.last.add(row);
+      } else {
+        groups.add([row]);
+      }
+    }
+    return groups;
+  }
+
+  String _outboundTaker(Map<String, dynamic> row) {
+    final employee = (row['employee_name'] ?? '').toString().trim();
+    if (employee.isNotEmpty) return employee;
+    return (row['outbound_recipient'] ?? '').toString().trim();
+  }
+
+  Widget _outboundTile(List<Map<String, dynamic>> group) {
+    final row = group.first;
+    final taker = _outboundTaker(row);
+    final jabatan = (row['employee_jabatan'] ?? '').toString().trim();
+    final purpose = (row['outbound_notes'] ?? '').toString().trim();
+    final codes = group
+        .map((r) => (r['public_code'] ?? '').toString())
+        .where((c) => c.isNotEmpty)
+        .toList();
+    const muted = Color(0xFF64748B);
+
+    Widget line(
+      IconData icon,
+      String label,
+      String value, {
+      bool empty = false,
+    }) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 3),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: Icon(icon, size: 14, color: muted),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text.rich(
+                TextSpan(
+                  children: [
+                    TextSpan(
+                      text: '$label: ',
+                      style: const TextStyle(color: muted),
+                    ),
+                    TextSpan(
+                      text: value,
+                      style: TextStyle(
+                        color: empty
+                            ? const Color(0xFF94A3B8)
+                            : const Color(0xFF0F172A),
+                        fontWeight: empty ? FontWeight.w400 : FontWeight.w600,
+                        fontStyle: empty ? FontStyle.italic : FontStyle.normal,
+                      ),
+                    ),
+                  ],
+                ),
+                style: const TextStyle(fontSize: 12.5, height: 1.3),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
               Expanded(
-                child: Text(
-                  row['item_name']?.toString() ?? '-',
+                child: Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(text: row['item_name']?.toString() ?? '-'),
+                      if (group.length > 1)
+                        TextSpan(
+                          text: '  ×${group.length}',
+                          style: const TextStyle(color: _orange),
+                        ),
+                    ],
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Color(0xFF0F172A),
-                    fontWeight: FontWeight.w700,
-                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 14,
                   ),
                 ),
               ),
-              _Badge(text: _shortDate(row['outbound_at']), color: _navy),
+              const SizedBox(width: 8),
+              Text(
+                _compactDate(row['outbound_at']),
+                style: const TextStyle(
+                  color: muted,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ],
           ),
-          const SizedBox(height: 6),
-          SelectableText(
-            row['public_code']?.toString() ?? '-',
-            style: const TextStyle(
-              fontWeight: FontWeight.w400,
-              color: Color(0xFF0F172A),
-            ),
+          const SizedBox(height: 2),
+          line(
+            Icons.person_outline_rounded,
+            'Diambil oleh',
+            taker.isEmpty
+                ? '-'
+                : (jabatan.isEmpty ? taker : '$taker ($jabatan)'),
           ),
-          Text(
-            'Ke: ${row['outbound_recipient'] ?? '-'}${employee.isEmpty ? '' : ' · $employee'}',
-            style: const TextStyle(
-              color: Color(0xFF334155),
-              fontWeight: FontWeight.w400,
-            ),
+          line(
+            Icons.flag_outlined,
+            'Tujuan',
+            purpose.isEmpty ? 'tidak ada catatan' : purpose,
+            empty: purpose.isEmpty,
           ),
+          if (codes.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4, left: 20),
+              child: SelectableText(
+                codes.join(', '),
+                style: const TextStyle(
+                  color: Color(0xFF94A3B8),
+                  fontSize: 11,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -816,10 +1016,11 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
             ),
           ],
         ),
-        const SizedBox(height: 8),
-        ...items.map(_reportTile),
+        const SizedBox(height: 10),
         if (items.isEmpty)
-          const _EmptyState(text: 'Belum ada master barang aktif.'),
+          const _EmptyState(text: 'Belum ada master barang aktif.')
+        else
+          _listCard(items.map(_reportTile).toList()),
       ],
     );
   }
@@ -864,21 +1065,21 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
     final byName = {
       for (final it in items) (it['name'] ?? '').toString().toLowerCase(): it,
     };
-    final rows = lowStock.map((e) {
-      final ref =
-          byId[_int(e['id'] ?? e['item_id'])] ??
-          byName[(e['name'] ?? '').toString().toLowerCase()] ??
-          const <String, dynamic>{};
-      return <String, dynamic>{...ref, ...e};
-    }).toList()
-      ..sort((a, b) {
-        double ratio(Map<String, dynamic> r) {
-          final low = _int(r['low_stock_threshold']);
-          return low <= 0 ? 0 : _int(r['stock_in']) / low;
-        }
+    final rows =
+        lowStock.map((e) {
+          final ref =
+              byId[_int(e['id'] ?? e['item_id'])] ??
+              byName[(e['name'] ?? '').toString().toLowerCase()] ??
+              const <String, dynamic>{};
+          return <String, dynamic>{...ref, ...e};
+        }).toList()..sort((a, b) {
+          double ratio(Map<String, dynamic> r) {
+            final low = _int(r['low_stock_threshold']);
+            return low <= 0 ? 0 : _int(r['stock_in']) / low;
+          }
 
-        return ratio(a).compareTo(ratio(b));
-      });
+          return ratio(a).compareTo(ratio(b));
+        });
 
     final outOfStock = rows.where((r) => _int(r['stock_in']) <= 0).length;
     const previewCount = 5;
@@ -1043,56 +1244,48 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
     final stock = _int(row['stock_in']);
     final low = _int(row['low_stock_threshold']);
     final danger = stock <= low;
-    return _Card(
-      compact: true,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
       child: Row(
         children: [
           Icon(
             danger ? Icons.warning_amber_rounded : Icons.inventory_2_rounded,
+            size: 20,
             color: danger ? _orange : _navy,
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   row['name']?.toString() ?? '-',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Color(0xFF0F172A),
                     fontWeight: FontWeight.w700,
+                    fontSize: 14,
                   ),
                 ),
                 Text(
                   '${row['unit'] ?? '-'} · keluar ${_count.format(_int(row['stock_out']))} · batas $low',
                   style: const TextStyle(
-                    color: Color(0xFF334155),
-                    fontWeight: FontWeight.w400,
+                    color: Color(0xFF64748B),
+                    fontSize: 12,
                   ),
                 ),
               ],
             ),
           ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              const Text(
-                'Stok',
-                style: TextStyle(
-                  color: Color(0xFF64748B),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w400,
-                ),
-              ),
-              Text(
-                _count.format(stock),
-                style: TextStyle(
-                  color: danger ? _orange : const Color(0xFF0F172A),
-                  fontWeight: FontWeight.w900,
-                  fontSize: 18,
-                ),
-              ),
-            ],
+          const SizedBox(width: 8),
+          Text(
+            _count.format(stock),
+            style: TextStyle(
+              color: danger ? _orange : const Color(0xFF0F172A),
+              fontWeight: FontWeight.w900,
+              fontSize: 17,
+            ),
           ),
         ],
       ),
@@ -1297,13 +1490,13 @@ class _AdminWarehouseScreenState extends State<AdminWarehouseScreen> {
   Widget _sectionTitle(String title, IconData icon) {
     return Row(
       children: [
-        Icon(icon, color: _navy),
+        Icon(icon, color: _navy, size: 20),
         const SizedBox(width: 8),
         Expanded(
           child: Text(
             title,
             style: const TextStyle(
-              fontSize: 17,
+              fontSize: 15,
               fontWeight: FontWeight.w900,
               color: Color(0xFF0F172A),
             ),
@@ -1704,25 +1897,18 @@ class _WarehouseScanScreenState extends State<_WarehouseScanScreen>
 
 class _Card extends StatelessWidget {
   final Widget child;
-  final bool compact;
+  final EdgeInsetsGeometry? padding;
 
-  const _Card({required this.child, this.compact = false});
+  const _Card({required this.child, this.padding});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: EdgeInsets.only(bottom: compact ? 10 : 0),
-      padding: EdgeInsets.all(compact ? 14 : 16),
+      padding: padding ?? const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 16,
-            offset: const Offset(0, 8),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE8EDF4)),
       ),
       child: DefaultTextStyle.merge(
         style: const TextStyle(color: Color(0xFF0F172A)),
@@ -1753,7 +1939,7 @@ class _Field extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.only(bottom: 10),
       child: TextField(
         controller: controller,
         keyboardType: keyboardType,
@@ -1790,13 +1976,15 @@ InputDecoration _inputDecoration(String label) {
     ),
     filled: true,
     fillColor: const Color(0xFFF8FAFC),
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+    isDense: true,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
     enabledBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(12),
       borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
     ),
     focusedBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(12),
       borderSide: const BorderSide(color: Color(0xFF2563EB), width: 1.4),
     ),
   );

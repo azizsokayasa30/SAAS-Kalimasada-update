@@ -96,8 +96,16 @@ async function listAuditLogs({
     const params = [];
 
     if (action) {
-        clauses.push('l.action LIKE ?');
-        params.push(`%${action}%`);
+        const q = String(action).trim().toLowerCase();
+        const labelKeys = Object.keys(ACTION_LABELS).filter((k) => ACTION_LABELS[k].toLowerCase().includes(q));
+        const likeQ = `%${q.replace(/\s+/g, '_')}%`;
+        if (labelKeys.length) {
+            clauses.push(`(l.action LIKE ? OR l.action IN (${labelKeys.map(() => '?').join(',')}))`);
+            params.push(likeQ, ...labelKeys);
+        } else {
+            clauses.push('l.action LIKE ?');
+            params.push(likeQ);
+        }
     }
     if (actorId) {
         clauses.push('l.actor_id = ?');
@@ -113,7 +121,7 @@ async function listAuditLogs({
     }
     if (to) {
         clauses.push('l.created_at <= ?');
-        params.push(to);
+        params.push(/^\d{4}-\d{2}-\d{2}$/.test(to) ? `${to} 23:59:59` : to);
     }
 
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -137,6 +145,22 @@ async function listAuditLogs({
     return {
         rows: rows.map((r) => ({ ...r, details_parsed: parseDetails(r.details) })),
         total: countRow?.total || 0,
+    };
+}
+
+async function auditLogStats() {
+    const row = await tenantStore.dbGet(
+        `SELECT COUNT(*) AS total,
+                COALESCE(SUM(created_at >= date('now', 'localtime')), 0) AS today,
+                COALESCE(SUM(created_at >= date('now', 'localtime', '-6 days')), 0) AS week,
+                COUNT(DISTINCT CASE WHEN created_at >= date('now', 'localtime', '-6 days') THEN actor_id END) AS week_actors
+         FROM platform_audit_logs`
+    );
+    return {
+        total: Number(row?.total) || 0,
+        today: Number(row?.today) || 0,
+        week: Number(row?.week) || 0,
+        weekActors: Number(row?.week_actors) || 0,
     };
 }
 
@@ -223,6 +247,7 @@ module.exports = {
     updateSuperAdmin,
     deactivateSuperAdmin,
     listAuditLogs,
+    auditLogStats,
     getAuditLogById,
     formatActionLabel,
 };

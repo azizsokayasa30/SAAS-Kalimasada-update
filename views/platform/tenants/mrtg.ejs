@@ -24,15 +24,26 @@
       </div>
     </div>
     <form id="nmsMrtgCustom" class="km-mrtg-custom" hidden>
-      <div>
-        <label class="form-label" for="nmsMrtgFrom">Mulai</label>
-        <input type="date" id="nmsMrtgFrom" class="form-control" required>
+      <input type="hidden" id="nmsMrtgFrom">
+      <input type="hidden" id="nmsMrtgTo">
+      <div class="km-drp" data-drp data-drp-from="#nmsMrtgFrom" data-drp-to="#nmsMrtgTo" data-drp-max="today" data-drp-max-span="366">
+        <button type="button" class="km-drp__field" data-drp-toggle aria-haspopup="dialog" aria-expanded="false">
+          <span class="km-drp__icon"><i class="bi bi-calendar-range"></i></span>
+          <span class="km-drp__part">
+            <small>Mulai</small>
+            <strong data-drp-label="from">-</strong>
+          </span>
+          <span class="km-drp__arrow"><i class="bi bi-arrow-right"></i></span>
+          <span class="km-drp__part">
+            <small>Akhir</small>
+            <strong data-drp-label="to">-</strong>
+          </span>
+          <span class="km-drp__days" data-drp-label="days"></span>
+          <i class="bi bi-chevron-down km-drp__caret"></i>
+        </button>
+        <div class="km-drp__panel" data-drp-panel role="dialog" aria-label="Pilih rentang tanggal" hidden></div>
       </div>
-      <div>
-        <label class="form-label" for="nmsMrtgTo">Akhir</label>
-        <input type="date" id="nmsMrtgTo" class="form-control" required>
-      </div>
-      <button type="submit" class="btn btn-km-primary"><i class="bi bi-check2 me-1"></i> Tampilkan</button>
+      <button type="submit" class="btn btn-km-primary km-mrtg-custom__submit"><i class="bi bi-graph-up-arrow me-1"></i> Tampilkan</button>
     </form>
   </div>
 
@@ -43,4 +54,5 @@
 <link rel="stylesheet" href="/css/nms-mrtg.css?v=6">
 <script src="/js/nms-mrtg-charts.js?v=6"></script>
 <script src="/js/management-nms-dashboard.js?v=3"></script>
+<script src="/js/km-daterange.js?v=1"></script>
 <%- include('../partials/footer') %>

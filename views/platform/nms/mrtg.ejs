@@ -1,52 +1,65 @@
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active: active || 'settings-mrtg', adminName }) %>
-<main class="km-main km-set">
-  <div class="km-topbar">
-    <div>
-      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-graph-up"></i></span>Pengaturan MRTG</h2>
-    </div>
-  </div>
+<main class="km-main km-set km-infra km-infra--mrtg">
+  <%- include('../partials/infra-hero', {
+    tab: 'mrtg',
+    icon: 'bi-graph-up',
+    heading: 'Pengaturan MRTG',
+    desc: 'Pasangkan graph trafik dari NMS ke router tenant, lalu atur di mana graph tersebut ditampilkan.',
+    chips: [
+      { tone: 'info', icon: 'bi-plug', label: 'Data dari Pengaturan API' }
+    ],
+    actions: '<a href="/management/settings/api" class="btn btn-outline-secondary"><i class="bi bi-plug"></i> Koneksi API</a>'
+  }) %>
 
   <div id="nmsPageAlert" class="alert d-none" role="status"></div>
+
+  <%- include('../partials/infra-stats', { stats: [
+    { tone: 'blue', icon: 'bi-hdd-network', label: 'Perangkat NMS', value: '…', attrs: 'data-ix-rows="#nmsDeviceBody"', meta: 'Siap dipasang' },
+    { tone: 'cyan', icon: 'bi-link-45deg', label: 'Pemetaan', value: '…', attrs: 'data-ix-rows="#nmsBindingBody"', meta: 'Graph terpasang' },
+    { tone: 'violet', icon: 'bi-buildings', label: 'Tenant Terhubung', value: '…', attrs: 'data-ix-unique="#nmsBindingBody" data-ix-col="0"', meta: 'Punya graph MRTG' }
+  ] }) %>
 
   <div class="km-card mb-3">
     <div class="km-vpn-card__head"><h5><i class="bi bi-diagram-2"></i> Pasang Graph ke Tenant</h5></div>
     <form id="nmsBindingForm" class="row g-3">
       <div class="col-md-6 col-xl-3">
-        <label class="form-label" for="nmsTenant">Tenant</label>
+        <label class="form-label" for="nmsTenant"><span class="km-infra-step" aria-hidden="true">1</span>Tenant</label>
         <select id="nmsTenant" class="form-select" required>
           <option value="">Pilih tenant</option>
         </select>
       </div>
       <div class="col-md-6 col-xl-3">
-        <label class="form-label" for="nmsRouter">Router</label>
+        <label class="form-label" for="nmsRouter"><span class="km-infra-step" aria-hidden="true">2</span>Router</label>
         <select id="nmsRouter" class="form-select" required disabled>
           <option value="">Pilih router</option>
         </select>
       </div>
       <div class="col-md-6 col-xl-3">
-        <label class="form-label" for="nmsDevice">Perangkat NMS</label>
+        <label class="form-label" for="nmsDevice"><span class="km-infra-step" aria-hidden="true">3</span>Perangkat NMS</label>
         <select id="nmsDevice" class="form-select" required>
           <option value="">Pilih perangkat</option>
         </select>
       </div>
       <div class="col-md-6 col-xl-3">
-        <label class="form-label" for="nmsGraph">Graph / interface</label>
+        <label class="form-label" for="nmsGraph"><span class="km-infra-step" aria-hidden="true">4</span>Graph / interface</label>
         <select id="nmsGraph" class="form-select" required disabled>
           <option value="">Pilih graph</option>
         </select>
       </div>
       <div class="col-12">
-        <div class="km-proxy-actions mt-0 align-items-center">
-          <div class="form-check form-switch mb-0">
+        <div class="km-infra-formbar mt-1">
+          <div class="form-check form-switch">
             <input class="form-check-input" type="checkbox" role="switch" id="nmsShowManagement" checked>
             <label class="form-check-label" for="nmsShowManagement">Tampil di menu MRTG</label>
           </div>
-          <div class="form-check form-switch mb-0 ms-3">
+          <div class="form-check form-switch">
             <input class="form-check-input" type="checkbox" role="switch" id="nmsShowTenant" checked>
             <label class="form-check-label" for="nmsShowTenant">Tampil di dashboard tenant</label>
           </div>
-          <button type="submit" class="btn btn-km-primary btn-sm ms-auto"><i class="bi bi-check-lg me-1"></i> Simpan Pemetaan</button>
+          <div class="km-infra-formbar__end">
+            <button type="submit" class="btn btn-km-primary btn-sm px-3"><i class="bi bi-check-lg"></i> Simpan Pemetaan</button>
+          </div>
         </div>
       </div>
     </form>
@@ -70,7 +83,7 @@
   </div>
 
   <div class="km-card km-card--flush">
-    <div class="km-vpn-card__head px-3 pt-3 mb-0">
+    <div class="km-infra-panel-head">
       <h5><i class="bi bi-link-45deg"></i> Pemetaan Tersimpan</h5>
     </div>
     <div class="table-responsive">
@@ -94,4 +107,5 @@
   </div>
 </main>
 <script src="/js/management-nms.js?v=3"></script>
+<script src="/js/infra-modern.js?v=1"></script>
 <%- include('../partials/footer') %>

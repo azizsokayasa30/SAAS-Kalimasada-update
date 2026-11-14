@@ -3,7 +3,7 @@
 <main class="km-main km-inv-page km-fin-page km-fin-page--backup">
   <div class="km-topbar">
     <div>
-      <h2>Backup &amp; Restore</h2>
+      <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi bi-cloud-arrow-up"></i></span>Backup &amp; Restore Finance</h2>
     </div>
     <a href="/management/finance/backup/download?return_to=<%= encodeURIComponent(typeof financeReturnTo !== 'undefined' ? financeReturnTo : '/management/finance/backup') %>" class="btn btn-km-primary btn-sm">
       <i class="bi bi-download"></i> Backup Sekarang
@@ -17,5 +17,5 @@
 
   <%- include('_backup-restore') %>
 </main>
-<script src="/js/platform-finance.js?v=1"></script>
+<script src="/js/platform-finance.js?v=3"></script>
 <%- include('../partials/footer') %>
