@@ -809,6 +809,7 @@ const apiOltsRouter = require('./routes/api/olts');
 const customerPortalV1Router = require('./routes/api/customerPortalV1');
 const unifiedAuthRouter = require('./routes/unifiedAuth');
 const managementPortalRouter = require('./routes/managementPortal');
+const companySiteRouter = require('./routes/companySite');
 const { resolveTenantMiddleware, isCentralHost } = require('./middleware/resolveTenant');
 const tenantStore = require('./config/platform/tenantStore');
 
@@ -920,6 +921,9 @@ app.use((req, res, next) => {
   req.session.cookie.maxAge = timeoutMs;
   return next();
 });
+
+// Login unduhan situs perusahaan (apex). Dipasang sebelum tenant agar Host kalimasada-app.com tidak ditolak.
+app.use('/api/company-site', companySiteRouter);
 
 // Kalimasada SaaS — Management Portal & tenant context (shared DB)
 app.use('/management', managementPortalRouter);

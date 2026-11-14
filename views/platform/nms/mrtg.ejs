@@ -30,10 +30,11 @@
         </select>
       </div>
       <div class="col-md-6 col-xl-3">
-        <label class="form-label" for="nmsRouter"><span class="km-infra-step" aria-hidden="true">2</span>Router</label>
-        <select id="nmsRouter" class="form-select" required disabled>
-          <option value="">Pilih router</option>
+        <label class="form-label" for="nmsRouter"><span class="km-infra-step" aria-hidden="true">2</span>Router <span class="text-muted small">(opsional)</span></label>
+        <select id="nmsRouter" class="form-select" disabled>
+          <option value="">Pilih tenant dulu</option>
         </select>
+        <div class="form-text">Kosongkan jika router tenant belum terdaftar di billing.</div>
       </div>
       <div class="col-md-6 col-xl-3">
         <label class="form-label" for="nmsDevice"><span class="km-infra-step" aria-hidden="true">3</span>Perangkat NMS</label>
@@ -106,6 +107,6 @@
     </div>
   </div>
 </main>
-<script src="/js/management-nms.js?v=3"></script>
+<script src="/js/management-nms.js?v=4"></script>
 <script src="/js/infra-modern.js?v=1"></script>
 <%- include('../partials/footer') %>

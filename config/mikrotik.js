@@ -66,6 +66,13 @@ function formatMikrotikConnectError(host, port, err) {
     const lower = `${msg} ${sockCode}`.toLowerCase().trim();
     const detail = msg || sockCode || String(err || 'unknown');
 
+    if (err && err.code === 'EROSCLOSED') {
+        return (
+            `MikroTik di ${host}:${port} menerima TCP lalu langsung menutup koneksi sebelum cek username/password. ` +
+            `Penyebab paling umum: IP server billing tidak ada di /ip service api address= (lewat VPN, sumbernya adalah IP tunnel server, mis. 10.10.0.1 — bukan IP publik VPS), ` +
+            `atau port ${port} bukan milik service "api" (mis. api-ssl/winbox), atau user tidak punya policy "api".`
+        );
+    }
     if (sockCode === 'ECONNRESET' || lower.includes('econnreset') || lower.includes('connection reset')) {
         return (
             `TCP ke ${host}:${port} terbuka tapi di-reset saat handshake API RouterOS (ECONNRESET). ` +
@@ -120,13 +127,37 @@ async function connectRouterOsApi({ host, port, user, password, keepalive = true
         keepalive,
         timeout: ROUTEROS_API_TIMEOUT_SEC
     });
+    let timer;
+    let onClose;
     const hardTimeout = new Promise((_, reject) => {
-        setTimeout(
+        timer = setTimeout(
             () => reject(new Error(`Timeout koneksi TCP ke ${host}:${port} setelah ${Math.round(CONNECT_HARD_TIMEOUT_MS / 1000)} detik`)),
             CONNECT_HARD_TIMEOUT_MS
         );
     });
-    await Promise.race([conn.connect(), hardTimeout]);
+    // node-routeros does not reject connect() when the router closes the socket cleanly (FIN) before login;
+    // RouterOS does exactly that when the source IP is outside /ip service api address=.
+    const closedBeforeLogin = new Promise((_, reject) => {
+        onClose = () => {
+            const err = new Error(`RouterOS menutup koneksi sebelum login di ${host}:${port}`);
+            err.code = 'EROSCLOSED';
+            reject(err);
+        };
+        conn.once('close', onClose);
+    });
+    try {
+        await Promise.race([conn.connect(), hardTimeout, closedBeforeLogin]);
+    } catch (e) {
+        try {
+            if (conn.connector) conn.connector.destroy();
+        } catch (_) {
+            // ignore
+        }
+        throw e;
+    } finally {
+        clearTimeout(timer);
+        conn.removeListener('close', onClose);
+    }
     return conn;
 }
 

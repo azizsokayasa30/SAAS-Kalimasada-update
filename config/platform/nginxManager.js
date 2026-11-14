@@ -247,7 +247,21 @@ function buildAcmeChallengeBlock() {
     }`;
 }
 
-function buildApexWebServerBlock(cfg, sslReady) {
+function buildApexCompanyLocations(upstreamName) {
+    const upstream = upstreamName || 'kalimasada_app';
+    return [
+        '    location ^~ /api/company-site/ {',
+        buildProxyBlock(upstream),
+        '        proxy_buffering off;',
+        '    }',
+        '',
+        '    location ^~ /unduh/ {',
+        '        return 404;',
+        '    }',
+    ].join('\n');
+}
+
+function buildApexWebServerBlock(cfg, sslReady, upstreamName) {
     if (!cfg.apex_reserved_for_web) return '';
     const base = sanitizeDomain(cfg.base_domain) || 'kalimasada-app.com';
     const apexNames = `${base} www.${base}`;
@@ -270,6 +284,8 @@ function buildApexWebServerBlock(cfg, sslReady) {
         lines.push('    index index.html;');
         lines.push('');
         lines.push(buildAcmeChallengeBlock());
+        lines.push('');
+        lines.push(buildApexCompanyLocations(upstreamName));
         lines.push('');
         lines.push('    location / {');
         lines.push('        try_files $uri $uri/ /index.html;');
@@ -296,6 +312,8 @@ function buildApexWebServerBlock(cfg, sslReady) {
         lines.push('    index index.html;');
         lines.push('');
         lines.push(buildAcmeChallengeBlock());
+        lines.push('');
+        lines.push(buildApexCompanyLocations(upstreamName));
         lines.push('');
         lines.push('    location / {');
         lines.push('        try_files $uri $uri/ /index.html;');
@@ -533,7 +551,7 @@ function generateNginxConfig(cfg, tenantSubdomains) {
         lines.push(customProxyBlocks.trimEnd());
     }
 
-    const apexWebBlock = buildApexWebServerBlock(cfg, sslReady);
+    const apexWebBlock = buildApexWebServerBlock(cfg, sslReady, upstreamName);
     if (apexWebBlock) {
         lines.push('');
         lines.push(apexWebBlock.trimEnd());

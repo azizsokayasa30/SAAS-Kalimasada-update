@@ -487,7 +487,7 @@ const BINDING_SELECT = `
            t.subdomain AS tenant_subdomain,
            r.name AS router_name,
            r.nas_ip AS router_ip,
-           CASE WHEN r.id IS NULL THEN 1 ELSE 0 END AS router_missing
+           CASE WHEN b.router_id IS NOT NULL AND r.id IS NULL THEN 1 ELSE 0 END AS router_missing
     FROM platform_nms_graph_bindings b
     LEFT JOIN tenants t ON t.id = b.tenant_id
     LEFT JOIN routers r ON r.id = b.router_id
@@ -501,19 +501,24 @@ async function listBindings() {
 async function createBinding(input = {}) {
     await ensureSchema();
     const tenantId = asInt(input.tenant_id);
-    const routerId = asInt(input.router_id);
-    if (!tenantId || !routerId) throw new NmsError('Tenant dan router wajib diisi.', 400, 'BAD_BINDING');
+    const rawRouterId = input.router_id;
+    const routerProvided = rawRouterId !== undefined && rawRouterId !== null && String(rawRouterId).trim() !== '';
+    const routerId = routerProvided ? asInt(rawRouterId) : null;
+    if (!tenantId) throw new NmsError('Tenant wajib diisi.', 400, 'BAD_BINDING');
+    if (routerProvided && !routerId) throw new NmsError('Router tidak valid.', 400, 'BAD_ROUTER');
     const tenant = await tenantStore.dbGet(
         'SELECT id FROM tenants WHERE id = ? AND deleted_at IS NULL',
         [tenantId]
     );
     if (!tenant) throw new NmsError('Tenant tidak ditemukan.', 400, 'BAD_TENANT');
-    const router = await tenantStore.dbGet(
-        'SELECT id, tenant_id, name, nas_ip FROM routers WHERE id = ?',
-        [routerId]
-    );
-    if (!router || Number(router.tenant_id) !== tenantId) {
-        throw new NmsError('Router tidak termasuk tenant yang dipilih.', 400, 'BAD_ROUTER');
+    if (routerId) {
+        const router = await tenantStore.dbGet(
+            'SELECT id, tenant_id, name, nas_ip FROM routers WHERE id = ?',
+            [routerId]
+        );
+        if (!router || Number(router.tenant_id) !== tenantId) {
+            throw new NmsError('Router tidak termasuk tenant yang dipilih.', 400, 'BAD_ROUTER');
+        }
     }
     const deviceId = assertSafeId(input.nms_device_id, 'Perangkat NMS');
     const kind = input.nms_graph_kind === 'probe' ? 'probe' : 'interface';
@@ -533,14 +538,20 @@ async function createBinding(input = {}) {
     }
     const dup = await tenantStore.dbGet(
         `SELECT id FROM platform_nms_graph_bindings
-         WHERE tenant_id = ? AND router_id = ? AND nms_device_id = ?
+         WHERE tenant_id = ? AND router_id IS ? AND nms_device_id = ?
            AND (
              nms_graph_id = ?
              OR (interface_key != '' AND interface_key = ? AND nms_graph_kind = ?)
            )`,
         [tenantId, routerId, deviceId, graphId, interfaceKey, kind]
     );
-    if (dup) throw new NmsError('Graph ini sudah dipetakan ke router tersebut.', 400, 'DUP_BINDING');
+    if (dup) {
+        throw new NmsError(
+            routerId ? 'Graph ini sudah dipetakan ke router tersebut.' : 'Graph ini sudah dipetakan ke tenant tersebut tanpa router.',
+            400,
+            'DUP_BINDING'
+        );
+    }
     const result = await tenantStore.dbRun(
         `INSERT INTO platform_nms_graph_bindings (
             tenant_id, router_id, nms_device_id, nms_device_name, nms_device_ip,
@@ -697,7 +708,7 @@ async function loadManagementGraphs(range, query) {
     const window = rangeWindow(range, query);
     const rows = await tenantStore.dbAll(
         `${BINDING_SELECT}
-         WHERE b.is_active = 1 AND b.show_on_management = 1 AND r.id IS NOT NULL
+         WHERE b.is_active = 1 AND b.show_on_management = 1
          ORDER BY b.sort_order ASC, b.id ASC`
     );
     return loadGraphsForBindings(rows, window);
@@ -717,9 +728,9 @@ async function loadTenantGraphs(tenantId, range) {
     const rows = await tenantStore.dbAll(
         `${BINDING_SELECT}
          WHERE b.is_active = 1 AND b.show_on_tenant = 1
-           AND b.tenant_id = ? AND r.tenant_id = ?
+           AND b.tenant_id = ?
          ORDER BY b.sort_order ASC, b.id ASC`,
-        [tid, tid]
+        [tid]
     );
     return loadGraphsForBindings(rows, range);
 }

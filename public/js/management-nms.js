@@ -117,17 +117,20 @@
     sel.disabled = true;
     sel.innerHTML = '<option value="">Memuat router…</option>';
     if (!tenantId) {
-      sel.innerHTML = '<option value="">Pilih router</option>';
+      sel.innerHTML = '<option value="">Pilih tenant dulu</option>';
+      fillDevices(devices);
       return;
     }
     var data = await api('/management/nms/api/routers?tenant_id=' + encodeURIComponent(tenantId));
     var rows = data.routers || [];
-    sel.innerHTML = '<option value="">Pilih router</option>' + rows.map(function (r) {
+    var emptyLabel = rows.length
+      ? '— Tanpa router (langsung dari NMS) —'
+      : '— Tanpa router (tenant belum punya router) —';
+    sel.innerHTML = '<option value="">' + emptyLabel + '</option>' + rows.map(function (r) {
       return '<option value="' + r.id + '" data-ip="' + escapeText(r.nas_ip || '') + '">'
         + escapeText(r.name || ('Router ' + r.id)) + ' · ' + escapeText(r.nas_ip || '—') + '</option>';
     }).join('');
-    sel.disabled = !rows.length;
-    if (!rows.length) sel.innerHTML = '<option value="">Tenant ini belum punya router</option>';
+    sel.disabled = false;
     fillDevices(devices);
   }
 
@@ -193,9 +196,11 @@
     }
     body.innerHTML = rows.map(function (b) {
       var missing = Number(b.router_missing) === 1;
+      var noRouter = b.router_id == null || b.router_id === '';
+      var routerLabel = b.router_name || (missing ? 'Router dihapus' : (noRouter ? 'Tanpa router' : '—'));
       return '<tr class="' + (b.is_active ? '' : 'opacity-50') + '">'
         + '<td>' + escapeText(b.tenant_name || '—') + '</td>'
-        + '<td>' + escapeText(b.router_name || (missing ? 'Router dihapus' : '—')) + '<div class="small text-muted">' + escapeText(b.router_ip || '') + '</div></td>'
+        + '<td>' + (noRouter ? '<span class="text-muted fst-italic">' + escapeText(routerLabel) + '</span>' : escapeText(routerLabel)) + '<div class="small text-muted">' + escapeText(b.router_ip || '') + '</div></td>'
         + '<td>' + escapeText(b.nms_device_name || b.nms_device_id) + '<div class="small text-muted">' + escapeText(b.nms_device_ip || '') + '</div></td>'
         + '<td>' + escapeText(b.nms_graph_name || b.interface_key || b.nms_graph_id) + '<div class="small text-muted">' + escapeText(b.nms_graph_kind || '') + '</div></td>'
         + '<td>' + badge(b.show_on_management, b.show_on_management ? 'Ya' : 'Tidak') + '</td>'

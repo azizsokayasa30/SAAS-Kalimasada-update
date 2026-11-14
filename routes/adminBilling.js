@@ -9366,6 +9366,11 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
         const cable_status = req.body.cable_status;
         const cable_notes = req.body.cable_notes;
         const router_id = req.body.router_id;
+        const area_id = (() => {
+            if (req.body.area_id === undefined) return undefined;
+            const v = parseInt(req.body.area_id, 10);
+            return Number.isFinite(v) && v > 0 ? v : null;
+        })();
         
         // Validate required fields - check for empty strings too
         if (!name || name.trim() === '' || !username || username.trim() === '' || !package_id || package_id.toString().trim() === '') {
@@ -9437,6 +9442,7 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
             email: email || currentCustomer.email,
             address: address || currentCustomer.address,
             area: area !== undefined ? area : currentCustomer.area,
+            area_id: area_id !== undefined ? area_id : currentCustomer.area_id,
             package_id: package_id,
             odp_id: odp_id !== undefined ? odp_id : currentCustomer.odp_id,
             pppoe_profile: profileToUse ?? null,
@@ -9801,7 +9807,7 @@ router.put('/customers/:phone', customerPhotoUpload.fields([
                     String(updatedCustomer.mac_address || '') !== String(currentCustomer.mac_address || '');
 
                 if (hasPppoe || !newIp) {
-                    if (oldIp || currentCustomer.id) {
+                    if (oldIp) {
                         staticIpProvision.attempted = true;
                         const rem = await removeStaticIPQueue(updatedCustomer);
                         staticIpProvision.success = !!(rem && rem.success);
