@@ -1659,9 +1659,9 @@ router.get('/customers', verifyToken, allowFieldOps, async (req, res) => {
     }
     if (search) {
         where +=
-            ' AND (c.name LIKE ? OR c.phone LIKE ? OR CAST(c.customer_id AS TEXT) LIKE ? OR c.username LIKE ? OR IFNULL(c.email, \'\') LIKE ?)';
+            ' AND (c.name LIKE ? OR c.phone LIKE ? OR CAST(c.customer_id AS TEXT) LIKE ? OR c.username LIKE ? OR IFNULL(c.pppoe_username, \'\') LIKE ? OR IFNULL(c.email, \'\') LIKE ?)';
         const like = `%${search.replace(/%/g, '')}%`;
-        params.push(like, like, like, like, like);
+        params.push(like, like, like, like, like, like);
     }
     if (area) {
         where += " AND LOWER(COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, '')) = LOWER(?)";
@@ -2278,6 +2278,70 @@ router.get('/customers/search', verifyToken, allowFieldOps, async (req, res) => 
     } catch (error) {
         logger.error('[mobile-adapter] customers/search', error);
         return res.status(500).json({ success: false, message: error.message || 'Gagal mencari pelanggan' });
+    }
+});
+
+/** Detail satu pelanggan by numeric id — dipakai dari PPPoE aktif, dll. */
+router.get('/customers/:customerId', verifyToken, allowFieldOps, requireAreaManagerCustomerParam, async (req, res) => {
+    const customerId = parseInt(String(req.params.customerId), 10);
+    if (!Number.isFinite(customerId) || customerId <= 0) {
+        return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+    }
+    const tenantId = resolveReqTenantId(req);
+    if (tenantId == null) {
+        return res.status(400).json({ success: false, message: 'Konteks tenant wajib' });
+    }
+    try {
+        const row = await new Promise((resolve, reject) => {
+            db.get(
+                `SELECT c.id, c.customer_id, c.name, c.phone, c.email, c.status, c.address,
+                        c.username, c.join_date, c.created_at, c.package_id,
+                        c.area_id, c.latitude, c.longitude, c.pppoe_username,
+                        COALESCE(NULLIF(TRIM(c.area), ''), ar.nama_area, '') AS area,
+                        ar.nama_area AS nama_area,
+                        p.name AS profile,
+                        p.name AS package_name,
+                        COALESCE(p.price, 0) AS package_price,
+                        COALESCE(p.tax_rate, 0) AS package_tax_rate,
+                        CASE WHEN p.price IS NOT NULL
+                             THEN ROUND(p.price * (1.0 + COALESCE(p.tax_rate, 0) / 100.0))
+                             ELSE 0
+                        END AS package_amount
+                 FROM customers c
+                 LEFT JOIN packages p ON c.package_id = p.id AND p.tenant_id = c.tenant_id
+                 LEFT JOIN areas ar ON c.area_id = ar.id AND ar.tenant_id = c.tenant_id
+                 WHERE c.id = ? AND c.tenant_id = ?`,
+                [customerId, tenantId],
+                (err, r) => (err ? reject(err) : resolve(r || null))
+            );
+        });
+        if (!row) {
+            return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
+        }
+        attachAreaNamesFromMaster([row], (areaErr, enriched) => {
+            if (areaErr) {
+                return res.status(500).json({ success: false, message: areaErr.message });
+            }
+            const safe = sqliteJsonSafeRow((enriched && enriched[0]) || row);
+            return res.json({
+                success: true,
+                data: {
+                    ...safe,
+                    area: resolveCustomerAreaLabel(safe),
+                    latitude:
+                        safe.latitude != null && safe.latitude !== '' && !Number.isNaN(Number(safe.latitude))
+                            ? parseFloat(safe.latitude)
+                            : null,
+                    longitude:
+                        safe.longitude != null && safe.longitude !== '' && !Number.isNaN(Number(safe.longitude))
+                            ? parseFloat(safe.longitude)
+                            : null
+                }
+            });
+        }, tenantId);
+    } catch (error) {
+        logger.error('[mobile-adapter] customers/:customerId', error);
+        return res.status(500).json({ success: false, message: error.message || 'Gagal memuat pelanggan' });
     }
 });
 
@@ -2916,6 +2980,10 @@ function mobileIncomeCategory(item) {
 router.get('/admin/finance/overview', verifyToken, requireAdmin, async (req, res) => {
     try {
         const period = mobileFinancePeriod(req.query);
+        const liteLimit = Math.min(
+            80,
+            Math.max(10, parseInt(String(req.query.limit || '30'), 10) || 30)
+        );
         const paymentFilters = {
             month: String(period.month),
             year: String(period.year),
@@ -2923,9 +2991,22 @@ router.get('/admin/finance/overview', verifyToken, requireAdmin, async (req, res
             to: period.endDate,
             collector_id: req.query.collector_id || '',
             q: req.query.q || '',
-            limit: req.query.limit || 80,
-            tenantId: resolveReqTenantId(req)
+            limit: liteLimit,
+            tenantId: resolveReqTenantId(req),
+            // Baca daftar mobile: skip repair remittance yang berat + query ringan.
+            skipRemittanceEnsure: true,
+            fast: true,
+            lite: true
         };
+
+        // sections=payments|options|remittance|income|expenses|report|all
+        const sectionsRaw = String(req.query.sections || 'all').toLowerCase();
+        const wantAll = !sectionsRaw || sectionsRaw === 'all';
+        const wantSet = new Set(
+            sectionsRaw.split(',').map((s) => s.trim()).filter(Boolean)
+        );
+        const need = (name) => wantAll || wantSet.has(name);
+        const useFastPayments = !wantAll || String(req.query.fast || '') === '1';
 
         const amAreas = getMobileAreaManagerAreaIds(req);
         if (amAreas !== null) {
@@ -2933,13 +3014,14 @@ router.get('/admin/finance/overview', verifyToken, requireAdmin, async (req, res
             paymentFilters.collector_id = '';
             const [payments, paymentSummary] = await Promise.all([
                 billingManager.getAllPaymentsHistory(paymentFilters),
-                billingManager.getAllPaymentsHistorySummary(paymentFilters)
+                billingManager.getAllPaymentsHistorySummaryFast(paymentFilters)
             ]);
             return res.json({
                 success: true,
                 data: {
                     period,
                     scope: 'area',
+                    sections: ['payments', 'options'],
                     payments: { summary: paymentSummary || {}, items: payments || [] },
                     remittance: { summary: {}, collectors: [], receipts: [] },
                     income: { total: 0, items: [] },
@@ -2954,33 +3036,71 @@ router.get('/admin/finance/overview', verifyToken, requireAdmin, async (req, res
             });
         }
 
-        const [
-            payments,
-            paymentSummary,
-            collectorsPending,
-            collectorReport,
-            remittances,
-            incomes,
-            expenses,
-            financialData,
-            incomeCategories,
-            expenseCategories
-        ] = await Promise.all([
-            billingManager.getAllPaymentsHistory(paymentFilters),
-            billingManager.getAllPaymentsHistorySummary(paymentFilters),
-            billingManager.getCollectorsWithPendingAmounts(period.month, period.year, {
-                tenantId: resolveReqTenantId(req)
-            }),
-            billingManager.getCollectorReportsAreaRowsAndSummary(period.month, period.year, null, {
-                tenantId: resolveReqTenantId(req)
-            }),
-            billingManager.getCollectorRemittanceReceipts(40),
-            billingManager.getIncomes(period.startDate, period.endDate),
-            billingManager.getExpenses(period.startDate, period.endDate),
-            billingManager.getFinancialReport(period.startDate, period.endDate, req.query.type || 'all'),
-            mobileFinanceCategories('income'),
-            mobileFinanceCategories('expense')
-        ]);
+        const tenantId = resolveReqTenantId(req);
+        const jobs = [];
+        const keys = [];
+
+        if (need('payments')) {
+            keys.push('payments', 'paymentSummary');
+            jobs.push(
+                billingManager.getAllPaymentsHistory(paymentFilters),
+                useFastPayments
+                    ? billingManager.getAllPaymentsHistorySummaryFast(paymentFilters)
+                    : billingManager.getAllPaymentsHistorySummary(paymentFilters)
+            );
+        }
+        if (need('remittance')) {
+            keys.push('collectorsPending', 'collectorReport', 'remittances');
+            jobs.push(
+                billingManager.getCollectorsWithPendingAmounts(period.month, period.year, { tenantId }),
+                billingManager.getCollectorReportsAreaRowsAndSummary(period.month, period.year, null, { tenantId }),
+                billingManager.getCollectorRemittanceReceipts(30)
+            );
+        }
+        if (need('income') || need('expenses') || need('report')) {
+            if (need('income') || need('report')) {
+                keys.push('incomes');
+                jobs.push(billingManager.getIncomes(period.startDate, period.endDate));
+            }
+            if (need('expenses') || need('report')) {
+                keys.push('expenses');
+                jobs.push(billingManager.getExpenses(period.startDate, period.endDate));
+            }
+            if (need('report')) {
+                keys.push('financialData');
+                jobs.push(
+                    billingManager.getFinancialReport(
+                        period.startDate,
+                        period.endDate,
+                        req.query.type || 'all'
+                    )
+                );
+            }
+        }
+        if (need('options')) {
+            keys.push('incomeCategories', 'expenseCategories');
+            jobs.push(
+                mobileFinanceCategories('income'),
+                mobileFinanceCategories('expense')
+            );
+        }
+
+        const results = await Promise.all(jobs);
+        const bag = Object.create(null);
+        keys.forEach((k, i) => {
+            bag[k] = results[i];
+        });
+
+        const payments = bag.payments || [];
+        const paymentSummary = bag.paymentSummary || {};
+        const collectorsPending = bag.collectorsPending || [];
+        const collectorReport = bag.collectorReport || { rows: [], summary: {} };
+        const remittances = bag.remittances || [];
+        const incomes = bag.incomes || [];
+        const expenses = bag.expenses || [];
+        const financialData = bag.financialData || null;
+        const incomeCategories = bag.incomeCategories || [];
+        const expenseCategories = bag.expenseCategories || [];
 
         const reportById = new Map((collectorReport.rows || []).map((row) => [row.id, row]));
         const collectors = (collectorsPending || []).map((collector) => ({
@@ -3003,41 +3123,53 @@ router.get('/admin/finance/overview', verifyToken, requireAdmin, async (req, res
             )
         };
 
-        res.json({
-            success: true,
-            data: {
-                period,
-                payments: {
-                    summary: paymentSummary || {},
-                    items: payments || []
-                },
-                remittance: {
-                    summary: collectorReport.summary || {},
-                    collectors,
-                    receipts: remittances || []
-                },
-                income: {
-                    total: totalIncomeManual,
-                    items: incomes || []
-                },
-                expenses: {
-                    total: totalExpenseManual,
-                    items: expenses || []
-                },
-                financial_report: {
-                    summary: (financialData && financialData.summary) || {},
-                    transactions: allTransactions.slice(0, 120),
-                    transactions_total: allTransactions.length,
-                    category_summary: categorySummary,
-                    profit_loss: (financialData && financialData.profitLossData) || null
-                },
-                options: {
-                    payment_methods: MOBILE_FINANCE_PAYMENT_METHODS,
-                    income_categories: incomeCategories || [],
-                    expense_categories: expenseCategories || []
-                }
-            }
-        });
+        const data = {
+            period,
+            sections: wantAll ? ['all'] : Array.from(wantSet)
+        };
+        if (need('payments')) {
+            data.payments = {
+                summary: paymentSummary || {},
+                items: payments || []
+            };
+        }
+        if (need('remittance')) {
+            data.remittance = {
+                summary: collectorReport.summary || {},
+                collectors,
+                receipts: remittances || []
+            };
+        }
+        if (need('income') || need('report')) {
+            data.income = {
+                total: totalIncomeManual,
+                items: incomes || []
+            };
+        }
+        if (need('expenses') || need('report')) {
+            data.expenses = {
+                total: totalExpenseManual,
+                items: expenses || []
+            };
+        }
+        if (need('report')) {
+            data.financial_report = {
+                summary: (financialData && financialData.summary) || {},
+                transactions: allTransactions.slice(0, 80),
+                transactions_total: allTransactions.length,
+                category_summary: categorySummary,
+                profit_loss: (financialData && financialData.profitLossData) || null
+            };
+        }
+        if (need('options')) {
+            data.options = {
+                payment_methods: MOBILE_FINANCE_PAYMENT_METHODS,
+                income_categories: incomeCategories || [],
+                expense_categories: expenseCategories || []
+            };
+        }
+
+        res.json({ success: true, data });
     } catch (error) {
         logger.error('[mobile-adapter] admin/finance/overview:', error);
         res.status(500).json({ success: false, message: error.message || 'Gagal memuat menu keuangan' });

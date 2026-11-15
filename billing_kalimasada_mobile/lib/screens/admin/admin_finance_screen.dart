@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../services/api_client.dart';
 
@@ -16,6 +19,7 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
   static const _orange = Color(0xFFE49A16);
   static const _green = Color(0xFF10B981);
   static const _red = Color(0xFFE84C4F);
+  static const _paymentsCachePrefix = 'finance_payments_cache_v2';
   static const _monthNames = [
     'Januari',
     'Februari',
@@ -40,11 +44,15 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
   final _date = DateFormat('yyyy-MM-dd');
 
   Map<String, dynamic>? _data;
-  bool _loading = true;
+  /// Full-page spinner hanya sekali saat benar-benar belum ada kerangka UI.
+  bool _loading = false;
+  bool _contentLoading = true;
+  bool _loadingMore = false;
   String? _error;
   int _selectedMenu = 0;
   late int _month;
   late int _year;
+  final Set<String> _loadedSections = {};
 
   @override
   void initState() {
@@ -52,41 +60,182 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
     final now = DateTime.now();
     _month = now.month;
     _year = now.year;
+    // Kerangka UI langsung tampil; data diisi async.
+    _data = {
+      'payments': {
+        'summary': <String, dynamic>{},
+        'items': <dynamic>[],
+      },
+      'options': {
+        'payment_methods': const [
+          'Cash',
+          'Transfer Bank',
+          'E-Wallet',
+          'Kartu Kredit',
+        ],
+        'income_categories': <dynamic>[],
+        'expense_categories': <dynamic>[],
+      },
+    };
     _load();
+  }
+
+  void _mergeFinanceData(Map<String, dynamic> incoming) {
+    final next = Map<String, dynamic>.from(_data ?? const {});
+    for (final entry in incoming.entries) {
+      next[entry.key] = entry.value;
+    }
+    _data = next;
+    final sections = incoming['sections'];
+    if (sections is List) {
+      for (final s in sections) {
+        final key = s.toString();
+        if (key.isNotEmpty && key != 'all') _loadedSections.add(key);
+      }
+    }
+  }
+
+  String _paymentsCacheKey() {
+    final monthParam = _month == 0 ? 'all' : _month.toString();
+    final tenant = ApiClient.apiTenant ?? 'default';
+    return '${_paymentsCachePrefix}_${tenant}_${monthParam}_$_year';
+  }
+
+  Future<Map<String, dynamic>?> _readPaymentsCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_paymentsCacheKey());
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return null;
+      return Map<String, dynamic>.from(decoded);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _writePaymentsCache(Map<String, dynamic> data) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final slim = <String, dynamic>{
+        if (data['payments'] != null) 'payments': data['payments'],
+        if (data['options'] != null) 'options': data['options'],
+        if (data['period'] != null) 'period': data['period'],
+        'sections': const ['payments'],
+      };
+      await prefs.setString(_paymentsCacheKey(), jsonEncode(slim));
+    } catch (_) {}
+  }
+
+  Future<Map<String, dynamic>> _fetchSections(
+    String sections, {
+    int limit = 30,
+  }) async {
+    final monthParam = _month == 0 ? 'all' : _month.toString();
+    final response = await ApiClient.get(
+      '/api/mobile-adapter/admin/finance/overview'
+      '?month=$monthParam&year=$_year&sections=$sections&limit=$limit&fast=1',
+    );
+    final body = ApiClient.decodeJsonObject(
+      response,
+      debugLabel: 'admin/finance/overview:$sections',
+    );
+    if (response.statusCode != 200 ||
+        !ApiClient.jsonSuccess(body['success'])) {
+      throw FormatException(
+        body['message']?.toString() ?? 'Gagal memuat keuangan',
+      );
+    }
+    final raw = body['data'];
+    if (raw is! Map) throw const FormatException('Data keuangan tidak valid');
+    return Map<String, dynamic>.from(raw);
   }
 
   Future<void> _load() async {
     setState(() {
-      _loading = true;
+      _contentLoading = true;
       _error = null;
+      _loadedSections.clear();
     });
+
+    // Tampilkan cache dulu agar riwayat tidak kosong lama.
+    final cached = await _readPaymentsCache();
+    if (cached != null && mounted) {
+      setState(() {
+        _mergeFinanceData(cached);
+        _loadedSections.add('payments');
+        if (cached['options'] is Map) _loadedSections.add('options');
+      });
+    }
+
     try {
-      final monthParam = _month == 0 ? 'all' : _month.toString();
-      final response = await ApiClient.get(
-        '/api/mobile-adapter/admin/finance/overview?month=$monthParam&year=$_year',
-      );
-      final body = ApiClient.decodeJsonObject(
-        response,
-        debugLabel: 'admin/finance/overview',
-      );
-      if (response.statusCode != 200 ||
-          !ApiClient.jsonSuccess(body['success'])) {
-        throw FormatException(
-          body['message']?.toString() ?? 'Gagal memuat keuangan',
-        );
-      }
-      final raw = body['data'];
-      if (raw is! Map) throw const FormatException('Data keuangan tidak valid');
+      // Hanya payments — tanpa options/report agar respons cepat.
+      final light = await _fetchSections('payments', limit: 20);
+      if (!mounted) return;
       setState(() {
-        _data = Map<String, dynamic>.from(raw);
+        _mergeFinanceData(light);
+        _loadedSections.add('payments');
+        if (light['options'] is Map) {
+          _loadedSections.add('options');
+        }
+        _contentLoading = false;
         _loading = false;
       });
+      await _writePaymentsCache(light);
     } catch (e) {
+      if (!mounted) return;
+      // Jika cache sudah ada, tetap tampilkan cache; jangan blank.
+      final hasCachedPayments =
+          _list(_map(_data?['payments'])['items']).isNotEmpty;
       setState(() {
-        _error =
-            'Menu keuangan belum tersedia dari server. Restart/deploy backend lalu muat ulang.';
+        if (!hasCachedPayments) {
+          _data = null;
+          _error =
+              'Gagal memuat keuangan. Cek koneksi / restart backend, lalu muat ulang.';
+        }
+        _contentLoading = false;
         _loading = false;
       });
+    }
+  }
+
+  Future<void> _ensureSections(List<String> sections) async {
+    final missing = sections
+        .where((s) => !_loadedSections.contains(s))
+        .toList();
+    if (missing.isEmpty || _loadingMore) return;
+    setState(() => _loadingMore = true);
+    try {
+      final extra = await _fetchSections(missing.join(','), limit: 40);
+      if (!mounted) return;
+      setState(() {
+        _mergeFinanceData(extra);
+        _loadedSections.addAll(missing);
+        _loadingMore = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingMore = false);
+    }
+  }
+
+  Future<void> _onSelectMenu(int menu) async {
+    setState(() => _selectedMenu = menu);
+    switch (menu) {
+      case 1:
+        await _ensureSections(['remittance']);
+        break;
+      case 2:
+        await _ensureSections(['income', 'report', 'options']);
+        break;
+      case 3:
+        await _ensureSections(['expenses', 'report', 'options']);
+        break;
+      case 4:
+        await _ensureSections(['report', 'income', 'expenses']);
+        break;
+      default:
+        await _ensureSections(['payments']);
     }
   }
 
@@ -204,13 +353,24 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
   }
 
   Widget _buildBody() {
-    if (_loading) {
+    if (_loading && _data == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_error != null) {
+    if (_error != null && _data == null) {
       return _ErrorState(message: _error!, onRetry: _load);
     }
-    return _tabList(_selectedContent());
+    return Stack(
+      children: [
+        _tabList(_selectedContent()),
+        if (_contentLoading || _loadingMore)
+          const Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            child: LinearProgressIndicator(minHeight: 2),
+          ),
+      ],
+    );
   }
 
   List<Widget> _selectedContent() {
@@ -254,7 +414,7 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
           icon: Icons.receipt_long_rounded,
           color: _navy,
           selected: _selectedMenu == 0 || _areaScoped,
-          onTap: () => setState(() => _selectedMenu = 0),
+          onTap: () => _onSelectMenu(0),
         ),
         if (!_areaScoped) ..._fullFinanceMenuButtons(),
       ],
@@ -269,7 +429,7 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
         icon: Icons.assignment_returned_rounded,
         color: _orange,
         selected: _selectedMenu == 1,
-        onTap: () => setState(() => _selectedMenu = 1),
+        onTap: () => _onSelectMenu(1),
       ),
       const SizedBox(height: 6),
       _FinanceMenuButton(
@@ -277,7 +437,7 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
         icon: Icons.trending_up_rounded,
         color: _green,
         selected: _selectedMenu == 2,
-        onTap: () => setState(() => _selectedMenu = 2),
+        onTap: () => _onSelectMenu(2),
       ),
       const SizedBox(height: 6),
       _FinanceMenuButton(
@@ -285,7 +445,7 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
         icon: Icons.trending_down_rounded,
         color: _red,
         selected: _selectedMenu == 3,
-        onTap: () => setState(() => _selectedMenu = 3),
+        onTap: () => _onSelectMenu(3),
       ),
       const SizedBox(height: 6),
       _FinanceMenuButton(
@@ -293,7 +453,7 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
         icon: Icons.assessment_rounded,
         color: _navy,
         selected: _selectedMenu == 4,
-        onTap: () => setState(() => _selectedMenu = 4),
+        onTap: () => _onSelectMenu(4),
       ),
     ];
   }
@@ -401,9 +561,24 @@ class _AdminFinanceScreenState extends State<AdminFinanceScreen> {
       const SizedBox(height: 14),
       _SectionCard(
         title: 'Riwayat Pembayaran',
-        subtitle: '${items.length} transaksi terbaru',
+        subtitle: items.isEmpty && _contentLoading
+            ? 'Memuat transaksi…'
+            : '${items.length} transaksi terbaru',
         child: items.isEmpty
-            ? const _EmptyState(text: 'Belum ada pembayaran pada periode ini.')
+            ? (_contentLoading
+                  ? const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 18),
+                      child: Center(
+                        child: SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2.4),
+                        ),
+                      ),
+                    )
+                  : const _EmptyState(
+                      text: 'Belum ada pembayaran pada periode ini.',
+                    ))
             : Column(
                 children: [for (final item in items) _paymentHistoryRow(item)],
               ),

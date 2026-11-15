@@ -38,14 +38,35 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
 
   static const _customerFlowColor = Color(0xFF00E676);
   static const _backboneFlowColor = Color(0xFF40C4FF);
+  static const _maxFlowDots = 36;
+
+  /// Filter tampilan marker di peta (semua aktif default).
+  bool _showCustomerActive = true;
+  bool _showCustomerInactive = true;
+  bool _showOdpActive = true;
+  bool _showOdpInactive = true;
+  bool _showOdpMaintenance = true;
+  bool _filterPanelOpen = false;
+
+  static const _customerOfflineColor = Color(0xFFDC3545);
+
+  /// Cache layer — di-rebuild hanya saat data/filter berubah (bukan tiap frame animasi).
+  final Map<String, Map> _customerById = {};
+  List<Marker> _cachedCustomerMarkers = const [];
+  List<Marker> _cachedOdpMarkers = const [];
+  List<Polyline> _cachedCablePolylines = const [];
+  List<Polyline> _cachedBackbonePolylines = const [];
+  List<List<LatLng>> _cachedCableSegments = const [];
+  List<List<LatLng>> _cachedBackboneSegments = const [];
+  bool _flowAnimEnabled = true;
 
   @override
   void initState() {
     super.initState();
     _flowController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 2200),
-    )..repeat();
+      duration: const Duration(milliseconds: 3200),
+    );
     _fetchNetworkMap();
   }
 
@@ -61,14 +82,13 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
       final response = await ApiClient.get('/api/mobile-adapter/network-map');
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       if (ApiClient.jsonSuccess(data['success'])) {
-        setState(() {
-          final payload = Map<String, dynamic>.from(data['data'] ?? {});
-          _odps = List<dynamic>.from(payload['odps'] ?? const []);
-          _customers = List<dynamic>.from(payload['customers'] ?? const []);
-          _cableRoutes = List<dynamic>.from(payload['cableRoutes'] ?? const []);
-          _backbone = List<dynamic>.from(payload['backbone'] ?? const []);
-          _selectedMapCustomer = null;
-        });
+        final payload = Map<String, dynamic>.from(data['data'] ?? {});
+        _odps = List<dynamic>.from(payload['odps'] ?? const []);
+        _customers = List<dynamic>.from(payload['customers'] ?? const []);
+        _cableRoutes = List<dynamic>.from(payload['cableRoutes'] ?? const []);
+        _backbone = List<dynamic>.from(payload['backbone'] ?? const []);
+        _selectedMapCustomer = null;
+        _rebuildMapCaches();
       }
     } catch (e) {
       print('Error fetching network map: $e');
@@ -77,6 +97,144 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  void _syncFlowAnimation() {
+    final heavy =
+        _customers.length + _odps.length + _cableRoutes.length > 140;
+    _flowAnimEnabled = !heavy;
+    if (_flowAnimEnabled) {
+      if (!_flowController.isAnimating) {
+        _flowController.repeat();
+      }
+    } else if (_flowController.isAnimating) {
+      _flowController.stop();
+      _flowController.value = 0;
+    }
+  }
+
+  void _rebuildMapCaches() {
+    _customerById
+      ..clear()
+      ..addEntries(
+        _customers.whereType<Map>().where((c) => c['id'] != null).map(
+              (c) => MapEntry(c['id'].toString(), c),
+            ),
+      );
+
+    _cachedBackboneSegments = _buildBackboneSegments();
+    _cachedBackbonePolylines = _cachedBackboneSegments
+        .map(
+          (points) => Polyline(
+            points: points,
+            color: const Color(0xFFFFD400),
+            strokeWidth: 3.5,
+          ),
+        )
+        .toList(growable: false);
+
+    final visibleCables = _cableRoutes
+        .whereType<Map>()
+        .where(_isCableRouteVisible)
+        .toList(growable: false);
+
+    final cablePolylines = <Polyline>[];
+    final cableSegments = <List<LatLng>>[];
+    for (final row in visibleCables) {
+      final fromLat = (row['customer_lat'] as num?)?.toDouble();
+      final fromLng = (row['customer_lng'] as num?)?.toDouble();
+      final toLat = (row['odp_lat'] as num?)?.toDouble();
+      final toLng = (row['odp_lng'] as num?)?.toDouble();
+      if (fromLat == null ||
+          fromLng == null ||
+          toLat == null ||
+          toLng == null) {
+        continue;
+      }
+      final points = [LatLng(fromLat, fromLng), LatLng(toLat, toLng)];
+      final online = _isCableOnlineOnMap(row);
+      cablePolylines.add(
+        Polyline(
+          points: points,
+          color: online ? const Color(0xFF28A745) : const Color(0xFFDC3545),
+          strokeWidth: 2.5,
+        ),
+      );
+      cableSegments.add([LatLng(toLat, toLng), LatLng(fromLat, fromLng)]);
+    }
+    _cachedCablePolylines = cablePolylines;
+    _cachedCableSegments = cableSegments;
+
+    _cachedCustomerMarkers = _customers
+        .whereType<Map>()
+        .where(_isCustomerRowVisible)
+        .map((c) {
+          final lat = (c['latitude'] as num?)?.toDouble();
+          final lng = (c['longitude'] as num?)?.toDouble();
+          if (lat == null || lng == null) return null;
+          final online = _isCustomerOnlineOnMap(c);
+          final color =
+              online ? const Color(0xFF2196F3) : _customerOfflineColor;
+          final row = Map<String, dynamic>.from(c);
+          return Marker(
+            point: LatLng(lat, lng),
+            width: 20,
+            height: 20,
+            alignment: Alignment.center,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _onCustomerMarkerTap(row),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 1),
+                ),
+                child: const Icon(
+                  Icons.home_rounded,
+                  size: 11,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          );
+        })
+        .whereType<Marker>()
+        .toList(growable: false);
+
+    _cachedOdpMarkers = _odps
+        .whereType<Map>()
+        .where(_isOdpRowVisible)
+        .map((odp) {
+          final status = (odp['status'] ?? 'active').toString();
+          final lat = (odp['latitude'] as num?)?.toDouble();
+          final lng = (odp['longitude'] as num?)?.toDouble();
+          if (lat == null || lng == null) return null;
+          final odpId =
+              odp['code'] ?? odp['name'] ?? odp['id']?.toString() ?? '';
+          return Marker(
+            point: LatLng(lat, lng),
+            width: 26,
+            height: 30,
+            alignment: Alignment.topCenter,
+            child: GestureDetector(
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) =>
+                        OdpDetailScreen(odpId: odpId.toString()),
+                  ),
+                ).then((_) => _fetchNetworkMap());
+              },
+              child: OdpMapMarker(status: status, size: 24),
+            ),
+          );
+        })
+        .whereType<Marker>()
+        .toList(growable: false);
+
+    _syncFlowAnimation();
   }
 
   void _zoomIn() {
@@ -364,24 +522,95 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
     );
   }
 
-  List<List<LatLng>> _buildCustomerCableSegments() {
-    return _cableRoutes
-        .whereType<Map>()
-        .map((row) {
-          final fromLat = (row['odp_lat'] as num?)?.toDouble();
-          final fromLng = (row['odp_lng'] as num?)?.toDouble();
-          final toLat = (row['customer_lat'] as num?)?.toDouble();
-          final toLng = (row['customer_lng'] as num?)?.toDouble();
-          if (fromLat == null ||
-              fromLng == null ||
-              toLat == null ||
-              toLng == null) {
-            return null;
-          }
-          return [LatLng(fromLat, fromLng), LatLng(toLat, toLng)];
-        })
-        .whereType<List<LatLng>>()
-        .toList();
+  /// Online/offline di peta = status PPPoE (bukan status billing),
+  /// supaya warna rumah dan kabel selalu selaras.
+  bool _isCustomerOnlineOnMap(Map row) {
+    final pa = row['pppoe_active'];
+    if (pa == true || pa == 1) return true;
+    if (pa is String) {
+      final s = pa.toLowerCase().trim();
+      if (s == 'true' || s == '1') return true;
+      if (s == 'false' || s == '0') return false;
+    }
+    if (pa == false || pa == 0) return false;
+    if (row['network_down'] == true) return false;
+    // PPPoE tidak diketahui: ikut status billing sebagai fallback.
+    return (row['status'] ?? 'active').toString().toLowerCase() == 'active';
+  }
+
+  bool _isCableOnlineOnMap(Map row) {
+    if (row['network_down'] == true) return false;
+    final customer = _findCustomerForCable(row);
+    if (customer != null) return _isCustomerOnlineOnMap(customer);
+    final status = (row['status'] ?? 'connected').toString().toLowerCase();
+    return status == 'connected';
+  }
+
+  bool _isOdpStatusVisible(String? rawStatus) {
+    final status = (rawStatus ?? 'active').toString().toLowerCase();
+    if (status == 'inactive') return _showOdpInactive;
+    if (status == 'maintenance') return _showOdpMaintenance;
+    return _showOdpActive;
+  }
+
+  bool _isCustomerRowVisible(Map row) {
+    final online = _isCustomerOnlineOnMap(row);
+    return online ? _showCustomerActive : _showCustomerInactive;
+  }
+
+  bool _isOdpRowVisible(Map row) {
+    return _isOdpStatusVisible(row['status']?.toString());
+  }
+
+  Map? _findCustomerForCable(Map row) {
+    final customerId = row['customer_id']?.toString();
+    if (customerId != null && customerId.isNotEmpty) {
+      final hit = _customerById[customerId];
+      if (hit != null) return hit;
+    }
+    final lat = (row['customer_lat'] as num?)?.toDouble();
+    final lng = (row['customer_lng'] as num?)?.toDouble();
+    if (lat == null || lng == null) return null;
+    for (final c in _customers.whereType<Map>()) {
+      final cLat = (c['latitude'] as num?)?.toDouble();
+      final cLng = (c['longitude'] as num?)?.toDouble();
+      if (cLat == null || cLng == null) continue;
+      if ((cLat - lat).abs() < 0.00001 && (cLng - lng).abs() < 0.00001) {
+        return c;
+      }
+    }
+    return null;
+  }
+
+  Map? _findOdpForCable(Map row) {
+    final odpKey =
+        (row['odp_id'] ?? row['odp_code'] ?? row['odp_name'])?.toString();
+    if (odpKey != null && odpKey.isNotEmpty) {
+      for (final o in _odps.whereType<Map>()) {
+        final key = (o['id'] ?? o['code'] ?? o['name'])?.toString();
+        if (key == odpKey) return o;
+      }
+    }
+    final lat = (row['odp_lat'] as num?)?.toDouble();
+    final lng = (row['odp_lng'] as num?)?.toDouble();
+    if (lat == null || lng == null) return null;
+    for (final o in _odps.whereType<Map>()) {
+      final oLat = (o['latitude'] as num?)?.toDouble();
+      final oLng = (o['longitude'] as num?)?.toDouble();
+      if (oLat == null || oLng == null) continue;
+      if ((oLat - lat).abs() < 0.00001 && (oLng - lng).abs() < 0.00001) {
+        return o;
+      }
+    }
+    return null;
+  }
+
+  bool _isCableRouteVisible(Map row) {
+    final customer = _findCustomerForCable(row);
+    final odp = _findOdpForCable(row);
+    if (customer != null && !_isCustomerRowVisible(customer)) return false;
+    if (odp != null && !_isOdpRowVisible(odp)) return false;
+    return true;
   }
 
   List<List<LatLng>> _buildBackboneSegments() {
@@ -411,22 +640,36 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
     );
   }
 
+  List<List<LatLng>> _sampleSegments(
+    List<List<LatLng>> segments, {
+    int maxCount = _maxFlowDots,
+  }) {
+    if (segments.length <= maxCount) return segments;
+    final out = <List<LatLng>>[];
+    for (var i = 0; i < maxCount; i++) {
+      out.add(segments[(i * segments.length) ~/ maxCount]);
+    }
+    return out;
+  }
+
   List<CircleMarker> _buildFlowDots(
     List<List<LatLng>> segments, {
     required Color color,
     required double phaseShift,
   }) {
+    if (!_flowAnimEnabled || segments.isEmpty) return const [];
     final t = (_flowController.value + phaseShift) % 1.0;
-    return segments.map((segment) {
+    final sampled = _sampleSegments(segments);
+    return sampled.map((segment) {
       final p = _interpolatePoint(segment.first, segment.last, t);
       return CircleMarker(
         point: p,
-        radius: 4.2,
+        radius: 3.4,
         color: color,
         borderColor: Colors.white,
-        borderStrokeWidth: 1.2,
+        borderStrokeWidth: 0.8,
       );
-    }).toList();
+    }).toList(growable: false);
   }
 
   Widget _buildGpsPulseMarker() {
@@ -478,141 +721,239 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
     );
   }
 
-  /// Teks legenda di atas peta: gelap + halo putih agar tetap terbaca tanpa panel opak.
-  static const List<Shadow> _legendShadows = [
-    Shadow(color: Color(0xE6FFFFFF), blurRadius: 2, offset: Offset(0, 0)),
-    Shadow(color: Color(0xCCFFFFFF), blurRadius: 5, offset: Offset(0, 0)),
-    Shadow(color: Color(0x55000000), blurRadius: 1, offset: Offset(0, 1)),
-  ];
+  void _toggleFilter(void Function() update) {
+    setState(() {
+      update();
+      final selected = _selectedMapCustomer;
+      if (selected != null && !_isCustomerRowVisible(selected)) {
+        _selectedMapCustomer = null;
+      }
+      _rebuildMapCaches();
+    });
+  }
 
-  TextStyle _legendBodyStyle() => const TextStyle(
-    fontSize: 10,
-    height: 1.05,
-    letterSpacing: -0.1,
-    color: Color(0xFF0D0B1A),
-    fontWeight: FontWeight.w600,
-    shadows: _legendShadows,
-  );
-
-  TextStyle _legendTitleStyle() => const TextStyle(
-    fontSize: 10.5,
-    height: 1.05,
-    fontWeight: FontWeight.w800,
-    color: Color(0xFF070038),
-    letterSpacing: 0.15,
-    shadows: _legendShadows,
-  );
-
-  Widget _legendRowIcon(Widget icon, String label) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          SizedBox(width: 18, height: 18, child: Center(child: icon)),
-          const SizedBox(width: 5),
-          Expanded(child: Text(label, style: _legendBodyStyle())),
+  Widget _filterChipIcon({
+    required Color color,
+    required IconData icon,
+    Color iconColor = Colors.white,
+    double size = 16,
+  }) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 1),
+        boxShadow: const [
+          BoxShadow(color: Colors.black26, blurRadius: 2, offset: Offset(0, 1)),
         ],
+      ),
+      child: Icon(icon, size: size * 0.55, color: iconColor),
+    );
+  }
+
+  Widget _buildFilterToggleRow({
+    required bool enabled,
+    required Widget icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Opacity(
+        opacity: enabled ? 1 : 0.42,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+          child: Row(
+            children: [
+              Icon(
+                enabled ? Icons.check_box : Icons.check_box_outline_blank,
+                size: 18,
+                color: enabled
+                    ? const Color(0xFF2563EB)
+                    : const Color(0xFF9E9E9E),
+              ),
+              const SizedBox(width: 6),
+              icon,
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    height: 1.1,
+                    fontWeight: FontWeight.w700,
+                    color: enabled
+                        ? const Color(0xFF19163F)
+                        : const Color(0xFF787582),
+                    decoration: enabled
+                        ? TextDecoration.none
+                        : TextDecoration.lineThrough,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 
-  /// Legenda kiri bawah, tepat di bawah kolom pencarian (latar transparan, teks dengan halo).
-  Widget _buildMapLegend() {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 248),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(2, 2, 8, 0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Pelanggan & ODP', style: _legendTitleStyle()),
-            const SizedBox(height: 3),
-            _legendRowIcon(
-              Container(
-                width: 14,
-                height: 14,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF2196F3),
-                  shape: BoxShape.circle,
-                  border: Border.fromBorderSide(
-                    BorderSide(color: Colors.white, width: 1),
-                  ),
-                ),
-                child: const Icon(Icons.home, size: 8, color: Colors.white),
-              ),
-              'Pelanggan aktif',
+  bool get _hasActiveFilter =>
+      !_showCustomerActive ||
+      !_showCustomerInactive ||
+      !_showOdpActive ||
+      !_showOdpInactive ||
+      !_showOdpMaintenance;
+
+  Widget _buildMapFilterButton() {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => setState(() => _filterPanelOpen = !_filterPanelOpen),
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: _filterPanelOpen || _hasActiveFilter
+                ? const Color(0xFF2563EB)
+                : const Color(0xFFFCF8FF),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: _filterPanelOpen || _hasActiveFilter
+                  ? const Color(0xFF2563EB)
+                  : const Color(0xFFC8C4D3),
             ),
-            _legendRowIcon(
-              Container(
-                width: 14,
-                height: 14,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF9E9E9E),
-                  shape: BoxShape.circle,
-                  border: Border.fromBorderSide(
-                    BorderSide(color: Colors.white, width: 1),
-                  ),
-                ),
-                child: const Icon(Icons.home, size: 8, color: Colors.white),
+            boxShadow: const [
+              BoxShadow(
+                color: Colors.black26,
+                blurRadius: 6,
+                offset: Offset(0, 2),
               ),
-              'Pelanggan tidak aktif',
-            ),
-            _legendRowIcon(
-              Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFC107),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: const Color(0xFFF9A825)),
-                ),
-                child: const Icon(
-                  Icons.settings_input_antenna_rounded,
-                  size: 7,
-                  color: Color(0xFF5D4037),
-                ),
-              ),
-              'ODP aktif',
-            ),
-            _legendRowIcon(
-              Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFC4C4C4),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Color(0xFF9E9E9E)),
-                ),
-                child: const Icon(
-                  Icons.settings_input_antenna_rounded,
-                  size: 7,
-                  color: Color(0xFF424242),
-                ),
-              ),
-              'ODP nonaktif',
-            ),
-            _legendRowIcon(
-              Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFCA28),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Color(0xFFFF9800)),
-                ),
-                child: const Icon(
-                  Icons.settings_input_component_rounded,
-                  size: 7,
-                  color: Color(0xFF5D4037),
-                ),
-              ),
-              'ODP pemeliharaan',
-            ),
-          ],
+            ],
+          ),
+          child: Icon(
+            _filterPanelOpen ? Icons.close : Icons.filter_alt_rounded,
+            size: 22,
+            color: _filterPanelOpen || _hasActiveFilter
+                ? Colors.white
+                : const Color(0xFF19163F),
+          ),
         ),
       ),
+    );
+  }
+
+  /// Tombol ringkas di tengah kanan; panel muncul hanya saat dibuka.
+  Widget _buildMapFilterControl() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        if (_filterPanelOpen) ...[
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 196),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(8, 10, 8, 8),
+              decoration: BoxDecoration(
+                color: const Color(0xF2FFFFFF),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFC7D7FE)),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black26,
+                    blurRadius: 10,
+                    offset: Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4),
+                    child: Text(
+                      'Filter perangkat',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF070038),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  _buildFilterToggleRow(
+                    enabled: _showCustomerActive,
+                    icon: _filterChipIcon(
+                      color: const Color(0xFF2196F3),
+                      icon: Icons.home_rounded,
+                    ),
+                    label: 'Pelanggan online',
+                    onTap: () => _toggleFilter(
+                      () => _showCustomerActive = !_showCustomerActive,
+                    ),
+                  ),
+                  _buildFilterToggleRow(
+                    enabled: _showCustomerInactive,
+                    icon: _filterChipIcon(
+                      color: _customerOfflineColor,
+                      icon: Icons.home_rounded,
+                    ),
+                    label: 'Pelanggan offline',
+                    onTap: () => _toggleFilter(
+                      () => _showCustomerInactive = !_showCustomerInactive,
+                    ),
+                  ),
+                  _buildFilterToggleRow(
+                    enabled: _showOdpActive,
+                    icon: _filterChipIcon(
+                      color: const Color(0xFFFFC107),
+                      icon: Icons.settings_input_antenna_rounded,
+                      iconColor: const Color(0xFF5D4037),
+                      size: 14,
+                    ),
+                    label: 'ODP aktif',
+                    onTap: () =>
+                        _toggleFilter(() => _showOdpActive = !_showOdpActive),
+                  ),
+                  _buildFilterToggleRow(
+                    enabled: _showOdpInactive,
+                    icon: _filterChipIcon(
+                      color: const Color(0xFFC4C4C4),
+                      icon: Icons.settings_input_antenna_rounded,
+                      iconColor: const Color(0xFF424242),
+                      size: 14,
+                    ),
+                    label: 'ODP nonaktif',
+                    onTap: () => _toggleFilter(
+                      () => _showOdpInactive = !_showOdpInactive,
+                    ),
+                  ),
+                  _buildFilterToggleRow(
+                    enabled: _showOdpMaintenance,
+                    icon: _filterChipIcon(
+                      color: const Color(0xFFFFCA28),
+                      icon: Icons.settings_input_component_rounded,
+                      iconColor: const Color(0xFF5D4037),
+                      size: 14,
+                    ),
+                    label: 'ODP pemeliharaan',
+                    onTap: () => _toggleFilter(
+                      () => _showOdpMaintenance = !_showOdpMaintenance,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+        _buildMapFilterButton(),
+      ],
     );
   }
 
@@ -678,200 +1019,73 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
       ),
       body: Stack(
         children: [
-          // Map Background Layer
-          AnimatedBuilder(
-            animation: _flowController,
-            builder: (context, _) {
-              final backboneSegments = _buildBackboneSegments();
-              final cableSegments = _buildCustomerCableSegments();
-              return FlutterMap(
-                mapController: _mapController,
-                options: MapOptions(
-                  initialCenter: _defaultCenter,
-                  initialZoom: _currentZoom,
-                  onMapReady: () {
-                    _isMapReady = true;
-                  },
-                  onTap: (tapPosition, latLng) {
-                    setState(() => _selectedMapCustomer = null);
-                  },
-                  onPositionChanged: (position, hasGesture) {
-                    if (hasGesture) {
-                      _currentZoom = position.zoom;
-                    }
-                  },
+          // Map — marker/polyline dari cache; hanya flow dots yang dianimasikan.
+          RepaintBoundary(
+            child: FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter: _defaultCenter,
+                initialZoom: _currentZoom,
+                keepAlive: true,
+                onMapReady: () {
+                  _isMapReady = true;
+                },
+                onTap: (tapPosition, latLng) {
+                  setState(() => _selectedMapCustomer = null);
+                },
+                onPositionChanged: (position, hasGesture) {
+                  if (hasGesture) {
+                    _currentZoom = position.zoom;
+                  }
+                },
+              ),
+              children: [
+                TileLayer(
+                  urlTemplate:
+                      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                  userAgentPackageName:
+                      'com.example.billing_kalimasada_mobile',
+                  keepBuffer: 2,
+                  panBuffer: 1,
                 ),
-                children: [
-                  TileLayer(
-                    urlTemplate:
-                        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                    userAgentPackageName:
-                        'com.example.billing_kalimasada_mobile',
-                  ),
-                  PolylineLayer(
-                    polylines: backboneSegments
-                        .map(
-                          (points) => Polyline(
-                            points: points,
-                            color: const Color(0xFFFFD400),
-                            strokeWidth: 4,
+                PolylineLayer(polylines: _cachedBackbonePolylines),
+                PolylineLayer(polylines: _cachedCablePolylines),
+                if (_flowAnimEnabled)
+                  AnimatedBuilder(
+                    animation: _flowController,
+                    builder: (context, _) {
+                      return CircleLayer(
+                        circles: [
+                          ..._buildFlowDots(
+                            _cachedCableSegments,
+                            color: _customerFlowColor,
+                            phaseShift: 0.0,
                           ),
-                        )
-                        .toList(),
+                          ..._buildFlowDots(
+                            _cachedBackboneSegments,
+                            color: _backboneFlowColor,
+                            phaseShift: 0.35,
+                          ),
+                        ],
+                      );
+                    },
                   ),
-                  PolylineLayer(
-                    polylines: _cableRoutes
-                        .whereType<Map>()
-                        .map((row) {
-                          final fromLat = (row['customer_lat'] as num?)
-                              ?.toDouble();
-                          final fromLng = (row['customer_lng'] as num?)
-                              ?.toDouble();
-                          final toLat = (row['odp_lat'] as num?)?.toDouble();
-                          final toLng = (row['odp_lng'] as num?)?.toDouble();
-                          if (fromLat == null ||
-                              fromLng == null ||
-                              toLat == null ||
-                              toLng == null) {
-                            return null;
-                          }
-                          final status = (row['status'] ?? 'connected')
-                              .toString()
-                              .toLowerCase();
-                          return Polyline(
-                            points: [
-                              LatLng(fromLat, fromLng),
-                              LatLng(toLat, toLng),
-                            ],
-                            color: status == 'connected'
-                                ? const Color(0xFF28A745)
-                                : const Color(0xFFDC3545),
-                            strokeWidth: 3,
-                          );
-                        })
-                        .whereType<Polyline>()
-                        .toList(),
-                  ),
-                  CircleLayer(
-                    circles: _buildFlowDots(
-                      cableSegments,
-                      color: _customerFlowColor,
-                      phaseShift: 0.0,
-                    ),
-                  ),
-                  CircleLayer(
-                    circles: _buildFlowDots(
-                      backboneSegments,
-                      color: _backboneFlowColor,
-                      phaseShift: 0.35,
-                    ),
-                  ),
+                MarkerLayer(markers: _cachedCustomerMarkers),
+                if (_currentGpsLocation != null)
                   MarkerLayer(
-                    markers: _customers
-                        .whereType<Map>()
-                        .map((c) {
-                          final lat = (c['latitude'] as num?)?.toDouble();
-                          final lng = (c['longitude'] as num?)?.toDouble();
-                          if (lat == null || lng == null) return null;
-                          final status = (c['status'] ?? 'active')
-                              .toString()
-                              .toLowerCase();
-                          final color = status == 'active'
-                              ? const Color(0xFF2196F3)
-                              : const Color(0xFF9E9E9E);
-                          final row = Map<String, dynamic>.from(c);
-                          return Marker(
-                            point: LatLng(lat, lng),
-                            width: 22,
-                            height: 22,
-                            alignment: Alignment.center,
-                            child: GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onTap: () => _onCustomerMarkerTap(row),
-                              child: Container(
-                                width: 22,
-                                height: 22,
-                                decoration: BoxDecoration(
-                                  color: color,
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: Colors.white,
-                                    width: 1,
-                                  ),
-                                  boxShadow: const [
-                                    BoxShadow(
-                                      color: Colors.black26,
-                                      blurRadius: 3,
-                                      offset: Offset(0, 1),
-                                    ),
-                                  ],
-                                ),
-                                alignment: Alignment.center,
-                                child: const Icon(
-                                  Icons.home_rounded,
-                                  size: 12,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                          );
-                        })
-                        .whereType<Marker>()
-                        .toList(),
+                    markers: [
+                      Marker(
+                        point: _currentGpsLocation!,
+                        width: 34,
+                        height: 34,
+                        alignment: Alignment.center,
+                        child: _buildGpsPulseMarker(),
+                      ),
+                    ],
                   ),
-                  if (_currentGpsLocation != null)
-                    MarkerLayer(
-                      markers: [
-                        Marker(
-                          point: _currentGpsLocation!,
-                          width: 34,
-                          height: 34,
-                          alignment: Alignment.center,
-                          child: _buildGpsPulseMarker(),
-                        ),
-                      ],
-                    ),
-                  MarkerLayer(
-                    markers: _odps
-                        .map((odp) {
-                          final status = (odp['status'] ?? 'active').toString();
-                          final lat = (odp['latitude'] as num?)?.toDouble();
-                          final lng = (odp['longitude'] as num?)?.toDouble();
-                          if (lat == null || lng == null) {
-                            return null;
-                          }
-
-                          return Marker(
-                            point: LatLng(lat, lng),
-                            width: 28,
-                            height: 33,
-                            alignment: Alignment.topCenter,
-                            child: GestureDetector(
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (context) => OdpDetailScreen(
-                                      odpId:
-                                          odp['code'] ??
-                                          odp['name'] ??
-                                          odp['id'].toString(),
-                                    ),
-                                  ),
-                                ).then(
-                                  (_) => _fetchNetworkMap(),
-                                ); // Refresh after returning
-                              },
-                              child: OdpMapMarker(status: status),
-                            ),
-                          );
-                        })
-                        .whereType<Marker>()
-                        .toList(),
-                  ),
-                ],
-              );
-            },
+                MarkerLayer(markers: _cachedOdpMarkers),
+              ],
+            ),
           ),
 
           // Overlays Layer
@@ -882,7 +1096,7 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Atas kiri: pencarian + legenda di bawahnya
+                  // Atas: pencarian
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Column(
@@ -1104,8 +1318,6 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                             ),
                           ),
                         ),
-                        const SizedBox(height: 6),
-                        _buildMapLegend(),
                       ],
                     ),
                   ),
@@ -1284,6 +1496,17 @@ class _NetworkMapScreenState extends State<NetworkMapScreen>
                     ],
                   ),
                 ],
+              ),
+            ),
+          ),
+
+          // Tombol filter ringkas: tengah layar, sebelah kanan
+          SafeArea(
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: _buildMapFilterControl(),
               ),
             ),
           ),

@@ -283,10 +283,13 @@ router.get('/api/mapping/new', adminAuth, async (req, res) => {
             }
 
             const live = await buildLivePayload(customers, tenantId);
+            const enriched = live.enrichedCustomers || [];
             const data = {
-                customers: live.enrichedCustomers,
+                customers: enriched,
                 statistics: {
-                    downCustomers: live.enrichedCustomers.filter((c) => c.network_down === true).length
+                    onlineCustomers: enriched.filter((c) => c.pppoe_active === true).length,
+                    downCustomers: enriched.filter((c) => c.network_down === true).length,
+                    unknownCustomers: enriched.filter((c) => c.pppoe_active == null).length
                 }
             };
             cacheManager.set(liveKey, data, CACHE_TTL.live);

@@ -195,29 +195,22 @@ class _AdminMoreScreenState extends State<AdminMoreScreen> {
   ) {
     final base = _portalBaseDomain();
     final tenant = _tenantSlug(user);
+    if (tenant == null) return const [];
     return [
       _sectionTitle('URL PORTAL'),
       _settingsGroup([
         _portalTile(
           context,
-          icon: Icons.dashboard_customize_rounded,
-          title: 'Portal Management',
-          url: 'https://manage.$base/management/login',
+          icon: Icons.receipt_long_rounded,
+          title: 'Portal Billing',
+          url: 'https://$tenant.$base/login',
         ),
-        if (tenant != null) ...[
-          _portalTile(
-            context,
-            icon: Icons.receipt_long_rounded,
-            title: 'Portal Billing',
-            url: 'https://$tenant.$base/login',
-          ),
-          _portalTile(
-            context,
-            icon: Icons.people_alt_rounded,
-            title: 'Portal Pelanggan',
-            url: 'https://$tenant.$base/portal-pelanggan',
-          ),
-        ],
+        _portalTile(
+          context,
+          icon: Icons.people_alt_rounded,
+          title: 'Portal Pelanggan',
+          url: 'https://$tenant.$base/portal-pelanggan',
+        ),
       ]),
       const SizedBox(height: 20),
     ];

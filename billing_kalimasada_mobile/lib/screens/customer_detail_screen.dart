@@ -29,6 +29,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   bool _paymentHistoryLoading = true;
   bool _statusActionLoading = false;
   bool _savingCustomerInfo = false;
+  bool _loadingPackages = false;
 
   final _money = NumberFormat.currency(
     locale: 'id_ID',
@@ -695,21 +696,8 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
     addressCtrl.dispose();
   }
 
-  Future<void> _showEditPackageDialog() async {
-    try {
-      await _ensurePackageOptions();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(e.toString().replaceFirst('Exception: ', '')),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-    if (!mounted) return;
-    int? selectedPackageId = _asInt(customer['package_id']);
+  int? _resolveCurrentPackageId() {
+    var selectedPackageId = _asInt(customer['package_id']);
     if (selectedPackageId == null && _packageOptions.isNotEmpty) {
       final currentProfile = customer['profile']?.toString();
       for (final item in _packageOptions) {
@@ -719,72 +707,138 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
         }
       }
     }
+    return selectedPackageId;
+  }
+
+  Future<void> _showChangePackageOverlay() async {
+    setState(() => _loadingPackages = true);
+    try {
+      await _ensurePackageOptions();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loadingPackages = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _loadingPackages = false);
+
+    int? selectedPackageId = _resolveCurrentPackageId();
     await showDialog<void>(
       context: context,
+      barrierColor: Colors.black54,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+        builder: (context, setDialogState) => Dialog(
           backgroundColor: Colors.white,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 28),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(18),
           ),
-          title: const Text(
-            'Edit Paket Pelanggan',
-            style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800),
-          ),
-          content: DropdownButtonFormField<int>(
-            value: selectedPackageId,
-            isExpanded: true,
-            dropdownColor: Colors.white,
-            style: const TextStyle(color: Colors.black),
-            decoration: InputDecoration(
-              labelText: 'Paket layanan',
-              labelStyle: const TextStyle(color: Colors.black87),
-              filled: true,
-              fillColor: Colors.white,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: Color(0xFFC7D7FE)),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(
-                  color: Color(0xFF2563EB),
-                  width: 1.4,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Ganti Paket',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.black,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 18,
+                  ),
                 ),
-              ),
-            ),
-            items: _packageOptions
-                .map(
-                  (item) => DropdownMenuItem<int>(
-                    value: _asInt(item['id']),
-                    child: Text(
-                      item['name']?.toString() ?? 'Paket',
-                      style: const TextStyle(color: Colors.black),
+                const SizedBox(height: 6),
+                const Text(
+                  'Pilih paket internet baru untuk pelanggan',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Color(0xFF474551), fontSize: 13),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<int>(
+                  key: ValueKey('pkg-overlay-$selectedPackageId'),
+                  initialValue: selectedPackageId,
+                  isExpanded: true,
+                  icon: const Icon(
+                    Icons.keyboard_arrow_down,
+                    color: Color(0xFF2E9DEB),
+                  ),
+                  dropdownColor: Colors.white,
+                  style: const TextStyle(color: Colors.black),
+                  decoration: InputDecoration(
+                    labelText: 'Paket internet',
+                    labelStyle: const TextStyle(color: Colors.black87),
+                    hintText: 'Pilih paket',
+                    filled: true,
+                    fillColor: const Color(0xFFEAF2FF),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: Color(0xFFC7D7FE)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(
+                        color: Color(0xFF2563EB),
+                        width: 1.4,
+                      ),
                     ),
                   ),
-                )
-                .where((item) => item.value != null)
-                .toList(),
-            onChanged: (value) =>
-                setDialogState(() => selectedPackageId = value),
+                  items: _packageOptions
+                      .map(
+                        (item) => DropdownMenuItem<int>(
+                          value: _asInt(item['id']),
+                          child: Text(
+                            item['name']?.toString() ?? 'Paket',
+                            style: const TextStyle(color: Colors.black),
+                          ),
+                        ),
+                      )
+                      .where((item) => item.value != null)
+                      .toList(),
+                  onChanged: (value) =>
+                      setDialogState(() => selectedPackageId = value),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: _savingCustomerInfo
+                            ? null
+                            : () => Navigator.of(dialogContext).pop(),
+                        child: const Text('Batal'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed:
+                            _savingCustomerInfo || selectedPackageId == null
+                            ? null
+                            : () => _saveCustomerPackage(selectedPackageId!),
+                        child: Text(
+                          _savingCustomerInfo ? 'Menyimpan...' : 'Simpan',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-          actions: [
-            TextButton(
-              onPressed: _savingCustomerInfo
-                  ? null
-                  : () => Navigator.of(dialogContext).pop(),
-              child: const Text('Batal'),
-            ),
-            FilledButton(
-              onPressed: _savingCustomerInfo || selectedPackageId == null
-                  ? null
-                  : () => _saveCustomerPackage(selectedPackageId!),
-              child: Text(_savingCustomerInfo ? 'Menyimpan...' : 'Simpan'),
-            ),
-          ],
         ),
       ),
     );
@@ -1075,7 +1129,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                                 Icon(Icons.edit, color: surfaceTint, size: 17),
                                 SizedBox(height: 1),
                                 Text(
-                                  'Edit',
+                                  'Edit Kontak',
                                   style: TextStyle(
                                     fontSize: 10,
                                     fontWeight: FontWeight.w800,
@@ -1262,7 +1316,9 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                       ),
                       if (!isTechnician)
                         InkWell(
-                          onTap: _showEditPackageDialog,
+                          onTap: _loadingPackages
+                              ? null
+                              : _showChangePackageOverlay,
                           borderRadius: BorderRadius.circular(10),
                           child: Container(
                             padding: const EdgeInsets.symmetric(
@@ -1274,13 +1330,19 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                               borderRadius: BorderRadius.circular(10),
                               border: Border.all(color: outlineVariant),
                             ),
-                            child: const Column(
+                            child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.edit, color: surfaceTint, size: 17),
-                                SizedBox(height: 1),
-                                Text(
-                                  'Edit',
+                                Icon(
+                                  _loadingPackages
+                                      ? Icons.hourglass_top
+                                      : Icons.swap_horiz,
+                                  color: surfaceTint,
+                                  size: 17,
+                                ),
+                                const SizedBox(height: 1),
+                                const Text(
+                                  'Ganti Paket',
                                   style: TextStyle(
                                     fontSize: 10,
                                     fontWeight: FontWeight.w800,
@@ -1307,27 +1369,29 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                       children: [
                         const Icon(Icons.speed, color: surfaceTint),
                         const SizedBox(width: 12),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'SERVICE PLAN',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                color: textOnSurfaceVariant,
-                                letterSpacing: 1.1,
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Paket internet',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: textOnSurfaceVariant,
+                                  letterSpacing: 0.2,
+                                ),
                               ),
-                            ),
-                            Text(
-                              customer['profile'] ?? 'Standard Package',
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: textOnBackground,
+                              Text(
+                                customer['profile'] ?? 'Standard Package',
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: textOnBackground,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ],
                     ),

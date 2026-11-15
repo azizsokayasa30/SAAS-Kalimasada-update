@@ -191,6 +191,7 @@ function enrichCustomersWithPppoe(customers, pppoeBatch) {
     const onlineLoginSet = pppoeBatch?.names || new Set();
     const pppoeUptimeByLogin = pppoeBatch?.uptimeByLogin || Object.create(null);
     const onlineLower = new Set([...onlineLoginSet].map((n) => String(n).toLowerCase()));
+    const checkAvailable = pppoeBatch?.ok !== false && pppoeBatch?.available !== false;
 
     return (customers || []).map((customer) => {
         const pppoeLogin =
@@ -201,8 +202,18 @@ function enrichCustomersWithPppoe(customers, pppoeBatch) {
             return {
                 ...customer,
                 pppoe_active: null,
-                network_down: true,
-                down_reason: 'PPPoE username tidak ada',
+                network_down: false,
+                down_reason: 'no_pppoe_username',
+                pppoe_uptime_display: null
+            };
+        }
+        // Jangan anggap semua pelanggan "down" kalau cek PPPoE gagal/timeout.
+        if (!checkAvailable) {
+            return {
+                ...customer,
+                pppoe_active: null,
+                network_down: false,
+                down_reason: 'pppoe_check_unavailable',
                 pppoe_uptime_display: null
             };
         }
@@ -223,16 +234,19 @@ function buildCoreCustomers(customers) {
     return (customers || []).map((customer) => ({
         ...customer,
         pppoe_active: null,
-        network_down: true,
-        down_reason: 'Menunggu cek PPPoE',
+        network_down: false,
+        down_reason: 'pending',
         pppoe_uptime_display: null
     }));
 }
 
 function buildMappingStatistics(customers, odps, cables, backboneCables, onuDevices) {
+    const list = customers || [];
     return {
-        totalCustomers: customers.length,
-        downCustomers: customers.filter((c) => c.network_down === true).length,
+        totalCustomers: list.length,
+        onlineCustomers: list.filter((c) => c.pppoe_active === true).length,
+        downCustomers: list.filter((c) => c.network_down === true).length,
+        unknownCustomers: list.filter((c) => c.pppoe_active == null).length,
         totalONU: onuDevices.length,
         onlineONU: onuDevices.filter((d) => d.status === 'Online').length,
         offlineONU: onuDevices.filter((d) => d.status === 'Offline').length,
@@ -251,13 +265,38 @@ async function getPppoeBatchCached(tenantId = null) {
         return cached;
     }
     try {
-        const { getActivePppoeLoginNamesSetWithUptimeMap } = require('../config/mikrotik');
-        const batch = await getActivePppoeLoginNamesSetWithUptimeMap();
-        cacheManager.set(cacheKey, batch, CACHE_TTL.pppoe);
-        return batch;
+        const mikrotik = require('../config/mikrotik');
+        const batch = await mikrotik.getActivePppoeLoginNamesSetWithUptimeMap();
+        let ok = batch.ok !== false;
+        const onlineCount = batch.names?.size || 0;
+
+        // Poll sering mengembalikan Set kosong saat NAS timeout (bukan "semua offline").
+        // Kalau 0 online, pastikan MikroTik benar-benar reachable sebelum menandai semua "down".
+        if (ok && onlineCount === 0) {
+            try {
+                const conn = await Promise.race([
+                    mikrotik.getMikrotikConnection(),
+                    new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error('mapping-mikrotik-probe-timeout')), 1500)
+                    )
+                ]);
+                if (!conn) ok = false;
+            } catch (_) {
+                ok = false;
+            }
+        }
+
+        const result = {
+            names: batch.names || new Set(),
+            uptimeByLogin: batch.uptimeByLogin || Object.create(null),
+            ok,
+            available: ok
+        };
+        cacheManager.set(cacheKey, result, CACHE_TTL.pppoe);
+        return result;
     } catch (e) {
         console.warn('⚠️ PPPoE batch (mapping):', e.message || e);
-        return { names: new Set(), uptimeByLogin: Object.create(null) };
+        return { names: new Set(), uptimeByLogin: Object.create(null), ok: false, available: false };
     }
 }
 

@@ -202,11 +202,32 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
     final desc = _deskripsiCtrl.text.trim();
     if (desc.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Isi deskripsi penyelesaian terlebih dahulu.'),
+        SnackBar(
+          content: Text(
+            _isInstall
+                ? 'Isi deskripsi penyelesaian terlebih dahulu.'
+                : 'Isi catatan penanganan gangguan terlebih dahulu.',
+          ),
         ),
       );
       return;
+    }
+    // Gangguan: minimal 2 kata agar catatan penanganan bermakna.
+    if (!_isInstall) {
+      final words = desc
+          .split(RegExp(r'\s+'))
+          .where((w) => w.trim().isNotEmpty)
+          .toList();
+      if (words.length < 2) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Catatan penanganan gangguan minimal 2 kata/kalimat.',
+            ),
+          ),
+        );
+        return;
+      }
     }
     final id = _task['id']?.toString();
     final type = _task['type']?.toString();
@@ -657,9 +678,12 @@ class _JobExecutionScreenState extends State<JobExecutionScreen> {
                       ),
                       cursorColor: const Color(0xFF15803D),
                       decoration: InputDecoration(
-                        labelText: 'Deskripsi penyelesaian',
-                        hintText:
-                            'Contoh: kabel diganti, sinyal stabil, tes browsing OK…',
+                        labelText: _isInstall
+                            ? 'Deskripsi penyelesaian'
+                            : 'Catatan penanganan gangguan',
+                        hintText: _isInstall
+                            ? 'Contoh: instalasi selesai, ONT nyala, tes browsing OK…'
+                            : 'Minimal 2 kata. Contoh: kabel diganti, sinyal stabil…',
                         labelStyle: const TextStyle(
                           color: Color(0xFF474551),
                           fontWeight: FontWeight.w500,

@@ -7650,8 +7650,35 @@ ${lifetimePaymentStatusSql}
      * Riwayat pembayaran (admin + kolektor + tipe lain): pelanggan atau member.
      * Tanpa kolom remittance di UI — gunakan untuk halaman all-payments.
      */
+    async _ensurePaymentsHistoryIndexes() {
+        if (this._paymentsHistoryIndexesEnsured) return;
+        const stmts = [
+            'CREATE INDEX IF NOT EXISTS idx_payments_tenant_payment_date ON payments(tenant_id, payment_date)',
+            'CREATE INDEX IF NOT EXISTS idx_payments_invoice_id ON payments(invoice_id)',
+            'CREATE INDEX IF NOT EXISTS idx_payments_tenant_id ON payments(tenant_id)'
+        ];
+        await Promise.all(
+            stmts.map(
+                (sql) =>
+                    new Promise((resolve) => {
+                        this.db.run(sql, () => resolve());
+                    })
+            )
+        );
+        this._paymentsHistoryIndexesEnsured = true;
+    }
+
     _allPaymentsHistoryWhere(filters = {}) {
-        let sql = `
+        const lite = !!filters.lite || !!filters.fast;
+        let sql = lite
+            ? `
+            FROM payments p
+            JOIN invoices i ON p.invoice_id = i.id AND i.tenant_id = p.tenant_id
+            LEFT JOIN customers c ON i.customer_id = c.id AND c.tenant_id = p.tenant_id
+            LEFT JOIN collectors col ON p.collector_id = col.id AND col.tenant_id = p.tenant_id
+            WHERE 1=1
+        `
+            : `
             FROM payments p
             JOIN invoices i ON p.invoice_id = i.id AND i.tenant_id = p.tenant_id
             LEFT JOIN customers c ON i.customer_id = c.id AND c.tenant_id = p.tenant_id
@@ -7668,13 +7695,17 @@ ${lifetimePaymentStatusSql}
             // HTTP/admin tidak boleh lolos tanpa tenant (cegah dump lintas-tenant).
             sql += ` AND 1=0`;
         }
+        // Bandingkan kolom mentah (bukan date(column)) agar index payment_date terpakai.
         if (filters.from) {
-            sql += ` AND date(p.payment_date) >= date(?)`;
-            params.push(filters.from);
+            const fromRaw = String(filters.from).trim();
+            const fromTs = fromRaw.length <= 10 ? `${fromRaw} 00:00:00` : fromRaw;
+            sql += ` AND p.payment_date >= ?`;
+            params.push(fromTs);
         }
         if (filters.to) {
-            sql += ` AND date(p.payment_date) <= date(?)`;
-            params.push(filters.to);
+            const toDay = String(filters.to).trim().slice(0, 10);
+            sql += ` AND p.payment_date < date(?, '+1 day')`;
+            params.push(toDay);
         }
         if (filters.collector_id) {
             const cid = String(filters.collector_id).trim();
@@ -7687,14 +7718,24 @@ ${lifetimePaymentStatusSql}
         }
         if (filters.q) {
             const term = `%${String(filters.q).trim()}%`;
-            sql += ` AND (
-                COALESCE(c.name, '') LIKE ? OR COALESCE(m.name, '') LIKE ?
-                OR COALESCE(c.phone, '') LIKE ? OR COALESCE(m.phone, '') LIKE ?
-                OR COALESCE(i.invoice_number, '') LIKE ?
-                OR COALESCE(p.notes, '') LIKE ?
-                OR COALESCE(col.name, '') LIKE ?
-            )`;
-            params.push(term, term, term, term, term, term, term);
+            if (lite) {
+                sql += ` AND (
+                    COALESCE(c.name, '') LIKE ?
+                    OR COALESCE(c.phone, '') LIKE ?
+                    OR COALESCE(i.invoice_number, '') LIKE ?
+                    OR COALESCE(col.name, '') LIKE ?
+                )`;
+                params.push(term, term, term, term);
+            } else {
+                sql += ` AND (
+                    COALESCE(c.name, '') LIKE ? OR COALESCE(m.name, '') LIKE ?
+                    OR COALESCE(c.phone, '') LIKE ? OR COALESCE(m.phone, '') LIKE ?
+                    OR COALESCE(i.invoice_number, '') LIKE ?
+                    OR COALESCE(p.notes, '') LIKE ?
+                    OR COALESCE(col.name, '') LIKE ?
+                )`;
+                params.push(term, term, term, term, term, term, term);
+            }
         }
         const methodGroupSql = sqlPaymentMethodGroup('p', filters.payment_method);
         if (methodGroupSql) sql += methodGroupSql;
@@ -7708,10 +7749,21 @@ ${lifetimePaymentStatusSql}
 
     async getAllPaymentsHistory(filters = {}) {
         await this._ensurePaymentsDiscountColumn();
-        await this._ensureRemittanceNetAppliedColumn();
+        await this._ensurePaymentsHistoryIndexes();
+        // Skip repair berat saat baca daftar (mobile) — cukup kolom diskon.
+        if (!filters.skipRemittanceEnsure) {
+            await this._ensureRemittanceNetAppliedColumn();
+        }
+        const lite = !!filters.lite || !!filters.fast;
         const { sql: whereSql, params: whereParams } = this._allPaymentsHistoryWhere(filters);
         const limit = Math.min(2500, Math.max(1, parseInt(String(filters.limit || 1500), 10) || 1500));
         const params = [...whereParams, limit];
+        const nameExpr = lite
+            ? `COALESCE(c.name, '—')`
+            : `COALESCE(c.name, m.name, '—')`;
+        const phoneExpr = lite
+            ? `COALESCE(c.phone, '')`
+            : `COALESCE(c.phone, m.phone, '')`;
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT
@@ -7729,11 +7781,11 @@ ${lifetimePaymentStatusSql}
                     COALESCE(i.amount, 0) as invoice_amount,
                     i.invoice_number,
                     i.status as invoice_status,
-                    COALESCE(c.name, m.name, '—') as customer_name,
-                    COALESCE(c.phone, m.phone, '') as customer_phone,
+                    ${nameExpr} as customer_name,
+                    ${phoneExpr} as customer_phone,
                     col.name as collector_name
                 ${whereSql}
-                ORDER BY datetime(p.payment_date) DESC, p.id DESC
+                ORDER BY p.payment_date DESC, p.id DESC
                 LIMIT ?
             `;
             this.db.all(sql, params, (err, rows) => {
@@ -7756,7 +7808,50 @@ ${lifetimePaymentStatusSql}
         });
     }
 
+    /**
+     * Ringkasan cepat untuk mobile: 1 query agregat, tanpa scan semua baris notes.
+     * Diskon dari kolom discount_amount (cukup akurat untuk dashboard).
+     */
+    async getAllPaymentsHistorySummaryFast(filters = {}) {
+        await this._ensurePaymentsDiscountColumn();
+        await this._ensurePaymentsHistoryIndexes();
+        const { sql: whereSql, params: whereParams } = this._allPaymentsHistoryWhere({
+            ...filters,
+            lite: true,
+            fast: true
+        });
+        const aggSql = `
+                SELECT
+                    COUNT(*) as transaction_count,
+                    COALESCE(SUM(p.amount), 0) as total_amount,
+                    COALESCE(SUM(COALESCE(p.commission_amount, 0)), 0) as total_commission,
+                    COALESCE(SUM(COALESCE(p.discount_amount, 0)), 0) as total_discount,
+                    COALESCE(SUM(COALESCE(i.amount, 0)), 0) as total_tagihan
+                ${whereSql}
+            `;
+        return new Promise((resolve, reject) => {
+            this.db.get(aggSql, whereParams, (err, row) => {
+                if (err) return reject(err);
+                const total_discount = row ? Number(row.total_discount) || 0 : 0;
+                const total_tagihan = row ? Number(row.total_tagihan) || 0 : 0;
+                const total_commission = row ? Number(row.total_commission) || 0 : 0;
+                const total_net = Math.round(total_tagihan - total_discount - total_commission);
+                resolve({
+                    transaction_count: row ? parseInt(row.transaction_count, 10) || 0 : 0,
+                    total_amount: row ? Number(row.total_amount) || 0 : 0,
+                    total_tagihan,
+                    total_commission,
+                    total_net,
+                    total_discount
+                });
+            });
+        });
+    }
+
     async getAllPaymentsHistorySummary(filters = {}) {
+        if (filters.fast) {
+            return this.getAllPaymentsHistorySummaryFast(filters);
+        }
         await this._ensurePaymentsDiscountColumn();
         await this._ensureRemittanceNetAppliedColumn();
         const { sql: whereSql, params: whereParams } = this._allPaymentsHistoryWhere(filters);

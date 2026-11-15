@@ -106,46 +106,120 @@ class _RouterPppoeActiveScreenState extends State<RouterPppoeActiveScreen> {
     }).toList();
   }
 
+  Map<String, dynamic> _customerFromSession(Map<String, dynamic> session, int id) {
+    final login = session['name']?.toString().trim() ?? '';
+    final name = session['customer_name']?.toString().trim() ?? '';
+    return {
+      'id': id,
+      'name': name.isNotEmpty ? name : (login.isNotEmpty ? login : 'Pelanggan'),
+      'phone': session['customer_phone']?.toString() ?? '',
+      'pppoe_username': login,
+      'username': login,
+      'status': 'active',
+      'pppoe_active': true,
+    };
+  }
+
+  Map<String, dynamic>? _pickCustomerById(dynamic raw, int id) {
+    if (raw is Map && int.tryParse('${raw['id']}') == id) {
+      return Map<String, dynamic>.from(raw);
+    }
+    if (raw is List) {
+      for (final row in raw.whereType<Map>()) {
+        if (int.tryParse('${row['id']}') == id) {
+          return Map<String, dynamic>.from(row);
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> _fetchCustomerForSession(
+    Map<String, dynamic> session,
+    int id,
+  ) async {
+    final login = session['name']?.toString().trim() ?? '';
+    final customerName = session['customer_name']?.toString().trim() ?? '';
+
+    // 1) Endpoint detail by id (setelah backend di-update)
+    try {
+      final r = await ApiClient.get('/api/mobile-adapter/customers/$id');
+      final body = ApiClient.decodeJsonObject(
+        r,
+        debugLabel: 'customers/by-id-pppoe-active',
+      );
+      if (r.statusCode == 200 && ApiClient.jsonSuccess(body['success'])) {
+        final hit = _pickCustomerById(body['data'], id);
+        if (hit != null) return hit;
+      }
+    } catch (_) {}
+
+    // 2) Search keyword (mencakup pppoe_username di /customers/search)
+    for (final key in <String>{login, customerName, '$id'}) {
+      if (key.isEmpty) continue;
+      try {
+        final r = await ApiClient.get(
+          '/api/mobile-adapter/customers/search'
+          '?q=${Uri.encodeQueryComponent(key)}',
+        );
+        final body = ApiClient.decodeJsonObject(
+          r,
+          debugLabel: 'customers/search-pppoe-active',
+        );
+        if (r.statusCode == 200 && ApiClient.jsonSuccess(body['success'])) {
+          final hit = _pickCustomerById(body['data'], id);
+          if (hit != null) {
+            return {
+              ...hit,
+              if (login.isNotEmpty) 'pppoe_username': login,
+              if (login.isNotEmpty) 'username': hit['username'] ?? login,
+              'pppoe_active': true,
+              if ((hit['profile'] == null ||
+                      hit['profile'].toString().trim().isEmpty) &&
+                  hit['package_name'] != null)
+                'profile': hit['package_name'],
+            };
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 3) List search (setelah backend ikut cari pppoe_username)
+    for (final key in <String>{login, customerName}) {
+      if (key.isEmpty) continue;
+      try {
+        final r = await ApiClient.get(
+          '/api/mobile-adapter/customers?page=1&limit=50&month=all'
+          '&search=${Uri.encodeQueryComponent(key)}',
+        );
+        final body = ApiClient.decodeJsonObject(
+          r,
+          debugLabel: 'customers/list-search-pppoe-active',
+        );
+        if (r.statusCode == 200 && ApiClient.jsonSuccess(body['success'])) {
+          final hit = _pickCustomerById(body['data'], id);
+          if (hit != null) return hit;
+        }
+      } catch (_) {}
+    }
+
+    // 4) Fallback: data dari sesi PPPoE (cukup untuk buka detail + load by id)
+    return _customerFromSession(session, id);
+  }
+
   Future<void> _openCustomer(Map<String, dynamic> session) async {
     final id = int.tryParse('${session['customer_id'] ?? ''}');
     if (id == null) return;
     final navigator = Navigator.of(context);
-    final messenger = ScaffoldMessenger.of(context);
     showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (_) =>
           const Center(child: CircularProgressIndicator(color: Colors.white)),
     );
-    Map<String, dynamic>? customer;
-    try {
-      final login = session['name']?.toString() ?? '';
-      final r = await ApiClient.get(
-        '/api/mobile-adapter/customers?page=1&limit=20'
-        '&search=${Uri.encodeQueryComponent(login)}',
-      );
-      final body = ApiClient.decodeJsonObject(
-        r,
-        debugLabel: 'customers/search-for-pppoe-active',
-      );
-      if (r.statusCode == 200 && ApiClient.jsonSuccess(body['success'])) {
-        for (final row
-            in (body['data'] as List? ?? const []).whereType<Map>()) {
-          if (int.tryParse('${row['id']}') == id) {
-            customer = Map<String, dynamic>.from(row);
-            break;
-          }
-        }
-      }
-    } catch (_) {}
+    final customer = await _fetchCustomerForSession(session, id);
     if (!mounted) return;
     navigator.pop();
-    if (customer == null) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Data pelanggan tidak ditemukan')),
-      );
-      return;
-    }
     await navigator.push(
       MaterialPageRoute(
         builder: (_) => CustomerDetailScreen(customer: customer!),

@@ -8,7 +8,6 @@
     
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    
     <!-- Bootstrap CSS -->
     <link href="/vendor/bootstrap/css/bootstrap.min.css" rel="stylesheet">
     <link href="/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
@@ -464,31 +463,21 @@
             font-weight: 600;
         }
         
-        /* Layer Control Styling */
+        /* Layer Control Styling — tetap di dalam peta (top-right Leaflet) */
         .leaflet-control-layers {
             background: var(--panel-bg, #ffffff);
             border-radius: 8px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             border: 1px solid #e9ecef;
-            width: 250px !important;
-            max-height: calc(30vh - 20px) !important;
-            overflow-y: auto !important;
+            max-width: 260px;
+            max-height: 45vh;
+            overflow-y: auto;
         }
         
         .leaflet-control-layers-toggle {
             background: linear-gradient(135deg, #3498db, #2980b9);
             border-radius: 6px;
             box-shadow: 0 2px 6px rgba(0,0,0,0.2);
-        }
-        
-        /* Layer Control Position */
-        .leaflet-control-layers {
-            position: absolute !important;
-            top: calc(60vh + 20px) !important;
-            right: 20px !important;
-            left: auto !important;
-            bottom: auto !important;
-            transform: none !important;
         }
         
         /* Layer Control Responsive */
@@ -736,6 +725,16 @@
             background: #ef4444;
             animation: pulse-red 1.8s infinite;
         }
+
+        /* Saat banyak pelanggan: matikan pulse agar pan/zoom lebih ringan (ikon tetap sama) */
+        body.mapping-heavy .customer-status-indicator.active,
+        body.mapping-heavy .customer-status-indicator.down {
+            animation: none !important;
+        }
+        body.mapping-heavy .customer-icon-container,
+        body.mapping-heavy .customer-icon-bg {
+            transition: none !important;
+        }
         
         @keyframes pulse-blue {
             0% {
@@ -856,15 +855,23 @@
         }
         
         .panels-row {
-            display: flex;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 20px;
-            flex-wrap: wrap;
             margin-bottom: 30px;
+            align-items: start;
+            position: relative;
+            z-index: 2;
         }
         
         .panel-col {
-            flex: 1;
-            min-width: 300px;
+            min-width: 0;
+        }
+
+        @media (max-width: 992px) {
+            .panels-row {
+                grid-template-columns: 1fr;
+            }
         }
         
         .control-panel {
@@ -872,6 +879,318 @@
             padding: 20px;
             border-radius: 10px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Modern mapping side panels */
+        .map-side-panel {
+            border: 1px solid rgba(148, 163, 184, 0.18) !important;
+            border-radius: 16px !important;
+            padding: 18px 18px 16px !important;
+            box-shadow:
+                0 10px 28px rgba(0, 0, 0, 0.28),
+                inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+            background:
+                linear-gradient(180deg, rgba(36, 52, 82, 0.98) 0%, rgba(28, 41, 66, 0.98) 100%) !important;
+        }
+
+        .panel-head {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 16px;
+            padding-bottom: 14px;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+        }
+
+        .panel-head-icon {
+            width: 38px;
+            height: 38px;
+            border-radius: 11px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            background: linear-gradient(145deg, #3b82f6, #2563eb);
+            color: #fff;
+            box-shadow: 0 6px 14px rgba(37, 99, 235, 0.35);
+            font-size: 0.95rem;
+        }
+
+        .panel-head-icon.is-stats {
+            background: linear-gradient(145deg, #0ea5e9, #0284c7);
+            box-shadow: 0 6px 14px rgba(14, 165, 233, 0.32);
+        }
+
+        .panel-head-icon.is-legend {
+            background: linear-gradient(145deg, #64748b, #475569);
+            box-shadow: 0 6px 14px rgba(71, 85, 105, 0.28);
+            width: 30px;
+            height: 30px;
+            border-radius: 9px;
+            font-size: 0.8rem;
+        }
+
+        .panel-head-copy h5,
+        .panel-head-copy h6 {
+            margin: 0 !important;
+            padding: 0 !important;
+            border: none !important;
+            color: #f1f5ff !important;
+            font-size: 1.05rem !important;
+            font-weight: 700 !important;
+            letter-spacing: 0.01em;
+            line-height: 1.25;
+        }
+
+        .panel-subtitle {
+            margin: 3px 0 0;
+            color: #93a7c9;
+            font-size: 0.78rem;
+            line-height: 1.35;
+        }
+
+        .layer-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .control-panel .form-check.layer-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 0;
+            padding: 11px 12px !important;
+            padding-left: 12px !important;
+            border-radius: 12px;
+            border: 1px solid rgba(148, 163, 184, 0.14);
+            background: rgba(15, 27, 46, 0.45);
+            transition: background-color 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+        }
+
+        .control-panel .form-check.layer-row:hover {
+            background: rgba(59, 130, 246, 0.12);
+            border-color: rgba(96, 165, 250, 0.35);
+        }
+
+        .control-panel .form-check.layer-row .form-check-input {
+            position: static !important;
+            float: none;
+            margin: 0 !important;
+            margin-left: 0 !important;
+            width: 1.05rem;
+            height: 1.05rem;
+            flex-shrink: 0;
+            cursor: pointer;
+            background-color: #0f1b2e;
+            border-color: #4b628a;
+        }
+
+        .control-panel .form-check.layer-row .form-check-input:checked {
+            background-color: #22c55e;
+            border-color: #22c55e;
+        }
+
+        .control-panel .form-check.layer-row .form-check-label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 0;
+            width: 100%;
+            cursor: pointer;
+            color: #e9f0ff;
+            font-size: 0.92rem;
+            font-weight: 560;
+        }
+
+        .layer-ico {
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: 0.78rem;
+        }
+
+        .layer-ico.is-customers {
+            background: rgba(59, 130, 246, 0.18);
+            color: #60a5fa;
+        }
+        .layer-ico.is-down {
+            background: rgba(239, 68, 68, 0.18);
+            color: #f87171;
+        }
+        .layer-ico.is-odp {
+            background: rgba(245, 158, 11, 0.18);
+            color: #fbbf24;
+        }
+        .layer-ico.is-cable {
+            background: rgba(14, 165, 233, 0.18);
+            color: #38bdf8;
+        }
+        .layer-ico.is-onu {
+            background: rgba(34, 197, 94, 0.18);
+            color: #4ade80;
+        }
+
+        .control-panel .form-check.layer-row.layer-filter-down {
+            border-color: rgba(239, 68, 68, 0.28);
+            background: rgba(239, 68, 68, 0.08);
+        }
+
+        .control-panel .form-check.layer-row.layer-filter-down:hover {
+            background: rgba(239, 68, 68, 0.14);
+            border-color: rgba(248, 113, 113, 0.42);
+        }
+
+        .control-panel .form-check.layer-row.layer-filter-down.is-disabled {
+            opacity: 0.45;
+            pointer-events: none;
+        }
+
+        .stats-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .stats-panel .stats-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin: 0;
+            padding: 11px 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(148, 163, 184, 0.12);
+            background: rgba(15, 27, 46, 0.42);
+            transition: background-color 0.18s ease, border-color 0.18s ease;
+        }
+
+        .stats-panel .stats-item:hover {
+            background: rgba(14, 165, 233, 0.10);
+            border-color: rgba(56, 189, 248, 0.28);
+        }
+
+        .stats-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 9px;
+            color: #b6c7e2;
+            font-size: 0.88rem;
+            font-weight: 500;
+        }
+
+        .stats-label i {
+            width: 18px;
+            text-align: center;
+            opacity: 0.9;
+        }
+
+        .stats-value {
+            min-width: 42px;
+            text-align: right;
+            color: #f8fbff;
+            font-size: 0.98rem;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 0.01em;
+        }
+
+        .stats-item.is-down .stats-label,
+        .stats-item.is-down .stats-value {
+            color: #f87171 !important;
+        }
+
+        .stats-item.is-down {
+            border-color: rgba(239, 68, 68, 0.22);
+            background: rgba(239, 68, 68, 0.08);
+        }
+
+        .legend-block {
+            margin-top: 16px;
+            padding-top: 14px;
+            border-top: 1px solid rgba(148, 163, 184, 0.18);
+        }
+
+        .legend-block .panel-head {
+            margin-bottom: 12px;
+            padding-bottom: 0;
+            border-bottom: none;
+            align-items: center;
+        }
+
+        .legend-block .panel-head-copy h6 {
+            font-size: 0.95rem !important;
+        }
+
+        .legend-list {
+            display: flex;
+            flex-direction: column;
+            gap: 7px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 0;
+            padding: 9px 11px;
+            border-radius: 10px;
+            background: rgba(15, 27, 46, 0.38);
+            border: 1px solid rgba(148, 163, 184, 0.10);
+            color: #d7e3f7;
+            font-size: 0.82rem;
+            font-weight: 500;
+        }
+
+        .legend-swatch {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.04);
+        }
+
+        .legend-swatch.customer-down {
+            background: #ef4444;
+            box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.18);
+        }
+
+        .legend-swatch.online {
+            background: linear-gradient(145deg, #22c55e, #16a34a);
+        }
+
+        .legend-swatch.offline {
+            background: linear-gradient(145deg, #ef4444, #dc2626);
+        }
+
+        .legend-swatch.cable-connected {
+            width: 18px;
+            height: 4px;
+            border-radius: 999px;
+            background: #22c55e;
+            border: none;
+            box-shadow: 0 0 8px rgba(34, 197, 94, 0.35);
+        }
+
+        .legend-swatch.cable-disconnected {
+            width: 18px;
+            height: 4px;
+            border-radius: 999px;
+            border: none;
+            background-image: repeating-linear-gradient(
+                90deg,
+                #ef4444 0 3px,
+                transparent 3px 6px
+            );
+            background-color: transparent;
+            box-shadow: none;
         }
         
         /* Mobile toggle buttons */
@@ -947,21 +1266,17 @@
                 z-index: -1;
             }
             
-            .control-panel {
-                position: fixed;
-                top: 10px;
-                right: 10px;
-                left: 10px;
+            .control-panel,
+            .stats-panel {
+                position: relative;
+                top: auto;
+                right: auto;
+                left: auto;
+                bottom: auto;
+                width: auto;
                 max-width: none;
-                min-width: auto;
-                padding: 15px;
-                border-radius: 8px;
-                transform: translateY(-100%);
-                transition: transform 0.3s ease;
-            }
-            
-            .control-panel.show {
-                transform: translateY(0);
+                transform: none;
+                max-height: none;
             }
             
             /* Add bottom padding to prevent overlap with navbar */
@@ -996,33 +1311,20 @@
         
         /* Landscape mode adjustments */
         @media (max-width: 1024px) and (orientation: landscape) {
-            .control-panel {
-                position: fixed;
-                top: calc(30vh + 5px);
-                right: 10px;
-                width: 220px;
-                padding: 12px;
-                border-radius: 8px;
-                transform: translateY(0);
-                z-index: 999;
-                max-height: calc(30vh - 15px);
-            }
-            
+            .control-panel,
             .stats-panel {
-                position: fixed;
-                top: 10px;
-                right: 10px;
-                width: 220px;
-                padding: 12px;
-                border-radius: 8px;
-                transform: translateY(0);
-                z-index: 999;
-                max-height: calc(30vh - 15px);
+                position: relative;
+                top: auto;
+                right: auto;
+                width: auto;
+                max-height: none;
+                transform: none;
+                z-index: 1;
             }
             
             .leaflet-control-layers {
-                position: fixed !important;
-                top: calc(60vh + 10px) !important;
+                position: absolute !important;
+                top: 10px !important;
                 right: 10px !important;
                 width: 220px !important;
                 max-height: calc(30vh - 15px) !important;
@@ -1056,6 +1358,15 @@
             border-bottom: 2px solid #e9ecef;
             padding-bottom: 10px;
         }
+
+        .map-side-panel .control-panel h5,
+        .map-side-panel .stats-panel h6,
+        .control-panel.map-side-panel h5,
+        .stats-panel.map-side-panel h6 {
+            margin-bottom: 0;
+            border-bottom: none;
+            padding-bottom: 0;
+        }
         
         .form-check {
             margin-bottom: 12px;
@@ -1066,6 +1377,11 @@
         
         .form-check:hover {
             background-color: var(--bg-secondary, #f8f9fa);
+        }
+
+        .layer-filter-down.is-disabled {
+            opacity: 0.45;
+            pointer-events: none;
         }
         
         .stats-item {
@@ -1116,14 +1432,7 @@
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }
         
-        /* Legend Styling */
-        .legend-item {
-            display: flex;
-            align-items: center;
-            margin-bottom: 8px;
-            font-size: 12px;
-        }
-        
+        /* Legacy legend color class kept for compatibility */
         .legend-color {
             width: 12px;
             height: 12px;
@@ -1132,92 +1441,20 @@
             border: 1px solid #ccc;
         }
         
-        .legend-color.online {
-            background: linear-gradient(45deg, #28a745, #20c997);
-        }
-        
-        .legend-color.offline {
-            background: linear-gradient(45deg, #dc3545, #e74c3c);
-        }
-
-        .legend-color.customer-down {
-            background: #ef4444;
-        }
-        
-        .legend-color.cable-connected {
-            background: #28a745;
-            border-radius: 2px;
-            width: 16px;
-            height: 3px;
-        }
-        
-        .legend-color.cable-disconnected {
-            background: #dc3545;
-            border-radius: 2px;
-            width: 16px;
-            height: 3px;
-            background-image: repeating-linear-gradient(
-                90deg,
-                #dc3545,
-                #dc3545 3px,
-                transparent 3px,
-                transparent 6px
-            );
-        }
-        
-        /* Responsive design for mobile/portrait */
+        /* Mobile/portrait: panel tetap di alur dokumen (tidak floating overlap) */
         @media (max-width: 768px) {
-            .control-panel {
-                position: fixed;
-                top: 10px;
-                right: 10px;
-                left: 10px;
-                width: auto;
-                max-width: none;
-                padding: 15px;
-                border-radius: 8px;
-                transform: translateY(-100%);
-                transition: transform 0.3s ease;
-            }
-            
-            .control-panel.show {
-                transform: translateY(0);
-            }
-            
+            .control-panel,
             .stats-panel {
-                position: fixed;
-                bottom: 100px; /* Move up to avoid bottom navbar */
-                left: 10px;
-                right: 10px;
-                top: auto;
-                width: auto;
-                max-width: none;
-                padding: 12px;
-                border-radius: 8px;
-                transform: translateY(100%);
-                transition: transform 0.3s ease;
-            }
-            
-            .stats-panel.show {
-                transform: translateY(0);
-            }
-            
-            .leaflet-control-layers {
-                position: fixed !important;
-                bottom: 100px; /* Move up to avoid bottom navbar */
-                left: 10px;
-                right: 10px;
-                top: auto;
+                position: relative !important;
+                top: auto !important;
+                right: auto !important;
+                left: auto !important;
+                bottom: auto !important;
                 width: auto !important;
                 max-width: none !important;
-                padding: 12px;
-                border-radius: 8px;
-                transform: translateY(100%) !important;
-                transition: transform 0.3s ease !important;
-            }
-            
-            .leaflet-control-layers.show {
-                transform: translateY(0) !important;
+                max-height: none !important;
+                transform: none !important;
+                z-index: 1 !important;
             }
             
             .stats-panel h6 {
@@ -1234,6 +1471,14 @@
         
         .status-online { color: #28a745; font-weight: bold; }
         .status-offline { color: #dc3545; font-weight: bold; }
+
+        /* Di panel gelap: Down Customers tetap gaya asli, tapi kontrasnya jelas */
+        .stats-panel .stats-item > .status-offline {
+            background: transparent !important;
+            color: #f87171 !important;
+            font-weight: 700;
+            padding: 0;
+        }
         
         .popup-content {
             min-width: 200px;
@@ -1267,6 +1512,15 @@
         .status-offline {
             background-color: #f8d7da;
             color: #721c24;
+        }
+
+        /* Stats Down Customers: jangan pakai background pink badge di panel gelap */
+        .stats-panel .stats-item > span.status-offline {
+            background-color: transparent !important;
+            color: #f87171 !important;
+            font-weight: 700;
+            padding: 0 !important;
+            border-radius: 0;
         }
         
         /* Cable Animation Styles */
@@ -1392,13 +1646,24 @@
         }
 
         /* ===== Mapping page hardening (avoid transparent/low-contrast UI) ===== */
-        .control-panel,
-        .stats-panel,
+        .control-panel:not(.map-side-panel),
+        .stats-panel:not(.map-side-panel),
         .leaflet-control-layers,
         .leaflet-popup-content-wrapper,
         .modal-content,
         .table {
             background-color: #1f2d46 !important;
+        }
+
+        .control-panel.map-side-panel,
+        .stats-panel.map-side-panel {
+            color: #e9f0ff;
+        }
+
+        .control-panel.map-side-panel .form-check-label,
+        .stats-panel.map-side-panel .stats-label,
+        .stats-panel.map-side-panel .legend-item {
+            color: inherit;
         }
 
         .modal-content,
@@ -1527,104 +1792,134 @@
                 <div class="panels-row">
                     <!-- Control Panel -->
                     <div class="panel-col">
-                        <div class="control-panel">
-                            <h5><i class="fas fa-cogs"></i> Layer Controls</h5>
-                            
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="showCustomers" checked>
-                                <label class="form-check-label" for="showCustomers">
-                                    <i class="fas fa-user text-primary"></i> Customers
-                                </label>
+                        <div class="control-panel map-side-panel">
+                            <div class="panel-head">
+                                <span class="panel-head-icon"><i class="fas fa-layer-group"></i></span>
+                                <div class="panel-head-copy">
+                                    <h5>Layer Controls</h5>
+                                    <p class="panel-subtitle">Tampilkan atau sembunyikan layer di peta</p>
+                                </div>
                             </div>
-                            <div class="form-check ms-3">
-                                <input class="form-check-input" type="checkbox" id="filterDownCustomers">
-                                <label class="form-check-label" for="filterDownCustomers">
-                                    <i class="fas fa-triangle-exclamation text-danger"></i> Filter Pelanggan Down
-                                </label>
-                            </div>
-                            
-                            <div class="form-check d-none" id="showONUWrap" aria-hidden="true">
-                                <input class="form-check-input" type="checkbox" id="showONU">
-                                <label class="form-check-label" for="showONU">
-                                    <i class="fas fa-broadcast-tower text-success"></i> ONU Devices
-                                </label>
-                            </div>
-                            
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="showODP" checked>
-                                <label class="form-check-label" for="showODP">
-                                    <i class="fas fa-broadcast-tower text-warning"></i> ODPs
-                                </label>
-                            </div>
-                            
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="showCables" checked>
-                                <label class="form-check-label" for="showCables">
-                                    <i class="fas fa-plug text-info"></i> Cables & Network
-                                </label>
+
+                            <div class="layer-list">
+                                <div class="form-check layer-row">
+                                    <input class="form-check-input" type="checkbox" id="showCustomers" checked>
+                                    <label class="form-check-label" for="showCustomers">
+                                        <span class="layer-ico is-customers"><i class="fas fa-user"></i></span>
+                                        Customers
+                                    </label>
+                                </div>
+
+                                <div class="form-check layer-row layer-filter-down" id="filterDownWrap">
+                                    <input class="form-check-input" type="checkbox" id="filterDownCustomers">
+                                    <label class="form-check-label" for="filterDownCustomers">
+                                        <span class="layer-ico is-down"><i class="fas fa-triangle-exclamation"></i></span>
+                                        Filter Pelanggan Down
+                                    </label>
+                                </div>
+                                
+                                <div class="form-check layer-row d-none" id="showONUWrap" aria-hidden="true">
+                                    <input class="form-check-input" type="checkbox" id="showONU">
+                                    <label class="form-check-label" for="showONU">
+                                        <span class="layer-ico is-onu"><i class="fas fa-broadcast-tower"></i></span>
+                                        ONU Devices
+                                    </label>
+                                </div>
+                                
+                                <div class="form-check layer-row">
+                                    <input class="form-check-input" type="checkbox" id="showODP" checked>
+                                    <label class="form-check-label" for="showODP">
+                                        <span class="layer-ico is-odp"><i class="fas fa-broadcast-tower"></i></span>
+                                        ODPs
+                                    </label>
+                                </div>
+                                
+                                <div class="form-check layer-row">
+                                    <input class="form-check-input" type="checkbox" id="showCables" checked>
+                                    <label class="form-check-label" for="showCables">
+                                        <span class="layer-ico is-cable"><i class="fas fa-plug"></i></span>
+                                        Cables & Network
+                                    </label>
+                                </div>
                             </div>
                         </div>
                     </div>
                     
                     <!-- Statistics Panel -->
                     <div class="panel-col">
-                        <div class="stats-panel">
-                            <h6><i class="fas fa-chart-bar"></i> Network Statistics</h6>
-                            <div class="stats-item">
-                                <span>Customers:</span>
-                                <span id="totalCustomers">-</span>
+                        <div class="stats-panel map-side-panel">
+                            <div class="panel-head">
+                                <span class="panel-head-icon is-stats"><i class="fas fa-chart-bar"></i></span>
+                                <div class="panel-head-copy">
+                                    <h6>Network Statistics</h6>
+                                    <p class="panel-subtitle">Ringkasan status jaringan saat ini</p>
+                                </div>
                             </div>
-                            <div class="stats-item">
-                                <span class="status-offline">Down Customers:</span>
-                                <span id="downCustomers" class="status-offline">-</span>
-                            </div>
-                            <div class="stats-item d-none" id="onuStatsWrap" aria-hidden="true">
-                                <span>ONU Devices:</span>
-                                <span id="totalONU">-</span>
-                            </div>
-                            <div class="stats-item d-none" aria-hidden="true">
-                                <span class="status-online">Online:</span>
-                                <span id="onlineONU" class="status-online">-</span>
-                            </div>
-                            <div class="stats-item d-none" aria-hidden="true">
-                                <span class="status-offline">Offline:</span>
-                                <span id="offlineONU" class="status-offline">-</span>
-                            </div>
-                            <div class="stats-item">
-                                <span>ODPs:</span>
-                                <span id="totalODP">-</span>
-                            </div>
-                            <div class="stats-item">
-                                <span>Cables:</span>
-                                <span id="totalCables">-</span>
-                            </div>
-                            <div class="stats-item">
-                                <span>Backbone:</span>
-                                <span id="totalBackbone">-</span>
+
+                            <div class="stats-grid">
+                                <div class="stats-item">
+                                    <span class="stats-label"><i class="fas fa-users"></i> Customers</span>
+                                    <span class="stats-value" id="totalCustomers">-</span>
+                                </div>
+                                <div class="stats-item is-down">
+                                    <span class="stats-label status-offline"><i class="fas fa-triangle-exclamation"></i> Down Customers</span>
+                                    <span class="stats-value status-offline" id="downCustomers">-</span>
+                                </div>
+                                <div class="stats-item d-none" id="onuStatsWrap" aria-hidden="true">
+                                    <span class="stats-label"><i class="fas fa-broadcast-tower"></i> ONU Devices</span>
+                                    <span class="stats-value" id="totalONU">-</span>
+                                </div>
+                                <div class="stats-item d-none" aria-hidden="true">
+                                    <span class="stats-label status-online"><i class="fas fa-circle"></i> Online</span>
+                                    <span class="stats-value status-online" id="onlineONU">-</span>
+                                </div>
+                                <div class="stats-item d-none" aria-hidden="true">
+                                    <span class="stats-label status-offline"><i class="fas fa-circle"></i> Offline</span>
+                                    <span class="stats-value status-offline" id="offlineONU">-</span>
+                                </div>
+                                <div class="stats-item">
+                                    <span class="stats-label"><i class="fas fa-network-wired"></i> ODPs</span>
+                                    <span class="stats-value" id="totalODP">-</span>
+                                </div>
+                                <div class="stats-item">
+                                    <span class="stats-label"><i class="fas fa-plug"></i> Cables</span>
+                                    <span class="stats-value" id="totalCables">-</span>
+                                </div>
+                                <div class="stats-item">
+                                    <span class="stats-label"><i class="fas fa-route"></i> Backbone</span>
+                                    <span class="stats-value" id="totalBackbone">-</span>
+                                </div>
                             </div>
                             
                             <!-- Legend -->
-                            <div class="mt-3 pt-2 border-top">
-                                <h6 class="mb-2"><i class="fas fa-info-circle"></i> Legend</h6>
-                                <div class="legend-item d-none" id="onuLegendWrap" aria-hidden="true">
-                                    <div class="legend-color online"></div>
-                                    <span>ONU Online</span>
+                            <div class="legend-block">
+                                <div class="panel-head">
+                                    <span class="panel-head-icon is-legend"><i class="fas fa-info"></i></span>
+                                    <div class="panel-head-copy">
+                                        <h6>Legend</h6>
+                                    </div>
                                 </div>
-                                <div class="legend-item d-none" aria-hidden="true">
-                                    <div class="legend-color offline"></div>
-                                    <span>ONU Offline</span>
-                                </div>
-                                <div class="legend-item">
-                                    <div class="legend-color customer-down"></div>
-                                    <span>Pelanggan Down (PPPoE)</span>
-                                </div>
-                                <div class="legend-item">
-                                    <div class="legend-color cable-connected"></div>
-                                    <span>Cable Connected</span>
-                                </div>
-                                <div class="legend-item">
-                                    <div class="legend-color cable-disconnected"></div>
-                                    <span>Cable Disconnected</span>
+                                <div class="legend-list">
+                                    <div class="legend-item d-none" id="onuLegendWrap" aria-hidden="true">
+                                        <div class="legend-swatch online"></div>
+                                        <span>ONU Online</span>
+                                    </div>
+                                    <div class="legend-item d-none" aria-hidden="true">
+                                        <div class="legend-swatch offline"></div>
+                                        <span>ONU Offline</span>
+                                    </div>
+                                    <div class="legend-item">
+                                        <div class="legend-swatch customer-down"></div>
+                                        <span>Pelanggan Down (PPPoE)</span>
+                                    </div>
+                                    <div class="legend-item">
+                                        <div class="legend-swatch cable-connected"></div>
+                                        <span>Cable Connected</span>
+                                    </div>
+                                    <div class="legend-item">
+                                        <div class="legend-swatch cable-disconnected"></div>
+                                        <span>Cable Disconnected</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1660,6 +1955,9 @@
         let networkData = {};
         let showOnlyDownCustomers = false;
         let customerLayer, onuLayer, odpLayer, cableLayer, backboneLayer;
+        let customerMarkersById = new Map();
+        let customerRenderTimer = null;
+        let customerRenderToken = 0;
         let odpPickMode = null;
         let odpParentPickMode = null;
         let addOdpMode = false;
@@ -1729,7 +2027,11 @@
             const savedView = getSavedMapView();
             map = L.map('map', {
                 zoomControl: false,
-                maxZoom: 19
+                maxZoom: 19,
+                preferCanvas: true,
+                fadeAnimation: false,
+                zoomAnimation: true,
+                markerZoomAnimation: false
             });
             if (savedView) {
                 map.setView([savedView.lat, savedView.lng], savedView.zoom);
@@ -1740,20 +2042,23 @@
             
             // Add enhanced tile layers with multiple options
             const lightTheme = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                attribution: '� OpenStreetMap � CartoDB',
+                attribution: '© OpenStreetMap © CartoDB',
                 subdomains: 'abcd',
-                maxZoom: 19
+                maxZoom: 19,
+                updateWhenIdle: true
             });
             
             const darkTheme = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-                attribution: '� OpenStreetMap � CartoDB',
+                attribution: '© OpenStreetMap © CartoDB',
                 subdomains: 'abcd',
-                maxZoom: 19
+                maxZoom: 19,
+                updateWhenIdle: true
             });
             
             const satelliteTheme = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-                attribution: '� Esri � DigitalGlobe � GeoEye � i-cubed � USDA FSA � USGS � AeroGRID � IGN � IGP',
-                maxZoom: 19
+                attribution: '© Esri',
+                maxZoom: 19,
+                updateWhenIdle: true
             });
             
             // Add default satellite theme
@@ -1788,21 +2093,21 @@
             }).addTo(map);
 
             
-            // Ensure layer control is always visible and positioned correctly
+            // Biarkan kontrol basemap di pojok kanan atas peta (jangan digeser ke panel bawah)
             setTimeout(() => {
                 const layerControlElement = document.querySelector('.leaflet-control-layers');
                 if (layerControlElement) {
                     layerControlElement.style.display = 'block';
                     layerControlElement.style.visibility = 'visible';
                     layerControlElement.style.opacity = '1';
-                    layerControlElement.style.position = 'absolute';
-                    layerControlElement.style.top = 'calc(60vh + 20px)';
-                    layerControlElement.style.right = '20px';
-                    layerControlElement.style.left = 'auto';
-                    layerControlElement.style.bottom = 'auto';
-                    layerControlElement.style.transform = 'none';
-                    layerControlElement.style.width = '250px';
-                    layerControlElement.style.maxHeight = 'calc(30vh - 20px)';
+                    layerControlElement.style.position = '';
+                    layerControlElement.style.top = '';
+                    layerControlElement.style.right = '';
+                    layerControlElement.style.left = '';
+                    layerControlElement.style.bottom = '';
+                    layerControlElement.style.transform = '';
+                    layerControlElement.style.width = '';
+                    layerControlElement.style.maxHeight = '50vh';
                     layerControlElement.style.overflowY = 'auto';
                 }
             }, 100);
@@ -1813,6 +2118,10 @@
                 }
             });
             
+            // Refresh marker pelanggan hanya untuk area yang terlihat (tetap ikon rumah yang sama)
+            map.on('moveend', scheduleVisibleCustomerRender);
+            map.on('zoomend', scheduleVisibleCustomerRender);
+
             console.log('? Map initialized successfully with satellite view as default');
             
             // Load network data
@@ -1838,7 +2147,8 @@
         }
         
         function isCustomerPppoeDown(customer) {
-            return !customer || customer.pppoe_active !== true;
+            // Hanya status down yang sudah dikonfirmasi (bukan pending/unknown)
+            return Boolean(customer && customer.network_down === true);
         }
 
         function createCustomerIcon(customer) {
@@ -1976,16 +2286,9 @@
         }
 
         function renderLiveNetworkData() {
-            if (customerLayer) customerLayer.clearLayers();
-            if (networkData.customers?.length > 0) {
-                renderCustomers(networkData.customers);
-            }
-            if (cableLayer) cableLayer.clearLayers();
-            if (networkData.cables?.length > 0) {
-                renderCables(networkData.cables);
-            }
+            // Jangan rebuild kabel saat live sync — cukup update status pelanggan + statistik
+            renderCustomers(networkData.customers || [], { force: true });
             updateStatistics();
-            scheduleDataFlowAnimations();
         }
         
         // Render all network data
@@ -2034,6 +2337,8 @@
             console.log('?? Clearing all layers...');
             
             if (customerLayer) customerLayer.clearLayers();
+            customerMarkersById.clear();
+            customerRenderToken += 1;
             if (onuLayer) onuLayer.clearLayers();
             if (odpLayer) odpLayer.clearLayers();
             if (cableLayer) cableLayer.clearLayers();
@@ -2564,22 +2869,114 @@
             });
         }
 
-        function renderCustomers(customers) {
-            console.log(`?? Rendering ${customers.length} customers...`);
-            
-            customers.forEach(customer => {
-                if (showOnlyDownCustomers && !isCustomerPppoeDown(customer)) return;
-                if (customer.latitude && customer.longitude) {
-                    const marker = L.marker([customer.latitude, customer.longitude], {
-                        icon: createCustomerIcon(customer),
-                        customerId: customer.id
-                    }).addTo(customerLayer);
-                    
-                    marker.bindPopup(createCustomerPopupContent(customer));
+        function scheduleVisibleCustomerRender() {
+            if (customerRenderTimer) clearTimeout(customerRenderTimer);
+            customerRenderTimer = setTimeout(() => {
+                renderCustomers(networkData.customers || []);
+            }, 120);
+        }
+
+        function getVisibleCustomerBounds() {
+            if (!map) return null;
+            try {
+                return map.getBounds().pad(0.35);
+            } catch (_) {
+                return null;
+            }
+        }
+
+        function renderCustomers(customers, options = {}) {
+            const list = customers || [];
+            const force = options.force === true;
+            console.log(`Rendering customers (visible viewport)... total=${list.length}`);
+            if (!customerLayer || !map) return;
+
+            document.body.classList.toggle('mapping-heavy', list.length > 300);
+
+            const bounds = getVisibleCustomerBounds();
+            const zoom = map.getZoom();
+            // Saat zoom sangat jauh, batasi jumlah marker agar tidak lag (ikon tetap rumah saat terlihat)
+            const maxVisible = zoom <= 12 ? 450 : (zoom <= 14 ? 900 : 1800);
+
+            const visible = [];
+            for (let i = 0; i < list.length; i++) {
+                const customer = list[i];
+                if (showOnlyDownCustomers && !isCustomerPppoeDown(customer)) continue;
+                const lat = Number(customer.latitude);
+                const lng = Number(customer.longitude);
+                if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+                if (bounds && !bounds.contains([lat, lng])) continue;
+                visible.push(customer);
+            }
+
+            // Jika terlalu padat di viewport, ambil sampel merata (masih ikon rumah yang sama)
+            let toRender = visible;
+            if (visible.length > maxVisible) {
+                const step = Math.ceil(visible.length / maxVisible);
+                toRender = [];
+                for (let i = 0; i < visible.length; i += step) {
+                    toRender.push(visible[i]);
+                }
+            }
+
+            const nextIds = new Set(toRender.map((c) => String(c.id)));
+
+            // Hapus marker yang keluar viewport
+            customerMarkersById.forEach((marker, id) => {
+                if (!nextIds.has(id)) {
+                    customerLayer.removeLayer(marker);
+                    customerMarkersById.delete(id);
                 }
             });
-            
-            console.log(`? Loaded ${customers.length} customer markers from database`);
+
+            const token = ++customerRenderToken;
+            const chunkSize = 80;
+            let index = 0;
+
+            function addChunk() {
+                if (token !== customerRenderToken) return;
+                const end = Math.min(index + chunkSize, toRender.length);
+                for (; index < end; index++) {
+                    const customer = toRender[index];
+                    const id = String(customer.id);
+                    const existing = customerMarkersById.get(id);
+                    if (existing) {
+                        // Update posisi/ikon jika status berubah (live sync)
+                        const latLng = L.latLng(Number(customer.latitude), Number(customer.longitude));
+                        if (!existing.getLatLng().equals(latLng)) existing.setLatLng(latLng);
+                        existing.setIcon(createCustomerIcon(customer));
+                        existing._customerData = customer;
+                        continue;
+                    }
+
+                    const marker = L.marker([customer.latitude, customer.longitude], {
+                        icon: createCustomerIcon(customer),
+                        customerId: customer.id,
+                        keyboard: false
+                    });
+                    marker._customerData = customer;
+                    marker.bindPopup(() => createCustomerPopupContent(marker._customerData || customer));
+                    customerLayer.addLayer(marker);
+                    customerMarkersById.set(id, marker);
+                }
+
+                if (index < toRender.length) {
+                    if (typeof requestAnimationFrame === 'function') {
+                        requestAnimationFrame(addChunk);
+                    } else {
+                        setTimeout(addChunk, 0);
+                    }
+                } else {
+                    console.log(`Loaded ${customerMarkersById.size} visible customer markers (from ${list.length})`);
+                }
+            }
+
+            if (force) {
+                // Rebuild bersih jika diminta
+                customerLayer.clearLayers();
+                customerMarkersById.clear();
+            }
+            addChunk();
         }
 
         // Render ONU devices (popup dibuat saat dibuka — lebih ringan)
@@ -2821,6 +3218,12 @@
         }
 
         function scheduleDataFlowAnimations() {
+            // Skip animasi kabel jika pelanggan sangat banyak — ini sumber lag di laptop lemah
+            const customerCount = networkData.customers?.length || 0;
+            if (customerCount > 400) {
+                console.log('Skip cable flow animations for performance (customers > 400)');
+                return;
+            }
             if (typeof requestIdleCallback === 'function') {
                 requestIdleCallback(() => addDataFlowAnimations(), { timeout: 1500 });
             } else {
@@ -2950,16 +3353,22 @@
         
         // Update statistics
         function updateStatistics() {
-            if (networkData.statistics) {
-                document.getElementById('totalCustomers').textContent = networkData.statistics.totalCustomers || 0;
-                document.getElementById('downCustomers').textContent = networkData.statistics.downCustomers || 0;
-                document.getElementById('totalONU').textContent = networkData.statistics.totalONU || 0;
-                document.getElementById('onlineONU').textContent = networkData.statistics.onlineONU || 0;
-                document.getElementById('offlineONU').textContent = networkData.statistics.offlineONU || 0;
-                document.getElementById('totalODP').textContent = networkData.statistics.totalODP || 0;
-                document.getElementById('totalCables').textContent = networkData.statistics.totalCables || 0;
-                document.getElementById('totalBackbone').textContent = networkData.statistics.totalBackboneCables || 0;
-            }
+            const stats = networkData.statistics || {};
+            const customers = networkData.customers || [];
+            const downFromList = customers.filter((c) => c.network_down === true).length;
+            const setText = (id, value) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = value;
+            };
+
+            setText('totalCustomers', stats.totalCustomers != null ? stats.totalCustomers : customers.length);
+            setText('downCustomers', stats.downCustomers != null ? stats.downCustomers : downFromList);
+            setText('totalONU', stats.totalONU || 0);
+            setText('onlineONU', stats.onlineONU || 0);
+            setText('offlineONU', stats.offlineONU || 0);
+            setText('totalODP', stats.totalODP || 0);
+            setText('totalCables', stats.totalCables || 0);
+            setText('totalBackbone', stats.totalBackboneCables || 0);
         }
 
         // Fit map to data bounds
@@ -3001,6 +3410,22 @@
         }
         
         // Layer control event listeners
+        function syncFilterDownAvailability() {
+            const showCustomers = document.getElementById('showCustomers');
+            const filterDown = document.getElementById('filterDownCustomers');
+            const filterWrap = document.getElementById('filterDownWrap');
+            if (!showCustomers || !filterDown || !filterWrap) return;
+
+            const enabled = showCustomers.checked;
+            filterDown.disabled = !enabled;
+            filterWrap.classList.toggle('is-disabled', !enabled);
+            if (!enabled && filterDown.checked) {
+                filterDown.checked = false;
+                showOnlyDownCustomers = false;
+                renderCustomers(networkData.customers || [], { force: true });
+            }
+        }
+
         document.getElementById('showCustomers').addEventListener('change', function() {
             if (this.checked) {
                 map.addLayer(customerLayer);
@@ -3009,15 +3434,15 @@
                 map.removeLayer(customerLayer);
                 console.log('? Customer layer hidden');
             }
+            syncFilterDownAvailability();
         });
 
         document.getElementById('filterDownCustomers').addEventListener('change', function() {
             showOnlyDownCustomers = this.checked;
-            if (customerLayer) customerLayer.clearLayers();
-            if (networkData.customers?.length > 0) {
-                renderCustomers(networkData.customers);
-            }
+            renderCustomers(networkData.customers || [], { force: true });
         });
+
+        syncFilterDownAvailability();
 
         document.getElementById('showODP').addEventListener('change', function() {
             if (this.checked) {
@@ -4194,27 +4619,13 @@ Please wait a few minutes for the device to come back online.`);
             
             if (controlToggle && controlPanel) {
                 controlToggle.addEventListener('click', function() {
-                    controlPanel.classList.toggle('show');
-                    if (controlPanel.classList.contains('show')) {
-                        controlToggle.innerHTML = '<i class="fas fa-times"></i>';
-                        controlToggle.title = 'Hide Layer Controls';
-                    } else {
-                        controlToggle.innerHTML = '<i class="fas fa-cogs"></i>';
-                        controlToggle.title = 'Show Layer Controls';
-                    }
+                    controlPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 });
             }
             
             if (statsToggle && statsPanel) {
                 statsToggle.addEventListener('click', function() {
-                    statsPanel.classList.toggle('show');
-                    if (statsPanel.classList.contains('show')) {
-                        statsToggle.innerHTML = '<i class="fas fa-times"></i>';
-                        statsToggle.title = 'Hide Network Statistics';
-                    } else {
-                        statsToggle.innerHTML = '<i class="fas fa-chart-bar"></i>';
-                        statsToggle.title = 'Show Network Statistics';
-                    }
+                    statsPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 });
             }
             

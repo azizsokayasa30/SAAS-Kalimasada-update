@@ -1478,6 +1478,8 @@ function cloneActivePppoeResult(result) {
     return {
         names: new Set(result.names || []),
         uptimeByLogin: { ...(result.uptimeByLogin || {}) },
+        // ok=false = cek PPPoE gagal/timeout (bukan "semua offline")
+        ok: result && result.ok === false ? false : true,
     };
 }
 
@@ -1494,10 +1496,20 @@ async function fetchActivePppoeLoginNamesSetWithUptimeMapUncached(options = {}) 
 
     if (authMode === 'radius') {
         // Satu poll (sama sumber /admin/mikrotik) — jangan poll /ppp/active kedua kali hanya untuk uptime.
-        const active = await getActivePPPoEConnectionsRadius({
-            mikrotikTimeoutMs: options.mikrotikTimeoutMs,
-            forceRefresh: options.forceRefresh === true
-        });
+        let pollOk = false;
+        let active = [];
+        try {
+            active = await getActivePPPoEConnectionsRadius({
+                mikrotikTimeoutMs: options.mikrotikTimeoutMs,
+                forceRefresh: options.forceRefresh === true
+            });
+            // Array (termasuk kosong) = poll selesai; null/undefined = sumber tidak valid
+            pollOk = Array.isArray(active);
+        } catch (e) {
+            logger.warn(`[getActivePppoeLoginNamesSetWithUptimeMap] radius poll: ${e.message}`);
+            pollOk = false;
+            active = [];
+        }
         const uptimeByLogin = Object.create(null);
         for (const a of active || []) {
             const n = a && a.name != null ? String(a.name).trim().toLowerCase() : '';
@@ -1508,10 +1520,14 @@ async function fetchActivePppoeLoginNamesSetWithUptimeMapUncached(options = {}) 
                 if (disp) uptimeByLogin[n] = disp;
             }
         }
-        return { names: set, uptimeByLogin };
+        // Jika 0 sesi aktif: bedakan "semua offline" vs "gagal cek" lewat tanda sumber Mikrotik.
+        // getActivePPPoEConnectionsRadius sering mengembalikan [] saat NAS timeout — anggap tidak valid
+        // hanya jika benar-benar tidak ada koneksi sama sekali (lihat helper di bawah via ok flag mapping).
+        return { names: set, uptimeByLogin, ok: pollOk };
     }
 
     const uptimeByLogin = Object.create(null);
+    let successCount = 0;
     const mergeRow = (row) => {
         const n = row && row.name != null ? String(row.name).trim().toLowerCase() : '';
         if (!n) return;
@@ -1528,11 +1544,12 @@ async function fetchActivePppoeLoginNamesSetWithUptimeMapUncached(options = {}) 
             if (conn) {
                 const active = await conn.write('/ppp/active/print');
                 for (const row of active || []) mergeRow(row);
+                successCount += 1;
             }
         } catch (e) {
             logger.warn(`[getActivePppoeLoginNamesSetWithUptimeMap] single NAS: ${e.message}`);
         }
-        return { names: set, uptimeByLogin };
+        return { names: set, uptimeByLogin, ok: successCount > 0 };
     }
     // Parallel per router — router down tidak ditunggu berantai.
     await Promise.all(
@@ -1541,12 +1558,13 @@ async function fetchActivePppoeLoginNamesSetWithUptimeMapUncached(options = {}) 
                 const conn = await getMikrotikConnectionForRouter(r);
                 const active = await conn.write('/ppp/active/print');
                 for (const row of active || []) mergeRow(row);
+                successCount += 1;
             } catch (e) {
                 logger.warn(`[getActivePppoeLoginNamesSetWithUptimeMap] router ${r.name}: ${e.message}`);
             }
         })
     );
-    return { names: set, uptimeByLogin };
+    return { names: set, uptimeByLogin, ok: successCount > 0 };
 }
 
 async function getActivePppoeLoginNamesSetWithUptimeMap(options = {}) {
@@ -1562,7 +1580,7 @@ async function getActivePppoeLoginNamesSetWithUptimeMap(options = {}) {
         return cloneActivePppoeResult(cachedEntry.value);
     }
 
-    const emptyResult = () => ({ names: new Set(), uptimeByLogin: Object.create(null) });
+    const emptyResult = () => ({ names: new Set(), uptimeByLogin: Object.create(null), ok: false });
 
     const awaitWithBudget = async (promise, staleEntry) => {
         // Stale-while-revalidate: jangan blokir list pelanggan jika cache (meski expired) masih ada.
