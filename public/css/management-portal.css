@@ -9021,6 +9021,74 @@ button.km-inv-action {
   display: inline-block;
 }
 
+.km-tl-metric__unit {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: #64748b;
+}
+
+.km-tl-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+}
+
+.km-tl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.12rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.km-tl-chip b { font-weight: 700; }
+.km-tl-chip--green { color: #047857; background: rgba(16, 185, 129, 0.12); }
+.km-tl-chip--gray { color: #475569; background: rgba(148, 163, 184, 0.18); }
+.km-tl-chip--blue { color: #1d4ed8; background: rgba(59, 130, 246, 0.12); }
+.km-tl-chip--orange { color: #b45309; background: rgba(245, 158, 11, 0.14); }
+[data-theme="dark"] .km-tl-chip--orange { color: #fcd34d; }
+[data-theme="dark"] .km-tl-chip--green { color: #6ee7b7; }
+[data-theme="dark"] .km-tl-chip--gray { color: #cbd5e1; }
+[data-theme="dark"] .km-tl-chip--blue { color: #93c5fd; }
+[data-theme="dark"] .km-tl-metric__unit { color: #94a3b8; }
+
+.km-tl-bill {
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: start;
+  gap: 0.1rem 0.75rem;
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.km-tl-bill dt {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 500;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.km-tl-bill dt::after { content: ':'; }
+.km-tl-bill dd { margin: 0; font-weight: 600; white-space: nowrap; }
+.km-tl-bill__total { font-weight: 700 !important; color: #0f172a; }
+.km-tl-bill__unpaid { color: #b45309; }
+.km-tl-bill__paid { color: #047857; }
+.km-tl-bill__isolir { color: #b91c1c; }
+[data-theme="dark"] .km-tl-bill dt { color: #94a3b8; }
+[data-theme="dark"] .km-tl-bill__total { color: #f1f5f9; }
+[data-theme="dark"] .km-tl-bill__unpaid { color: #fcd34d; }
+[data-theme="dark"] .km-tl-bill__paid { color: #6ee7b7; }
+[data-theme="dark"] .km-tl-bill__isolir { color: #fca5a5; }
+
 .km-dot--green { background: #22c55e; }
 .km-dot--gray { background: #94a3b8; }
 .km-dot--blue { background: #3b82f6; }

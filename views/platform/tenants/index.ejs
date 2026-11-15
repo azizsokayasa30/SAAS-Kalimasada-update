@@ -83,7 +83,7 @@ tenants.forEach(function(t) {
         <div>
           <div class="km-set-stat__label">Pelanggan</div>
           <div class="km-set-stat__value"><%= summary.customers.total.toLocaleString('id-ID') %></div>
-          <div class="km-set-stat__sub"><%= summary.customers.active.toLocaleString('id-ID') %> aktif · <%= summary.customers.new.toLocaleString('id-ID') %> baru</div>
+          <div class="km-set-stat__sub"><%= summary.customers.active.toLocaleString('id-ID') %> aktif · <%= summary.customers.inactive.toLocaleString('id-ID') %> nonaktif · <%= summary.customers.new.toLocaleString('id-ID') %> baru</div>
         </div>
       </div>
     </div>
@@ -192,20 +192,29 @@ tenants.forEach(function(t) {
                 <small class="text-muted"><%= t.owner_email %></small>
               </td>
               <td>
-                <div class="km-tl-metric"><%= (Number(c.total) || 0).toLocaleString('id-ID') %></div>
-                <div class="km-tl-dots">
-                  <span title="Aktif"><i class="km-dot km-dot--green"></i><%= c.active || 0 %></span>
-                  <span title="Nonaktif"><i class="km-dot km-dot--gray"></i><%= c.inactive || 0 %></span>
-                  <span title="Baru"><i class="km-dot km-dot--blue"></i><%= c.new || 0 %></span>
+                <div class="km-tl-metric"><%= (Number(c.total) || 0).toLocaleString('id-ID') %> <span class="km-tl-metric__unit">pelanggan</span></div>
+                <div class="km-tl-chips">
+                  <span class="km-tl-chip km-tl-chip--green" title="Pelanggan aktif (termasuk yang sedang isolir / suspend)"><i class="km-dot km-dot--green"></i><b><%= (Number(c.active) || 0).toLocaleString('id-ID') %></b> aktif</span>
+                  <span class="km-tl-chip km-tl-chip--gray" title="Pelanggan nonaktif / berhenti berlangganan"><i class="km-dot km-dot--gray"></i><b><%= (Number(c.inactive) || 0).toLocaleString('id-ID') %></b> nonaktif</span>
+                  <span class="km-tl-chip km-tl-chip--blue" title="Pelanggan baru yang bergabung<%= periodLabel ? ' pada ' + periodLabel : ' bulan ini' %>"><i class="km-dot km-dot--blue"></i><b><%= (Number(c.new) || 0).toLocaleString('id-ID') %></b> baru</span>
                 </div>
               </td>
               <td>
-                <div class="km-tl-metric"><%= formatRupiah(inv.total) %></div>
-                <div class="km-tl-progress" title="<%= rowPaidPct %>% lunas"><span style="width: <%= rowPaidPct %>%"></span></div>
-                <div class="km-tl-dots">
-                  <span title="Belum lunas"><i class="km-dot km-dot--orange"></i><%= formatRupiah(inv.unpaid) %></span>
-                  <% if (Number(inv.isolir) > 0) { %><span title="Isolir"><i class="km-dot km-dot--red"></i><%= formatRupiah(inv.isolir) %></span><% } %>
-                </div>
+                <dl class="km-tl-bill">
+                  <dt>Total tagihan</dt>
+                  <dd class="km-tl-bill__total"><%= formatRupiah(inv.total) %></dd>
+                  <dt><i class="km-dot km-dot--orange"></i>Belum lunas</dt>
+                  <dd class="km-tl-bill__unpaid"><%= formatRupiah(inv.unpaid) %></dd>
+                  <dt><i class="km-dot km-dot--green"></i>Lunas</dt>
+                  <dd class="km-tl-bill__paid"><%= formatRupiah(inv.paid) %></dd>
+                  <% if (Number(inv.isolir) > 0) { %>
+                    <dt title="Tagihan belum lunas milik pelanggan yang sedang isolir / suspend"><i class="km-dot km-dot--red"></i>Isolir</dt>
+                    <dd class="km-tl-bill__isolir"><%= formatRupiah(inv.isolir) %></dd>
+                  <% } %>
+                </dl>
+                <% if (invTotal > 0) { %>
+                  <span class="km-tl-chip <%= rowPaidPct >= 80 ? 'km-tl-chip--green' : 'km-tl-chip--orange' %> mt-1" title="Persentase nominal tagihan yang sudah lunas"><b><%= rowPaidPct %>%</b> lunas</span>
+                <% } %>
               </td>
               <td class="text-end text-nowrap">
                 <a href="/management/tenants/<%= t.id %>" class="btn btn-sm btn-outline-secondary" title="Detail"><i class="bi bi-eye"></i></a>

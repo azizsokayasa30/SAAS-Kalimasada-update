@@ -161,7 +161,8 @@ router.use('/nms', managementNmsRouter);
 const DASHBOARD_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 
 async function getCustomerInsights() {
-    const joinedAt = "DATE(COALESCE(NULLIF(created_at, ''), NULLIF(join_date, '')))";
+    const joinedAt = "DATE(COALESCE(NULLIF(c.join_date, ''), NULLIF(c.created_at, '')))";
+    const operationalCustomers = `customers c JOIN tenants t ON t.id = c.tenant_id WHERE ${tenantStore.OPERATIONAL_TENANT_WHERE}`;
     const now = new Date();
     const growth = [];
     for (let i = 5; i >= 0; i -= 1) {
@@ -170,7 +171,7 @@ async function getCustomerInsights() {
         const end = new Date(year, monthIndex + 1, 0);
         const endStr = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`;
         const row = await tenantStore.dbGet(
-            `SELECT COUNT(*) AS total FROM customers WHERE ${joinedAt} IS NULL OR ${joinedAt} <= DATE(?)`,
+            `SELECT COUNT(*) AS total FROM ${operationalCustomers} AND (${joinedAt} IS NULL OR ${joinedAt} <= DATE(?))`,
             [endStr]
         );
         growth.push({ label: DASHBOARD_MONTHS[end.getMonth()], value: Number(row?.total) || 0 });
@@ -178,7 +179,7 @@ async function getCustomerInsights() {
 
     const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
     const newRow = await tenantStore.dbGet(
-        `SELECT COUNT(*) AS total FROM customers WHERE ${joinedAt} >= DATE(?)`,
+        `SELECT COUNT(*) AS total FROM ${operationalCustomers} AND ${joinedAt} >= DATE(?)`,
         [monthStart]
     );
 

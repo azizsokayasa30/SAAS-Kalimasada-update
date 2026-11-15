@@ -580,9 +580,16 @@ async function getTenantStats(tenantId, options = {}) {
     };
 }
 
+// Harus sama dengan filter listOperationalTenants() agar total dashboard = jumlah di daftar tenant.
+const OPERATIONAL_TENANT_WHERE = 't.deleted_at IS NULL AND COALESCE(t.is_master, 0) = 0';
+
 async function getGlobalStats() {
-    const tenants = await dbGet(`SELECT COUNT(*) as total FROM tenants WHERE deleted_at IS NULL`);
-    const customers = await dbGet('SELECT COUNT(*) as total FROM customers');
+    const tenants = await dbGet(`SELECT COUNT(*) as total FROM tenants t WHERE ${OPERATIONAL_TENANT_WHERE}`);
+    const customers = await dbGet(
+        `SELECT COUNT(*) as total FROM customers c
+         JOIN tenants t ON t.id = c.tenant_id
+         WHERE ${OPERATIONAL_TENANT_WHERE}`
+    );
     return {
         totalTenants: tenants?.total || 0,
         totalCustomers: customers?.total || 0,
@@ -593,7 +600,13 @@ async function getExtendedGlobalStats() {
     const base = await getGlobalStats();
     let totalRouters = 0;
     if (await tableExists('routers')) {
-        const row = await dbGet('SELECT COUNT(*) as total FROM routers');
+        const row = (await tableHasColumn('routers', 'tenant_id'))
+            ? await dbGet(
+                `SELECT COUNT(*) as total FROM routers r
+                 JOIN tenants t ON t.id = r.tenant_id
+                 WHERE ${OPERATIONAL_TENANT_WHERE}`
+            )
+            : await dbGet('SELECT COUNT(*) as total FROM routers');
         totalRouters = row?.total || 0;
     }
     return {
@@ -1006,6 +1019,7 @@ module.exports = {
     resolveStatsPeriod,
     getGlobalStats,
     getExtendedGlobalStats,
+    OPERATIONAL_TENANT_WHERE,
     createTenant,
     updateTenant,
     updateTenantAdminCredentials,
