@@ -2,7 +2,6 @@
   const ihTabs = [
     { key: 'vpn', href: '/management/vpn', icon: 'bi-shield-lock', label: 'VPN Server' },
     { key: 'vpn-devices', href: '/management/vpn/devices', icon: 'bi-router', label: 'Perangkat VPN' },
-    { key: 'switch', href: '/management/pop/switches', icon: 'bi-hdd-network', label: 'Switch' },
     { key: 'radius', href: '/management/pop/radius', icon: 'bi-shield-check', label: 'Radius' },
     { key: 'proxy', href: '/management/settings/reverse-proxy', icon: 'bi-signpost-split', label: 'Reverse Proxy' },
     { key: 'api', href: '/management/settings/api', icon: 'bi-plug', label: 'API' },
@@ -11,7 +10,7 @@
   const ihChips = typeof chips !== 'undefined' && Array.isArray(chips) ? chips : [];
   const ihActions = typeof actions !== 'undefined' && actions ? actions : '';
 %>
-<link rel="stylesheet" href="/css/infra-modern.css?v=7">
+<link rel="stylesheet" href="/css/infra-modern.css?v=14">
 <header class="km-infra-hero">
   <div class="km-infra-hero__main">
     <span class="km-infra-hero__icon"><i class="bi <%= icon %>"></i></span>

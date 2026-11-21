@@ -325,15 +325,44 @@ async function saveConnection(input = {}) {
     return publicConnection({ baseUrl, token, timeoutMs });
 }
 
+function extractNetCode(err) {
+    const cause = err?.cause;
+    return cause?.code || err?.code || (err?.name === 'AbortError' ? 'ABORT_ERR' : '') || '';
+}
+
+function isTransientNetError(err) {
+    if (err instanceof NmsError) return false;
+    const code = extractNetCode(err);
+    return [
+        'ENETUNREACH',
+        'EHOSTUNREACH',
+        'ECONNRESET',
+        'ECONNREFUSED',
+        'ETIMEDOUT',
+        'EPIPE',
+        'EAI_AGAIN',
+        'UND_ERR_CONNECT_TIMEOUT',
+        'UND_ERR_SOCKET',
+        'ABORT_ERR',
+    ].includes(code) || err?.name === 'AbortError';
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function describeFetchError(err) {
     const cause = err?.cause;
-    const code = cause?.code || err?.code || '';
+    const code = extractNetCode(err);
     const detail = cause?.message || err?.message || 'Gagal menghubungi NMS';
     if (code === 'ERR_TLS_CERT_ALTNAME_INVALID' || /altname|certificate/i.test(detail)) {
         return 'Sertifikat NMS tidak cocok dengan alamat yang diisi. Pakai hostname bersertifikat, misalnya https://nms.kalimasada-app.com';
     }
     if (code === 'ENOTFOUND') return 'Hostname NMS tidak ditemukan.';
     if (code === 'ECONNREFUSED') return 'Koneksi ke NMS ditolak.';
+    if (code === 'ENETUNREACH' || code === 'EHOSTUNREACH') {
+        return 'Jaringan ke NMS tidak terjangkau (ENETUNREACH). Pastikan netmask server /27 agar IP NMS 103.132.40.79 bukan broadcast, lalu coba lagi.';
+    }
     if (err?.name === 'AbortError' || code === 'ABORT_ERR') return 'NMS tidak merespons dalam batas waktu.';
     return detail;
 }
@@ -348,28 +377,39 @@ async function nmsFetch(pathname, { auth = true } = {}) {
         if (!conn.token) throw new NmsError('Token API NMS belum diisi.', 400, 'NO_TOKEN');
         headers.Authorization = `Bearer ${conn.token}`;
     }
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), conn.timeoutMs);
-    try {
-        const res = await fetch(url, { method: 'GET', headers, signal: ctrl.signal });
-        const text = await res.text();
-        let body = null;
+
+    const maxAttempts = 3;
+    let lastErr = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), conn.timeoutMs);
         try {
-            body = text ? JSON.parse(text) : null;
-        } catch (_) {
-            body = { message: text.slice(0, 180) };
+            const res = await fetch(url, { method: 'GET', headers, signal: ctrl.signal });
+            const text = await res.text();
+            let body = null;
+            try {
+                body = text ? JSON.parse(text) : null;
+            } catch (_) {
+                body = { message: text.slice(0, 180) };
+            }
+            if (!res.ok) {
+                const message = body?.message || `NMS membalas ${res.status}`;
+                throw new NmsError(message, 502, res.status === 401 ? 'NMS_AUTH' : 'NMS_HTTP');
+            }
+            return body;
+        } catch (err) {
+            if (err instanceof NmsError) throw err;
+            lastErr = err;
+            if (attempt < maxAttempts && isTransientNetError(err)) {
+                await sleep(250 * attempt);
+                continue;
+            }
+            throw new NmsError(describeFetchError(err), 502, 'NMS_NET');
+        } finally {
+            clearTimeout(timer);
         }
-        if (!res.ok) {
-            const message = body?.message || `NMS membalas ${res.status}`;
-            throw new NmsError(message, 502, res.status === 401 ? 'NMS_AUTH' : 'NMS_HTTP');
-        }
-        return body;
-    } catch (err) {
-        if (err instanceof NmsError) throw err;
-        throw new NmsError(describeFetchError(err), 502, 'NMS_NET');
-    } finally {
-        clearTimeout(timer);
     }
+    throw new NmsError(describeFetchError(lastErr), 502, 'NMS_NET');
 }
 
 async function testConnection() {
@@ -582,6 +622,74 @@ async function updateBinding(id, input = {}) {
     if (!bindingId) throw new NmsError('Binding tidak ditemukan.', 404, 'NOT_FOUND');
     const current = await tenantStore.dbGet('SELECT * FROM platform_nms_graph_bindings WHERE id = ?', [bindingId]);
     if (!current) throw new NmsError('Binding tidak ditemukan.', 404, 'NOT_FOUND');
+
+    const fullUpdate = input.tenant_id !== undefined
+        || input.nms_device_id !== undefined
+        || input.nms_graph_id !== undefined
+        || input.interface_key !== undefined
+        || input.router_id !== undefined;
+
+    if (!fullUpdate) {
+        const showManagement = input.show_on_management === undefined
+            ? current.show_on_management
+            : (flag(input.show_on_management) ? 1 : 0);
+        const showTenant = input.show_on_tenant === undefined
+            ? current.show_on_tenant
+            : (flag(input.show_on_tenant) ? 1 : 0);
+        const isActive = input.is_active === undefined ? current.is_active : (flag(input.is_active) ? 1 : 0);
+        await tenantStore.dbRun(
+            `UPDATE platform_nms_graph_bindings
+             SET show_on_management = ?, show_on_tenant = ?, is_active = ?, updated_at = datetime('now','localtime')
+             WHERE id = ?`,
+            [showManagement, showTenant, isActive, bindingId]
+        );
+        return tenantStore.dbGet(`${BINDING_SELECT} WHERE b.id = ?`, [bindingId]);
+    }
+
+    const tenantId = input.tenant_id !== undefined ? asInt(input.tenant_id) : Number(current.tenant_id);
+    const rawRouterId = input.router_id !== undefined ? input.router_id : current.router_id;
+    const routerProvided = rawRouterId !== undefined && rawRouterId !== null && String(rawRouterId).trim() !== '';
+    const routerId = routerProvided ? asInt(rawRouterId) : null;
+    if (!tenantId) throw new NmsError('Tenant wajib diisi.', 400, 'BAD_BINDING');
+    if (routerProvided && !routerId) throw new NmsError('Router tidak valid.', 400, 'BAD_ROUTER');
+    const tenant = await tenantStore.dbGet(
+        'SELECT id FROM tenants WHERE id = ? AND deleted_at IS NULL',
+        [tenantId]
+    );
+    if (!tenant) throw new NmsError('Tenant tidak ditemukan.', 400, 'BAD_TENANT');
+    if (routerId) {
+        const router = await tenantStore.dbGet(
+            'SELECT id, tenant_id, name, nas_ip FROM routers WHERE id = ?',
+            [routerId]
+        );
+        if (!router || Number(router.tenant_id) !== tenantId) {
+            throw new NmsError('Router tidak termasuk tenant yang dipilih.', 400, 'BAD_ROUTER');
+        }
+    }
+
+    const deviceId = assertSafeId(
+        input.nms_device_id !== undefined ? input.nms_device_id : current.nms_device_id,
+        'Perangkat NMS'
+    );
+    const kind = (input.nms_graph_kind !== undefined ? input.nms_graph_kind : current.nms_graph_kind) === 'probe'
+        ? 'probe'
+        : 'interface';
+    const interfaceKey = cleanText(
+        input.interface_key !== undefined ? input.interface_key : (current.interface_key || ''),
+        160
+    );
+    let graphId = cleanText(
+        input.nms_graph_id !== undefined ? input.nms_graph_id : (current.nms_graph_id || ''),
+        128
+    );
+    if (graphId && !/^[A-Za-z0-9_.:-]{1,128}$/.test(graphId)) {
+        throw new NmsError('ID graph NMS tidak valid.', 400, 'BAD_ID');
+    }
+    if (!graphId && interfaceKey) {
+        graphId = `${kind}:${interfaceKey}`.replace(/[^\w.:-]+/g, '_').slice(0, 128);
+    }
+    if (!graphId) throw new NmsError('Pilih graph atau interface NMS.', 400, 'BAD_BINDING');
+
     const showManagement = input.show_on_management === undefined
         ? current.show_on_management
         : (flag(input.show_on_management) ? 1 : 0);
@@ -589,11 +697,59 @@ async function updateBinding(id, input = {}) {
         ? current.show_on_tenant
         : (flag(input.show_on_tenant) ? 1 : 0);
     const isActive = input.is_active === undefined ? current.is_active : (flag(input.is_active) ? 1 : 0);
+    if (!showManagement && !showTenant) {
+        throw new NmsError('Pilih minimal satu tampilan: dashboard management atau tenant.', 400, 'BAD_BINDING');
+    }
+
+    const dup = await tenantStore.dbGet(
+        `SELECT id FROM platform_nms_graph_bindings
+         WHERE id != ?
+           AND tenant_id = ? AND router_id IS ? AND nms_device_id = ?
+           AND (
+             nms_graph_id = ?
+             OR (interface_key != '' AND interface_key = ? AND nms_graph_kind = ?)
+           )`,
+        [bindingId, tenantId, routerId, deviceId, graphId, interfaceKey, kind]
+    );
+    if (dup) {
+        throw new NmsError(
+            routerId ? 'Graph ini sudah dipetakan ke router tersebut.' : 'Graph ini sudah dipetakan ke tenant tersebut tanpa router.',
+            400,
+            'DUP_BINDING'
+        );
+    }
+
     await tenantStore.dbRun(
         `UPDATE platform_nms_graph_bindings
-         SET show_on_management = ?, show_on_tenant = ?, is_active = ?, updated_at = datetime('now','localtime')
+         SET tenant_id = ?, router_id = ?, nms_device_id = ?, nms_device_name = ?, nms_device_ip = ?,
+             nms_graph_id = ?, nms_graph_name = ?, nms_graph_kind = ?, interface_key = ?,
+             show_on_management = ?, show_on_tenant = ?, is_active = ?,
+             updated_at = datetime('now','localtime')
          WHERE id = ?`,
-        [showManagement, showTenant, isActive, bindingId]
+        [
+            tenantId,
+            routerId,
+            deviceId,
+            cleanText(
+                input.nms_device_name !== undefined ? input.nms_device_name : (current.nms_device_name || ''),
+                160
+            ),
+            cleanText(
+                input.nms_device_ip !== undefined ? input.nms_device_ip : (current.nms_device_ip || ''),
+                64
+            ),
+            graphId,
+            cleanText(
+                input.nms_graph_name !== undefined ? input.nms_graph_name : (current.nms_graph_name || ''),
+                160
+            ),
+            kind,
+            interfaceKey,
+            showManagement ? 1 : 0,
+            showTenant ? 1 : 0,
+            isActive ? 1 : 0,
+            bindingId,
+        ]
     );
     return tenantStore.dbGet(`${BINDING_SELECT} WHERE b.id = ?`, [bindingId]);
 }

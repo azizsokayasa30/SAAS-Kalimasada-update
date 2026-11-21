@@ -2119,21 +2119,22 @@ router.post('/customers/:customerId/status', verifyToken, allowFieldOps, async (
             return res.status(404).json({ success: false, message: 'Pelanggan tidak ditemukan' });
         }
 
-        if (status === 'suspended') {
+        const { classifyBucket } = require('../../config/customerStatus');
+        if (status === 'suspended' || status === 'isolated') {
+            // suspendCustomerService menulis status canonical 'suspended' (bukan 'isolated')
             const serviceSuspension = require('../../config/serviceSuspension');
             await serviceSuspension.suspendCustomerService(customer, 'Isolir manual dari aplikasi mobile admin');
         } else if (status === 'active') {
-            if (String(customer.status || '').toLowerCase() === 'suspended') {
+            if (classifyBucket(customer.status) === 'isolir') {
                 const serviceSuspension = require('../../config/serviceSuspension');
                 await serviceSuspension.restoreCustomerService(customer, 'Aktifkan manual dari aplikasi mobile admin');
             } else {
                 await billingManager.setCustomerStatusById(customerId, 'active', { skipRadiusSync: true });
             }
-        } else {
-            await billingManager.setCustomerStatusById(customerId, 'isolated', { skipRadiusSync: true });
         }
 
-        res.json({ success: true, data: { id: customerId, status } });
+        const fresh = await billingManager.getCustomerById(customerId);
+        res.json({ success: true, data: { id: customerId, status: (fresh && fresh.status) || status } });
     } catch (error) {
         logger.error('[mobile-adapter] customers/status', error);
         res.status(500).json({ success: false, message: error.message || 'Gagal memperbarui status pelanggan' });

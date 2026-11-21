@@ -4,14 +4,31 @@
   const periodLabel = fin.periodLabel(filters.month, filters.year);
   const gateways = ['midtrans', 'xendit', 'tripay', 'duitku'];
   const gatewayTone = { midtrans: 'blue', xendit: 'violet', tripay: 'teal', duitku: 'amber' };
-  const successRate = summary.total ? Math.round(summary.successCount / summary.total * 100) : 0;
+  const statusTab = String(filters.status || 'success').toLowerCase();
+  const counts = (summary && summary.statusCounts) || { success: 0, pending: 0, failed: 0, all: 0 };
+  const successRate = (counts.success + counts.pending + counts.failed)
+    ? Math.round(counts.success / Math.max(counts.success + counts.pending + counts.failed, 1) * 100)
+    : 0;
   const avg = summary.total ? summary.totalAmount / summary.total : 0;
-  const pageQuery = function (page) {
-    return '?page=' + page + '&month=' + filters.month + '&year=' + filters.year
-      + '&tenant_id=' + encodeURIComponent(filters.tenantId || '') + '&gateway=' + encodeURIComponent(filters.gateway || '');
+  const pageQuery = function (page, statusOverride) {
+    const st = statusOverride != null ? statusOverride : statusTab;
+    return '?page=' + page
+      + '&month=' + filters.month
+      + '&year=' + filters.year
+      + '&tenant_id=' + encodeURIComponent(filters.tenantId || '')
+      + '&gateway=' + encodeURIComponent(filters.gateway || '')
+      + '&status=' + encodeURIComponent(st);
   };
+  const tabQuery = function (st) { return pageQuery(1, st); };
   const firstRow = pagination.total ? (pagination.page - 1) * pagination.limit + 1 : 0;
   const lastRow = Math.min(pagination.page * pagination.limit, pagination.total);
+  const tabTitle = statusTab === 'pending' ? 'Pembayaran Pending'
+    : (statusTab === 'failed' ? 'Pembayaran Gagal' : 'Pembayaran Sukses');
+  const emptyCopy = statusTab === 'pending'
+    ? { title: 'Tidak ada pembayaran pending', desc: 'Transaksi gateway yang menunggu pembayaran/settlement akan tampil di tab ini.' }
+    : (statusTab === 'failed'
+      ? { title: 'Tidak ada pembayaran gagal', desc: 'Transaksi yang expired/dibatalkan/gagal akan tampil di tab ini.' }
+      : { title: 'Belum ada pembayaran sukses', desc: 'Pembayaran online yang sudah berhasil dari pelanggan tenant akan tampil di sini.' });
 %>
 <main class="km-main km-inv-page km-fin-page">
   <div class="km-topbar">
@@ -33,10 +50,30 @@
         options: tenants.map(function (t) { return { value: t.id, label: t.name }; }) },
       { name: 'gateway', label: 'Gateway', allLabel: 'Semua gateway', selected: filters.gateway, icon: 'bi-credit-card-2-front',
         options: gateways.map(function (g) { return { value: g, label: g.charAt(0).toUpperCase() + g.slice(1) }; }) }
-    ]
+    ],
+    hiddenFields: [{ name: 'status', value: statusTab }]
   }) %>
 
   <div class="km-inv-stats mb-3">
+    <% if (statusTab === 'pending') { %>
+    <div class="km-inv-stat km-inv-stat--rose km-fin-stat--pending-warn">
+      <span class="km-inv-stat__icon"><i class="bi bi-exclamation-triangle-fill"></i></span>
+      <div class="km-inv-stat__body">
+        <div class="km-inv-stat__label">Nominal Pending</div>
+        <div class="km-inv-stat__value"><%= formatRupiah(summary.totalAmount) %></div>
+        <div class="km-inv-stat__meta"><i class="bi bi-x-octagon-fill text-danger me-1"></i>Belum masuk koleksi · <%= periodLabel %></div>
+      </div>
+    </div>
+    <% } else if (statusTab === 'failed') { %>
+    <div class="km-inv-stat km-inv-stat--rose">
+      <span class="km-inv-stat__icon"><i class="bi bi-x-circle-fill"></i></span>
+      <div class="km-inv-stat__body">
+        <div class="km-inv-stat__label">Nominal Gagal</div>
+        <div class="km-inv-stat__value"><%= formatRupiah(summary.totalAmount) %></div>
+        <div class="km-inv-stat__meta">Bukan koleksi · <%= periodLabel %></div>
+      </div>
+    </div>
+    <% } else { %>
     <div class="km-inv-stat km-inv-stat--green">
       <span class="km-inv-stat__icon"><i class="bi bi-cash-coin"></i></span>
       <div class="km-inv-stat__body">
@@ -45,10 +82,11 @@
         <div class="km-inv-stat__meta"><%= periodLabel %></div>
       </div>
     </div>
+    <% } %>
     <div class="km-inv-stat km-inv-stat--blue">
       <span class="km-inv-stat__icon"><i class="bi bi-receipt"></i></span>
       <div class="km-inv-stat__body">
-        <div class="km-inv-stat__label">Jumlah Transaksi</div>
+        <div class="km-inv-stat__label">Jumlah di Tab Ini</div>
         <div class="km-inv-stat__value"><%= summary.total %> <small>transaksi</small></div>
         <div class="km-inv-stat__meta">Rata-rata <%= formatRupiah(avg) %></div>
       </div>
@@ -56,7 +94,7 @@
     <div class="km-inv-stat km-inv-stat--violet">
       <span class="km-inv-stat__icon"><i class="bi bi-buildings"></i></span>
       <div class="km-inv-stat__body">
-        <div class="km-inv-stat__label">Tenant Bertransaksi</div>
+        <div class="km-inv-stat__label">Tenant</div>
         <div class="km-inv-stat__value"><%= summary.tenantCount %> <small>tenant</small></div>
         <div class="km-inv-stat__meta">dari <%= tenants.length %> tenant aktif</div>
       </div>
@@ -65,9 +103,9 @@
       <span class="km-inv-stat__icon"><i class="bi bi-patch-check"></i></span>
       <div class="km-inv-stat__body">
         <div class="km-inv-stat__label">Tingkat Berhasil</div>
-        <div class="km-inv-stat__value"><%= summary.total ? successRate + '%' : '-' %></div>
+        <div class="km-inv-stat__value"><%= (counts.success + counts.pending + counts.failed) ? successRate + '%' : '-' %></div>
         <div class="km-inv-progress"><span style="width: <%= successRate %>%"></span></div>
-        <div class="km-inv-stat__meta"><%= summary.successCount %> dari <%= summary.total %> transaksi</div>
+        <div class="km-inv-stat__meta"><%= counts.success %> sukses · <%= counts.pending %> pending</div>
       </div>
     </div>
   </div>
@@ -75,8 +113,7 @@
   <div class="km-card km-card--flush">
     <div class="km-inv-list__head">
       <div>
-        <h5>Daftar Pembayaran</h5>
-        <p><%= pagination.total %> transaksi pada <%= periodLabel %></p>
+        <h5><%= tabTitle %></h5>
       </div>
       <% if (payments.length) { %>
         <div class="km-inv-search">
@@ -86,11 +123,33 @@
       <% } %>
     </div>
 
+    <div class="km-inv-toolbar">
+      <div class="km-fin-pay-tabs" role="tablist" aria-label="Filter status pembayaran">
+        <a href="<%= tabQuery('success') %>" class="km-fin-pay-tab km-fin-pay-tab--success <%= statusTab === 'success' ? 'is-active' : '' %>" role="tab" aria-selected="<%= statusTab === 'success' %>">
+          <i class="bi bi-check-circle-fill"></i>
+          <span class="km-fin-pay-tab__label">Sukses</span>
+          <span class="km-fin-pay-tab__count"><%= counts.success %></span>
+        </a>
+        <a href="<%= tabQuery('pending') %>" class="km-fin-pay-tab km-fin-pay-tab--pending <%= statusTab === 'pending' ? 'is-active' : '' %>" role="tab" aria-selected="<%= statusTab === 'pending' %>">
+          <i class="bi bi-hourglass-split"></i>
+          <span class="km-fin-pay-tab__label">Pending</span>
+          <span class="km-fin-pay-tab__count"><%= counts.pending %></span>
+        </a>
+        <% if (counts.failed > 0) { %>
+          <a href="<%= tabQuery('failed') %>" class="km-fin-pay-tab km-fin-pay-tab--failed <%= statusTab === 'failed' ? 'is-active' : '' %>" role="tab" aria-selected="<%= statusTab === 'failed' %>">
+            <i class="bi bi-x-circle-fill"></i>
+            <span class="km-fin-pay-tab__label">Gagal</span>
+            <span class="km-fin-pay-tab__count"><%= counts.failed %></span>
+          </a>
+        <% } %>
+      </div>
+    </div>
+
     <% if (!payments.length) { %>
       <div class="km-inv-empty">
         <i class="bi bi-credit-card-2-front"></i>
-        <strong>Belum ada pembayaran di <%= periodLabel %></strong>
-        <span>Pembayaran online dari pelanggan tenant melalui payment gateway akan tampil di sini.</span>
+        <strong><%= emptyCopy.title %> di <%= periodLabel %></strong>
+        <span><%= emptyCopy.desc %></span>
       </div>
     <% } else { %>
       <div class="table-responsive">
@@ -137,8 +196,14 @@
                   <span class="km-fin-cat km-fin-cat--plain km-fin-cat--<%= gatewayTone[gw] || 'slate' %>"><%= gw ? gw.charAt(0).toUpperCase() + gw.slice(1) : 'Online' %></span>
                   <% if (p.order_id) { %><div class="km-inv-sub mt-1" title="Order ID"><%= p.order_id %></div><% } %>
                 </td>
-                <td class="text-end"><span class="km-inv-total"><%= formatRupiah(p.amount) %></span></td>
-                <td><span class="km-inv-pill km-inv-pill--<%= st.key === 'paid' ? 'paid' : (st.key === 'failed' ? 'failed' : 'none') %>"><i class="bi <%= st.icon %>"></i> <%= st.label %></span></td>
+                <td class="text-end">
+                  <% if (st.key === 'pending' || statusTab === 'pending') { %>
+                    <span class="km-inv-total km-fin-amt--pending"><i class="bi bi-exclamation-triangle-fill"></i> <%= formatRupiah(p.amount) %></span>
+                  <% } else { %>
+                    <span class="km-inv-total"><%= formatRupiah(p.amount) %></span>
+                  <% } %>
+                </td>
+                <td><span class="km-inv-pill km-inv-pill--<%= st.key === 'paid' ? 'paid' : (st.key === 'failed' ? 'failed' : (st.key === 'pending' ? 'pending' : 'none')) %>"><i class="bi <%= st.icon %>"></i> <%= st.key === 'pending' ? 'Pending' : st.label %></span></td>
               </tr>
             <% }); %>
             <tr class="js-search-empty d-none">

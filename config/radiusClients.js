@@ -2,8 +2,20 @@
 // Sekarang menggunakan RADIUS SQLite database sebagai primary storage
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execSync } = require('child_process');
 const logger = require('./logger');
+
+/** Secret RADIUS NAS baru — jangan pernah pakai password API MikroTik. */
+function generateRadiusNasSecret() {
+    return crypto.randomBytes(18).toString('base64url');
+}
+
+function normalizeNasSecret(value) {
+    if (value == null) return null;
+    const s = String(value).trim();
+    return s || null;
+}
 
 const CLIENTS_CONF_PATH = '/etc/freeradius/3.0/clients.conf';
 const APP_ROOT = path.join(__dirname, '..');
@@ -66,10 +78,23 @@ function mergeTenantClientsIntoAll(allClients, tenantClients, tenantId) {
         return tenantClients;
     }
     const others = (allClients || []).filter((c) => !clientBelongsToTenant(c, tid));
-    const owned = (tenantClients || []).map((c) => ({
-        ...c,
-        tenant_id: tid
-    }));
+    const existingByIp = new Map();
+    for (const c of allClients || []) {
+        const ip = String(c?.ipaddr || '').trim();
+        if (ip) existingByIp.set(ip, c);
+    }
+    const owned = (tenantClients || []).map((c) => {
+        const ip = String(c?.ipaddr || '').trim();
+        const prev = ip ? existingByIp.get(ip) : null;
+        const incomingSecret = normalizeNasSecret(c?.secret);
+        // Jangan biarkan secret kosong menimpa secret yang sudah ada
+        const secret = incomingSecret || normalizeNasSecret(prev?.secret) || c?.secret;
+        return {
+            ...c,
+            secret,
+            tenant_id: tid
+        };
+    });
     return [...others, ...owned].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
 }
 
@@ -453,22 +478,49 @@ function mergeClientsFromDbAndFile(dbClients, fileClients) {
     return [...m.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
 }
 
+/** Snapshot secret NAS per IP sebelum tulis ulang — mencegah secret hilang/tertukar. */
+async function loadExistingNasSecretsByIp(conn) {
+    const map = new Map();
+    try {
+        const [rows] = await conn.execute('SELECT nasname, shortname, secret FROM nas');
+        for (const row of rows || []) {
+            const ip = String(row.nasname || '').trim();
+            const secret = normalizeNasSecret(row.secret);
+            if (ip && secret) map.set(ip, { secret, shortname: row.shortname || null });
+        }
+    } catch (e) {
+        logger.warn(`[RADIUS-CLIENTS] Gagal baca secret nas lama: ${e.message}`);
+    }
+    return map;
+}
+
 /** Hanya isi ulang tabel nas (tanpa menulis clients.conf) — dipakai auto-heal + writeClientsConfToDB */
 async function replaceNasTable(clients) {
     const conn = await getRadiusConnection();
     await ensureNasTenantColumn(conn);
+    const existingSecrets = await loadExistingNasSecretsByIp(conn);
     await conn.execute('DELETE FROM nas');
     const seenIps = new Set();
+    let preserved = 0;
+    let changed = 0;
     for (const client of clients) {
-        if (!client.name || !client.secret) {
-            logger.warn(`[RADIUS-CLIENTS] Lewati client tidak lengkap: ${client.name}`);
-            continue;
-        }
         let ip = String(client.ipaddr || '').trim();
         const ipv4Port = ip.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/);
         if (ipv4Port) ip = ipv4Port[1];
         if (!ip) {
             logger.warn(`[RADIUS-CLIENTS] Lewati client tanpa IP: ${client.name}`);
+            continue;
+        }
+        const prev = existingSecrets.get(ip);
+        let secret = normalizeNasSecret(client.secret);
+        // Lindungi secret yang sudah ada: jangan tulis kosong, jangan biarkan hilang
+        if (!secret && prev?.secret) {
+            secret = prev.secret;
+            preserved += 1;
+            logger.warn(`[RADIUS-CLIENTS] Secret kosong untuk ${ip} (${client.name}) — dipertahankan dari nas lama`);
+        }
+        if (!client.name || !secret) {
+            logger.warn(`[RADIUS-CLIENTS] Lewati client tidak lengkap: ${client.name}`);
             continue;
         }
         if (seenIps.has(ip)) {
@@ -485,16 +537,24 @@ async function replaceNasTable(clients) {
             logger.warn(`[RADIUS-CLIENTS] Lewati IP ilegal ${ip} (${shortname})`);
             continue;
         }
+        if (prev?.secret && prev.secret !== secret) {
+            changed += 1;
+            logger.warn(
+                `[RADIUS-CLIENTS] Secret NAS berubah untuk ${ip} (${shortname}): len ${prev.secret.length} → ${secret.length}`
+            );
+        }
         const tenantId = client.tenant_id != null && Number.isFinite(Number(client.tenant_id))
             ? parseInt(client.tenant_id, 10)
             : null;
         await conn.execute(
             `INSERT INTO nas (nasname, shortname, type, secret, description, tenant_id)
              VALUES (?, ?, ?, ?, ?, ?)`,
-            [ip, shortname, client.nas_type || 'other', client.secret, client.comment || null, tenantId]
+            [ip, shortname, client.nas_type || 'other', secret, client.comment || null, tenantId]
         );
     }
-    logger.info(`[RADIUS-CLIENTS] Tabel nas diisi ulang (${clients.length} entri masukan)`);
+    logger.info(
+        `[RADIUS-CLIENTS] Tabel nas diisi ulang (${clients.length} entri masukan, preservedSecrets=${preserved}, changedSecrets=${changed})`
+    );
     await conn.end();
 }
 
@@ -510,6 +570,9 @@ async function writeTenantClientsConfToDB(tenantClients, tenantId = null) {
 
 /**
  * Upsert satu NAS RADIUS dari data router billing (sinkron Setting Mikrotik / NAS).
+ *
+ * PENTING: password API MikroTik BUKAN secret RADIUS.
+ * Secret hanya diubah jika router.secret diisi eksplisit; selain itu secret nas yang ada dipertahankan.
  */
 async function upsertRadiusNasFromRouter(router, tenantId = null) {
     const ip = String(router?.nas_ip || '').trim();
@@ -530,11 +593,53 @@ async function upsertRadiusNasFromRouter(router, tenantId = null) {
         };
     }
     const name = rawName;
-    const secret = String(router?.secret || router?.password || 'testing123').trim() || 'testing123';
+    // Hanya secret RADIUS eksplisit — JANGAN fallback ke router.password (API)
+    const explicitSecret = normalizeNasSecret(router?.secret);
 
     const all = await parseClientsConfFromDB({ all: true });
     const idx = all.findIndex((c) => String(c.ipaddr || '').trim() === ip);
-    const next = {
+
+    if (idx >= 0) {
+        // Jangan timpa milik tenant lain
+        if (tid != null && all[idx].tenant_id != null && Number(all[idx].tenant_id) !== Number(tid)) {
+            return { success: false, message: 'NAS IP sudah dipakai tenant lain di RADIUS' };
+        }
+        const existingSecret = normalizeNasSecret(all[idx].secret);
+        const secret = explicitSecret || existingSecret;
+        if (!secret) {
+            return {
+                success: false,
+                message: 'Secret RADIUS NAS kosong. Set di Manage RADIUS Clients (jangan pakai password API).'
+            };
+        }
+        if (explicitSecret && existingSecret && explicitSecret !== existingSecret) {
+            logger.warn(
+                `[RADIUS-CLIENTS] upsertRadiusNasFromRouter: secret eksplisit untuk ${ip} (${name}) — len ${existingSecret.length} → ${explicitSecret.length}`
+            );
+        } else if (!explicitSecret) {
+            logger.info(
+                `[RADIUS-CLIENTS] upsertRadiusNasFromRouter: pertahankan secret NAS ${ip} (${name}) — sinkron router tanpa menimpa secret`
+            );
+        }
+        all[idx] = {
+            ...all[idx],
+            name,
+            ipaddr: ip,
+            secret,
+            comment: router?.location || router?.nas_identifier || all[idx].comment || null,
+            tenant_id: tid != null ? tid : all[idx].tenant_id
+        };
+        await writeClientsConfToDB(all);
+        return { success: true, secretPreserved: !explicitSecret, secretGenerated: false };
+    }
+
+    const secret = explicitSecret || generateRadiusNasSecret();
+    if (!explicitSecret) {
+        logger.warn(
+            `[RADIUS-CLIENTS] NAS baru ${ip} (${name}): secret di-generate otomatis. Samakan secret di MikroTik /radius dan Manage RADIUS Clients.`
+        );
+    }
+    all.push({
         name,
         ipaddr: ip,
         secret,
@@ -542,18 +647,16 @@ async function upsertRadiusNasFromRouter(router, tenantId = null) {
         require_message_authenticator: 'no',
         comment: router?.location || router?.nas_identifier || null,
         tenant_id: tid
-    };
-    if (idx >= 0) {
-        // Jangan timpa milik tenant lain
-        if (tid != null && all[idx].tenant_id != null && Number(all[idx].tenant_id) !== Number(tid)) {
-            return { success: false, message: 'NAS IP sudah dipakai tenant lain di RADIUS' };
-        }
-        all[idx] = { ...all[idx], ...next, tenant_id: tid != null ? tid : all[idx].tenant_id };
-    } else {
-        all.push(next);
-    }
+    });
     await writeClientsConfToDB(all);
-    return { success: true };
+    return {
+        success: true,
+        secretPreserved: false,
+        secretGenerated: !explicitSecret,
+        warning: !explicitSecret
+            ? 'Secret RADIUS digenerate otomatis — samakan di MikroTik RADIUS client. Password API tidak dipakai sebagai secret.'
+            : null
+    };
 }
 
 async function removeRadiusNasByIp(nasIp, tenantId = null) {

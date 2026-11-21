@@ -853,10 +853,12 @@ router.get('/invoices/:id/payment-options', verifyCustomerToken, async (req, res
         const defGw = pg.active && pgm.gateways[pg.active] ? pg.active : gateways[0]?.id || null;
 
         let methods = [];
+        let methodsError = null;
         try {
             methods = await pgm.getAvailablePaymentMethods(invoice.amount);
         } catch (methodErr) {
-            logger.warn('[customer-portal-v1] payment methods lookup', methodErr.message);
+            methodsError = methodErr.message || 'Gagal memuat metode pembayaran';
+            logger.warn('[customer-portal-v1] payment methods lookup', methodsError);
         }
         const portalMethods = (methods || []).map((m) => ({
             gateway: m.gateway,
@@ -872,6 +874,12 @@ router.get('/invoices/:id/payment-options', verifyCustomerToken, async (req, res
             methodsByGateway[m.gateway].push(m);
         });
 
+        // Jika gateway aktif (Duitku/Tripay) enabled tapi daftar channel kosong, anggap error
+        // agar UI tidak hanya bilang "channel belum aktif" tanpa alasan teknis.
+        if (!methodsError && portalMethods.length === 0 && gateways.some((g) => g.id === 'duitku' || g.id === 'tripay')) {
+            methodsError = 'Tidak ada channel pembayaran aktif dari penyedia. Cek Payment Method di dashboard Duitku/Tripay.';
+        }
+
         return res.json({
             success: true,
             already_paid: false,
@@ -881,6 +889,7 @@ router.get('/invoices/:id/payment-options', verifyCustomerToken, async (req, res
             default_gateway: defGw,
             methods: portalMethods,
             methods_by_gateway: methodsByGateway,
+            methods_error: methodsError,
         });
     } catch (err) {
         logger.error('[customer-portal-v1] payment-options', err);
@@ -915,6 +924,7 @@ router.post('/invoices/:id/checkout', verifyCustomerToken, async (req, res) => {
             : await billingManager.createOnlinePayment(id, bodyGw || null);
         const displayMode = result.display_mode || (result.qr_string ? 'qr' : (result.va_number ? 'va' : (result.app_url || result.payment_url ? 'app' : 'redirect')));
         const inline = displayMode === 'qr' || displayMode === 'va' || displayMode === 'app';
+        const payMethod = String(result.payment_method || bodyMethod || '').toUpperCase();
         return res.json({
             success: true,
             inline,
@@ -927,10 +937,13 @@ router.post('/invoices/:id/checkout', verifyCustomerToken, async (req, res) => {
             amount: result.amount || invoice.amount,
             expiry_minutes: result.expiry_minutes || 60,
             payment_method: result.payment_method || bodyMethod || null,
+            method_label: result.method_label || null,
             order_id: result.order_id,
             gateway: result.gateway,
             token: result.token,
             sandbox: !!result.sandbox,
+            // Docs Duitku: scan bank (BCA/BRI) andalkan Nobu QRIS (NQ).
+            qris_bank_ready: payMethod === 'NQ',
         });
     } catch (err) {
         logger.error('[customer-portal-v1] checkout', err);

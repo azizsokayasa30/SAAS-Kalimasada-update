@@ -9,10 +9,15 @@
   const pfYear = Number(filters.year) || pfNowY;
   const pfMonth = Number(filters.month) || pfNowM;
   const pfExtras = typeof extraSelects !== 'undefined' && Array.isArray(extraSelects) ? extraSelects : [];
+  const pfHidden = typeof hiddenFields !== 'undefined' && Array.isArray(hiddenFields) ? hiddenFields : [];
+  const pfHiddenKeep = pfHidden
+    .filter(function (h) { return h && h.name && h.value !== undefined && h.value !== null && String(h.value) !== ''; })
+    .map(function (h) { return '&' + encodeURIComponent(h.name) + '=' + encodeURIComponent(h.value); })
+    .join('');
   const pfKeep = pfExtras
     .filter(function (s) { return s.selected !== undefined && s.selected !== null && String(s.selected) !== ''; })
     .map(function (s) { return '&' + encodeURIComponent(s.name) + '=' + encodeURIComponent(s.selected); })
-    .join('');
+    .join('') + pfHiddenKeep;
   const pfHref = function (m, y) { return pfYearOnly ? '?year=' + y + pfKeep : '?month=' + m + '&year=' + y + pfKeep; };
   const pfWith = function (name, value) {
     let q = pfYearOnly ? '?year=' + pfYear : '?month=' + pfMonth + '&year=' + pfYear;
@@ -20,6 +25,7 @@
       const v = s.name === name ? value : s.selected;
       if (v !== undefined && v !== null && String(v) !== '') q += '&' + encodeURIComponent(s.name) + '=' + encodeURIComponent(v);
     });
+    q += pfHiddenKeep;
     return q;
   };
   let pfPrev;
@@ -46,6 +52,11 @@
 <form method="GET" class="km-card km-pp js-period-form mb-3" data-pp data-pp-keep="<%= pfKeep %>" data-pp-year="<%= pfYear %>">
   <% if (!pfYearOnly) { %><input type="hidden" name="month" value="<%= pfMonth %>"><% } %>
   <input type="hidden" name="year" value="<%= pfYear %>">
+  <% pfHidden.forEach(function (h) {
+       if (!h || !h.name) return;
+  %>
+    <input type="hidden" name="<%= h.name %>" value="<%= h.value == null ? '' : h.value %>">
+  <% }); %>
 
   <div class="km-pp__period">
     <div class="km-pp__stepper">

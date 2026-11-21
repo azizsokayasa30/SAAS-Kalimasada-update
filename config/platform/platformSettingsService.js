@@ -78,18 +78,62 @@ async function saveCompanyProfile(data) {
     return profile;
 }
 
+const GATEWAY_KEYS = ['midtrans', 'xendit', 'tripay', 'duitku'];
+const GATEWAY_REQUIRED = {
+    midtrans: ['server_key', 'client_key'],
+    xendit: ['api_key'],
+    tripay: ['api_key', 'private_key', 'merchant_code'],
+    duitku: ['merchant_code', 'api_key'],
+};
+
+function isGatewayReady(key, cfg = {}) {
+    if (!cfg || !cfg.enabled) return false;
+    const required = GATEWAY_REQUIRED[key] || [];
+    return required.every((field) => String(cfg[field] || '').trim());
+}
+
+function pickReadyGateway(config, preferred) {
+    if (preferred && GATEWAY_KEYS.includes(preferred) && isGatewayReady(preferred, config[preferred])) {
+        return preferred;
+    }
+    const ready = GATEWAY_KEYS.find((key) => isGatewayReady(key, config[key]));
+    return ready || preferred || config.active || 'midtrans';
+}
+
 async function getPlatformPaymentGateway() {
     const stored = await getSetting('payment_gateway');
     return applyDefaults(stored && typeof stored === 'object' ? stored : DEFAULT_CONFIG);
 }
 
+async function persistPlatformPaymentGateway(next) {
+    await setSetting('payment_gateway', next);
+    const { syncPlatformToAppSettings, reloadRuntimePaymentGateway } = require('./paymentGatewaySync');
+    await syncPlatformToAppSettings(next);
+    await reloadRuntimePaymentGateway();
+    return next;
+}
+
+/** Perbaiki active yang macet (mis. Midtrans default) bila ada gateway lain yang sudah siap. */
+async function healPlatformPaymentGatewayActive() {
+    const current = await getPlatformPaymentGateway();
+    if (isGatewayReady(current.active, current[current.active])) return { healed: false, payment: current };
+
+    const ready = pickReadyGateway(current, null);
+    if (!ready || ready === current.active || !isGatewayReady(ready, current[ready])) {
+        return { healed: false, payment: current };
+    }
+
+    const next = { ...current, active: ready };
+    await persistPlatformPaymentGateway(next);
+    return { healed: true, payment: next, from: current.active, to: ready };
+}
+
 async function savePlatformPaymentGateway(data) {
     const current = await getPlatformPaymentGateway();
-    const active = data.active || current.active;
-    const gateways = ['midtrans', 'xendit', 'tripay', 'duitku'];
-    const next = { active, ...current };
+    const requestedActive = GATEWAY_KEYS.includes(data.active) ? data.active : current.active;
+    const next = { ...current, active: requestedActive };
 
-    for (const gw of gateways) {
+    for (const gw of GATEWAY_KEYS) {
         if (!data[gw]) continue;
         const raw = data[gw];
         next[gw] = {
@@ -103,13 +147,13 @@ async function savePlatformPaymentGateway(data) {
         });
     }
 
-    await setSetting('payment_gateway', next);
+    // Jika gateway utama belum siap tapi ada gateway lain yang siap, otomatis pindahkan.
+    // Mencegah Midtrans (default) tetap "utama" saat user hanya mengaktifkan Duitku/dll.
+    if (!isGatewayReady(next.active, next[next.active])) {
+        next.active = pickReadyGateway(next, requestedActive);
+    }
 
-    const { syncPlatformToAppSettings, reloadRuntimePaymentGateway } = require('./paymentGatewaySync');
-    await syncPlatformToAppSettings(next);
-    await reloadRuntimePaymentGateway();
-
-    return next;
+    return persistPlatformPaymentGateway(next);
 }
 
 module.exports = {
@@ -120,5 +164,8 @@ module.exports = {
     saveCompanyProfile,
     getPlatformPaymentGateway,
     savePlatformPaymentGateway,
+    healPlatformPaymentGatewayActive,
+    isGatewayReady,
+    GATEWAY_KEYS,
     DEFAULT_COMPANY,
 };

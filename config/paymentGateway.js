@@ -32,12 +32,13 @@ class PaymentGatewayManager {
         // Only initialize enabled gateways
         if (this.settings.payment_gateway && this.settings.payment_gateway.midtrans && this.settings.payment_gateway.midtrans.enabled) {
             try {
-                console.log('[PAYMENT_GATEWAY] Initializing Midtrans with config:', this.settings.payment_gateway.midtrans);
+                console.log('[PAYMENT_GATEWAY] Initializing Midtrans (enabled=%s production=%s)',
+                    !!this.settings.payment_gateway.midtrans.enabled,
+                    !!this.settings.payment_gateway.midtrans.production);
                 this.gateways.midtrans = new MidtransGateway(this.settings.payment_gateway.midtrans);
                 console.log('[PAYMENT_GATEWAY] Midtrans initialized successfully');
             } catch (error) {
                 console.error('Failed to initialize Midtrans gateway:', error.message);
-                console.error('Midtrans config provided:', this.settings.payment_gateway.midtrans);
             }
         } else {
             console.log('[PAYMENT_GATEWAY] Midtrans not enabled or config missing');
@@ -61,12 +62,13 @@ class PaymentGatewayManager {
         
         if (this.settings.payment_gateway && this.settings.payment_gateway.duitku && this.settings.payment_gateway.duitku.enabled) {
             try {
-                console.log('[PAYMENT_GATEWAY] Initializing Duitku with config:', this.settings.payment_gateway.duitku);
-                this.gateways.duitku = new DuitkuGateway(this.settings.payment_gateway.duitku);
+                const d = this.settings.payment_gateway.duitku;
+                console.log('[PAYMENT_GATEWAY] Initializing Duitku (merchant=%s production=%s)',
+                    d.merchant_code || '-', !!d.production);
+                this.gateways.duitku = new DuitkuGateway(d);
                 console.log('[PAYMENT_GATEWAY] Duitku initialized successfully');
             } catch (error) {
                 console.error('Failed to initialize Duitku gateway:', error.message);
-                console.error('Duitku config provided:', this.settings.payment_gateway.duitku);
             }
         } else {
             console.log('[PAYMENT_GATEWAY] Duitku not enabled or config missing');
@@ -811,6 +813,9 @@ class DuitkuGateway {
         'DN', 'AT', 'JP', 'T1', 'T2', 'T3'
     ]);
     static QRIS_CODES = new Set(['SP', 'NQ', 'GQ', 'SQ']);
+    // Urutan QRIS untuk scan bank (BCA/Mandiri/dll): prioritas acquirer GPN nasional.
+    // SP (ShopeePay QRIS) sering ditolak aplikasi bank ("QR tidak sesuai") — taruh terakhir.
+    static QRIS_PREFERENCE = ['NQ', 'SQ', 'GQ', 'SP'];
     static EWALLET_CODES = new Set(['OV', 'SA', 'LF', 'LA', 'DA', 'SL', 'OL']);
     static VA_CODES = new Set(['BC', 'M2', 'VA', 'I1', 'B1', 'BT', 'A1', 'AG', 'NC', 'BR', 'S1', 'DM', 'BV']);
     static RETAIL_CODES = new Set(['FT', 'IR']);
@@ -882,20 +887,57 @@ class DuitkuGateway {
         return Math.min(value, max);
     }
 
+    /**
+     * Ambil payload EMV QRIS dari respons Duitku.
+     * JANGAN hapus spasi di tengah — spasi di nama merchant (tag 59) bagian dari TLV;
+     * menghapusnya merusak panjang tag + CRC → bank menolak "QR tidak sesuai".
+     */
     normalizeQrisPayload(raw) {
-        const s = String(raw || '').trim().replace(/\s+/g, '');
-        return s.startsWith('000201') ? s : '';
+        const s = String(raw || '').replace(/[\r\n\t]+/g, '').trim();
+        if (!s.startsWith('000201')) return '';
+        if (!this.isValidQrisCrc(s)) {
+            console.warn('[DUITKU] qrString CRC mismatch — payload mungkin rusak');
+        }
+        return s;
+    }
+
+    isValidQrisCrc(payload) {
+        const s = String(payload || '');
+        const idx = s.lastIndexOf('6304');
+        if (idx < 0 || idx + 8 > s.length) return false;
+        const claimed = s.slice(idx + 4, idx + 8).toUpperCase();
+        let crc = 0xffff;
+        const body = s.slice(0, idx + 4);
+        for (let i = 0; i < body.length; i++) {
+            crc ^= body.charCodeAt(i) << 8;
+            for (let j = 0; j < 8; j++) {
+                crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) : (crc << 1);
+                crc &= 0xffff;
+            }
+        }
+        return claimed === crc.toString(16).toUpperCase().padStart(4, '0');
     }
 
     async renderQrisImage(qrString) {
         const QRCode = require('qrcode');
-        return QRCode.toDataURL(qrString, {
-            errorCorrectionLevel: 'M',
-            margin: 4,
-            width: 480,
-            type: 'image/png',
-            color: { dark: '#000000', light: '#FFFFFF' }
-        });
+        // SVG lebih aman di-scan dari layar HP (tidak pecah saat di-scale).
+        try {
+            const svg = await QRCode.toString(qrString, {
+                type: 'svg',
+                errorCorrectionLevel: 'M',
+                margin: 4,
+                color: { dark: '#000000', light: '#FFFFFF' }
+            });
+            return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+        } catch (_) {
+            return QRCode.toDataURL(qrString, {
+                errorCorrectionLevel: 'M',
+                margin: 4,
+                width: 512,
+                type: 'image/png',
+                color: { dark: '#000000', light: '#FFFFFF' }
+            });
+        }
     }
 
     mapDuitkuError(message, status) {
@@ -906,10 +948,14 @@ class DuitkuGateway {
         return raw || `Duitku API error ${status || ''}`.trim();
     }
 
+    pickPreferredQris(codes) {
+        return DuitkuGateway.QRIS_PREFERENCE.find((c) => codes.includes(c)) || null;
+    }
+
     /**
      * Pilih kode channel yang benar-benar aktif di merchant.
      * - "VA" di setting lama artinya "virtual account" (salah kaprah); VA Duitku = Maybank.
-     * - "QRIS" bukan kode Duitku; dipetakan ke NQ/SP/SQ/GQ jika ada.
+     * - "QRIS" bukan kode Duitku; dipetakan ke NQ/SQ/GQ/SP (GPN dulu, ShopeePay terakhir).
      */
     pickAvailableChannel(methods, preferred) {
         const codes = (methods || [])
@@ -919,14 +965,17 @@ class DuitkuGateway {
 
         const pref = this.normalizeMethodCode(preferred);
         if (pref === 'QRIS') {
-            const qris = ['NQ', 'SP', 'SQ', 'GQ'].find((c) => codes.includes(c));
+            const qris = this.pickPreferredQris(codes);
             if (qris) return qris;
         }
         if (DuitkuGateway.CHANNEL_CODES.has(pref) && codes.includes(pref)) {
             return pref;
         }
 
-        const order = ['NQ', 'SP', 'SQ', 'GQ', 'BR', 'I1', 'M2', 'BT', 'B1', 'BC', 'VA', 'BV', 'DM', 'DA', 'OV', 'SA', 'LA'];
+        const order = [
+            ...DuitkuGateway.QRIS_PREFERENCE,
+            'BR', 'I1', 'M2', 'BT', 'B1', 'BC', 'VA', 'BV', 'DM', 'DA', 'OV', 'SA', 'LA'
+        ];
         return order.find((c) => codes.includes(c)) || codes[0];
     }
 
@@ -1154,19 +1203,20 @@ class DuitkuGateway {
         try {
             const fetchFn = typeof fetch === 'function' ? fetch : (await import('node-fetch')).default;
             
-            // Gunakan endpoint getpaymentmethod sesuai dokumentasi Duitku
-            // Endpoint: /webapi/api/merchant/paymentmethod/getpaymentmethod
+            // Endpoint resmi: /webapi/api/merchant/paymentmethod/getpaymentmethod
+            // Signature: HMAC-SHA256(merchantcode + amount + datetime, apiKey) — hex lowercase
             const endpoint = '/webapi/api/merchant/paymentmethod/getpaymentmethod';
             const url = `${this.baseUrl}${endpoint}`;
 
-            // Signature resmi: HMAC-SHA256(merchantCode + amount + datetime, apiKey).
-            // Fallback: SHA256(merchantCode + amount + datetime + apiKey) untuk akun lama.
-            const paymentAmount = parseInt(amount, 10) > 0 ? parseInt(amount, 10) : 10000;
+            const paymentAmount = Math.max(parseInt(amount, 10) || 0, 10000);
             const datetime = this.jakartaDateTime();
-            const stringToSign = `${this.config.merchant_code}${paymentAmount}${datetime}`;
+            const merchantCode = String(this.config.merchant_code || '').trim();
+            const apiKey = String(this.config.api_key || '').trim();
+            const stringToSign = `${merchantCode}${paymentAmount}${datetime}`;
             const signatures = [
-                crypto.createHmac('sha256', this.config.api_key).update(stringToSign).digest('hex'),
-                crypto.createHash('sha256').update(`${stringToSign}${this.config.api_key}`).digest('hex')
+                crypto.createHmac('sha256', apiKey).update(stringToSign).digest('hex'),
+                // Fallback legacy (sudah obsolete di docs Duitku, tetap dicoba untuk akun lama)
+                crypto.createHash('sha256').update(`${stringToSign}${apiKey}`).digest('hex')
             ];
 
             let result = null;
@@ -1176,18 +1226,21 @@ class DuitkuGateway {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        merchantcode: this.config.merchant_code,
+                        merchantcode: merchantCode,
                         amount: paymentAmount,
                         datetime,
                         signature
                     })
                 });
                 const parsed = await response.json().catch(() => ({}));
-                if (response.ok && parsed.responseCode === '00') {
+                if (response.ok && String(parsed.responseCode) === '00') {
                     result = parsed;
                     break;
                 }
-                lastError = new Error(parsed.responseMessage || parsed.Message || `Duitku API error ${response.status}`);
+                const msg = parsed.responseMessage || parsed.Message || `Duitku API error ${response.status}`;
+                lastError = new Error(msg);
+                // Invalid Signature: coba skema signature berikutnya
+                if (!/signature/i.test(String(msg))) break;
             }
             if (!result) {
                 throw lastError || new Error('Duitku getpaymentmethod failed');
@@ -1227,6 +1280,20 @@ class DuitkuGateway {
                 console.warn('[DUITKU] No payment methods returned from API');
                 return [];
             }
+
+            // Urutkan QRIS GPN dulu agar konsumen (portal) tidak default ke ShopeePay QRIS.
+            const qrisRank = (code) => {
+                const i = DuitkuGateway.QRIS_PREFERENCE.indexOf(this.normalizeMethodCode(code));
+                return i === -1 ? 99 : i;
+            };
+            methods.sort((a, b) => {
+                const aq = DuitkuGateway.QRIS_CODES.has(this.normalizeMethodCode(a.method));
+                const bq = DuitkuGateway.QRIS_CODES.has(this.normalizeMethodCode(b.method));
+                if (aq && bq) return qrisRank(a.method) - qrisRank(b.method);
+                if (aq && !bq) return -1;
+                if (!aq && bq) return 1;
+                return 0;
+            });
 
             console.log(`[DUITKU] Found ${methods.length} payment methods from API`);
             return methods;

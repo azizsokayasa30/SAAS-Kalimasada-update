@@ -1,6 +1,6 @@
 <%
 const summary = {
-  customers: { total: 0, active: 0, inactive: 0, new: 0 },
+  customers: { total: 0, active: 0, isolir: 0, inactive: 0, new: 0 },
   invoices: { total: 0, paid: 0, unpaid: 0, isolir: 0 },
 };
 tenants.forEach(function(t) {
@@ -8,6 +8,7 @@ tenants.forEach(function(t) {
   const inv = t.usage?.invoices || {};
   summary.customers.total += Number(c.total) || 0;
   summary.customers.active += Number(c.active) || 0;
+  summary.customers.isolir += Number(c.isolir) || 0;
   summary.customers.inactive += Number(c.inactive) || 0;
   summary.customers.new += Number(c.new) || 0;
   summary.invoices.total += Number(inv.total) || 0;
@@ -83,7 +84,7 @@ tenants.forEach(function(t) {
         <div>
           <div class="km-set-stat__label">Pelanggan</div>
           <div class="km-set-stat__value"><%= summary.customers.total.toLocaleString('id-ID') %></div>
-          <div class="km-set-stat__sub"><%= summary.customers.active.toLocaleString('id-ID') %> aktif · <%= summary.customers.inactive.toLocaleString('id-ID') %> nonaktif · <%= summary.customers.new.toLocaleString('id-ID') %> baru</div>
+          <div class="km-set-stat__sub"><%= summary.customers.active.toLocaleString('id-ID') %> aktif · <%= summary.customers.isolir.toLocaleString('id-ID') %> isolir · <%= summary.customers.inactive.toLocaleString('id-ID') %> nonaktif · <%= summary.customers.new.toLocaleString('id-ID') %> baru</div>
         </div>
       </div>
     </div>
@@ -91,9 +92,19 @@ tenants.forEach(function(t) {
       <div class="km-card km-set-stat h-100">
         <span class="km-set-stat__icon km-tone-purple"><i class="bi bi-receipt"></i></span>
         <div>
-          <div class="km-set-stat__label">Tagihan</div>
+          <div class="km-set-stat__label">Total Tagihan</div>
           <div class="km-set-stat__value"><%= formatRupiah(summary.invoices.total) %></div>
-          <div class="km-set-stat__sub"><%= paidPct %>% lunas</div>
+          <div class="km-set-stat__sub"><%= paidPct %>% sudah lunas</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-green"><i class="bi bi-check2-circle"></i></span>
+        <div>
+          <div class="km-set-stat__label">Lunas</div>
+          <div class="km-set-stat__value"><%= formatRupiah(summary.invoices.paid) %></div>
+          <div class="km-set-stat__sub">Sudah dibayar</div>
         </div>
       </div>
     </div>
@@ -103,7 +114,17 @@ tenants.forEach(function(t) {
         <div>
           <div class="km-set-stat__label">Belum Lunas</div>
           <div class="km-set-stat__value"><%= formatRupiah(summary.invoices.unpaid) %></div>
-          <div class="km-set-stat__sub">Isolir <%= formatRupiah(summary.invoices.isolir) %></div>
+          <div class="km-set-stat__sub">Tagihan outstanding</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-red"><i class="bi bi-shield-slash"></i></span>
+        <div>
+          <div class="km-set-stat__label">Isolir</div>
+          <div class="km-set-stat__value"><%= formatRupiah(summary.invoices.isolir) %></div>
+          <div class="km-set-stat__sub">Belum lunas + pelanggan isolir</div>
         </div>
       </div>
     </div>
@@ -143,19 +164,21 @@ tenants.forEach(function(t) {
       <% if (periodLabel) { %><span class="km-tl-period-chip"><i class="bi bi-calendar3"></i> <%= periodLabel %></span><% } %>
     </div>
     <div class="table-responsive">
-      <table class="table table-hover align-middle mb-0 km-tl-table">
+      <table class="table table-hover align-middle mb-0 km-tl-table km-tenant-table km-recap-table">
         <thead>
           <tr>
-            <th>Tenant</th>
-            <th class="d-none d-xl-table-cell">Owner</th>
-            <th>Pelanggan</th>
-            <th>Tagihan</th>
-            <th class="text-end">Aksi</th>
+            <th class="km-tl-col-tenant">Tenant</th>
+            <th class="km-tl-col-pelanggan">Pelanggan</th>
+            <th class="text-end km-col-rail-start">Total Tagihan</th>
+            <th class="text-end">Belum Lunas</th>
+            <th class="text-end">Lunas</th>
+            <th class="text-end">Isolir</th>
+            <th class="text-end km-tenant-table__actions-col"><span class="visually-hidden">Aksi</span></th>
           </tr>
         </thead>
         <tbody>
           <% if (!tenants.length) { %>
-            <tr id="tenantEmptyRow"><td colspan="5">
+            <tr id="tenantEmptyRow"><td colspan="7">
               <div class="km-tl-empty">
                 <span class="km-tl-empty__icon"><i class="bi bi-buildings"></i></span>
                 <div class="km-tl-empty__title">Belum ada tenant</div>
@@ -163,7 +186,7 @@ tenants.forEach(function(t) {
               </div>
             </td></tr>
           <% } %>
-          <tr id="tenantSearchEmptyRow" class="d-none"><td colspan="5">
+          <tr id="tenantSearchEmptyRow" class="d-none"><td colspan="7">
             <div class="km-tl-empty">
               <span class="km-tl-empty__icon"><i class="bi bi-search"></i></span>
               <div class="km-tl-empty__title">Tidak ada tenant yang cocok</div>
@@ -172,61 +195,80 @@ tenants.forEach(function(t) {
           <% tenants.forEach(function(t) {
             const c = t.usage.customers || {};
             const inv = t.usage.invoices || {};
-            const invTotal = Number(inv.total) || 0;
-            const rowPaidPct = invTotal > 0 ? Math.min(100, Math.round(((Number(inv.paid) || 0) / invTotal) * 100)) : 0;
             const searchBlob = [t.id, t.name, t.subdomain, t.owner_name, t.owner_email].filter(Boolean).join(' ').toLowerCase();
+            const ownerLabel = t.owner_name || t.owner_email || '';
           %>
             <tr class="tenant-data-row" data-search="<%= searchBlob.replace(/"/g, '&quot;') %>">
-              <td>
-                <div class="km-set-user">
-                  <span class="km-set-avatar"><%= String(t.name || '?').trim().charAt(0).toUpperCase() %></span>
-                  <div class="lh-sm" style="min-width:0">
-                    <a href="/management/tenants/<%= t.id %>" class="km-tl-name"><%= t.name %></a>
-                    <div class="km-tl-sub"><code><%= t.subdomain %></code> <span class="text-muted">#<%= t.id %></span></div>
-                    <div class="km-tl-sub d-xl-none text-muted"><%= t.owner_email %></div>
+              <td class="km-tl-col-tenant">
+                <div class="km-tl-tenant">
+                  <span class="km-tl-tenant__avatar"><%= String(t.name || '?').trim().charAt(0).toUpperCase() %></span>
+                  <div class="km-tl-tenant__meta">
+                    <a href="/management/tenants/<%= t.id %>" class="km-tl-tenant__name"><%= t.name %></a>
+                    <div class="km-tl-tenant__sub">
+                      <span>#<%= t.id %></span><% if (ownerLabel) { %><span class="km-tl-tenant__owner"><%= ownerLabel %></span><% } %>
+                    </div>
                   </div>
                 </div>
               </td>
-              <td class="d-none d-xl-table-cell">
-                <div class="fw-semibold small"><%= t.owner_name %></div>
-                <small class="text-muted"><%= t.owner_email %></small>
-              </td>
-              <td>
-                <div class="km-tl-metric"><%= (Number(c.total) || 0).toLocaleString('id-ID') %> <span class="km-tl-metric__unit">pelanggan</span></div>
-                <div class="km-tl-chips">
-                  <span class="km-tl-chip km-tl-chip--green" title="Pelanggan aktif (termasuk yang sedang isolir / suspend)"><i class="km-dot km-dot--green"></i><b><%= (Number(c.active) || 0).toLocaleString('id-ID') %></b> aktif</span>
-                  <span class="km-tl-chip km-tl-chip--gray" title="Pelanggan nonaktif / berhenti berlangganan"><i class="km-dot km-dot--gray"></i><b><%= (Number(c.inactive) || 0).toLocaleString('id-ID') %></b> nonaktif</span>
-                  <span class="km-tl-chip km-tl-chip--blue" title="Pelanggan baru yang bergabung<%= periodLabel ? ' pada ' + periodLabel : ' bulan ini' %>"><i class="km-dot km-dot--blue"></i><b><%= (Number(c.new) || 0).toLocaleString('id-ID') %></b> baru</span>
+              <td class="km-tl-col-pelanggan">
+                <div class="km-tl-cust">
+                  <div class="km-tl-cust__total"><%= (Number(c.total) || 0).toLocaleString('id-ID') %> <span>pelanggan</span></div>
+                  <div class="km-tl-cust__grid">
+                    <span class="km-tl-cust__item km-tl-cust__item--aktif"><i class="km-dot km-dot--green"></i><b><%= (Number(c.active) || 0).toLocaleString('id-ID') %></b> aktif</span>
+                    <span class="km-tl-cust__item km-tl-cust__item--nonaktif"><i class="km-dot km-dot--gray"></i><b><%= (Number(c.inactive) || 0).toLocaleString('id-ID') %></b> nonaktif</span>
+                    <span class="km-tl-cust__item km-tl-cust__item--baru"><i class="km-dot km-dot--blue"></i><b><%= (Number(c.new) || 0).toLocaleString('id-ID') %></b> baru</span>
+                    <span class="km-tl-cust__item km-tl-cust__item--isolir"><i class="km-dot km-dot--red"></i><b><%= (Number(c.isolir) || 0).toLocaleString('id-ID') %></b> isolir</span>
+                  </div>
                 </div>
               </td>
-              <td>
-                <dl class="km-tl-bill">
-                  <dt>Total tagihan</dt>
-                  <dd class="km-tl-bill__total"><%= formatRupiah(inv.total) %></dd>
-                  <dt><i class="km-dot km-dot--orange"></i>Belum lunas</dt>
-                  <dd class="km-tl-bill__unpaid"><%= formatRupiah(inv.unpaid) %></dd>
-                  <dt><i class="km-dot km-dot--green"></i>Lunas</dt>
-                  <dd class="km-tl-bill__paid"><%= formatRupiah(inv.paid) %></dd>
-                  <% if (Number(inv.isolir) > 0) { %>
-                    <dt title="Tagihan belum lunas milik pelanggan yang sedang isolir / suspend"><i class="km-dot km-dot--red"></i>Isolir</dt>
-                    <dd class="km-tl-bill__isolir"><%= formatRupiah(inv.isolir) %></dd>
-                  <% } %>
-                </dl>
-                <% if (invTotal > 0) { %>
-                  <span class="km-tl-chip <%= rowPaidPct >= 80 ? 'km-tl-chip--green' : 'km-tl-chip--orange' %> mt-1" title="Persentase nominal tagihan yang sudah lunas"><b><%= rowPaidPct %>%</b> lunas</span>
-                <% } %>
-              </td>
-              <td class="text-end text-nowrap">
-                <a href="/management/tenants/<%= t.id %>" class="btn btn-sm btn-outline-secondary" title="Detail"><i class="bi bi-eye"></i></a>
-                <button type="button" class="btn btn-sm btn-outline-info" title="Rename"
-                  data-bs-toggle="modal" data-bs-target="#renameModal-<%= t.id %>"><i class="bi bi-input-cursor-text"></i></button>
-                <a href="/management/tenants/<%= t.id %>/edit" class="btn btn-sm btn-outline-primary" title="Edit"><i class="bi bi-pencil"></i></a>
-                <button type="button" class="btn btn-sm btn-outline-danger" title="Hapus"
-                  data-bs-toggle="modal" data-bs-target="#deleteModal-<%= t.id %>"><i class="bi bi-trash"></i></button>
+              <td class="km-metric-cell km-metric-cell--money km-col-rail-start"><%= formatRupiah(inv.total) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning"><%= formatRupiah(inv.unpaid) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--success"><%= formatRupiah(inv.paid) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--danger" title="Tagihan belum lunas milik pelanggan isolir / suspended"><%= formatRupiah(inv.isolir) %></td>
+              <td class="text-end text-nowrap km-tenant-table__actions-cell">
+                <div class="dropdown km-tl-action-dd">
+                  <button type="button"
+                    class="km-tl-action-menu-btn"
+                    data-bs-toggle="dropdown"
+                    data-bs-boundary="clippingParents"
+                    data-bs-popper-config='{"strategy":"fixed"}'
+                    aria-expanded="false"
+                    title="Aksi"
+                    aria-label="Aksi tenant <%= t.name %>">
+                    <i class="bi bi-three-dots-vertical"></i>
+                  </button>
+                  <ul class="dropdown-menu dropdown-menu-end">
+                    <li><a class="dropdown-item" href="/management/tenants/<%= t.id %>"><i class="bi bi-eye"></i> Detail</a></li>
+                    <li>
+                      <button type="button" class="dropdown-item" data-bs-toggle="modal" data-bs-target="#renameModal-<%= t.id %>">
+                        <i class="bi bi-input-cursor-text"></i> Rename
+                      </button>
+                    </li>
+                    <li><a class="dropdown-item" href="/management/tenants/<%= t.id %>/edit"><i class="bi bi-pencil"></i> Edit</a></li>
+                    <li><hr class="dropdown-divider"></li>
+                    <li>
+                      <button type="button" class="dropdown-item text-danger" data-bs-toggle="modal" data-bs-target="#deleteModal-<%= t.id %>">
+                        <i class="bi bi-trash"></i> Hapus
+                      </button>
+                    </li>
+                  </ul>
+                </div>
               </td>
             </tr>
           <% }); %>
         </tbody>
+        <% if (tenants.length) { %>
+          <tfoot>
+            <tr class="km-recap-table__summary">
+              <td colspan="2">Summary</td>
+              <td class="km-metric-cell km-metric-cell--money km-col-rail-start"><%= formatRupiah(summary.invoices.total) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning"><%= formatRupiah(summary.invoices.unpaid) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--success"><%= formatRupiah(summary.invoices.paid) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--danger"><%= formatRupiah(summary.invoices.isolir) %></td>
+              <td class="km-tenant-table__actions-cell"></td>
+            </tr>
+          </tfoot>
+        <% } %>
       </table>
     </div>
   </div>
@@ -341,6 +383,24 @@ tenants.forEach(function(t) {
       e.preventDefault();
       applyFilter();
     }
+  });
+})();
+
+/* Dropdown aksi: escape overflow table-responsive agar menu tidak terpotong */
+(function () {
+  document.querySelectorAll('.km-tl-action-dd').forEach(function (dd) {
+    dd.addEventListener('show.bs.dropdown', function () {
+      var wrap = dd.closest('.table-responsive');
+      if (wrap) wrap.classList.add('km-tl-dropdown-open');
+      var cell = dd.closest('.km-tenant-table__actions-cell');
+      if (cell) cell.classList.add('is-open');
+    });
+    dd.addEventListener('hide.bs.dropdown', function () {
+      var wrap = dd.closest('.table-responsive');
+      if (wrap) wrap.classList.remove('km-tl-dropdown-open');
+      var cell = dd.closest('.km-tenant-table__actions-cell');
+      if (cell) cell.classList.remove('is-open');
+    });
   });
 })();
 </script>

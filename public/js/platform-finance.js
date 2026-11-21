@@ -1,6 +1,61 @@
 (function () {
   'use strict';
 
+  (function initLedgerCategories() {
+    var modal = document.getElementById('ledgerCategoryModal');
+    if (!modal || modal.getAttribute('data-cat-ready') === '1') return;
+    modal.setAttribute('data-cat-ready', '1');
+
+    function clearEditing(exceptRow) {
+      modal.querySelectorAll('.km-fin-cat-row.is-editing').forEach(function (row) {
+        if (row !== exceptRow) row.classList.remove('is-editing');
+      });
+    }
+
+    modal.addEventListener('click', function (e) {
+      var actionEl = e.target.closest('[data-cat-action]');
+      if (!actionEl || !modal.contains(actionEl)) return;
+
+      var action = actionEl.getAttribute('data-cat-action');
+      var row = actionEl.closest('.km-fin-cat-row');
+      if (!row) return;
+
+      if (action === 'edit') {
+        e.preventDefault();
+        clearEditing(row);
+        row.classList.add('is-editing');
+        var input = row.querySelector('.km-fin-cat-row__edit input[name="name"]');
+        if (input) {
+          setTimeout(function () {
+            input.focus();
+            input.select();
+          }, 50);
+        }
+        return;
+      }
+
+      if (action === 'cancel') {
+        e.preventDefault();
+        row.classList.remove('is-editing');
+        var original = row.querySelector('.km-fin-cat-row__view .km-fin-cat');
+        var editInput = row.querySelector('.km-fin-cat-row__edit input[name="name"]');
+        if (original && editInput) editInput.value = original.textContent.trim();
+        return;
+      }
+
+      if (action === 'delete') {
+        e.preventDefault();
+        var name = actionEl.getAttribute('data-cat-name') || '';
+        var msg = name
+          ? 'Hapus kategori "' + name + '"? Catatan yang sudah memakai kategori ini tidak dihapus.'
+          : 'Hapus kategori ini? Catatan yang sudah memakai kategori ini tidak dihapus.';
+        if (!window.confirm(msg)) return;
+        var form = row.querySelector('[data-cat-delete-form]');
+        if (form) form.submit();
+      }
+    });
+  })();
+
   document.querySelectorAll('.js-period-form').forEach(function (form) {
     form.querySelectorAll('.js-autosubmit').forEach(function (el) {
       el.addEventListener('change', function () {
@@ -238,6 +293,36 @@
     });
   });
 
+  document.querySelectorAll('[data-fin-highlight]').forEach(function (input) {
+    var body = document.querySelector(input.getAttribute('data-fin-highlight'));
+    if (!body) return;
+
+    function applyHighlight() {
+      var q = input.value.trim().toLowerCase();
+      var rows = body.querySelectorAll('.js-highlight-row');
+      var firstMatch = null;
+      Array.prototype.forEach.call(rows, function (row) {
+        var hay = (row.getAttribute('data-search') || '').toLowerCase();
+        if (!hay) {
+          var nameEl = row.querySelector('.km-recap-tenant-name');
+          hay = ((nameEl && nameEl.textContent) || '').toLowerCase();
+        }
+        var match = !!q && hay.indexOf(q) !== -1;
+        row.classList.toggle('is-search-match', match);
+        if (match && !firstMatch) firstMatch = row;
+      });
+      if (firstMatch) {
+        try { firstMatch.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { /* ignore */ }
+      }
+    }
+
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') e.preventDefault();
+    });
+    input.addEventListener('input', applyHighlight);
+    input.addEventListener('search', applyHighlight);
+  });
+
   document.querySelectorAll('.js-fin-drop').forEach(function (drop) {
     var input = drop.querySelector('input[type="file"]');
     var label = drop.querySelector('.js-fin-drop-name');
@@ -255,4 +340,5 @@
       drop.addEventListener(ev, function () { drop.classList.remove('is-dragover'); });
     });
   });
+
 })();

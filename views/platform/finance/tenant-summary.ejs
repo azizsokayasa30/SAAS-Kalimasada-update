@@ -12,7 +12,22 @@
   <% if (flash && flash.error) { %><div class="alert alert-danger"><%= flash.error %></div><% } %>
   <% if (flash && flash.success === 'restored') { %><div class="alert alert-success">Backup finance berhasil di-restore.</div><% } %>
 
-  <%- include('_period-filter', { filters, yearOnly: false, extraSelects: [], periodTitle: 'Periode Tagihan' }) %>
+  <div class="km-recap-topbar mb-3">
+    <div class="km-recap-topbar__period">
+      <%- include('_period-filter', {
+        filters,
+        yearOnly: false,
+        extraSelects: [],
+        periodTitle: 'Periode Tagihan'
+      }) %>
+    </div>
+    <% if (summary.length) { %>
+      <label class="km-inv-search km-pp__search km-recap-topbar__search mb-0">
+        <i class="bi bi-search" aria-hidden="true"></i>
+        <input type="search" class="form-control form-control-sm" data-fin-highlight="#recapTenantBody" placeholder="Cari tenant…" autocomplete="off" aria-label="Cari tenant">
+      </label>
+    <% } %>
+  </div>
 
   <div class="km-card km-card--flush">
     <div class="table-responsive">
@@ -20,30 +35,34 @@
         <thead>
           <tr>
             <th>Tenant</th>
-            <th class="text-end">Total Tagihan</th>
-            <th class="text-end">Tagihan Belum Lunas</th>
-            <th class="text-end">Tagihan Lunas</th>
-            <th class="text-end">Lunas by Cash</th>
-            <th class="text-end">Lunas by Transfer</th>
-            <th class="text-end">Lunas by PG</th>
+            <th class="text-end km-col-split km-col-split--strong">Total Tagihan</th>
+            <th class="text-end km-col-split">Belum Lunas</th>
+            <th class="text-end km-col-split">Lunas</th>
+            <th class="text-end km-col-split">Isolir</th>
+            <th class="text-end km-col-split km-col-split--strong">Lunas by Cash</th>
+            <th class="text-end km-col-split">Lunas by Transfer</th>
+            <th class="text-end km-col-split">Lunas by PG</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="recapTenantBody">
           <% if (!summary.length) { %>
-            <tr><td colspan="7" class="text-center py-4" style="color: var(--text-muted)">Tidak ada tenant pada periode ini.</td></tr>
+            <tr><td colspan="8" class="text-center py-4" style="color: var(--text-muted)">Tidak ada tenant pada periode ini.</td></tr>
           <% } %>
-          <% summary.forEach(function(row) { %>
-            <tr>
+          <% summary.forEach(function(row) {
+            const searchBlob = [row.tenant_name, row.owner_name, row.subdomain].filter(Boolean).join(' ').toLowerCase();
+          %>
+            <tr class="js-highlight-row" data-search="<%= searchBlob.replace(/"/g, '&quot;') %>">
               <td>
-                <div class="fw-semibold"><%= row.tenant_name %></div>
+                <div class="km-recap-tenant-name"><%= row.tenant_name %></div>
                 <% if (row.owner_name) { %><div class="small" style="color: var(--text-muted)"><%= row.owner_name %></div><% } %>
               </td>
-              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(row.total_tagihan) %></td>
-              <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning"><%= formatRupiah(row.unpaid_amount) %></td>
-              <td class="km-metric-cell km-metric-cell--money km-metric-cell--success"><%= formatRupiah(row.paid_amount) %></td>
-              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(row.paid_cash) %></td>
-              <td class="km-metric-cell km-metric-cell--money km-metric-cell--accent"><%= formatRupiah(row.paid_transfer) %></td>
-              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(row.paid_pg) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-col-split km-col-split--strong"><%= formatRupiah(row.total_tagihan) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning km-col-split"><%= formatRupiah(row.unpaid_amount) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--success km-col-split"><%= formatRupiah(row.paid_amount) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--danger km-col-split" title="Tagihan belum lunas milik pelanggan isolir"><%= formatRupiah(row.isolir_amount) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-col-split km-col-split--strong"><%= formatRupiah(row.paid_cash) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--accent km-col-split"><%= formatRupiah(row.paid_transfer) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-col-split"><%= formatRupiah(row.paid_pg) %></td>
             </tr>
           <% }); %>
         </tbody>
@@ -51,12 +70,13 @@
           <tfoot>
             <tr class="km-recap-table__summary">
               <td>Summary</td>
-              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(totals.total_tagihan) %></td>
-              <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning"><%= formatRupiah(totals.unpaid_amount) %></td>
-              <td class="km-metric-cell km-metric-cell--money km-metric-cell--success"><%= formatRupiah(totals.paid_amount) %></td>
-              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(totals.paid_cash) %></td>
-              <td class="km-metric-cell km-metric-cell--money km-metric-cell--accent"><%= formatRupiah(totals.paid_transfer) %></td>
-              <td class="km-metric-cell km-metric-cell--money"><%= formatRupiah(totals.paid_pg) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-col-split km-col-split--strong"><%= formatRupiah(totals.total_tagihan) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning km-col-split"><%= formatRupiah(totals.unpaid_amount) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--success km-col-split"><%= formatRupiah(totals.paid_amount) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--danger km-col-split"><%= formatRupiah(totals.isolir_amount) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-col-split km-col-split--strong"><%= formatRupiah(totals.paid_cash) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--accent km-col-split"><%= formatRupiah(totals.paid_transfer) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-col-split"><%= formatRupiah(totals.paid_pg) %></td>
             </tr>
           </tfoot>
         <% } %>
@@ -64,5 +84,54 @@
     </div>
   </div>
 </main>
-<script src="/js/platform-finance.js?v=3"></script>
+<style>
+.km-recap-table .js-highlight-row.is-search-match .km-recap-tenant-name {
+  font-weight: 800 !important;
+  color: #1e3a8a !important;
+  background: #dbeafe !important;
+  padding: 0.15rem 0.45rem;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.35);
+}
+[data-theme="dark"] .km-recap-table .js-highlight-row.is-search-match .km-recap-tenant-name {
+  color: #eff6ff !important;
+  background: rgba(37, 99, 235, 0.55) !important;
+  box-shadow: inset 0 0 0 1px rgba(147, 197, 253, 0.45);
+}
+.km-recap-table .js-highlight-row.is-search-match > td {
+  background: rgba(37, 99, 235, 0.06);
+}
+[data-theme="dark"] .km-recap-table .js-highlight-row.is-search-match > td {
+  background: rgba(37, 99, 235, 0.12);
+}
+</style>
+<script src="/js/platform-finance.js?v=6"></script>
+<script>
+(function () {
+  var input = document.querySelector('[data-fin-highlight="#recapTenantBody"]');
+  var body = document.getElementById('recapTenantBody');
+  if (!input || !body || input.__recapHighlightBound) return;
+  input.__recapHighlightBound = true;
+  function paint() {
+    var q = String(input.value || '').trim().toLowerCase();
+    var first = null;
+    body.querySelectorAll('.js-highlight-row').forEach(function (row) {
+      var hay = String(row.getAttribute('data-search') || '').toLowerCase();
+      if (!hay) {
+        var nameEl = row.querySelector('.km-recap-tenant-name');
+        hay = String((nameEl && nameEl.textContent) || '').toLowerCase();
+      }
+      var match = !!q && hay.indexOf(q) !== -1;
+      row.classList.toggle('is-search-match', match);
+      if (match && !first) first = row;
+    });
+    if (first) {
+      try { first.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) {}
+    }
+  }
+  input.addEventListener('input', paint);
+  input.addEventListener('search', paint);
+  input.addEventListener('keydown', function (e) { if (e.key === 'Enter') e.preventDefault(); });
+})();
+</script>
 <%- include('../partials/footer') %>

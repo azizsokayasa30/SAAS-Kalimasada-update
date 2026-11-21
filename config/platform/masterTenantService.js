@@ -12,7 +12,7 @@ function periodCacheKey(period) {
 
 function emptySummary() {
     return {
-        customers: { total: 0, active: 0, inactive: 0, new: 0 },
+        customers: { total: 0, active: 0, isolir: 0, inactive: 0, new: 0 },
         invoices: { total: 0, paid: 0, unpaid: 0, isolir: 0 },
         routers: 0,
     };
@@ -23,6 +23,7 @@ function addSummary(target, usage) {
     const inv = usage?.invoices || {};
     target.customers.total += Number(c.total) || 0;
     target.customers.active += Number(c.active) || 0;
+    target.customers.isolir += Number(c.isolir) || 0;
     target.customers.inactive += Number(c.inactive) || 0;
     target.customers.new += Number(c.new) || 0;
     target.invoices.total += Number(inv.total) || 0;

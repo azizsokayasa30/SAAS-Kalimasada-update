@@ -15,6 +15,66 @@
   margin-bottom: 0.35rem;
 }
 
+.nms-mrtg-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.nms-mrtg-card__actions.is-exporting {
+  visibility: hidden;
+}
+
+.nms-mrtg-export-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--card-border, rgba(148, 163, 184, 0.45));
+  border-radius: 8px;
+  background: var(--card-bg, #fff);
+  color: var(--text-primary, #0f172a);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+}
+
+.nms-mrtg-export-btn:hover:not(:disabled) {
+  border-color: rgba(37, 99, 235, 0.45);
+  background: rgba(59, 130, 246, 0.08);
+  color: #1d4ed8;
+}
+
+.nms-mrtg-export-btn:disabled,
+.nms-mrtg-export-btn.is-busy {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.nms-mrtg-export-btn--pdf:hover:not(:disabled) {
+  border-color: rgba(220, 38, 38, 0.4);
+  background: rgba(220, 38, 38, 0.08);
+  color: #b91c1c;
+}
+
+.nms-mrtg-export-btn--jpg:hover:not(:disabled) {
+  border-color: rgba(5, 150, 105, 0.4);
+  background: rgba(16, 185, 129, 0.08);
+  color: #047857;
+}
+
+.nms-mrtg-export-btn i {
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
 .nms-mrtg-card__title {
   font-weight: 600;
   line-height: 1.3;

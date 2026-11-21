@@ -270,7 +270,10 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
                  role="button"
                  tabindex="0">
                 <span>Keuangan</span>
-                <i class="bi <%= financeExpanded ? 'bi-chevron-up' : 'bi-chevron-down' %> toggle-arrow sb-chevron"></i>
+                <span class="d-flex align-items-center">
+                    <span id="sbFinanceSectionBadge" class="sb-count-badge d-none" aria-hidden="true">0</span>
+                    <i class="bi <%= financeExpanded ? 'bi-chevron-up' : 'bi-chevron-down' %> toggle-arrow sb-chevron"></i>
+                </span>
             </div>
             <div class="collapse <%= financeExpanded ? 'show' : '' %>" id="billingFinanceCollapse">
                 <% if (!(typeof isAreaManager !== 'undefined' && isAreaManager)) { %>
@@ -282,6 +285,7 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
                 <a href="/admin/billing/all-payments" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'all-payments' ? 'active' : '' %>">
                     <i class="bi bi-credit-card"></i>
                     <span class="sb-item-text">Riwayat Pembayaran</span>
+                    <span id="sbFinancePaymentsBadge" class="sb-count-badge d-none" aria-hidden="true">0</span>
                 </a>
                 <a href="/admin/collectors" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'collectors' ? 'active' : '' %>">
                     <i class="bi bi-people"></i>
@@ -296,6 +300,7 @@ const sidebarLogo = sidebarSettings.logo_filename || 'logo.png';
                 <a href="/admin/billing/collector-remittance" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'collector-remittance' ? 'active' : '' %>">
                     <i class="bi bi-cash"></i>
                     <span class="sb-item-text">Terima Setoran</span>
+                    <span id="sbFinanceRemittanceBadge" class="sb-count-badge d-none" aria-hidden="true">0</span>
                 </a>
                 <a href="/admin/billing/reports/voucher" class="sb-item sb-sub <%= typeof page !== 'undefined' && page === 'report-voucher' ? 'active' : '' %>">
                     <i class="bi bi-ticket-perforated"></i>
@@ -1092,3 +1097,4 @@ document.addEventListener('DOMContentLoaded', function () {
 <script src="/js/admin-session-timeout.js?v=1" defer></script>
 <script src="/js/admin-trouble-badge.js?v=4" defer></script>
 <script src="/js/install-progress-badge.js?v=3" defer></script>
+<script src="/js/finance-badge.js?v=1" defer></script>

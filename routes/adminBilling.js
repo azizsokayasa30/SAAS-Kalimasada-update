@@ -1819,6 +1819,23 @@ router.get('/api/collector-remittance/:id', adminAuth, async (req, res) => {
     }
 });
 
+// Badge sidebar Keuangan (setoran pending + notif pembayaran/isolir)
+router.get('/api/finance-badge', adminAuth, async (req, res) => {
+    try {
+        const tenantId = req.session?.tenantId || req.tenantId || null;
+        const counts = await billingManager.getFinanceSidebarBadgeCounts(tenantId);
+        res.json({
+            success: true,
+            count: Number(counts.total) || 0,
+            remittance: Number(counts.remittance) || 0,
+            payments: Number(counts.payments) || 0
+        });
+    } catch (error) {
+        logger.warn('[finance-badge]', error.message);
+        res.json({ success: true, count: 0, remittance: 0, payments: 0 });
+    }
+});
+
 // API: Record Collector Remittance
 router.post('/api/collector-remittance', adminAuth, async (req, res) => {
     try {

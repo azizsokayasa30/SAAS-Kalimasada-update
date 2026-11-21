@@ -53,6 +53,11 @@
     const tInitials = tName.split(/\s+/).filter(Boolean).slice(0, 2).map(function (w) { return w[0]; }).join('').toUpperCase() || 'T';
     const tHue = tName.split('').reduce(function (h, c) { return (h * 31 + c.charCodeAt(0)) % 360; }, 7);
     const tMeta = sRow ? [sRow.owner_name, sRow.subdomain].filter(Boolean).join(' · ') : '';
+    const snap = (sInv && sInv.ownerSnapshot) || {};
+    const tPhone = (sRow && (sRow.owner_phone || snap.owner_phone)) || '';
+    const tEmail = (sRow && (sRow.owner_email || snap.owner_email)) || '';
+    const tOwner = (sRow && (sRow.owner_name || snap.owner_name)) || '';
+    const tHost = sRow && sRow.subdomain ? (sRow.subdomain + '.kalimasada-app.com') : '';
     const invDone = rows.filter(function (r) { return r.has_invoice; }).length;
     const invPct = rows.length ? Math.round(invDone / rows.length * 100) : 0;
   %>
@@ -144,12 +149,12 @@
     <div class="km-bbs-paper__kop">
       <div class="km-bbs-paper__brand">
         <span class="km-bbs-paper__logo-wrap"><img class="km-bbs-paper__logo" src="<%= company.logo_path || '/img/logo.png' %>" alt="<%= company.company_name || 'PT Kalimasada Inti Sarana' %>" onerror="this.src='/img/logo.png'"></span>
-        <div class="km-bbs-paper__label">Rincian Kontak</div>
-        <table class="km-bbs-paper__info">
-          <tr><th>Phone</th><td>:</td><td><%= company.contact_phone || company.contact_whatsapp || '-' %></td></tr>
-          <tr><th>Email</th><td>:</td><td><%= company.contact_email || '-' %></td></tr>
-          <tr><th>Alamat</th><td>:</td><td><%= company.company_address || '-' %></td></tr>
-        </table>
+        <div class="km-bbs-paper__label">Info Invoice</div>
+        <dl class="km-bbs-facts km-bbs-facts--brand">
+          <div><dt>No. Invoice</dt><dd><%= sInv ? sInv.invoice_number : 'Otomatis' %></dd></div>
+          <div><dt>Periode</dt><dd><%= periodLabel %></dd></div>
+          <div><dt>Tanggal</dt><dd><%= sInv ? fmtDate(sInv.created_at) : fmtDate(todayIso) %></dd></div>
+        </dl>
       </div>
       <div class="km-bbs-paper__doc">
         <h3 class="km-bbs-paper__title">Branch Billing<br>Statement</h3>
@@ -162,12 +167,16 @@
               <% if (tMeta) { %><small><%= tMeta %></small><% } %>
             </div>
           </div>
+          <div class="km-bbs-billto__contact">
+            <div class="km-bbs-paper__label">Rincian Kontak</div>
+            <table class="km-bbs-paper__info">
+              <tr><th>Phone</th><td>:</td><td><%= tPhone || '-' %></td></tr>
+              <tr><th>Email</th><td>:</td><td><%= tEmail || '-' %></td></tr>
+              <tr><th>Owner</th><td>:</td><td><%= tOwner || '-' %></td></tr>
+              <% if (tHost) { %><tr><th>Host</th><td>:</td><td><%= tHost %></td></tr><% } %>
+            </table>
+          </div>
         </div>
-        <dl class="km-bbs-facts">
-          <div><dt>No. Invoice</dt><dd><%= sInv ? sInv.invoice_number : 'Otomatis' %></dd></div>
-          <div><dt>Periode</dt><dd><%= periodLabel %></dd></div>
-          <div><dt>Tanggal</dt><dd><%= sInv ? fmtDate(sInv.created_at) : fmtDate(todayIso) %></dd></div>
-        </dl>
       </div>
     </div>
 
@@ -274,6 +283,122 @@
   <% if (sInv && sInv.status === 'draft') { %>
     <form method="POST" action="/management/finance/invoices/<%= sInv.id %>/delete" id="deleteDraftForm" class="d-none" onsubmit="return confirm('Hapus invoice draft ini?')"></form>
   <% } %>
+  <% } %>
+
+  <% if (rows.length) { %>
+    <% const listQs = 'month=' + filters.month + '&year=' + filters.year; %>
+    <div class="km-card km-card--flush km-inv-roster mt-3">
+      <div class="km-inv-roster__head">
+        <div>
+          <h5>Daftar Invoice Tenant</h5>
+          <p>Periode <%= periodLabel %></p>
+        </div>
+        <div class="km-inv-roster__stats">
+          <span><strong><%= invDone %></strong> dibuat</span>
+          <span><strong><%= rows.length - invDone %></strong> belum</span>
+          <span><strong><%= rows.filter(function (x) { return x.has_invoice && x.status === 'paid'; }).length %></strong> lunas</span>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="km-inv-roster__table">
+          <thead>
+            <tr>
+              <th class="col-no">No</th>
+              <th>Tenant</th>
+              <th>No. Invoice</th>
+              <th>Status</th>
+              <th class="col-amt">Total</th>
+              <th class="col-paid">Pembayaran</th>
+              <th class="col-act">Aksi</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% rows.forEach(function (r, idx) {
+                 const st = r.has_invoice ? (r.status || 'draft') : 'none';
+                 const isPaid = st === 'paid';
+                 const isDraft = st === 'draft';
+                 const isActive = sRow && String(sRow.tenant_id) === String(r.tenant_id);
+                 const editHref = '?' + listQs + '&view=' + encodeURIComponent(r.tenant_id);
+                 const name = String(r.tenant_name || '-');
+                 const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map(function (w) { return w[0]; }).join('').toUpperCase() || 'T';
+                 const hue = name.split('').reduce(function (h, c) { return (h * 31 + c.charCodeAt(0)) % 360; }, 7);
+            %>
+              <tr class="<%= isActive ? 'is-active' : '' %> <%= isPaid ? 'is-paid' : '' %> <%= st === 'none' ? 'is-pending' : '' %>">
+                <td class="col-no"><%= idx + 1 %></td>
+                <td>
+                  <div class="km-inv-roster__tenant">
+                    <span class="km-inv-roster__avatar" style="--h: <%= hue %>"><%= initials %></span>
+                    <div>
+                      <strong><%= r.tenant_name %></strong>
+                      <% if (r.owner_name) { %><small><%= r.owner_name %></small><% } %>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <% if (r.has_invoice && r.invoice_number) { %>
+                    <span class="km-inv-roster__num"><%= r.invoice_number %></span>
+                  <% } else { %>
+                    <span class="km-inv-roster__dash">Belum ada</span>
+                  <% } %>
+                </td>
+                <td>
+                  <span class="km-inv-pill km-inv-pill--<%= st %>">
+                    <i class="bi <%= statusIcons[st] || 'bi-circle' %>"></i>
+                    <%= statusLabels[st] || st %>
+                  </span>
+                </td>
+                <td class="col-amt">
+                  <% if (r.has_invoice) { %>
+                    <span class="km-inv-roster__money"><%= formatRupiah(r.total_amount) %></span>
+                  <% } else { %>
+                    <span class="km-inv-roster__dash">—</span>
+                  <% } %>
+                </td>
+                <td class="col-paid">
+                  <% if (!r.has_invoice) { %>
+                    <span class="km-inv-roster__dash">—</span>
+                  <% } else if (isPaid) { %>
+                    <span class="km-inv-roster__pay km-inv-roster__pay--yes" title="Status sistem: lunas"><i class="bi bi-check-circle-fill"></i> Lunas</span>
+                  <% } else { %>
+                    <span class="km-inv-roster__pay km-inv-roster__pay--no" title="Status sistem: <%= statusLabels[st] || st %>"><i class="bi bi-clock-history"></i> Belum Lunas</span>
+                  <% } %>
+                </td>
+                <td class="col-act">
+                  <div class="km-inv-roster__actions" role="group" aria-label="Aksi invoice <%= r.tenant_name %>">
+                    <% if (r.has_invoice) { %>
+                      <a href="/management/finance/invoices/<%= r.invoice_id %>" class="km-inv-act km-inv-act--view" title="Lihat"><i class="bi bi-eye"></i><span>Lihat</span></a>
+                      <% if (!isPaid) { %>
+                        <form method="POST" action="/management/finance/invoices/<%= r.invoice_id %>/status" class="d-inline">
+                          <input type="hidden" name="status" value="paid">
+                          <input type="hidden" name="return_to" value="list">
+                          <button type="submit" class="km-inv-act km-inv-act--paid" title="Tandai lunas" onclick="return confirm('Tandai invoice <%= r.invoice_number %> sebagai lunas?')"><i class="bi bi-check2-circle"></i><span>Lunas</span></button>
+                        </form>
+                        <a href="<%= editHref %>" class="km-inv-act km-inv-act--edit" title="Edit"><i class="bi bi-pencil-square"></i><span>Edit</span></a>
+                      <% } else { %>
+                        <button type="button" class="km-inv-act is-disabled" disabled title="Sudah lunas"><i class="bi bi-check2-circle"></i><span>Lunas</span></button>
+                        <button type="button" class="km-inv-act is-disabled" disabled title="Invoice lunas terkunci"><i class="bi bi-pencil-square"></i><span>Edit</span></button>
+                      <% } %>
+                      <% if (isDraft) { %>
+                        <form method="POST" action="/management/finance/invoices/<%= r.invoice_id %>/delete" class="d-inline">
+                          <button type="submit" class="km-inv-act km-inv-act--del" title="Hapus" onclick="return confirm('Hapus invoice draft <%= r.invoice_number %>?')"><i class="bi bi-trash3"></i><span>Hapus</span></button>
+                        </form>
+                      <% } else { %>
+                        <button type="button" class="km-inv-act is-disabled" disabled title="Hanya draft yang bisa dihapus"><i class="bi bi-trash3"></i><span>Hapus</span></button>
+                      <% } %>
+                    <% } else { %>
+                      <button type="button" class="km-inv-act is-disabled" disabled title="Belum ada invoice"><i class="bi bi-eye"></i><span>Lihat</span></button>
+                      <button type="button" class="km-inv-act is-disabled" disabled title="Belum ada invoice"><i class="bi bi-check2-circle"></i><span>Lunas</span></button>
+                      <a href="<%= editHref %>" class="km-inv-act km-inv-act--edit" title="Buat invoice"><i class="bi bi-pencil-square"></i><span>Edit</span></a>
+                      <button type="button" class="km-inv-act is-disabled" disabled title="Belum ada invoice"><i class="bi bi-trash3"></i><span>Hapus</span></button>
+                    <% } %>
+                  </div>
+                </td>
+              </tr>
+            <% }); %>
+          </tbody>
+        </table>
+      </div>
+    </div>
   <% } %>
 </main>
 <script>

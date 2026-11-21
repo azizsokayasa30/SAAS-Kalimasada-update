@@ -752,32 +752,34 @@ const { deleteCustomerRecord } = require('../utils/customerDelete');
                         }
                     }
                     const oldStatus = existing.status;
+                    const { normalizeCustomerStatusForWrite } = require('./customerStatus');
+                    const nextStatus = normalizeCustomerStatusForWrite(status, oldStatus || 'active');
                     const skipRadiusSync = Boolean(options && (options.skipRadiusSync || options.skipExternalSync))
                         || masterRecordGuard.isCurrentTenantMaster()
                         || masterRecordGuard.isDummyOrigin(existing)
                         || masterRecordGuard.isCopiedOrigin(existing);
-                    const st = String(status || '').toLowerCase();
+                    const st = String(nextStatus || '').toLowerCase();
                     const clearSuspendReason = st === 'active' || st === 'inactive' || st === 'register';
                     const sql = clearSuspendReason
                         ? `UPDATE customers SET status = ?, suspend_reason = NULL WHERE id = ?`
                         : `UPDATE customers SET status = ? WHERE id = ?`;
-                    const params = clearSuspendReason ? [status, id] : [status, id];
+                    const params = clearSuspendReason ? [nextStatus, id] : [nextStatus, id];
                     this.db.run(sql, params, async (err) => {
                         if (err) return reject(err);
                         try {
-                            logger.info(`[BILLING] setCustomerStatusById: id=${id}, username=${existing.username}, from=${oldStatus} -> to=${status}`);
+                            logger.info(`[BILLING] setCustomerStatusById: id=${id}, username=${existing.username}, from=${oldStatus} -> to=${nextStatus}`);
                             
                             // Auto-sync hanya untuk perubahan status langsung dari billing.
                             // Orchestrator isolir/restore memakai skipRadiusSync agar aksi jaringan tidak dobel.
                             if (!skipRadiusSync) {
-                                await this._autoSyncStatusToRadius(existing, oldStatus, status);
+                                await this._autoSyncStatusToRadius(existing, oldStatus, nextStatus);
                             }
                             // Static IP: sync allow/block pool ke MikroTik saat status berubah
-                            if (String(oldStatus || '') !== String(status || '')) {
+                            if (String(oldStatus || '') !== String(nextStatus || '')) {
                                 setImmediate(() => {
                                     try {
                                         const { syncPoolAfterCustomerChange } = require('./staticIpPoolSync');
-                                        syncPoolAfterCustomerChange({ ...existing, status }).catch((e) => {
+                                        syncPoolAfterCustomerChange({ ...existing, status: nextStatus }).catch((e) => {
                                             logger.warn(`[BILLING] static pool sync after status: ${e.message}`);
                                         });
                                     } catch (_) {}
@@ -795,7 +797,7 @@ const { deleteCustomerRecord } = require('../utils/customerDelete');
                                 } catch (_) {}
                             });
                         }
-                        resolve({ id, status });
+                        resolve({ id, status: nextStatus });
                     });
                 } catch (e) {
                     reject(e);
@@ -847,6 +849,10 @@ const { deleteCustomerRecord } = require('../utils/customerDelete');
                         (fix_date !== undefined ? Math.min(Math.max(parseInt(fix_date, 10) || 15, 1), 28) : (oldCustomer.fix_date || 15)) : 
                         null;
 
+                    const { normalizeCustomerStatusForWrite } = require('./customerStatus');
+                    const nextStatus = status !== undefined && status !== null && String(status).trim() !== ''
+                        ? normalizeCustomerStatusForWrite(status, oldCustomer.status || 'active')
+                        : normalizeCustomerStatusForWrite(oldCustomer.status, 'active');
                     const sql = `UPDATE customers SET name = ?, username = ?, pppoe_username = ?, email = ?, address = ?, area = ?, area_id = ?, latitude = ?, longitude = ?, package_id = ?, odp_id = ?, pppoe_profile = ?, status = ?, auto_suspension = ?, billing_day = ?, renewal_type = ?, fix_date = ?, cable_type = ?, cable_length = ?, port_number = ?, cable_status = ?, cable_notes = ? WHERE id = ?`;
                     this.db.run(sql, [
                         name ?? oldCustomer.name,
@@ -861,7 +867,7 @@ const { deleteCustomerRecord } = require('../utils/customerDelete');
                         package_id ?? oldCustomer.package_id,
                         odp_id !== undefined ? odp_id : oldCustomer.odp_id,
                         pppoe_profile ?? oldCustomer.pppoe_profile,
-                        status ?? oldCustomer.status,
+                        nextStatus,
                         auto_suspension !== undefined ? auto_suspension : oldCustomer.auto_suspension,
                         normBillingDay,
                         normRenewalType,
@@ -877,7 +883,7 @@ const { deleteCustomerRecord } = require('../utils/customerDelete');
                             reject(err);
                         } else {
                             // PENTING: Auto-sync ke RADIUS jika status berubah menjadi 'suspended' atau 'active'
-                            const newStatus = status !== undefined ? status : oldCustomer.status;
+                            const newStatus = nextStatus;
                             const oldStatus = oldCustomer.status;
                             if (newStatus !== oldStatus) {
                                 // Buat customer object dengan data terbaru untuk sync
@@ -2707,10 +2713,11 @@ const { deleteCustomerRecord } = require('../utils/customerDelete');
                 }
             }
             
-            // Pastikan status 'register' tidak di-override
-            // Jika status sudah diset (termasuk 'register'), gunakan itu
-            // Jika tidak, default ke 'active'
-            const finalStatus = (status !== undefined && status !== null && status !== '') ? status : 'active';
+            // Canonical status saja (hindari Active/Aktif/disable-isolir masuk lagi)
+            const { normalizeCustomerStatusForWrite } = require('./customerStatus');
+            const finalStatus = (status !== undefined && status !== null && String(status).trim() !== '')
+                ? normalizeCustomerStatusForWrite(status, 'active')
+                : 'active';
 
             // join_date/created_at dari import (YYYY-MM-DD) atau hari ini jika kosong
             let joinDateStored = `${getLocalTimestamp().replace(/ /, 'T')}+07:00`;
@@ -4140,13 +4147,18 @@ ${lifetimePaymentStatusSql}
             )
         )`;
 
+        const {
+            sqlIsActive,
+            sqlIsIsolir,
+            sqlIsInactive
+        } = require('./customerStatus');
         const sql = `
             SELECT 
                 COUNT(DISTINCT c.id) as total,
-                SUM(CASE WHEN c.status IN ('active', 'suspended', 'isolir') THEN 1 ELSE 0 END) as aktif,
-                SUM(CASE WHEN c.status = 'inactive' THEN 1 ELSE 0 END) as nonaktif,
+                SUM(CASE WHEN ${sqlIsActive('c.status')} THEN 1 ELSE 0 END) as aktif,
+                SUM(CASE WHEN ${sqlIsInactive('c.status')} THEN 1 ELSE 0 END) as nonaktif,
                 SUM(CASE WHEN ${cjd('c')} >= date(?) AND ${cjd('c')} < date(?) AND ${cjd('c')} <= date('now','localtime') THEN 1 ELSE 0 END) as baru,
-                SUM(CASE WHEN c.status IN ('suspended', 'isolir') THEN 1 ELSE 0 END) as isolir,
+                SUM(CASE WHEN ${sqlIsIsolir('c.status')} THEN 1 ELSE 0 END) as isolir,
                 (
                     SELECT COUNT(DISTINCT i.id)
                     FROM invoices i
@@ -4181,12 +4193,12 @@ ${lifetimePaymentStatusSql}
                     ${invTenantSql}
                 ) as belum_lunas,
                 ${packageNominalSub()} AS total_nominal,
-                ${packageNominalSub(" AND c_sum.status IN ('active', 'suspended', 'isolir')")} AS aktif_nominal,
-                ${packageNominalSub(" AND c_sum.status = 'inactive'")} AS nonaktif_nominal,
+                ${packageNominalSub(` AND ${sqlIsActive('c_sum.status')}`)} AS aktif_nominal,
+                ${packageNominalSub(` AND ${sqlIsInactive('c_sum.status')}`)} AS nonaktif_nominal,
                 ${invoiceNominalSub("AND i.status IN ('paid', 'unpaid')")} AS total_tagihan_nominal,
                 ${invoiceNominalSub("AND i.status = 'paid'")} AS lunas_nominal,
                 ${invoiceNominalSub("AND i.status = 'unpaid'")} AS belum_lunas_nominal,
-                ${packageNominalSub(" AND c_sum.status IN ('suspended', 'isolir')")} AS isolir_nominal,
+                ${packageNominalSub(` AND ${sqlIsIsolir('c_sum.status')}`)} AS isolir_nominal,
                 ${packageNominalSub(` AND ${cjd('c_sum')} >= date(?) AND ${cjd('c_sum')} < date(?) AND ${cjd('c_sum')} <= date('now','localtime')`)} AS baru_nominal
             FROM customers c
             ${filterJoins}
@@ -4380,12 +4392,18 @@ ${lifetimePaymentStatusSql}
 
         if (filters.status) {
             const status = String(filters.status).trim();
+            const {
+                sqlIsActive,
+                sqlIsIsolir,
+                sqlIsInactive
+            } = require('./customerStatus');
             if (status === 'isolir' || status === 'suspended') {
-                whereClause += " AND c.status IN ('suspended', 'isolir')";
-            } else if (status === 'nonaktif') {
-                whereClause += " AND c.status = 'inactive'";
-            } else if (status === 'aktif') {
-                whereClause += " AND c.status IN ('active', 'suspended', 'isolir')";
+                whereClause += ` AND ${sqlIsIsolir('c.status')}`;
+            } else if (status === 'nonaktif' || status === 'inactive') {
+                whereClause += ` AND ${sqlIsInactive('c.status')}`;
+            } else if (status === 'aktif' || status === 'active') {
+                // Hanya status aktif — isolir punya filter sendiri
+                whereClause += ` AND ${sqlIsActive('c.status')}`;
             } else {
                 whereClause += ' AND c.status = ?';
                 params.push(status);
@@ -4454,9 +4472,14 @@ ${lifetimePaymentStatusSql}
                 whereClause += ` AND ${this._customerJoinDateExpr('c')} >= date(?) AND ${this._customerJoinDateExpr('c')} <= date('now','localtime')`;
                 params.push(startDate);
             } else if (!hasExplicitStatusFilter && filters.customer_type === 'aktif') {
-                whereClause += " AND c.status IN ('active', 'suspended', 'isolir')";
+                const { sqlIsActive } = require('./customerStatus');
+                whereClause += ` AND ${sqlIsActive('c.status')}`;
+            } else if (!hasExplicitStatusFilter && filters.customer_type === 'isolir') {
+                const { sqlIsIsolir } = require('./customerStatus');
+                whereClause += ` AND ${sqlIsIsolir('c.status')}`;
             } else if (!hasExplicitStatusFilter && filters.customer_type === 'nonaktif') {
-                whereClause += " AND c.status = 'inactive'";
+                const { sqlIsInactive } = require('./customerStatus');
+                whereClause += ` AND ${sqlIsInactive('c.status')}`;
             }
 
             const endDateLast = new Date(parseInt(year, 10), parseInt(month, 10), 0).toISOString().split('T')[0];
@@ -4500,9 +4523,14 @@ ${lifetimePaymentStatusSql}
             }
         } else {
             if (!hasExplicitStatusFilter && filters.customer_type === 'aktif') {
-                whereClause += " AND c.status IN ('active', 'suspended', 'isolir')";
+                const { sqlIsActive } = require('./customerStatus');
+                whereClause += ` AND ${sqlIsActive('c.status')}`;
+            } else if (!hasExplicitStatusFilter && filters.customer_type === 'isolir') {
+                const { sqlIsIsolir } = require('./customerStatus');
+                whereClause += ` AND ${sqlIsIsolir('c.status')}`;
             } else if (!hasExplicitStatusFilter && filters.customer_type === 'nonaktif') {
-                whereClause += " AND c.status = 'inactive'";
+                const { sqlIsInactive } = require('./customerStatus');
+                whereClause += ` AND ${sqlIsInactive('c.status')}`;
             }
 
             if (filters.payment_status === 'has_invoice') {
@@ -5024,7 +5052,12 @@ ${lifetimePaymentStatusSql}
                     nextPackageId, 
                     odp_id !== undefined ? odp_id : oldCustomer.odp_id,
                     nextPppoeProfile, 
-                    status !== undefined ? status : oldCustomer.status, 
+                    (() => {
+                        const { normalizeCustomerStatusForWrite } = require('./customerStatus');
+                        return status !== undefined && status !== null && String(status).trim() !== ''
+                            ? normalizeCustomerStatusForWrite(status, oldCustomer.status || 'active')
+                            : normalizeCustomerStatusForWrite(oldCustomer.status, 'active');
+                    })(),
                     auto_suspension !== undefined ? auto_suspension : oldCustomer.auto_suspension, 
                     normBillingDay,
                     normRenewalType,
@@ -8450,7 +8483,7 @@ ${lifetimePaymentStatusSql}
                         sql = `
                             SELECT 
                                 (SELECT COUNT(*) FROM customers${tCustW}) as total_customers,
-                                (SELECT COUNT(*) FROM customers WHERE status IN ('active', 'suspended', 'isolir')${tCustA}) as active_customers,
+                                (SELECT COUNT(*) FROM customers WHERE (${require('./customerStatus').sqlIsSubscribed('status')})${tCustA}) as active_customers,
                                 (SELECT COUNT(*) FROM invoices WHERE created_at >= ?${tInvA}) as monthly_invoices,
                                 (SELECT COUNT(*) FROM invoices WHERE invoice_type = 'voucher'${tInvA}) as voucher_invoices,
                                 (SELECT COUNT(*) FROM invoices WHERE created_at >= ? AND status = 'paid'${tInvA}) as paid_monthly_invoices,
@@ -8468,7 +8501,7 @@ ${lifetimePaymentStatusSql}
                         sql = `
                             SELECT 
                                 (SELECT COUNT(*) FROM customers${tCustW}) as total_customers,
-                                (SELECT COUNT(*) FROM customers WHERE status IN ('active', 'suspended', 'isolir')${tCustA}) as active_customers,
+                                (SELECT COUNT(*) FROM customers WHERE (${require('./customerStatus').sqlIsSubscribed('status')})${tCustA}) as active_customers,
                                 (SELECT COUNT(*) FROM invoices WHERE created_at >= ?${tInvA}) as monthly_invoices,
                                 (SELECT COUNT(*) FROM invoices WHERE (invoice_number LIKE 'INV-VCR-%' OR notes LIKE 'Voucher Hotspot%')${tInvA}) as voucher_invoices,
                                 (SELECT COUNT(*) FROM invoices WHERE created_at >= ? AND status = 'paid'${tInvA}) as paid_monthly_invoices,
@@ -8572,7 +8605,7 @@ ${lifetimePaymentStatusSql}
                                         const counts = await new Promise((resolveCount, rejectCount) => {
                                             this.db.get(
                                                 `SELECT COUNT(*) AS total_customers,
-                                                        SUM(CASE WHEN c.status IN ('active', 'suspended', 'isolir') THEN 1 ELSE 0 END) AS active_customers
+                                                        SUM(CASE WHEN ${require('./customerStatus').sqlIsSubscribed('c.status')} THEN 1 ELSE 0 END) AS active_customers
                                                  FROM customers c
                                                  WHERE ${areaScope.clause}${tenantSql}`,
                                                 countParams,
@@ -9155,18 +9188,24 @@ ${lifetimePaymentStatusSql}
                 Promise.all([
                     // Active customers
                     new Promise((res, rej) => {
-                        this.db.get(`SELECT COUNT(*) as count FROM customers WHERE status IN ('active', 'suspended', 'isolir')${_t.sql}`, _t.params, (err, row) => {
-                            if (err) {
-                                console.error('Error getting active customers:', err);
-                                res(0); // Return 0 on error instead of rejecting
-                            } else {
-                                res(row?.count || 0);
+                        const { sqlIsActive } = require('./customerStatus');
+                        this.db.get(
+                            `SELECT COUNT(*) as count FROM customers WHERE ${sqlIsActive('status')}${_t.sql}`,
+                            _t.params,
+                            (err, row) => {
+                                if (err) {
+                                    console.error('Error getting active customers:', err);
+                                    res(0);
+                                } else {
+                                    res(row?.count || 0);
+                                }
                             }
-                        });
+                        );
                     }),
                     // Inactive customers
                     new Promise((res, rej) => {
-                        this.db.get(`SELECT COUNT(*) as count FROM customers WHERE status = 'inactive'${_t.sql}`, _t.params, (err, row) => {
+                        const { sqlIsInactive } = require('./customerStatus');
+                        this.db.get(`SELECT COUNT(*) as count FROM customers WHERE ${sqlIsInactive('status')}${_t.sql}`, _t.params, (err, row) => {
                             if (err) {
                                 console.error('Error getting inactive customers:', err);
                                 res(0);
@@ -13667,6 +13706,59 @@ billingManager.reconcilePortalPackageRequestsFulfilled = async function (tenantI
         }
     }
     return closed;
+};
+
+/**
+ * Badge sidebar menu Keuangan:
+ * - remittance: jumlah kolektor yang masih punya sisa belum setor (bulan berjalan)
+ * - payments: notifikasi kolektor belum dibaca (ISOLIR / INVOICE_PAID)
+ */
+billingManager.getFinanceSidebarBadgeCounts = async function (tenantId = null) {
+    const _tId = tenantId != null ? tenantId : (hasTenantContext() ? getTenantId() : null);
+    const now = new Date();
+    const month = String(now.getMonth() + 1);
+    const year = String(now.getFullYear());
+
+    const countPaymentNotifs = () =>
+        new Promise((resolve) => {
+            const tColl = _tId != null ? ' AND col.tenant_id = ?' : '';
+            const params = _tId != null ? [_tId] : [];
+            this.db.get(
+                `SELECT COUNT(*) AS n FROM (
+                    SELECT n.kind, n.ref_id
+                    FROM collector_field_notifications n
+                    INNER JOIN collectors col ON col.id = n.collector_id
+                    WHERE n.read_at IS NULL
+                      AND UPPER(TRIM(COALESCE(n.kind,''))) IN ('ISOLIR','INVOICE_PAID')${tColl}
+                    GROUP BY UPPER(TRIM(n.kind)), n.ref_id
+                 )`,
+                params,
+                (err, row) => {
+                    if (err) {
+                        if (String(err.message || '').includes('no such table')) return resolve(0);
+                        return resolve(0);
+                    }
+                    resolve(Number(row && row.n) || 0);
+                }
+            );
+        });
+
+    let remittance = 0;
+    try {
+        const rows = await this.getCollectorsWithPendingAmounts(month, year, {
+            tenantId: _tId != null ? Number(_tId) : null
+        });
+        remittance = (rows || []).filter((c) => Number(c.pending_amount) > 0).length;
+    } catch (_) {
+        remittance = 0;
+    }
+
+    const payments = await countPaymentNotifs();
+    return {
+        remittance,
+        payments,
+        total: remittance + payments
+    };
 };
 
 /** Jumlah badge pusat notifikasi admin: teknisi (belum dibaca) + kolektor (isolir/lunas saja) + portal (paket + laporan gangguan: telepon cocok atau customer_id). */

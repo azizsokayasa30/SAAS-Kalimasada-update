@@ -37,7 +37,26 @@ async function ensureFinanceSchema() {
         }
     }
     await ensureManualInvoiceColumns();
+    await ensureFinancePerfIndexes();
     schemaReady = true;
+}
+
+async function ensureFinancePerfIndexes() {
+    const statements = [
+        'CREATE INDEX IF NOT EXISTS idx_payments_payment_date ON payments(payment_date)',
+        'CREATE INDEX IF NOT EXISTS idx_payments_method_date ON payments(payment_method, payment_date)',
+        'CREATE INDEX IF NOT EXISTS idx_payments_type_date ON payments(payment_type, payment_date)',
+        'CREATE INDEX IF NOT EXISTS idx_pgt_invoice_id ON payment_gateway_transactions(invoice_id)',
+        'CREATE INDEX IF NOT EXISTS idx_pgt_created_at ON payment_gateway_transactions(created_at)',
+        'CREATE INDEX IF NOT EXISTS idx_pgt_status_created ON payment_gateway_transactions(status, created_at)',
+    ];
+    for (const stmt of statements) {
+        try {
+            await tenantStore.dbRun(stmt);
+        } catch (err) {
+            console.warn('[platformFinance] index warn:', err.message);
+        }
+    }
 }
 
 async function ensureManualInvoiceColumns() {
@@ -282,74 +301,235 @@ function calculateFeeBreakdown(totals, settings) {
     return { gross, tax, bhp_uso: bhpUso, management_fee: managementFee, net };
 }
 
+const GW_SUCCESS_STATUSES = ['settlement', 'paid', 'capture', 'success', 'completed'];
+const GW_FAILED_STATUSES = ['expire', 'expired', 'cancel', 'cancelled', 'deny', 'failed', 'failure'];
+
+function normalizeGatewayStatusTab(raw) {
+    const s = String(raw || 'success').toLowerCase().trim();
+    if (s === 'pending' || s === 'success' || s === 'failed' || s === 'all') return s;
+    if (GW_SUCCESS_STATUSES.includes(s)) return 'success';
+    if (GW_FAILED_STATUSES.includes(s)) return 'failed';
+    if (s === 'pending' || s === 'waiting') return 'pending';
+    return 'success';
+}
+
+function sqlInList(values) {
+    return values.map((v) => `'${String(v).replace(/'/g, "''")}'`).join(', ');
+}
+
+/** Inclusive calendar-day range without wrapping columns in DATE() (keeps indexes usable). */
+function sqlDateRange(columnSql) {
+    return `${columnSql} >= ? AND ${columnSql} < date(?, '+1 day')`;
+}
+
 async function getGatewayPayments(filters = {}) {
     await ensureFinanceSchema();
     const { startDate, endDate } = defaultDateRange(filters);
-    const params = [startDate, endDate];
-    let extra = '';
-
-    if (filters.tenantId) {
-        extra += ' AND p.tenant_id = ?';
-        params.push(Number(filters.tenantId));
-    }
-    if (filters.gateway) {
-        extra += ' AND LOWER(COALESCE(pgt.gateway, "")) = LOWER(?)';
-        params.push(String(filters.gateway));
-    }
-    if (filters.status) {
-        extra += ' AND LOWER(COALESCE(pgt.status, "settlement")) = LOWER(?)';
-        params.push(String(filters.status));
-    }
-
+    const statusTab = normalizeGatewayStatusTab(filters.status);
     const limit = Math.min(Math.max(Number(filters.limit) || 50, 1), 200);
     const offset = Math.max(Number(filters.offset) || 0, 0);
 
-    const countRow = await tenantStore.dbGet(
-        `SELECT COUNT(*) AS total,
-            COALESCE(SUM(p.amount), 0) AS total_amount,
-            COUNT(DISTINCT p.tenant_id) AS tenant_count,
-            COALESCE(SUM(CASE WHEN LOWER(COALESCE(pgt.status, 'settlement')) IN ('settlement', 'paid', 'capture', 'success', 'completed') THEN 1 ELSE 0 END), 0) AS success_count
-         FROM payments p
-         JOIN invoices i ON i.id = p.invoice_id
-         JOIN tenants t ON t.id = p.tenant_id
-         LEFT JOIN payment_gateway_transactions pgt ON pgt.invoice_id = i.id
-         WHERE ${onlinePaymentWhere('p')}
-           AND t.deleted_at IS NULL
-           AND ${voucherExclusionClause('i')}
-           AND DATE(p.payment_date) BETWEEN ? AND ?${extra}`,
-        params
-    );
+    const successIn = sqlInList(GW_SUCCESS_STATUSES);
+    const failedIn = sqlInList(GW_FAILED_STATUSES);
+    const gatewayNorm = String(filters.gateway || '').trim().toLowerCase();
+    const tenantId = filters.tenantId ? Number(filters.tenantId) : null;
 
-    const rows = await tenantStore.dbAll(
-        `SELECT
-            p.id, p.amount, p.payment_date, p.reference_number, p.payment_method, p.payment_type,
-            i.invoice_number, i.base_amount, i.tax_rate, i.amount AS invoice_amount,
-            t.id AS tenant_id, t.name AS tenant_name, t.subdomain, t.owner_name,
-            COALESCE(c.name, m.name, '-') AS customer_name,
-            COALESCE(pgt.gateway, '') AS gateway,
-            COALESCE(pgt.order_id, p.reference_number, '') AS order_id,
-            COALESCE(pgt.status, 'settlement') AS gateway_status
-         FROM payments p
+    // Sukses = pembayaran online di tabel payments (bukan scan status PGT).
+    const payExtra = [];
+    const payParams = [startDate, endDate];
+    const pgtExtra = [];
+    const pgtParams = [startDate, endDate];
+
+    if (tenantId) {
+        payExtra.push(' AND p.tenant_id = ?');
+        payParams.push(tenantId);
+        pgtExtra.push(' AND i.tenant_id = ?');
+        pgtParams.push(tenantId);
+    }
+    if (gatewayNorm) {
+        payExtra.push(` AND EXISTS (
+            SELECT 1 FROM payment_gateway_transactions gx
+            WHERE gx.invoice_id = i.id AND LOWER(COALESCE(gx.gateway, '')) = ?
+        )`);
+        payParams.push(gatewayNorm);
+        pgtExtra.push(' AND LOWER(COALESCE(pgt.gateway, \'\')) = ?');
+        pgtParams.push(gatewayNorm);
+    }
+
+    const payExtraSql = payExtra.join('');
+    const pgtExtraSql = pgtExtra.join('');
+
+    const successBaseFrom = `FROM payments p
          JOIN invoices i ON i.id = p.invoice_id
          JOIN tenants t ON t.id = p.tenant_id
-         LEFT JOIN customers c ON c.id = i.customer_id
-         LEFT JOIN members m ON m.id = i.member_id
-         LEFT JOIN payment_gateway_transactions pgt ON pgt.invoice_id = i.id
          WHERE ${onlinePaymentWhere('p')}
            AND t.deleted_at IS NULL
            AND ${voucherExclusionClause('i')}
-           AND DATE(p.payment_date) BETWEEN ? AND ?${extra}
-         ORDER BY p.payment_date DESC, p.id DESC
-         LIMIT ? OFFSET ?`,
-        [...params, limit, offset]
-    );
+           AND ${sqlDateRange('p.payment_date')}
+           ${payExtraSql}`;
+
+    const pendingWhere = `t.deleted_at IS NULL
+           AND ${voucherExclusionClause('i')}
+           AND ${sqlDateRange('pgt.created_at')}
+           AND LOWER(COALESCE(pgt.status, 'pending')) NOT IN (${successIn})
+           AND LOWER(COALESCE(pgt.status, 'pending')) NOT IN (${failedIn})
+           ${pgtExtraSql}`;
+
+    const failedWhere = `t.deleted_at IS NULL
+           AND ${voucherExclusionClause('i')}
+           AND ${sqlDateRange('pgt.created_at')}
+           AND LOWER(COALESCE(pgt.status, '')) IN (${failedIn})
+           ${pgtExtraSql}`;
+
+    const successFullSql = `SELECT COUNT(*) AS total,
+            COALESCE(SUM(p.amount), 0) AS total_amount,
+            COUNT(DISTINCT p.tenant_id) AS tenant_count
+         ${successBaseFrom}`;
+    const successLightSql = `SELECT COUNT(*) AS total ${successBaseFrom}`;
+
+    const pendingFrom = `FROM payment_gateway_transactions pgt
+         JOIN invoices i ON i.id = pgt.invoice_id
+         JOIN tenants t ON t.id = i.tenant_id
+         WHERE ${pendingWhere}`;
+    const failedFrom = `FROM payment_gateway_transactions pgt
+         JOIN invoices i ON i.id = pgt.invoice_id
+         JOIN tenants t ON t.id = i.tenant_id
+         WHERE ${failedWhere}`;
+
+    const pendingFullSql = `SELECT COUNT(*) AS total,
+            COALESCE(SUM(pgt.amount), 0) AS total_amount,
+            COUNT(DISTINCT i.tenant_id) AS tenant_count
+         ${pendingFrom}`;
+    const pendingLightSql = `SELECT COUNT(*) AS total ${pendingFrom}`;
+    const failedFullSql = `SELECT COUNT(*) AS total,
+            COALESCE(SUM(pgt.amount), 0) AS total_amount,
+            COUNT(DISTINCT i.tenant_id) AS tenant_count
+         ${failedFrom}`;
+    const failedLightSql = `SELECT COUNT(*) AS total ${failedFrom}`;
+
+    const needSuccessFull = statusTab === 'success' || statusTab === 'all';
+    const needPendingFull = statusTab === 'pending';
+    const needFailedFull = statusTab === 'failed';
+
+    const latestPgtJoin = `LEFT JOIN payment_gateway_transactions pgt ON pgt.id = (
+                SELECT MAX(gx.id) FROM payment_gateway_transactions gx WHERE gx.invoice_id = i.id
+             )`;
+
+    const listSqlPending = `SELECT
+                pgt.id,
+                pgt.amount,
+                pgt.created_at AS payment_date,
+                COALESCE(pgt.order_id, '') AS reference_number,
+                'online' AS payment_method,
+                COALESCE(pgt.payment_type, 'online') AS payment_type,
+                i.invoice_number, i.base_amount, i.tax_rate, i.amount AS invoice_amount,
+                t.id AS tenant_id, t.name AS tenant_name, t.subdomain, t.owner_name,
+                COALESCE(c.name, m.name, '-') AS customer_name,
+                COALESCE(pgt.gateway, '') AS gateway,
+                COALESCE(pgt.order_id, '') AS order_id,
+                COALESCE(pgt.status, 'pending') AS gateway_status,
+                pgt.payment_url AS payment_url
+             FROM payment_gateway_transactions pgt
+             JOIN invoices i ON i.id = pgt.invoice_id
+             JOIN tenants t ON t.id = i.tenant_id
+             LEFT JOIN customers c ON c.id = i.customer_id
+             LEFT JOIN members m ON m.id = i.member_id
+             WHERE ${pendingWhere}
+             ORDER BY pgt.created_at DESC, pgt.id DESC
+             LIMIT ? OFFSET ?`;
+
+    const listSqlFailed = `SELECT
+                pgt.id,
+                pgt.amount,
+                pgt.created_at AS payment_date,
+                COALESCE(pgt.order_id, '') AS reference_number,
+                'online' AS payment_method,
+                COALESCE(pgt.payment_type, 'online') AS payment_type,
+                i.invoice_number, i.base_amount, i.tax_rate, i.amount AS invoice_amount,
+                t.id AS tenant_id, t.name AS tenant_name, t.subdomain, t.owner_name,
+                COALESCE(c.name, m.name, '-') AS customer_name,
+                COALESCE(pgt.gateway, '') AS gateway,
+                COALESCE(pgt.order_id, '') AS order_id,
+                COALESCE(pgt.status, 'failed') AS gateway_status,
+                pgt.payment_url AS payment_url
+             FROM payment_gateway_transactions pgt
+             JOIN invoices i ON i.id = pgt.invoice_id
+             JOIN tenants t ON t.id = i.tenant_id
+             LEFT JOIN customers c ON c.id = i.customer_id
+             LEFT JOIN members m ON m.id = i.member_id
+             WHERE ${failedWhere}
+             ORDER BY pgt.created_at DESC, pgt.id DESC
+             LIMIT ? OFFSET ?`;
+
+    const listSqlSuccess = `SELECT
+                p.id, p.amount, p.payment_date, p.reference_number, p.payment_method, p.payment_type,
+                i.invoice_number, i.base_amount, i.tax_rate, i.amount AS invoice_amount,
+                t.id AS tenant_id, t.name AS tenant_name, t.subdomain, t.owner_name,
+                COALESCE(c.name, m.name, '-') AS customer_name,
+                COALESCE(pgt.gateway, '') AS gateway,
+                COALESCE(pgt.order_id, p.reference_number, '') AS order_id,
+                COALESCE(pgt.status, 'settlement') AS gateway_status,
+                COALESCE(pgt.payment_url, '') AS payment_url
+             FROM payments p
+             JOIN invoices i ON i.id = p.invoice_id
+             JOIN tenants t ON t.id = p.tenant_id
+             LEFT JOIN customers c ON c.id = i.customer_id
+             LEFT JOIN members m ON m.id = i.member_id
+             ${latestPgtJoin}
+             WHERE ${onlinePaymentWhere('p')}
+               AND t.deleted_at IS NULL
+               AND ${voucherExclusionClause('i')}
+               AND ${sqlDateRange('p.payment_date')}
+               ${payExtraSql}
+             ORDER BY p.payment_date DESC, p.id DESC
+             LIMIT ? OFFSET ?`;
+
+    let listSql = listSqlSuccess;
+    let listParams = [...payParams, limit, offset];
+    if (statusTab === 'pending') {
+        listSql = listSqlPending;
+        listParams = [...pgtParams, limit, offset];
+    } else if (statusTab === 'failed') {
+        listSql = listSqlFailed;
+        listParams = [...pgtParams, limit, offset];
+    }
+
+    const [successCountRow, pendingCountRow, failedCountRow, rows] = await Promise.all([
+        tenantStore.dbGet(needSuccessFull ? successFullSql : successLightSql, payParams),
+        tenantStore.dbGet(needPendingFull ? pendingFullSql : pendingLightSql, pgtParams),
+        tenantStore.dbGet(needFailedFull ? failedFullSql : failedLightSql, pgtParams),
+        tenantStore.dbAll(listSql, listParams),
+    ]);
+
+    const statusCounts = {
+        success: successCountRow?.total || 0,
+        pending: pendingCountRow?.total || 0,
+        failed: failedCountRow?.total || 0,
+    };
+    statusCounts.all = statusCounts.success + statusCounts.pending + statusCounts.failed;
+
+    let total = statusCounts.success;
+    let totalAmount = roundMoney(successCountRow?.total_amount || 0);
+    let tenantCount = successCountRow?.tenant_count || 0;
+
+    if (statusTab === 'pending') {
+        total = statusCounts.pending;
+        totalAmount = roundMoney(pendingCountRow?.total_amount || 0);
+        tenantCount = pendingCountRow?.tenant_count || 0;
+    } else if (statusTab === 'failed') {
+        total = statusCounts.failed;
+        totalAmount = roundMoney(failedCountRow?.total_amount || 0);
+        tenantCount = failedCountRow?.tenant_count || 0;
+    }
 
     return {
         rows,
-        total: countRow?.total || 0,
-        totalAmount: roundMoney(countRow?.total_amount || 0),
-        tenantCount: countRow?.tenant_count || 0,
-        successCount: countRow?.success_count || 0,
+        total,
+        totalAmount,
+        tenantCount,
+        successCount: statusCounts.success,
+        statusCounts,
+        statusTab,
         startDate,
         endDate,
         limit,
@@ -443,6 +623,7 @@ async function getTenantPaymentRecap(filters = {}) {
     const pm = invoiceResolvedPaymentMethodExpr();
     const transferExpr = paymentMethodTransferExpr(pm);
     const pgExpr = paymentMethodPgExpr(pm);
+    const { sqlIsIsolir } = require('../customerStatus');
 
     const rows = await tenantStore.dbAll(
         `SELECT
@@ -453,6 +634,7 @@ async function getTenantPaymentRecap(filters = {}) {
             COALESCE(SUM(CASE WHEN i.status IN ('paid', 'unpaid') THEN i.amount ELSE 0 END), 0) AS total_tagihan,
             COALESCE(SUM(CASE WHEN i.status = 'unpaid' THEN i.amount ELSE 0 END), 0) AS unpaid_amount,
             COALESCE(SUM(CASE WHEN i.status = 'paid' THEN i.amount ELSE 0 END), 0) AS paid_amount,
+            COALESCE(SUM(CASE WHEN i.status = 'unpaid' AND ${sqlIsIsolir('c.status')} THEN i.amount ELSE 0 END), 0) AS isolir_amount,
             COALESCE(SUM(CASE WHEN i.status = 'paid' AND ${transferExpr} THEN i.amount ELSE 0 END), 0) AS paid_transfer,
             COALESCE(SUM(CASE WHEN i.status = 'paid' AND ${pgExpr} THEN i.amount ELSE 0 END), 0) AS paid_pg,
             COALESCE(SUM(CASE
@@ -464,6 +646,7 @@ async function getTenantPaymentRecap(filters = {}) {
             ON i.tenant_id = t.id
            AND ${voucherExclusionClause('i')}
            AND DATE(i.created_at) BETWEEN ? AND ?
+         LEFT JOIN customers c ON c.id = i.customer_id
          WHERE t.deleted_at IS NULL
            AND COALESCE(t.is_master, 0) = 0
          GROUP BY t.id
@@ -479,6 +662,7 @@ async function getTenantPaymentRecap(filters = {}) {
         total_tagihan: roundMoney(row.total_tagihan),
         unpaid_amount: roundMoney(row.unpaid_amount),
         paid_amount: roundMoney(row.paid_amount),
+        isolir_amount: roundMoney(row.isolir_amount),
         paid_cash: roundMoney(row.paid_cash),
         paid_transfer: roundMoney(row.paid_transfer),
         paid_pg: roundMoney(row.paid_pg),
@@ -732,6 +916,8 @@ async function listTenantInvoiceOverview(filters = {}) {
             t.id AS tenant_id,
             t.name AS tenant_name,
             t.owner_name,
+            t.owner_email,
+            t.owner_phone,
             t.subdomain,
             CASE WHEN inv.id IS NOT NULL THEN 1 ELSE 0 END AS has_invoice,
             inv.id AS invoice_id,
@@ -1062,6 +1248,94 @@ async function listCategories(type = null) {
     );
 }
 
+function normalizeCategoryType(type) {
+    const t = String(type || '').trim().toLowerCase();
+    if (t !== 'income' && t !== 'expense') throw new Error('Tipe kategori tidak valid.');
+    return t;
+}
+
+function normalizeCategoryName(name) {
+    const n = String(name || '').trim();
+    if (!n) throw new Error('Nama kategori wajib diisi.');
+    if (n.length > 80) throw new Error('Nama kategori terlalu panjang.');
+    return n;
+}
+
+function ledgerTableForCategoryType(type) {
+    return type === 'income' ? 'platform_finance_income' : 'platform_finance_expenses';
+}
+
+async function getCategory(id) {
+    await ensureFinanceSchema();
+    return tenantStore.dbGet(
+        'SELECT * FROM platform_finance_categories WHERE id = ?',
+        [id]
+    );
+}
+
+async function createCategory({ type, name }) {
+    await ensureFinanceSchema();
+    const catType = normalizeCategoryType(type);
+    const catName = normalizeCategoryName(name);
+    const dup = await tenantStore.dbGet(
+        `SELECT id FROM platform_finance_categories
+         WHERE type = ? AND is_active = 1 AND LOWER(TRIM(name)) = LOWER(?)
+         LIMIT 1`,
+        [catType, catName]
+    );
+    if (dup) throw new Error('Kategori dengan nama serupa sudah ada.');
+    const result = await tenantStore.dbRun(
+        `INSERT INTO platform_finance_categories (name, type, is_active)
+         VALUES (?, ?, 1)`,
+        [catName, catType]
+    );
+    return getCategory(result.id);
+}
+
+async function updateCategory(id, { name }) {
+    await ensureFinanceSchema();
+    const existing = await getCategory(id);
+    if (!existing || !Number(existing.is_active)) throw new Error('Kategori tidak ditemukan.');
+    const catName = normalizeCategoryName(name);
+    const dup = await tenantStore.dbGet(
+        `SELECT id FROM platform_finance_categories
+         WHERE type = ? AND is_active = 1 AND LOWER(TRIM(name)) = LOWER(?) AND id != ?
+         LIMIT 1`,
+        [existing.type, catName, id]
+    );
+    if (dup) throw new Error('Kategori dengan nama serupa sudah ada.');
+
+    const oldName = String(existing.name || '').trim();
+    await tenantStore.dbRun(
+        `UPDATE platform_finance_categories
+         SET name = ?, updated_at = datetime('now','localtime')
+         WHERE id = ?`,
+        [catName, id]
+    );
+
+    if (oldName && oldName !== catName) {
+        const table = ledgerTableForCategoryType(existing.type);
+        await tenantStore.dbRun(
+            `UPDATE ${table} SET category = ?, updated_at = datetime('now','localtime') WHERE category = ?`,
+            [catName, oldName]
+        );
+    }
+    return getCategory(id);
+}
+
+async function deleteCategory(id) {
+    await ensureFinanceSchema();
+    const existing = await getCategory(id);
+    if (!existing || !Number(existing.is_active)) throw new Error('Kategori tidak ditemukan.');
+    await tenantStore.dbRun(
+        `UPDATE platform_finance_categories
+         SET is_active = 0, updated_at = datetime('now','localtime')
+         WHERE id = ?`,
+        [id]
+    );
+    return { success: true };
+}
+
 async function getPlatformFinancialReport(filters = {}) {
     await ensureFinanceSchema();
     const settings = await getFinanceSettings();
@@ -1133,6 +1407,10 @@ module.exports = {
     updateExpense,
     deleteExpense,
     listCategories,
+    getCategory,
+    createCategory,
+    updateCategory,
+    deleteCategory,
     getIncomeExpenseOverview,
     getPlatformFinancialReport,
 };

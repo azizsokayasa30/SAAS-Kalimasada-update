@@ -21,9 +21,14 @@
     <div>
       <h2 class="km-set-title"><span class="km-set-title__icon"><i class="bi <%= isIncome ? 'bi-arrow-down-circle' : 'bi-arrow-up-circle' %>"></i></span><%= cfg.title %></h2>
     </div>
-    <button type="button" class="btn btn-km-primary btn-sm" data-bs-toggle="modal" data-bs-target="#<%= cfg.modalId %>">
-      <i class="bi bi-plus-lg"></i> Tambah <%= cfg.noun %>
-    </button>
+    <div class="km-topbar__actions">
+      <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#ledgerCategoryModal">
+        <i class="bi bi-tags"></i> Kategori
+      </button>
+      <button type="button" class="btn btn-km-primary btn-sm" data-bs-toggle="modal" data-bs-target="#<%= cfg.modalId %>">
+        <i class="bi bi-plus-lg"></i> Tambah <%= cfg.noun %>
+      </button>
+    </div>
   </div>
 
   <%- include('_nav', { financeSection }) %>
@@ -31,6 +36,9 @@
   <% if (flash && flash.success === 'created') { %><div class="alert alert-success"><i class="bi bi-check-circle me-1"></i> <%= cfg.noun %> berhasil ditambahkan.</div><% } %>
   <% if (flash && flash.success === 'updated') { %><div class="alert alert-success"><i class="bi bi-check-circle me-1"></i> <%= cfg.noun %> berhasil diperbarui.</div><% } %>
   <% if (flash && flash.success === 'deleted') { %><div class="alert alert-success"><i class="bi bi-trash me-1"></i> <%= cfg.noun %> dihapus.</div><% } %>
+  <% if (flash && flash.success === 'category_created') { %><div class="alert alert-success"><i class="bi bi-check-circle me-1"></i> Kategori berhasil ditambahkan.</div><% } %>
+  <% if (flash && flash.success === 'category_updated') { %><div class="alert alert-success"><i class="bi bi-check-circle me-1"></i> Kategori berhasil diperbarui.</div><% } %>
+  <% if (flash && flash.success === 'category_deleted') { %><div class="alert alert-success"><i class="bi bi-trash me-1"></i> Kategori dihapus.</div><% } %>
   <% if (flash && flash.success === 'restored') { %><div class="alert alert-success"><i class="bi bi-arrow-counterclockwise me-1"></i> Backup finance berhasil di-restore.</div><% } %>
   <% if (flash && flash.error) { %><div class="alert alert-danger"><i class="bi bi-exclamation-triangle me-1"></i> <%= flash.error %></div><% } %>
 
@@ -231,3 +239,102 @@
     </form>
   </div>
 </div>
+
+<div class="modal fade" id="ledgerCategoryModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-tags me-2"></i>Kategori <%= cfg.noun %></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <form method="POST" action="/management/finance/categories" class="km-fin-cat-add mb-3">
+          <input type="hidden" name="type" value="<%= isIncome ? 'income' : 'expense' %>">
+          <input type="hidden" name="return_to" value="<%= cfg.base %>">
+          <label class="form-label">Tambah kategori</label>
+          <div class="input-group input-group-sm">
+            <input type="text" name="name" class="form-control" placeholder="Nama kategori baru" maxlength="80" required>
+            <button type="submit" class="btn btn-km-primary"><i class="bi bi-plus-lg"></i> Tambah</button>
+          </div>
+        </form>
+
+        <% if (!categories.length) { %>
+          <div class="km-inv-empty py-3">
+            <i class="bi bi-tags"></i>
+            <strong>Belum ada kategori</strong>
+            <span>Tambahkan kategori agar pencatatan <%= nounLower %> lebih rapi.</span>
+          </div>
+        <% } else { %>
+          <div class="km-fin-cat-list" id="ledgerCategoryList">
+            <% categories.forEach(function(c) { %>
+              <div class="km-fin-cat-row" data-cat-row="<%= c.id %>">
+                <div class="km-fin-cat-row__view">
+                  <span class="km-fin-cat km-fin-cat--<%= fin.toneOf(c.name) %>"><%= c.name %></span>
+                  <div class="km-fin-cat-row__btns">
+                    <button type="button" class="km-inv-action" title="Edit" aria-label="Edit kategori" data-cat-action="edit"><i class="bi bi-pencil"></i></button>
+                    <button type="button" class="km-inv-action km-inv-action--danger" title="Hapus" aria-label="Hapus kategori" data-cat-action="delete" data-cat-name="<%= c.name %>" data-cat-id="<%= c.id %>"><i class="bi bi-trash3"></i></button>
+                  </div>
+                </div>
+                <form method="POST" action="/management/finance/categories/<%= c.id %>" class="km-fin-cat-row__edit">
+                  <input type="hidden" name="type" value="<%= isIncome ? 'income' : 'expense' %>">
+                  <input type="hidden" name="return_to" value="<%= cfg.base %>">
+                  <input type="text" name="name" class="form-control form-control-sm" value="<%= c.name %>" maxlength="80" required>
+                  <div class="km-fin-cat-row__btns">
+                    <button type="submit" class="btn btn-km-primary btn-sm">Simpan</button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" data-cat-action="cancel">Batal</button>
+                  </div>
+                </form>
+                <form method="POST" action="/management/finance/categories/<%= c.id %>/delete" class="d-none" data-cat-delete-form>
+                  <input type="hidden" name="type" value="<%= isIncome ? 'income' : 'expense' %>">
+                  <input type="hidden" name="return_to" value="<%= cfg.base %>">
+                </form>
+              </div>
+            <% }); %>
+          </div>
+        <% } %>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  var modal = document.getElementById('ledgerCategoryModal');
+  if (!modal || modal.getAttribute('data-cat-ready') === '1') return;
+  modal.setAttribute('data-cat-ready', '1');
+  modal.addEventListener('click', function (e) {
+    var actionEl = e.target.closest('[data-cat-action]');
+    if (!actionEl || !modal.contains(actionEl)) return;
+    var action = actionEl.getAttribute('data-cat-action');
+    var row = actionEl.closest('.km-fin-cat-row');
+    if (!row) return;
+    if (action === 'edit') {
+      e.preventDefault();
+      modal.querySelectorAll('.km-fin-cat-row.is-editing').forEach(function (r) {
+        if (r !== row) r.classList.remove('is-editing');
+      });
+      row.classList.add('is-editing');
+      var input = row.querySelector('.km-fin-cat-row__edit input[name="name"]');
+      if (input) setTimeout(function () { input.focus(); input.select(); }, 50);
+      return;
+    }
+    if (action === 'cancel') {
+      e.preventDefault();
+      row.classList.remove('is-editing');
+      var original = row.querySelector('.km-fin-cat-row__view .km-fin-cat');
+      var editInput = row.querySelector('.km-fin-cat-row__edit input[name="name"]');
+      if (original && editInput) editInput.value = original.textContent.trim();
+      return;
+    }
+    if (action === 'delete') {
+      e.preventDefault();
+      var name = actionEl.getAttribute('data-cat-name') || '';
+      var msg = name
+        ? 'Hapus kategori "' + name + '"? Catatan yang sudah memakai kategori ini tidak dihapus.'
+        : 'Hapus kategori ini? Catatan yang sudah memakai kategori ini tidak dihapus.';
+      if (!window.confirm(msg)) return;
+      var form = row.querySelector('[data-cat-delete-form]');
+      if (form) form.submit();
+    }
+  });
+})();
+</script>

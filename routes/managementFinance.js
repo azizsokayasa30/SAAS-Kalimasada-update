@@ -54,8 +54,10 @@ function safeReturnTo(path) {
 
 function financeLocals(req, extra = {}) {
     const returnPath = `${req.baseUrl || '/management/finance'}${req.path || ''}`.split('?')[0];
+    const section = String(extra.financeSection || '');
+    const needsBackups = section === 'backup' || String(req.path || '').includes('backup');
     return {
-        backups: platformFinanceBackup.listFinanceBackups(),
+        backups: needsBackups ? platformFinanceBackup.listFinanceBackups() : [],
         financeReturnTo: returnPath,
         adminName: req.session.platformAdminName,
         ...extra,
@@ -170,13 +172,19 @@ router.get('/payments', async (req, res) => {
     try {
         const { page, limit, offset } = parsePagination(req.query);
         const range = platformFinanceService.defaultDateRange(req.query);
-        const result = await platformFinanceService.getGatewayPayments({
-            ...req.query,
-            ...range,
-            limit,
-            offset,
-        });
-        const tenants = await tenantStore.listOperationalTenants();
+        const status = String(req.query.status || 'success').toLowerCase();
+        const [result, tenants] = await Promise.all([
+            platformFinanceService.getGatewayPayments({
+                ...req.query,
+                ...range,
+                status,
+                tenantId: req.query.tenant_id || '',
+                gateway: req.query.gateway || '',
+                limit,
+                offset,
+            }),
+            tenantStore.listOperationalTenantsLite(),
+        ]);
         const totalPages = Math.max(Math.ceil(result.total / limit), 1);
 
         res.render('platform/finance/payments', financeLocals(req, {
@@ -185,13 +193,19 @@ router.get('/payments', async (req, res) => {
             financeSection: 'payments',
             payments: result.rows,
             tenants,
-            filters: { ...range, tenantId: req.query.tenant_id || '', gateway: req.query.gateway || '', status: req.query.status || '' },
+            filters: {
+                ...range,
+                tenantId: req.query.tenant_id || '',
+                gateway: req.query.gateway || '',
+                status: result.statusTab || status || 'success',
+            },
             pagination: { page, totalPages, total: result.total, limit },
             summary: {
                 total: result.total,
                 totalAmount: result.totalAmount,
                 tenantCount: result.tenantCount,
                 successCount: result.successCount,
+                statusCounts: result.statusCounts || { success: 0, pending: 0, failed: 0, all: 0 },
             },
             flash: flashFromQuery(req.query),
         }));
@@ -211,12 +225,13 @@ router.get('/tenant-summary', async (req, res) => {
                 acc.total_tagihan += Number(row.total_tagihan) || 0;
                 acc.unpaid_amount += Number(row.unpaid_amount) || 0;
                 acc.paid_amount += Number(row.paid_amount) || 0;
+                acc.isolir_amount += Number(row.isolir_amount) || 0;
                 acc.paid_cash += Number(row.paid_cash) || 0;
                 acc.paid_transfer += Number(row.paid_transfer) || 0;
                 acc.paid_pg += Number(row.paid_pg) || 0;
                 return acc;
             },
-            { total_tagihan: 0, unpaid_amount: 0, paid_amount: 0, paid_cash: 0, paid_transfer: 0, paid_pg: 0 }
+            { total_tagihan: 0, unpaid_amount: 0, paid_amount: 0, isolir_amount: 0, paid_cash: 0, paid_transfer: 0, paid_pg: 0 }
         );
 
         res.render('platform/finance/tenant-summary', financeLocals(req, {
@@ -422,6 +437,13 @@ router.post('/invoices/:id/status', async (req, res) => {
         }
         res.redirect(`/management/finance/invoices/${req.params.id}?success=updated`);
     } catch (err) {
+        if (toList) {
+            const invoice = await platformFinanceService.getTenantInvoice(req.params.id).catch(() => null);
+            return res.redirect(invoiceListUrl(invoice?.period_start, {
+                error: err.message,
+                view: invoice?.tenant_id || '',
+            }));
+        }
         res.redirect(`/management/finance/invoices/${req.params.id}?error=${encodeURIComponent(err.message)}`);
     }
 });
@@ -432,7 +454,11 @@ router.post('/invoices/:id/delete', async (req, res) => {
         await platformFinanceService.deleteTenantInvoice(req.params.id);
         res.redirect(invoiceListUrl(invoice?.period_start, { success: 'deleted', view: invoice?.tenant_id || '' }));
     } catch (err) {
-        res.redirect(`/management/finance/invoices/${req.params.id}?error=${encodeURIComponent(err.message)}`);
+        const invoice = await platformFinanceService.getTenantInvoice(req.params.id).catch(() => null);
+        res.redirect(invoiceListUrl(invoice?.period_start, {
+            error: err.message,
+            view: invoice?.tenant_id || '',
+        }));
     }
 });
 
@@ -588,6 +614,45 @@ router.post('/expenses/:id/delete', async (req, res) => {
         res.redirect(ledgerUrl(req, 'expenses', { success: 'deleted' }));
     } catch (err) {
         res.redirect(ledgerUrl(req, 'expenses', { error: err.message }));
+    }
+});
+
+function categoryReturnKind(bodyType, returnTo) {
+    const fromBody = String(bodyType || '').trim().toLowerCase();
+    if (fromBody === 'income') return 'income';
+    if (fromBody === 'expense') return 'expenses';
+    const path = String(returnTo || '');
+    if (path.includes('/expenses')) return 'expenses';
+    return 'income';
+}
+
+router.post('/categories', async (req, res) => {
+    const kind = categoryReturnKind(req.body.type, req.body.return_to);
+    try {
+        await platformFinanceService.createCategory(req.body);
+        res.redirect(ledgerUrl(req, kind, { success: 'category_created' }));
+    } catch (err) {
+        res.redirect(ledgerUrl(req, kind, { error: err.message }));
+    }
+});
+
+router.post('/categories/:id', async (req, res) => {
+    const kind = categoryReturnKind(req.body.type, req.body.return_to);
+    try {
+        await platformFinanceService.updateCategory(req.params.id, req.body);
+        res.redirect(ledgerUrl(req, kind, { success: 'category_updated' }));
+    } catch (err) {
+        res.redirect(ledgerUrl(req, kind, { error: err.message }));
+    }
+});
+
+router.post('/categories/:id/delete', async (req, res) => {
+    const kind = categoryReturnKind(req.body.type, req.body.return_to);
+    try {
+        await platformFinanceService.deleteCategory(req.params.id);
+        res.redirect(ledgerUrl(req, kind, { success: 'category_deleted' }));
+    } catch (err) {
+        res.redirect(ledgerUrl(req, kind, { error: err.message }));
     }
 });
 

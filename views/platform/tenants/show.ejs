@@ -31,14 +31,15 @@
   <div class="row g-3 mb-4">
     <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pelanggan Total</div><div class="value"><%= usage.customers.total || 0 %></div></div></div>
     <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Pelanggan Aktif</div><div class="value text-success"><%= usage.customers.active || 0 %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Isolir</div><div class="value text-danger"><%= usage.customers.isolir || 0 %></div></div></div>
     <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Nonaktif</div><div class="value text-muted"><%= usage.customers.inactive || 0 %></div></div></div>
     <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Baru Bulan Ini</div><div class="value" style="color: var(--accent)"><%= usage.customers.new || 0 %></div></div></div>
   </div>
 
   <div class="row g-3 mb-4">
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Tagihan Total</div><div class="value"><%= formatRupiah(usage.invoices.total) %></div></div></div>
-    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Lunas</div><div class="value text-success"><%= formatRupiah(usage.invoices.paid) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Total Tagihan</div><div class="value"><%= formatRupiah(usage.invoices.total) %></div></div></div>
     <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Belum Lunas</div><div class="value text-warning"><%= formatRupiah(usage.invoices.unpaid) %></div></div></div>
+    <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Lunas</div><div class="value text-success"><%= formatRupiah(usage.invoices.paid) %></div></div></div>
     <div class="col-md-3 col-6"><div class="km-stat"><div class="label">Isolir</div><div class="value text-danger"><%= formatRupiah(usage.invoices.isolir) %></div></div></div>
   </div>
 

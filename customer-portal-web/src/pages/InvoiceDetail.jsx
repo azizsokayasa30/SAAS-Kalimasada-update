@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { QrCode, Wallet, Landmark, Store, CreditCard, Copy, Check, RefreshCw } from 'lucide-react';
 import api from '../api/client';
+import QrisImage from '../components/QrisImage';
 
 const TYPE_ORDER = ['qris', 'ewallet', 'bank', 'card', 'retail', 'other'];
 const TYPE_LABELS = {
@@ -21,11 +22,14 @@ const TYPE_ICONS = {
   other: CreditCard,
 };
 
+/** Prioritas QRIS untuk scan bank (BCA dll). SP/ShopeePay sering ditolak bank. */
+const QRIS_PREFERENCE = ['NQ', 'SQ', 'GQ', 'SP'];
+
 const CODE_LABELS = {
   NQ: 'Bayar pakai QRIS',
   SQ: 'Bayar pakai QRIS',
   GQ: 'Bayar pakai QRIS',
-  SP: 'Bayar pakai QRIS',
+  SP: 'ShopeePay QRIS',
   DA: 'DANA',
   OV: 'OVO',
   LA: 'LinkAja',
@@ -56,10 +60,25 @@ function resolveMethodType(m) {
   return m?.type || 'other';
 }
 
+function isShopeeQris(m) {
+  const code = String(m?.method || '').toUpperCase();
+  return code === 'SP' || (/shopee/i.test(String(m?.name || '')) && resolveMethodType(m) === 'qris');
+}
+
+function pickPreferredQris(items) {
+  const list = items || [];
+  for (const code of QRIS_PREFERENCE) {
+    const hit = list.find((m) => String(m.method || '').toUpperCase() === code);
+    if (hit) return hit;
+  }
+  return list[0] || null;
+}
+
 function displayName(m) {
   const code = String(m?.method || '').toUpperCase();
   if (CODE_LABELS[code]) return CODE_LABELS[code];
   const raw = String(m?.name || '').trim();
+  if (/shopee.*qris|qris.*shopee/i.test(raw)) return 'ShopeePay QRIS';
   if (/qris/i.test(raw)) return 'Bayar pakai QRIS';
   if (/indomaret|indomart/i.test(raw)) return 'Indomart';
   if (/retail|alfamart|pegadaian|\balfa\b/i.test(raw)) return 'Alfamart';
@@ -85,12 +104,23 @@ function walletBrandKey(m) {
   return `${m.gateway}:${code}`;
 }
 
+function isNobuQris(m) {
+  return String(m?.method || '').toUpperCase() === 'NQ';
+}
+
 function collapseItems(type, items) {
   if (type === 'qris') {
-    const preferred = items.find((m) => /^NQ$/i.test(m.method)) || items[0];
-    return preferred
-      ? [{ ...preferred, display_name: 'Bayar pakai QRIS', image_url: null, hide_logo: true }]
-      : [];
+    // Satu tombol QRIS. Provider (NQ/SQ/SP) hanya acquirer QR — menurut Duitku bisa dibayar semua bank/e-wallet QRIS.
+    const preferred = pickPreferredQris(items);
+    if (!preferred) return [];
+    return [{
+      ...preferred,
+      display_name: 'Bayar pakai QRIS',
+      image_url: null,
+      hide_logo: true,
+      qris_hint: 'Scan dengan QRIS di BCA, BRI, Mandiri, BNI, DANA, GoPay, OVO, dan lainnya.',
+      qris_bank_ready: true,
+    }];
   }
   if (type === 'ewallet') {
     const seen = new Map();
@@ -348,17 +378,28 @@ export default function InvoiceDetail() {
                 </p>
               )}
 
-              {(paySession.qr_image || (paySession.qr_string && paySession.qr_string.startsWith('000201'))) && (
+              {((paySession.qr_string && paySession.qr_string.startsWith('000201')) || paySession.qr_image) && (
                 <div className="bg-white rounded-2xl border border-slate-200 p-4 flex flex-col items-center">
-                  <img
-                    src={paySession.qr_image || `https://api.qrserver.com/v1/create-qr-code/?size=480x480&margin=4&ecc=M&data=${encodeURIComponent(paySession.qr_string)}`}
-                    alt="QRIS"
-                    className="w-72 h-72 bg-white"
-                    style={{ imageRendering: 'pixelated' }}
-                  />
+                  <div className="w-[min(100%,20rem)] aspect-square bg-white p-3 rounded-xl border border-slate-100">
+                    {paySession.qr_string && paySession.qr_string.startsWith('000201') ? (
+                      <QrisImage value={paySession.qr_string} />
+                    ) : (
+                      <img src={paySession.qr_image} alt="QRIS" className="w-full h-full object-contain bg-white" draggable={false} />
+                    )}
+                  </div>
                   <p className="text-xs text-slate-500 text-center mt-3 leading-relaxed">
-                    Scan dengan QRIS di BCA, DANA, GoPay, OVO, ShopeePay, atau LinkAja. Jangan diperkecil layar.
+                    Scan lewat menu QRIS di aplikasi bank atau e-wallet (BCA, BRI, Mandiri, DANA, GoPay, OVO). Naikkan kecerahan layar, jangan screenshot yang terpotong.
                   </p>
+                  {(paySession.payment_url || paySession.app_url) && (
+                    <a
+                      href={paySession.payment_url || paySession.app_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-3 w-full text-center rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-semibold text-sky-700 hover:bg-sky-100"
+                    >
+                      Buka halaman QRIS resmi
+                    </a>
+                  )}
                 </div>
               )}
 
@@ -412,7 +453,9 @@ export default function InvoiceDetail() {
           {!paySession && methodsMissing && (
             <div className="space-y-2">
               <p className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-                Daftar metode pembayaran belum bisa dimuat dari Duitku. Pastikan channel sudah aktif di dashboard, lalu muat ulang.
+                {payInfo?.methods_error
+                  ? `Metode pembayaran belum tersedia: ${payInfo.methods_error}`
+                  : 'Daftar metode pembayaran belum bisa dimuat dari Duitku. Pastikan channel sudah aktif di dashboard, lalu muat ulang.'}
               </p>
               <button
                 type="button"
@@ -437,7 +480,7 @@ export default function InvoiceDetail() {
                       <button
                         type="button"
                         disabled={checkoutBusy}
-                        onClick={() => startCheckout(m.gateway, m.method, 'Bayar pakai QRIS')}
+                        onClick={() => startCheckout(m.gateway, m.method, m.display_name || 'Bayar pakai QRIS')}
                         className="w-full rounded-2xl bg-gradient-to-r from-sky-600 to-cyan-500 text-white px-4 py-4 shadow-md hover:from-sky-500 hover:to-cyan-400 transition active:scale-[0.99] disabled:opacity-50"
                       >
                         <span className="flex items-center gap-3">
@@ -445,9 +488,11 @@ export default function InvoiceDetail() {
                             <QrCode className="h-7 w-7" />
                           </span>
                           <span className="text-left min-w-0">
-                            <span className="block font-extrabold text-base tracking-wide">BAYAR PAKAI QRIS</span>
+                            <span className="block font-extrabold text-base tracking-wide">
+                              {(m.display_name || 'Bayar pakai QRIS').toUpperCase()}
+                            </span>
                             <span className="block text-xs text-white/85 mt-0.5">
-                              {busy ? 'Menghubungkan…' : 'Scan dari DANA, GoPay, OVO, ShopeePay, dan lainnya'}
+                              {busy ? 'Menghubungkan…' : (m.qris_hint || 'Scan dengan aplikasi QRIS bank atau e-wallet')}
                             </span>
                           </span>
                         </span>

@@ -28,6 +28,9 @@
   const fillerPx = Math.max(0, 300 - Math.max(items.length, 1) * 26);
   const toName = (inv && (inv.tenant_name || owner.tenant_name)) || (typeof tenantName !== 'undefined' && tenantName) || '-';
   const toOwner = (inv && (inv.owner_name || owner.owner_name)) || (typeof ownerName !== 'undefined' && ownerName) || '';
+  const toPhone = (inv && (inv.owner_phone || owner.owner_phone)) || '';
+  const toEmail = (inv && (inv.owner_email || owner.owner_email)) || '';
+  const toHost = (inv && inv.subdomain) ? (inv.subdomain + '.kalimasada-app.com') : '';
   const logo = company.logo_path || '/img/logo.png';
   const emptyMsg = (typeof emptyMessage !== 'undefined' && emptyMessage) || 'Belum ada invoice';
   const emptyTenant = (typeof emptyTenantId !== 'undefined' && emptyTenantId) || '';
@@ -39,22 +42,28 @@
     <div class="km-bbs-kop__left">
       <img class="km-bbs-logo" src="<%= logo %>" alt="<%= company.company_name || 'Logo' %>" onerror="this.src='/img/logo.png'">
       <div class="km-bbs-contact">
-        <h6>RINCIAN KONTAK</h6>
+        <h6>INFO INVOICE</h6>
         <table>
-          <tr><td>Phone</td><td>:</td><td><%= company.contact_phone || company.contact_whatsapp || '-' %></td></tr>
-          <tr><td>Email</td><td>:</td><td><%= company.contact_email || '-' %></td></tr>
-          <tr><td>Alamat</td><td>:</td><td><%= company.company_address || '-' %></td></tr>
+          <tr><td>No</td><td>:</td><td><%= inv ? (inv.invoice_number || ('#' + inv.id)) : '-' %></td></tr>
+          <tr><td>Periode</td><td>:</td><td><%= periodText %></td></tr>
+          <tr><td>Tanggal</td><td>:</td><td><%= inv ? fmtLong(inv.created_at) : '-' %></td></tr>
         </table>
       </div>
     </div>
     <div class="km-bbs-kop__right">
       <h1 class="km-bbs-title">Branch Billing<br>Statement</h1>
       <table class="km-bbs-meta">
-        <tr><td>No</td><td><%= inv ? (inv.invoice_number || ('#' + inv.id)) : '-' %></td></tr>
         <tr><td>Kepada</td><td><%= toName %><% if (toOwner) { %><span><%= toOwner %></span><% } %></td></tr>
-        <tr><td>Periode</td><td><%= periodText %></td></tr>
-        <tr><td>Tanggal</td><td class="is-normal"><%= inv ? fmtLong(inv.created_at) : '-' %></td></tr>
       </table>
+      <div class="km-bbs-contact km-bbs-contact--tenant">
+        <h6>RINCIAN KONTAK</h6>
+        <table>
+          <tr><td>Phone</td><td>:</td><td><%= toPhone || '-' %></td></tr>
+          <tr><td>Email</td><td>:</td><td><%= toEmail || '-' %></td></tr>
+          <tr><td>Owner</td><td>:</td><td><%= toOwner || '-' %></td></tr>
+          <% if (toHost) { %><tr><td>Host</td><td>:</td><td><%= toHost %></td></tr><% } %>
+        </table>
+      </div>
     </div>
   </header>
 

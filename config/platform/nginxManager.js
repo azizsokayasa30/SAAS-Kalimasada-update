@@ -247,6 +247,31 @@ function buildAcmeChallengeBlock() {
     }`;
 }
 
+/** APK OTA: serve langsung via nginx sendfile (hindari proxy Node yang lambat untuk file besar). */
+const MOBILE_APP_STATIC_ROOT = '/var/www/kalimasada-mobile-app';
+
+function buildMobileAppStaticBlock() {
+    return `    location ^~ /mobile-app/ {
+        alias ${MOBILE_APP_STATIC_ROOT}/;
+        sendfile on;
+        sendfile_max_chunk 1m;
+        tcp_nopush on;
+        tcp_nodelay on;
+        gzip off;
+        open_file_cache max=32 inactive=60s;
+        open_file_cache_valid 30s;
+        open_file_cache_min_uses 1;
+        output_buffers 4 512k;
+        send_timeout 600s;
+        types {
+            application/vnd.android.package-archive apk;
+            application/json json;
+        }
+        default_type application/octet-stream;
+        add_header Cache-Control "public, max-age=604800" always;
+    }`;
+}
+
 function buildApexCompanyLocations(upstreamName) {
     const upstream = upstreamName || 'kalimasada_app';
     return [
@@ -336,6 +361,8 @@ function buildLanIpServerBlock(cfg, upstreamName) {
     lines.push(`    server_name ${lanIp} _;`);
     lines.push('');
     lines.push(buildAcmeChallengeBlock());
+    lines.push('');
+    lines.push(buildMobileAppStaticBlock());
     lines.push('');
     lines.push('    location / {');
     lines.push(buildProxyBlock(upstreamName));
@@ -494,6 +521,8 @@ function generateNginxConfig(cfg, tenantSubdomains) {
         lines.push('');
         lines.push(buildAcmeChallengeBlock());
         lines.push('');
+        lines.push(buildMobileAppStaticBlock());
+        lines.push('');
         lines.push('    location / {');
         lines.push(buildProxyBlock(upstreamName));
         lines.push('    }');
@@ -517,6 +546,8 @@ function generateNginxConfig(cfg, tenantSubdomains) {
         lines.push(`    server_name ${serverNames.join(' ')};`);
         lines.push('');
         lines.push(buildAcmeChallengeBlock());
+        lines.push('');
+        lines.push(buildMobileAppStaticBlock());
         lines.push('');
         lines.push('    location / {');
         lines.push(buildProxyBlock(upstreamName));

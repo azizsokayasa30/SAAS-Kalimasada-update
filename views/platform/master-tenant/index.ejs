@@ -88,7 +88,7 @@ const num = function (n) { return (Number(n) || 0).toLocaleString('id-ID'); };
         <div>
           <div class="km-set-stat__label">Pelanggan</div>
           <div class="km-set-stat__value"><%= num(sumCust.total) %></div>
-          <div class="km-set-stat__sub"><%= num(sumCust.active) %> aktif · <%= num(sumCust.new) %> baru</div>
+          <div class="km-set-stat__sub"><%= num(sumCust.active) %> aktif · <%= num(sumCust.isolir) %> isolir · <%= num(sumCust.new) %> baru</div>
         </div>
       </div>
     </div>
@@ -96,9 +96,19 @@ const num = function (n) { return (Number(n) || 0).toLocaleString('id-ID'); };
       <div class="km-card km-set-stat h-100">
         <span class="km-set-stat__icon km-tone-purple"><i class="bi bi-receipt"></i></span>
         <div>
-          <div class="km-set-stat__label">Tagihan</div>
+          <div class="km-set-stat__label">Total Tagihan</div>
           <div class="km-set-stat__value"><%= formatRupiah(sumInv.total) %></div>
-          <div class="km-set-stat__sub"><%= paidPct %>% lunas · <%= formatRupiah(sumInv.paid) %></div>
+          <div class="km-set-stat__sub"><%= paidPct %>% sudah lunas</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-green"><i class="bi bi-check2-circle"></i></span>
+        <div>
+          <div class="km-set-stat__label">Lunas</div>
+          <div class="km-set-stat__value"><%= formatRupiah(sumInv.paid) %></div>
+          <div class="km-set-stat__sub">Sudah dibayar</div>
         </div>
       </div>
     </div>
@@ -108,7 +118,17 @@ const num = function (n) { return (Number(n) || 0).toLocaleString('id-ID'); };
         <div>
           <div class="km-set-stat__label">Belum Lunas</div>
           <div class="km-set-stat__value"><%= formatRupiah(sumInv.unpaid) %></div>
-          <div class="km-set-stat__sub">Isolir <%= formatRupiah(sumInv.isolir) %></div>
+          <div class="km-set-stat__sub">Tagihan outstanding</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-red"><i class="bi bi-shield-slash"></i></span>
+        <div>
+          <div class="km-set-stat__label">Isolir</div>
+          <div class="km-set-stat__value"><%= formatRupiah(sumInv.isolir) %></div>
+          <div class="km-set-stat__sub">Belum lunas + pelanggan isolir</div>
         </div>
       </div>
     </div>
@@ -148,26 +168,28 @@ const num = function (n) { return (Number(n) || 0).toLocaleString('id-ID'); };
       <% if (periodLabel) { %><span class="km-tl-period-chip"><i class="bi bi-calendar3"></i> <%= periodLabel %></span><% } %>
     </div>
     <div class="table-responsive">
-      <table class="table table-hover align-middle mb-0 km-tl-table">
+      <table class="table table-hover align-middle mb-0 km-tl-table km-tenant-table km-recap-table">
         <thead>
           <tr>
-            <th>Tenant Child</th>
-            <th class="d-none d-xl-table-cell">Owner</th>
-            <th>Pelanggan</th>
-            <th>Tagihan</th>
-            <th class="text-end">Aksi</th>
+            <th class="km-tl-col-tenant">Tenant Child</th>
+            <th class="km-tl-col-pelanggan">Pelanggan</th>
+            <th class="text-end km-col-rail-start">Total Tagihan</th>
+            <th class="text-end">Belum Lunas</th>
+            <th class="text-end">Lunas</th>
+            <th class="text-end">Isolir</th>
+            <th class="text-end km-tenant-table__actions-col km-tenant-table__actions-col--pick"><span class="visually-hidden">Aksi</span></th>
           </tr>
         </thead>
         <tbody>
           <% if (!children.length) { %>
-            <tr><td colspan="5">
+            <tr><td colspan="7">
               <div class="km-tl-empty">
                 <span class="km-tl-empty__icon"><i class="bi bi-diagram-3"></i></span>
                 <div class="km-tl-empty__title">Belum ada tenant child</div>
               </div>
             </td></tr>
           <% } %>
-          <tr id="childSearchEmptyRow" class="d-none"><td colspan="5">
+          <tr id="childSearchEmptyRow" class="d-none"><td colspan="7">
             <div class="km-tl-empty">
               <span class="km-tl-empty__icon"><i class="bi bi-search"></i></span>
               <div class="km-tl-empty__title">Tidak ada tenant child yang cocok</div>
@@ -176,50 +198,54 @@ const num = function (n) { return (Number(n) || 0).toLocaleString('id-ID'); };
           <% children.forEach(function(t) {
             const c = t.usage.customers || {};
             const inv = t.usage.invoices || {};
-            const invTotal = Number(inv.total) || 0;
-            const rowPaidPct = invTotal > 0 ? Math.min(100, Math.round(((Number(inv.paid) || 0) / invTotal) * 100)) : 0;
             const searchBlob = [t.id, t.name, t.subdomain, t.owner_name, t.owner_email].filter(Boolean).join(' ').toLowerCase();
             const pickUrl = '/management/master-tenant/children/' + t.id + '?month=' + selectedMonth + '&year=' + selectedYear;
           %>
             <tr class="child-data-row" data-search="<%= searchBlob.replace(/"/g, '&quot;') %>">
-              <td>
-                <div class="km-set-user">
-                  <span class="km-set-avatar"><%= String(t.name || '?').trim().charAt(0).toUpperCase() %></span>
-                  <div class="lh-sm" style="min-width:0">
-                    <a href="<%= pickUrl %>" class="km-tl-name"><%= t.name %></a>
-                    <div class="km-tl-sub"><code><%= t.subdomain %></code> <span class="text-muted">#<%= t.id %></span></div>
-                    <div class="km-tl-sub d-xl-none text-muted"><%= t.owner_email %></div>
+              <td class="km-tl-col-tenant">
+                <div class="km-tl-tenant">
+                  <span class="km-tl-tenant__avatar"><%= String(t.name || '?').trim().charAt(0).toUpperCase() %></span>
+                  <div class="km-tl-tenant__meta">
+                    <a href="<%= pickUrl %>" class="km-tl-tenant__name"><%= t.name %></a>
+                    <div class="km-tl-tenant__sub">#<%= t.id %><% if (t.owner_name || t.owner_email) { %> · <%= t.owner_name || t.owner_email %><% } %></div>
                   </div>
                 </div>
               </td>
-              <td class="d-none d-xl-table-cell">
-                <div class="fw-semibold small"><%= t.owner_name %></div>
-                <small class="text-muted"><%= t.owner_email %></small>
-              </td>
-              <td>
-                <div class="km-tl-metric"><%= num(c.total) %></div>
-                <div class="km-tl-dots">
-                  <span title="Aktif"><i class="km-dot km-dot--green"></i><%= c.active || 0 %></span>
-                  <span title="Nonaktif"><i class="km-dot km-dot--gray"></i><%= c.inactive || 0 %></span>
-                  <span title="Baru"><i class="km-dot km-dot--blue"></i><%= c.new || 0 %></span>
+              <td class="km-tl-col-pelanggan">
+                <div class="km-tl-cust">
+                  <div class="km-tl-cust__total"><%= num(c.total) %> <span>pelanggan</span></div>
+                  <div class="km-tl-cust__grid">
+                    <span class="km-tl-cust__item km-tl-cust__item--aktif"><i class="km-dot km-dot--green"></i><b><%= c.active || 0 %></b> aktif</span>
+                    <span class="km-tl-cust__item km-tl-cust__item--nonaktif"><i class="km-dot km-dot--gray"></i><b><%= c.inactive || 0 %></b> nonaktif</span>
+                    <span class="km-tl-cust__item km-tl-cust__item--baru"><i class="km-dot km-dot--blue"></i><b><%= c.new || 0 %></b> baru</span>
+                    <span class="km-tl-cust__item km-tl-cust__item--isolir"><i class="km-dot km-dot--red"></i><b><%= c.isolir || 0 %></b> isolir</span>
+                  </div>
                 </div>
               </td>
-              <td>
-                <div class="km-tl-metric"><%= formatRupiah(inv.total) %></div>
-                <div class="km-tl-progress" title="<%= rowPaidPct %>% lunas"><span style="width: <%= rowPaidPct %>%"></span></div>
-                <div class="km-tl-dots">
-                  <span title="Belum lunas"><i class="km-dot km-dot--orange"></i><%= formatRupiah(inv.unpaid) %></span>
-                  <% if (Number(inv.isolir) > 0) { %><span title="Isolir"><i class="km-dot km-dot--red"></i><%= formatRupiah(inv.isolir) %></span><% } %>
-                </div>
-              </td>
-              <td class="text-end text-nowrap">
-                <a href="<%= pickUrl %>" class="btn btn-sm btn-km-primary km-mt-pick" title="Pilih pelanggan untuk disalin ke master">
-                  <i class="bi bi-person-check"></i><span> Pilih Pelanggan</span>
+              <td class="km-metric-cell km-metric-cell--money km-col-rail-start"><%= formatRupiah(inv.total) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning"><%= formatRupiah(inv.unpaid) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--success"><%= formatRupiah(inv.paid) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--danger" title="Tagihan belum lunas milik pelanggan isolir"><%= formatRupiah(inv.isolir) %></td>
+              <td class="text-end text-nowrap km-tenant-table__actions-cell">
+                <a href="<%= pickUrl %>" class="km-tl-action-btn" title="Pilih pelanggan" aria-label="Pilih pelanggan <%= t.name %>">
+                  <i class="bi bi-person-check"></i>
                 </a>
               </td>
             </tr>
           <% }); %>
         </tbody>
+        <% if (children.length) { %>
+          <tfoot>
+            <tr class="km-recap-table__summary">
+              <td colspan="2">Summary</td>
+              <td class="km-metric-cell km-metric-cell--money km-col-rail-start"><%= formatRupiah(sumInv.total) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--warning"><%= formatRupiah(sumInv.unpaid) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--success"><%= formatRupiah(sumInv.paid) %></td>
+              <td class="km-metric-cell km-metric-cell--money km-metric-cell--danger"><%= formatRupiah(sumInv.isolir) %></td>
+              <td class="km-tenant-table__actions-cell"></td>
+            </tr>
+          </tfoot>
+        <% } %>
       </table>
     </div>
   </div>

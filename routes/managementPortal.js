@@ -737,14 +737,15 @@ router.post('/tenants/:id/delete', async (req, res) => {
             action: 'tenant_deleted',
             ip: req.ip,
         });
-        try {
-            await nginxManager.syncTenantsAndApply();
-        } catch (e) {
-            console.warn('[platform] nginx sync after delete:', e.message);
-        }
+        // Jangan tunggu reload Nginx (~detik) — sync di background agar UI langsung kembali.
+        tenantStore.scheduleNginxTenantSync('tenant-delete');
         res.redirect('/management/tenants?success=deleted');
     } catch (err) {
-        res.redirect(tenantActionRedirect(req, req.params.id, `error=${encodeURIComponent(err.message)}`));
+        const raw = String(err.message || 'Gagal menghapus tenant');
+        const friendly = /FOREIGN KEY constraint failed/i.test(raw)
+            ? 'Gagal menghapus tenant karena masih ada data terkait. Coba lagi atau hubungi admin teknis.'
+            : raw;
+        res.redirect(tenantActionRedirect(req, req.params.id, `error=${encodeURIComponent(friendly)}`));
     }
 });
 

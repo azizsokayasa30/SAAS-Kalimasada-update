@@ -19,9 +19,10 @@ const gateways = [
 const gwState = function (gw) {
   const cfg = (payment && payment[gw.key]) || {};
   const complete = gw.required.every(function (f) { return String(cfg[f] || '').trim(); });
-  return { enabled: !!cfg.enabled, production: !!cfg.production, complete: complete };
+  return { enabled: !!cfg.enabled, production: !!cfg.production, complete: complete, ready: !!cfg.enabled && complete };
 };
-const readyCount = gateways.filter(function (g) { const s = gwState(g); return s.enabled && s.complete; }).length;
+const readyCount = gateways.filter(function (g) { return gwState(g).ready; }).length;
+const titlesJson = JSON.stringify(gateways.reduce(function (acc, g) { acc[g.key] = g.title; return acc; }, {}));
 %>
 <%- include('../partials/head', { title }) %>
 <%- include('../partials/sidebar', { active, adminName }) %>
@@ -33,7 +34,7 @@ const readyCount = gateways.filter(function (g) { const s = gwState(g); return s
         <div>
           <div class="km-sx-hero__eyebrow">Pengaturan</div>
           <h2 class="km-sx-hero__title">Payment Manager</h2>
-          <p class="km-sx-hero__desc">Atur gateway pembayaran untuk tagihan tenant. Pilih satu gateway utama, lalu isi kredensial dari dashboard penyedia.</p>
+          <p class="km-sx-hero__desc">Pilih gateway utama yang dipakai untuk link pembayaran, lalu isi kredensial dari dashboard penyedia.</p>
         </div>
       </div>
       <div class="km-sx-hero__actions">
@@ -42,6 +43,7 @@ const readyCount = gateways.filter(function (g) { const s = gwState(g); return s
     </div>
 
     <% if (flash && flash.success === 'saved') { %><div class="alert alert-success alert-dismissible fade show km-sx-alert"><i class="bi bi-check-circle-fill"></i>Pengaturan payment gateway berhasil disimpan.<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
+    <% if (flash && flash.info) { %><div class="alert alert-info alert-dismissible fade show km-sx-alert"><i class="bi bi-info-circle-fill"></i><%= flash.info %><button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
     <% if (flash && flash.error) { %><div class="alert alert-danger alert-dismissible fade show km-sx-alert"><i class="bi bi-exclamation-triangle-fill"></i><%= flash.error %><button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Tutup"></button></div><% } %>
 
     <section class="km-card km-sx-section mb-4">
@@ -49,26 +51,47 @@ const readyCount = gateways.filter(function (g) { const s = gwState(g); return s
         <span class="km-sx-section__icon km-tone-green"><i class="bi bi-star"></i></span>
         <div>
           <h3 class="km-sx-section__title">Gateway Utama</h3>
-          <p class="km-sx-section__sub">Dipakai untuk membuat link pembayaran tagihan.</p>
+          <p class="km-sx-section__sub">Pilih manual lewat dropdown atau klik salah satu kartu di bawah.</p>
         </div>
       </header>
       <div class="km-sx-section__body">
-        <div class="km-pay-pick">
+        <div class="km-pay-select-row">
+          <label class="form-label mb-1" for="activeGatewaySelect">Pilih gateway utama</label>
+          <div class="km-pay-select-wrap">
+            <select id="activeGatewaySelect" class="form-select form-select-lg km-pay-select" aria-label="Pilih gateway utama">
+              <% gateways.forEach(function (gw) { const s = gwState(gw); %>
+                <option value="<%= gw.key %>" <%= payment.active === gw.key ? 'selected' : '' %>>
+                  <%= gw.title %><%= s.ready ? ' — Siap dipakai' : (s.enabled ? ' — Kredensial belum lengkap' : ' — Nonaktif') %>
+                </option>
+              <% }); %>
+            </select>
+            <span class="km-pay-select-hint" id="paySelectHint"></span>
+          </div>
+        </div>
+
+        <div class="km-pay-pick mt-3" role="radiogroup" aria-label="Pilih gateway utama">
           <% gateways.forEach(function (gw) { const s = gwState(gw); %>
-            <label class="km-pay-opt" style="--gw: <%= gw.color %>" data-gw="<%= gw.key %>">
-              <input type="radio" name="active" value="<%= gw.key %>" <%= payment.active === gw.key ? 'checked' : '' %>>
+            <button type="button" class="km-pay-opt<%= s.ready ? ' is-ready' : '' %><%= payment.active === gw.key ? ' is-selected' : '' %>" style="--gw: <%= gw.color %>" data-gw="<%= gw.key %>" data-pick-gw="<%= gw.key %>" aria-pressed="<%= payment.active === gw.key ? 'true' : 'false' %>">
+              <input type="radio" name="active" value="<%= gw.key %>" <%= payment.active === gw.key ? 'checked' : '' %> tabindex="-1" aria-hidden="true">
               <span class="km-pay-logo"><%= gw.initial %></span>
               <span class="km-pay-opt__text">
                 <span class="km-pay-opt__name"><%= gw.title %></span>
                 <span class="km-pay-state" data-state-for="<%= gw.key %>"></span>
+                <span class="km-pay-opt__action" data-action-for="<%= gw.key %>"><%= payment.active === gw.key ? 'Sedang dipilih' : 'Klik untuk pilih' %></span>
               </span>
-              <i class="bi bi-check-circle-fill km-pay-opt__check"></i>
-            </label>
+              <span class="km-pay-opt__pill" data-pill-for="<%= gw.key %>"></span>
+              <i class="bi bi-check-circle-fill km-pay-opt__check" aria-hidden="true"></i>
+            </button>
           <% }); %>
         </div>
         <div class="km-sx-callout km-sx-callout--warn mt-3 d-none" id="payActiveWarn">
           <i class="bi bi-exclamation-triangle"></i>
-          <span>Gateway utama <strong id="payActiveName"></strong> belum aktif atau kredensialnya belum lengkap. Pembayaran online tidak akan berjalan sampai gateway ini siap.</span>
+          <div class="km-pay-warn__body">
+            <span>Gateway utama <strong id="payActiveName"></strong> belum aktif atau kredensialnya belum lengkap. Pembayaran online tidak akan berjalan sampai gateway ini siap.</span>
+            <button type="button" class="btn btn-sm btn-warning d-none" id="paySwitchReady">
+              <i class="bi bi-star-fill me-1"></i>Ganti ke <strong id="paySwitchReadyName"></strong>
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -76,7 +99,7 @@ const readyCount = gateways.filter(function (g) { const s = gwState(g); return s
     <div class="row g-4">
       <% gateways.forEach(function(gw) { const s = gwState(gw); %>
       <div class="col-xl-6">
-        <section class="km-card km-sx-section km-pay-card2 h-100" style="--gw: <%= gw.color %>" data-gw-card="<%= gw.key %>" data-required="<%= gw.required.join(',') %>">
+        <section class="km-card km-sx-section km-pay-card2 h-100" style="--gw: <%= gw.color %>" data-gw-card="<%= gw.key %>" data-required="<%= gw.required.join(',') %>" data-title="<%= gw.title %>">
           <header class="km-sx-section__head">
             <span class="km-pay-logo km-pay-logo--sm"><%= gw.initial %></span>
             <div>
@@ -87,6 +110,9 @@ const readyCount = gateways.filter(function (g) { const s = gwState(g); return s
               <p class="km-sx-section__sub"><span class="km-pay-state" data-state-for="<%= gw.key %>"></span></p>
             </div>
             <div class="km-sx-section__aside">
+              <button type="button" class="btn btn-sm km-pay-set-main" data-set-main="<%= gw.key %>">
+                <i class="bi bi-star"></i><span>Jadikan utama</span>
+              </button>
               <div class="form-check form-switch km-sx-toggle">
                 <input class="form-check-input" type="checkbox" role="switch" name="<%= gw.key %>[enabled]" value="1" id="<%= gw.key %>Enabled" <%= s.enabled ? 'checked' : '' %>>
                 <label class="form-check-label" for="<%= gw.key %>Enabled">Aktif</label>
@@ -145,11 +171,19 @@ const readyCount = gateways.filter(function (g) { const s = gwState(g); return s
   var form = document.getElementById('paymentForm');
   var warn = document.getElementById('payActiveWarn');
   var warnName = document.getElementById('payActiveName');
+  var switchBtn = document.getElementById('paySwitchReady');
+  var switchName = document.getElementById('paySwitchReadyName');
+  var selectEl = document.getElementById('activeGatewaySelect');
+  var selectHint = document.getElementById('paySelectHint');
+  var titles = <%- titlesJson %>;
 
   function stateOf(key) {
     var card = form.querySelector('[data-gw-card="' + key + '"]');
-    var enabled = form.querySelector('#' + key + 'Enabled').checked;
-    var prod = form.querySelector('#' + key + 'Prod').checked;
+    var enabledEl = form.querySelector('#' + key + 'Enabled');
+    var prodEl = form.querySelector('#' + key + 'Prod');
+    if (!card || !enabledEl || !prodEl) return { enabled: false, prod: false, complete: false, ready: false };
+    var enabled = enabledEl.checked;
+    var prod = prodEl.checked;
     var req = (card.getAttribute('data-required') || '').split(',').filter(Boolean);
     var complete = req.every(function (f) {
       var el = form.querySelector('[name="' + key + '[' + f + ']"]');
@@ -158,13 +192,66 @@ const readyCount = gateways.filter(function (g) { const s = gwState(g); return s
     return { enabled: enabled, prod: prod, complete: complete, ready: enabled && complete };
   }
 
+  function getActive() {
+    return (form.querySelector('input[name="active"]:checked') || {}).value || '';
+  }
+
+  function setActive(key, markDirty) {
+    if (!key) return;
+    var radio = form.querySelector('input[name="active"][value="' + key + '"]');
+    if (!radio) return;
+    radio.checked = true;
+    if (selectEl && selectEl.value !== key) selectEl.value = key;
+    if (markDirty !== false) {
+      try { radio.dispatchEvent(new Event('change', { bubbles: true })); } catch (_) {}
+      form.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    render();
+  }
+
+  function firstReady(exclude) {
+    var found = '';
+    form.querySelectorAll('[data-gw-card]').forEach(function (card) {
+      if (found) return;
+      var key = card.getAttribute('data-gw-card');
+      if (exclude && key === exclude) return;
+      if (stateOf(key).ready) found = key;
+    });
+    return found;
+  }
+
+  function optionLabel(key) {
+    var s = stateOf(key);
+    var title = titles[key] || key;
+    if (s.ready) return title + ' — Siap dipakai';
+    if (s.enabled) return title + ' — Kredensial belum lengkap';
+    return title + ' — Nonaktif';
+  }
+
   function render() {
-    var active = (form.querySelector('input[name="active"]:checked') || {}).value;
+    var active = getActive();
     var ready = 0;
+    var recommended = '';
+
+    if (selectEl) {
+      Array.prototype.forEach.call(selectEl.options, function (opt) {
+        opt.textContent = optionLabel(opt.value);
+      });
+      if (active) selectEl.value = active;
+    }
+
     form.querySelectorAll('[data-gw-card]').forEach(function (card) {
       var key = card.getAttribute('data-gw-card');
       var s = stateOf(key);
-      if (s.ready) ready++;
+      var opt = form.querySelector('[data-pick-gw="' + key + '"]');
+      var setBtn = form.querySelector('[data-set-main="' + key + '"]');
+      var pill = form.querySelector('[data-pill-for="' + key + '"]');
+      var action = form.querySelector('[data-action-for="' + key + '"]');
+      if (s.ready) {
+        ready++;
+        if (!recommended) recommended = key;
+      }
+
       var html, cls;
       if (!s.enabled) { cls = 'off'; html = '<i class="bi bi-pause-circle"></i>Nonaktif'; }
       else if (!s.complete) { cls = 'warn'; html = '<i class="bi bi-exclamation-circle"></i>Kredensial belum lengkap'; }
@@ -174,15 +261,106 @@ const readyCount = gateways.filter(function (g) { const s = gwState(g); return s
         el.className = 'km-pay-state km-pay-state--' + cls;
         el.innerHTML = html;
       });
+
       card.classList.toggle('is-main', key === active);
+      if (opt) {
+        opt.classList.toggle('is-ready', s.ready);
+        opt.classList.toggle('is-selected', key === active);
+        opt.setAttribute('aria-pressed', key === active ? 'true' : 'false');
+      }
+      if (setBtn) setBtn.classList.toggle('d-none', key === active);
+      if (action) action.textContent = key === active ? 'Sedang dipilih' : 'Klik untuk pilih';
+      if (pill) {
+        if (key === active) {
+          pill.textContent = 'Utama';
+          pill.className = 'km-pay-opt__pill km-pay-opt__pill--main';
+        } else if (s.ready) {
+          pill.textContent = 'Siap';
+          pill.className = 'km-pay-opt__pill km-pay-opt__pill--ready';
+        } else {
+          pill.textContent = '';
+          pill.className = 'km-pay-opt__pill';
+        }
+      }
+
       if (key === active) {
         warn.classList.toggle('d-none', s.ready);
-        warnName.textContent = card.querySelector('.km-sx-section__title').firstChild.textContent.trim();
+        warnName.textContent = titles[key] || key;
       }
     });
+
     var readyEl = document.getElementById('payReadyCount');
     if (readyEl) readyEl.textContent = ready;
+
+    if (selectHint) {
+      var activeState = active ? stateOf(active) : { ready: false };
+      if (active && activeState.ready) {
+        selectHint.textContent = titles[active] + ' siap dipakai sebagai gateway utama.';
+        selectHint.className = 'km-pay-select-hint is-ok';
+      } else if (active) {
+        selectHint.textContent = titles[active] + ' belum siap. Pilih gateway lain yang sudah siap, atau lengkapi kredensialnya.';
+        selectHint.className = 'km-pay-select-hint is-warn';
+      } else {
+        selectHint.textContent = '';
+        selectHint.className = 'km-pay-select-hint';
+      }
+    }
+
+    var activeReady = active && stateOf(active).ready;
+    var suggest = (!activeReady && recommended && recommended !== active) ? recommended : '';
+    if (switchBtn) {
+      switchBtn.classList.toggle('d-none', !suggest);
+      switchBtn.dataset.target = suggest || '';
+      if (switchName) switchName.textContent = suggest ? (titles[suggest] || suggest) : '';
+    }
   }
+
+  form.querySelectorAll('[data-pick-gw]').forEach(function (btn) {
+    btn.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      setActive(btn.getAttribute('data-pick-gw'));
+    });
+  });
+
+  form.querySelectorAll('[data-set-main]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      setActive(btn.getAttribute('data-set-main'));
+      var card = form.querySelector('[data-gw-card="' + btn.getAttribute('data-set-main') + '"]');
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+  });
+
+  if (selectEl) {
+    selectEl.addEventListener('change', function () {
+      setActive(selectEl.value);
+    });
+  }
+
+  if (switchBtn) {
+    switchBtn.addEventListener('click', function () {
+      var target = switchBtn.dataset.target;
+      if (target) setActive(target);
+    });
+  }
+
+  form.querySelectorAll('[id$="Enabled"]').forEach(function (toggle) {
+    toggle.addEventListener('change', function () {
+      var key = toggle.id.replace(/Enabled$/, '');
+      if (!toggle.checked) return;
+      var active = getActive();
+      var activeState = active ? stateOf(active) : { ready: false };
+      if (stateOf(key).ready && (!active || !activeState.ready)) {
+        setActive(key, false);
+      }
+    });
+  });
+
+  form.addEventListener('submit', function () {
+    var active = getActive();
+    if (active && stateOf(active).ready) return;
+    var ready = firstReady();
+    if (ready) setActive(ready, false);
+  });
 
   form.addEventListener('input', render);
   form.addEventListener('change', render);

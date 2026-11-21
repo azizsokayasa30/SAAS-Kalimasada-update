@@ -715,13 +715,13 @@
                     const summaryYear = typeof selectedYear !== 'undefined' ? selectedYear : '';
                     const summaryCards = [
                         { title: 'Total Pelanggan', value: stat.total || 0, nominal: stat.total_nominal || 0, hint: (typeof isAreaManager !== 'undefined' && isAreaManager) ? 'pelanggan wilayah Anda' : 'semua pelanggan', icon: 'bi-people-fill', href: `/admin/billing/customers?month=${summaryMonth}&year=${summaryYear}` },
-                        { title: 'Pelanggan Aktif', value: stat.aktif || 0, nominal: stat.aktif_nominal || 0, hint: 'termasuk pelanggan isolir', icon: 'bi-person-check-fill', href: `/admin/billing/customers?customer_type=aktif&month=${summaryMonth}&year=${summaryYear}` },
+                        { title: 'Pelanggan Aktif', value: stat.aktif || 0, nominal: stat.aktif_nominal || 0, hint: 'status aktif saja', icon: 'bi-person-check-fill', href: `/admin/billing/customers?customer_type=aktif&month=${summaryMonth}&year=${summaryYear}` },
                         { title: 'Pelanggan Nonaktif', value: stat.nonaktif || 0, nominal: stat.nonaktif_nominal || 0, hint: 'berhenti langganan', icon: 'bi-person-x-fill', href: `/admin/billing/customers?customer_type=nonaktif&month=${summaryMonth}&year=${summaryYear}` },
                         { title: 'Pelanggan Baru', value: stat.baru || 0, nominal: stat.baru_nominal || 0, hint: 'join bulan ini', icon: 'bi-person-plus-fill', href: `/admin/billing/customers?customer_type=baru&month=${summaryMonth}&year=${summaryYear}` },
                         { title: 'Total Tagihan', value: stat.total_tagihan || 0, nominal: stat.total_tagihan_nominal || 0, hint: 'invoice bulan ini', icon: 'bi-receipt-cutoff', href: `/admin/billing/customers?payment_status=has_invoice&month=${summaryMonth}&year=${summaryYear}` },
                         { title: 'Lunas', value: stat.lunas || 0, nominal: stat.lunas_nominal || 0, hint: 'terbayar bulan ini', icon: 'bi-check-circle-fill', href: `/admin/billing/customers?payment_status=paid&month=${summaryMonth}&year=${summaryYear}` },
                         { title: 'Belum Lunas', value: stat.belum_lunas || 0, nominal: stat.belum_lunas_nominal || 0, hint: 'invoice belum bayar', icon: 'bi-clock-history', href: `/admin/billing/customers?payment_status=unpaid&month=${summaryMonth}&year=${summaryYear}` },
-                        { title: 'Isolir', value: stat.isolir || 0, nominal: stat.isolir_nominal || 0, hint: 'layanan dibatasi', icon: 'bi-shield-slash-fill', href: `/admin/billing/customers?status=isolir&month=${summaryMonth}&year=${summaryYear}` }
+                        { title: 'Isolir', value: stat.isolir || 0, nominal: stat.isolir_nominal || 0, hint: 'layanan dibatasi', icon: 'bi-shield-slash-fill', href: `/admin/billing/customers?customer_type=isolir&month=${summaryMonth}&year=${summaryYear}` }
                     ];
                 %>
                 <div class="row mb-4 g-3 summary-cards-solid">

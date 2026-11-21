@@ -96,7 +96,7 @@
         <div>
           <div class="km-set-stat__label">Pelanggan</div>
           <div class="km-set-stat__value"><%= num(usage.customers.total) %></div>
-          <div class="km-set-stat__sub"><%= num(usage.customers.active) %> aktif · <%= num(usage.customers.inactive) %> nonaktif · <%= num(usage.customers.new) %> baru</div>
+          <div class="km-set-stat__sub"><%= num(usage.customers.active) %> aktif · <%= num(usage.customers.isolir) %> isolir · <%= num(usage.customers.inactive) %> nonaktif · <%= num(usage.customers.new) %> baru</div>
         </div>
       </div>
     </div>
@@ -104,9 +104,9 @@
       <div class="km-card km-set-stat h-100">
         <span class="km-set-stat__icon km-tone-purple"><i class="bi bi-receipt"></i></span>
         <div>
-          <div class="km-set-stat__label">Tagihan <%= invPeriodLabel %></div>
+          <div class="km-set-stat__label">Total Tagihan <%= invPeriodLabel %></div>
           <div class="km-set-stat__value"><%= formatRupiah(usage.invoices.total) %></div>
-          <div class="km-set-stat__sub"><%= invPaidPct %>% lunas</div>
+          <div class="km-set-stat__sub"><%= invPaidPct %>% sudah lunas</div>
         </div>
       </div>
     </div>
@@ -126,7 +126,17 @@
         <div>
           <div class="km-set-stat__label">Belum Lunas</div>
           <div class="km-set-stat__value"><%= formatRupiah(usage.invoices.unpaid) %></div>
-          <div class="km-set-stat__sub">Isolir <%= formatRupiah(usage.invoices.isolir) %></div>
+          <div class="km-set-stat__sub">Tagihan outstanding</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+      <div class="km-card km-set-stat h-100">
+        <span class="km-set-stat__icon km-tone-red"><i class="bi bi-shield-slash"></i></span>
+        <div>
+          <div class="km-set-stat__label">Isolir</div>
+          <div class="km-set-stat__value"><%= formatRupiah(usage.invoices.isolir) %></div>
+          <div class="km-set-stat__sub">Belum lunas + pelanggan isolir</div>
         </div>
       </div>
     </div>

@@ -287,6 +287,16 @@ async function listOperationalTenants() {
     return listTenants({ operationalOnly: true });
 }
 
+/** id + name only — for filter dropdowns (avoids parsing full settings JSON). */
+async function listOperationalTenantsLite() {
+    return dbAll(
+        `SELECT t.id, t.name
+         FROM tenants t
+         WHERE t.deleted_at IS NULL AND COALESCE(t.is_master, 0) = 0
+         ORDER BY t.name COLLATE NOCASE`
+    );
+}
+
 async function getMasterTenant() {
     const row = await dbGet(
         `SELECT t.*, sp.name as plan_name, sp.code as plan_code,
@@ -485,7 +495,7 @@ async function getTenantStats(tenantId, options = {}) {
     const period = hasExplicitPeriod ? resolveStatsPeriod(options) : resolveStatsPeriod({});
     const filterInvoicesByPeriod = hasExplicitPeriod;
 
-    const customers = { total: 0, active: 0, inactive: 0, new: 0 };
+    const customers = { total: 0, active: 0, isolir: 0, inactive: 0, new: 0 };
     const invoices = { total: 0, paid: 0, unpaid: 0, isolir: 0 };
 
     if (await tableExists('customers') && (await tableHasColumn('customers', 'tenant_id'))) {
@@ -514,11 +524,17 @@ async function getTenantStats(tenantId, options = {}) {
         }
         customerParams.push(tenantId);
 
+        const {
+            sqlIsActive,
+            sqlIsIsolir,
+            sqlIsInactive
+        } = require('../customerStatus');
         const row = await dbGet(
             `SELECT
                 COUNT(*) AS total,
-                SUM(CASE WHEN status IN ('active', 'suspended', 'isolir') THEN 1 ELSE 0 END) AS active,
-                SUM(CASE WHEN status = 'inactive' THEN 1 ELSE 0 END) AS inactive,
+                SUM(CASE WHEN ${sqlIsActive('status')} THEN 1 ELSE 0 END) AS active,
+                SUM(CASE WHEN ${sqlIsIsolir('status')} THEN 1 ELSE 0 END) AS isolir,
+                SUM(CASE WHEN ${sqlIsInactive('status')} THEN 1 ELSE 0 END) AS inactive,
                 ${newExpr} AS new_count
              FROM customers
              WHERE tenant_id = ?`,
@@ -527,6 +543,7 @@ async function getTenantStats(tenantId, options = {}) {
 
         customers.total = row?.total || 0;
         customers.active = row?.active || 0;
+        customers.isolir = row?.isolir || 0;
         customers.inactive = row?.inactive || 0;
         customers.new = row?.new_count || 0;
     }
@@ -538,8 +555,9 @@ async function getTenantStats(tenantId, options = {}) {
             : '1=1';
         const hasCustomerId = await tableHasColumn('invoices', 'customer_id');
         const joinCustomers = hasCustomerId ? 'LEFT JOIN customers c ON c.id = i.customer_id' : '';
+        const { sqlIsIsolir } = require('../customerStatus');
         const isolirExpr = hasCustomerId
-            ? "SUM(CASE WHEN i.status = 'unpaid' AND c.status IN ('suspended', 'isolir') THEN i.amount ELSE 0 END)"
+            ? `SUM(CASE WHEN i.status = 'unpaid' AND ${sqlIsIsolir('c.status')} THEN i.amount ELSE 0 END)`
             : '0';
 
         const invoiceParams = [tenantId];
@@ -648,39 +666,243 @@ function releasedIdentifier(base, id) {
     return `${String(base).slice(0, maxBase)}${suffix}`;
 }
 
+async function loadSchemaCache(tableNames = []) {
+    const existing = new Set(
+        (await dbAll(`SELECT name FROM sqlite_master WHERE type = 'table'`)).map((r) => r.name)
+    );
+    const columns = new Map();
+    const unique = [...new Set(tableNames.filter((t) => existing.has(t)))];
+    await Promise.all(unique.map(async (table) => {
+        const cols = await dbAll(`PRAGMA table_info(${table})`);
+        columns.set(table, new Set(cols.map((c) => c.name)));
+    }));
+    return {
+        hasTable: (table) => existing.has(table),
+        hasColumn: (table, column) => columns.get(table)?.has(column) === true,
+    };
+}
+
+async function safePurgeRun(sql, params = [], schema = null) {
+    const table = String(sql).match(/\bFROM\s+(\w+)/i)?.[1]
+        || String(sql).match(/\bUPDATE\s+(\w+)/i)?.[1]
+        || String(sql).match(/\bINTO\s+(\w+)/i)?.[1]
+        || '';
+    if (table) {
+        const exists = schema ? schema.hasTable(table) : await tableExists(table);
+        if (!exists) return { changes: 0 };
+    }
+    try {
+        return await dbRun(sql, params);
+    } catch (err) {
+        console.warn('[tenantStore] purge warn:', table || sql.slice(0, 60), err.message);
+        return { changes: 0, error: err };
+    }
+}
+
+async function deleteTenantScopedRows(table, tenantId, schema = null) {
+    const exists = schema ? schema.hasTable(table) : await tableExists(table);
+    if (!exists) return;
+    const hasTenantId = schema
+        ? schema.hasColumn(table, 'tenant_id')
+        : await tableHasColumn(table, 'tenant_id');
+    if (!hasTenantId) return;
+    await dbRun(`DELETE FROM ${table} WHERE tenant_id = ?`, [tenantId]);
+}
+
+/**
+ * Lepas / pindahkan FK lintas-tenant yang menahan paket tenant yang akan dihapus.
+ * invoices.package_id NOT NULL → paket yang masih dipakai tenant lain di-reassign.
+ */
+async function releaseSharedPackageReferences(tenantId, schema = null) {
+    const has = async (table, column = null) => {
+        const exists = schema ? schema.hasTable(table) : await tableExists(table);
+        if (!exists) return false;
+        if (!column) return true;
+        return schema ? schema.hasColumn(table, column) : tableHasColumn(table, column);
+    };
+
+    if (!(await has('packages'))) return;
+
+    // FK opsional: null-kan referensi dari tenant lain.
+    if (await has('customers', 'package_id')) {
+        await safePurgeRun(
+            `UPDATE customers SET package_id = NULL
+             WHERE package_id IN (SELECT id FROM packages WHERE tenant_id = ?)
+               AND (tenant_id IS NULL OR tenant_id != ?)`,
+            [tenantId, tenantId],
+            schema
+        );
+    }
+    if (await has('installation_jobs', 'package_id')) {
+        await safePurgeRun(
+            `UPDATE installation_jobs SET package_id = NULL
+             WHERE package_id IN (SELECT id FROM packages WHERE tenant_id = ?)
+               AND (tenant_id IS NULL OR tenant_id != ?)`,
+            [tenantId, tenantId],
+            schema
+        );
+    }
+
+    if (!(await has('invoices', 'package_id'))) return;
+
+    // Satu query reassign — hindari UPDATE per-baris.
+    await dbRun(
+        `UPDATE packages
+         SET tenant_id = (
+           SELECT i.tenant_id
+           FROM invoices i
+           WHERE i.package_id = packages.id
+             AND i.tenant_id IS NOT NULL
+             AND i.tenant_id != ?
+           GROUP BY i.tenant_id
+           ORDER BY COUNT(*) DESC
+           LIMIT 1
+         )
+         WHERE tenant_id = ?
+           AND EXISTS (
+             SELECT 1 FROM invoices i
+             WHERE i.package_id = packages.id
+               AND i.tenant_id IS NOT NULL
+               AND i.tenant_id != ?
+           )`,
+        [tenantId, tenantId, tenantId]
+    );
+}
+
 async function purgeTenantBillingData(tenantId) {
     const tid = Number(tenantId);
     if (!Number.isFinite(tid) || tid <= 0) return;
 
-    // Tabel junction tanpa tenant_id — hapus lewat relasi pelanggan/kolektor tenant.
-    const junctionDeletes = [
-        `DELETE FROM customer_router_map WHERE customer_id IN (SELECT id FROM customers WHERE tenant_id = ?)`,
-        `DELETE FROM collector_assignments WHERE customer_id IN (SELECT id FROM customers WHERE tenant_id = ?)`,
-        `DELETE FROM collector_assignments WHERE collector_id IN (SELECT id FROM collectors WHERE tenant_id = ?)`,
-        `DELETE FROM collector_areas WHERE collector_id IN (SELECT id FROM collectors WHERE tenant_id = ?)`,
-        `DELETE FROM collector_payments WHERE collector_id IN (SELECT id FROM collectors WHERE tenant_id = ?)`,
-        `DELETE FROM collector_payments WHERE customer_id IN (SELECT id FROM customers WHERE tenant_id = ?)`,
+    const relationDeletes = [
+        // Pelanggan / kolektor
+        [`DELETE FROM customer_router_map WHERE customer_id IN (SELECT id FROM customers WHERE tenant_id = ?)`, [tid]],
+        [`DELETE FROM collector_assignments WHERE customer_id IN (SELECT id FROM customers WHERE tenant_id = ?)`, [tid]],
+        [`DELETE FROM collector_assignments WHERE collector_id IN (SELECT id FROM collectors WHERE tenant_id = ?)`, [tid]],
+        [`DELETE FROM collector_areas WHERE collector_id IN (SELECT id FROM collectors WHERE tenant_id = ?)`, [tid]],
+        [`DELETE FROM collector_payments WHERE collector_id IN (SELECT id FROM collectors WHERE tenant_id = ?)`, [tid]],
+        [`DELETE FROM collector_payments WHERE customer_id IN (SELECT id FROM customers WHERE tenant_id = ?)`, [tid]],
+        [`DELETE FROM collector_remittance_receipts WHERE collector_id IN (SELECT id FROM collectors WHERE tenant_id = ?)`, [tid]],
+        [`DELETE FROM collector_field_notifications WHERE collector_id IN (SELECT id FROM collectors WHERE tenant_id = ?)`, [tid]],
+        // Instalasi
+        [`DELETE FROM installation_job_status_history WHERE job_id IN (SELECT id FROM installation_jobs WHERE tenant_id = ?)`, [tid]],
+        [`DELETE FROM installation_job_equipment WHERE job_id IN (SELECT id FROM installation_jobs WHERE tenant_id = ?)`, [tid]],
+        // Karyawan
+        [`DELETE FROM employee_attendance WHERE employee_id IN (SELECT id FROM employees WHERE tenant_id = ?)`, [tid]],
+        [`DELETE FROM employee_payroll WHERE employee_id IN (SELECT id FROM employees WHERE tenant_id = ?)`, [tid]],
+        [`DELETE FROM employee_leave_requests WHERE employee_id IN (SELECT id FROM employees WHERE tenant_id = ?)`, [tid]],
+        // ODP / router
+        [`DELETE FROM odp_connections WHERE from_odp_id IN (SELECT id FROM odps WHERE tenant_id = ?) OR to_odp_id IN (SELECT id FROM odps WHERE tenant_id = ?)`, [tid, tid]],
+        [`DELETE FROM static_ip_pools WHERE router_id IN (SELECT id FROM routers WHERE tenant_id = ?)`, [tid]],
+        // Invoice child
+        [`DELETE FROM payments WHERE invoice_id IN (SELECT id FROM invoices WHERE tenant_id = ?)`, [tid]],
+        [`DELETE FROM payment_gateway_transactions WHERE invoice_id IN (SELECT id FROM invoices WHERE tenant_id = ?)`, [tid]],
+        [`DELETE FROM agent_payments WHERE invoice_id IN (SELECT id FROM invoices WHERE tenant_id = ?)`, [tid]],
+        [`DELETE FROM agent_monthly_payments WHERE invoice_id IN (SELECT id FROM invoices WHERE tenant_id = ?)`, [tid]],
+        [`DELETE FROM goods_invoice_items WHERE invoice_id IN (SELECT id FROM goods_invoices WHERE tenant_id = ?)`, [tid]],
+        // Platform finance child
+        [`DELETE FROM platform_tenant_invoice_items WHERE invoice_id IN (SELECT id FROM platform_tenant_invoices WHERE tenant_id = ?)`, [tid]],
+        // Warehouse child
+        [`DELETE FROM warehouse_units WHERE item_id IN (SELECT id FROM warehouse_items WHERE tenant_id = ?)`, [tid]],
+        [`DELETE FROM warehouse_inbound_batches WHERE item_id IN (SELECT id FROM warehouse_items WHERE tenant_id = ?)`, [tid]],
     ];
-    for (const sql of junctionDeletes) {
-        if (await tableExists(sql.match(/FROM (\w+)/)?.[1] || '')) {
-            try { await dbRun(sql, [tid]); } catch (_) { /* tabel opsional */ }
-        }
-    }
 
-    // Urutan: child dulu (payments/invoices), lalu parent.
     const ordered = [
-        'payments', 'invoices', 'customers', 'collectors', 'packages', 'routers',
-        'areas', 'odps', 'expenses', 'income', 'members', 'member_packages',
-        'agents', 'technicians', 'app_settings',
+        'installation_job_status_history',
+        'installation_job_equipment',
+        'installation_jobs',
+        'employee_attendance',
+        'employee_payroll',
+        'employee_leave_requests',
+        'employees',
+        'payment_gateway_transactions',
+        'payments',
+        'invoices',
+        'goods_invoice_items',
+        'goods_invoices',
+        'collector_payments',
+        'collector_assignments',
+        'collector_areas',
+        'collector_remittance_receipts',
+        'collector_field_notifications',
+        'customers',
+        'collectors',
+        'trouble_reports',
+        'activity_logs',
+        'voucher_revenue',
+        'voucher_purchases',
+        'static_ip_pools',
+        'odp_connections',
+        'odps',
+        'warehouse_units',
+        'warehouse_inbound_batches',
+        'warehouse_items',
+        'tenant_package_selections',
+        'tenant_pppoe_profiles',
+        'tenant_pppoe_users',
+        'tenant_provisioning_logs',
+        'platform_nms_graph_bindings',
+        'platform_vpn_peers',
+        'platform_tenant_invoice_items',
+        'platform_tenant_invoices',
+        'expenses',
+        'income',
+        'finance_categories',
+        'members',
+        'member_packages',
+        'agents',
+        'technicians',
+        'packages',
+        'routers',
+        'areas',
+        'app_settings',
+        'attendance_branches',
+        'attendance_settings',
+        'attendance_shifts',
     ];
-    for (const table of ordered) {
-        if (!(await tableExists(table))) continue;
-        if (!(await tableHasColumn(table, 'tenant_id'))) continue;
-        await dbRun(`DELETE FROM ${table} WHERE tenant_id = ?`, [tid]);
-    }
 
-    if (await tableExists('tenant_provisioning_logs')) {
-        await dbRun('DELETE FROM tenant_provisioning_logs WHERE tenant_id = ?', [tid]);
+    const schemaTables = [
+        ...ordered,
+        'customer_router_map',
+        'customers',
+        'collectors',
+        'packages',
+        'invoices',
+        'installation_jobs',
+        'employees',
+        'odps',
+        'routers',
+        'goods_invoices',
+        'platform_tenant_invoices',
+        'warehouse_items',
+        'payments',
+        'payment_gateway_transactions',
+        'agent_payments',
+        'agent_monthly_payments',
+        'collector_assignments',
+        'collector_areas',
+        'collector_payments',
+        'collector_remittance_receipts',
+        'collector_field_notifications',
+        'installation_job_status_history',
+        'installation_job_equipment',
+        'employee_attendance',
+        'employee_payroll',
+        'employee_leave_requests',
+        'odp_connections',
+        'static_ip_pools',
+        'goods_invoice_items',
+        'platform_tenant_invoice_items',
+        'warehouse_units',
+        'warehouse_inbound_batches',
+    ];
+    const schema = await loadSchemaCache(schemaTables);
+
+    for (const [sql, params] of relationDeletes) {
+        await safePurgeRun(sql, params, schema);
+    }
+    await releaseSharedPackageReferences(tid, schema);
+    for (const table of ordered) {
+        await deleteTenantScopedRows(table, tid, schema);
     }
 }
 
@@ -933,13 +1155,41 @@ async function deleteTenant(id) {
     if (row?.is_master) {
         throw new Error('Master tenant tidak bisa dihapus dari halaman tenant operasional.');
     }
-    await purgeTenantBillingData(id);
-    await releaseTenantIdentifiers(id);
-    await dbRun(
-        `UPDATE tenants SET status = 'deleted', deleted_at = datetime('now','localtime'),
-         updated_at = datetime('now','localtime') WHERE id = ?`,
-        [id]
-    );
+
+    // Satu transaksi untuk purge + soft-delete → lebih cepat & atomik.
+    await dbRun('BEGIN IMMEDIATE');
+    try {
+        await purgeTenantBillingData(id);
+        await releaseTenantIdentifiers(id);
+        await dbRun(
+            `UPDATE tenants SET status = 'deleted', deleted_at = datetime('now','localtime'),
+             updated_at = datetime('now','localtime') WHERE id = ?`,
+            [id]
+        );
+        await dbRun('COMMIT');
+    } catch (err) {
+        try { await dbRun('ROLLBACK'); } catch (_) { /* ignore */ }
+        throw err;
+    }
+}
+
+/** Sync nginx di background agar request hapus/tambah tenant tidak menunggu reload. */
+function scheduleNginxTenantSync(reason = 'tenant-change') {
+    setImmediate(() => {
+        Promise.resolve()
+            .then(() => {
+                const nginxManager = require('./nginxManager');
+                return nginxManager.syncTenantsAndApply();
+            })
+            .then((result) => {
+                if (result && result.ok === false) {
+                    console.warn(`[platform] nginx sync (${reason}):`, result.message || 'gagal');
+                }
+            })
+            .catch((err) => {
+                console.warn(`[platform] nginx sync (${reason}):`, err.message || err);
+            });
+    });
 }
 
 async function auditLog({ tenantId, actorType, actorId, action, details, ip }) {
@@ -1007,6 +1257,7 @@ module.exports = {
     listSubscriptionPlans,
     listTenants,
     listOperationalTenants,
+    listOperationalTenantsLite,
     getMasterTenant,
     ensureMasterTenant,
     migrateMasterTenantSubdomain,
@@ -1026,6 +1277,7 @@ module.exports = {
     suspendTenant,
     activateTenant,
     deleteTenant,
+    scheduleNginxTenantSync,
     verifySuperAdmin,
     auditLog,
     isReservedSubdomain,

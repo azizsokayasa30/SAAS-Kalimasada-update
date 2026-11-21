@@ -19,7 +19,7 @@
     <% } %>
     <%- include('partials/theme-head') %>
     <link href="/css/dashboard-premium.css?v=10" rel="stylesheet">
-    <link href="/css/nms-mrtg.css?v=6" rel="stylesheet">
+    <link href="/css/nms-mrtg.css?v=7" rel="stylesheet">
 </head>
 <body class="isp-dash">
 <% const _greetUser = typeof dashboardGreetingUser !== 'undefined' ? dashboardGreetingUser : (typeof technician !== 'undefined' && technician && technician.name ? technician.name : 'Admin'); %>
@@ -1026,7 +1026,7 @@ function sendWaReminderFromBtn(btn) {
         return loadScript('/js/dashboard-charts.js?v=20260921');
       })
       .catch(function (e) { console.warn('[dashboard] deferred charts:', e); });
-    loadScript('/js/nms-mrtg-charts.js?v=6')
+    loadScript('/js/nms-mrtg-charts.js?v=7')
       .then(function () { return loadScript('/js/dashboard-mrtg.js?v=2'); })
       .catch(function (e) { console.warn('[dashboard] mrtg:', e); });
   }

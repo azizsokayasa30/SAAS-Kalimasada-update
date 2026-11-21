@@ -308,14 +308,168 @@
     return { min: min, max: max };
   }
 
+  function loadExternalScript(src) {
+    var key = '__nmsScript:' + src;
+    if (window[key]) return window[key];
+    window[key] = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = src;
+      s.async = true;
+      s.onload = function () { resolve(); };
+      s.onerror = function () { reject(new Error('Gagal memuat ' + src)); };
+      document.head.appendChild(s);
+    });
+    return window[key];
+  }
+
+  function loadHtml2Canvas() {
+    if (window.html2canvas) return Promise.resolve(window.html2canvas);
+    return loadExternalScript('https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js')
+      .then(function () {
+        if (!window.html2canvas) throw new Error('html2canvas tidak tersedia');
+        return window.html2canvas;
+      });
+  }
+
+  function loadJsPdf() {
+    if (window.jspdf && window.jspdf.jsPDF) return Promise.resolve(window.jspdf.jsPDF);
+    return loadExternalScript('https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js')
+      .then(function () {
+        if (!window.jspdf || !window.jspdf.jsPDF) throw new Error('jsPDF tidak tersedia');
+        return window.jspdf.jsPDF;
+      });
+  }
+
+  function fileSlug(value) {
+    var slug = String(value || 'mrtg')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    return slug || 'mrtg';
+  }
+
+  function downloadDataUrl(dataUrl, filename) {
+    var a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = filename;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function cardBackground(card) {
+    var bg = getComputedStyle(card).backgroundColor;
+    if (!bg || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)') {
+      return document.documentElement.getAttribute('data-theme') === 'dark' ? '#0f172a' : '#ffffff';
+    }
+    return bg;
+  }
+
+  function captureCard(card) {
+    var actions = card.querySelector('.nms-mrtg-card__actions');
+    if (actions) actions.classList.add('is-exporting');
+    return loadHtml2Canvas().then(function (html2canvas) {
+      return html2canvas(card, {
+        scale: 2,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: cardBackground(card),
+        logging: false
+      });
+    }).finally(function () {
+      if (actions) actions.classList.remove('is-exporting');
+    });
+  }
+
+  function setExportBusy(btn, busy) {
+    if (!btn) return;
+    btn.disabled = !!busy;
+    btn.classList.toggle('is-busy', !!busy);
+  }
+
+  function exportCardAsJpg(card, btn) {
+    var title = (card.querySelector('.nms-mrtg-card__title') || {}).textContent || 'mrtg';
+    setExportBusy(btn, true);
+    return captureCard(card).then(function (canvas) {
+      downloadDataUrl(canvas.toDataURL('image/jpeg', 0.92), fileSlug(title) + '-mrtg.jpg');
+    }).catch(function (err) {
+      console.warn('[mrtg] export jpg:', err);
+      window.alert('Gagal mengekspor JPG. Coba lagi.');
+    }).finally(function () {
+      setExportBusy(btn, false);
+    });
+  }
+
+  function exportCardAsPdf(card, btn) {
+    var title = (card.querySelector('.nms-mrtg-card__title') || {}).textContent || 'mrtg';
+    setExportBusy(btn, true);
+    return Promise.all([captureCard(card), loadJsPdf()]).then(function (parts) {
+      var canvas = parts[0];
+      var JsPDF = parts[1];
+      var img = canvas.toDataURL('image/jpeg', 0.92);
+      var pdf = new JsPDF({
+        orientation: canvas.width >= canvas.height ? 'landscape' : 'portrait',
+        unit: 'pt',
+        format: 'a4'
+      });
+      var pageW = pdf.internal.pageSize.getWidth();
+      var pageH = pdf.internal.pageSize.getHeight();
+      var margin = 28;
+      var maxW = pageW - margin * 2;
+      var maxH = pageH - margin * 2;
+      var ratio = Math.min(maxW / canvas.width, maxH / canvas.height);
+      var drawW = canvas.width * ratio;
+      var drawH = canvas.height * ratio;
+      var x = (pageW - drawW) / 2;
+      var y = (pageH - drawH) / 2;
+      pdf.addImage(img, 'JPEG', x, y, drawW, drawH);
+      pdf.save(fileSlug(title) + '-mrtg.pdf');
+    }).catch(function (err) {
+      console.warn('[mrtg] export pdf:', err);
+      window.alert('Gagal mengekspor PDF. Coba lagi.');
+    }).finally(function () {
+      setExportBusy(btn, false);
+    });
+  }
+
+  function bindExportActions(root) {
+    if (!root || root.__nmsMrtgExportBound) return;
+    root.__nmsMrtgExportBound = true;
+    root.addEventListener('click', function (ev) {
+      var btn = ev.target && ev.target.closest
+        ? ev.target.closest('[data-mrtg-export]')
+        : null;
+      if (!btn || !root.contains(btn)) return;
+      var card = btn.closest('.nms-mrtg-card');
+      if (!card) return;
+      ev.preventDefault();
+      var kind = btn.getAttribute('data-mrtg-export');
+      if (kind === 'jpg') exportCardAsJpg(card, btn);
+      else if (kind === 'pdf') exportCardAsPdf(card, btn);
+    });
+  }
+
+  function exportActionsHtml(canExport) {
+    if (!canExport) return '';
+    return '<div class="nms-mrtg-card__actions" role="group" aria-label="Ekspor graph">'
+      + '<button type="button" class="nms-mrtg-export-btn nms-mrtg-export-btn--pdf" data-mrtg-export="pdf" title="Export PDF">'
+      + '<i class="bi bi-file-earmark-pdf" aria-hidden="true"></i><span>Export PDF</span></button>'
+      + '<button type="button" class="nms-mrtg-export-btn nms-mrtg-export-btn--jpg" data-mrtg-export="jpg" title="Export JPG">'
+      + '<i class="bi bi-file-earmark-image" aria-hidden="true"></i><span>Export JPG</span></button>'
+      + '</div>';
+  }
+
   var renderSeq = 0;
   var lastRender = null;
 
   function render(el, payload, options) {
     lastRender = { el: el, payload: payload, options: options };
     if (!el) return Promise.resolve();
+    bindExportActions(el);
     var seq = ++renderSeq;
     var audience = options && options.audience === 'management' ? 'management' : 'tenant';
+    var showExport = !options || options.export !== false;
     var emptyText = options && options.emptyText
       ? options.emptyText
       : 'Belum ada graph MRTG yang dipetakan.';
@@ -333,6 +487,7 @@
     var axis = axisFromPayload(payload);
     var colClass = audience === 'management' ? 'col-12' : 'col-xl-6';
     el.innerHTML = graphs.map(function (graph, index) {
+      var canExport = showExport && !graph.error && graph.points && graph.points.length;
       var body = graph.error
         ? '<div class="nms-mrtg-card__error">' + escapeHtml(graph.error) + '</div>'
         : (graph.points && graph.points.length
@@ -343,7 +498,9 @@
         + '<div class="nms-mrtg-card__head"><div>'
         + '<div class="nms-mrtg-card__title">' + escapeHtml(cardTitle(graph, audience)) + '</div>'
         + (meta ? '<div class="nms-mrtg-card__meta">' + escapeHtml(meta) + '</div>' : '')
-        + '</div></div>'
+        + '</div>'
+        + exportActionsHtml(canExport)
+        + '</div>'
         + (graph.error ? '' : statsHtml(graph))
         + body
         + '</div></div>';

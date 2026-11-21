@@ -20,8 +20,10 @@
     { tone: 'violet', icon: 'bi-buildings', label: 'Tenant Terhubung', value: '…', attrs: 'data-ix-unique="#nmsBindingBody" data-ix-col="0"', meta: 'Punya graph MRTG' }
   ] }) %>
 
-  <div class="km-card mb-3">
-    <div class="km-vpn-card__head"><h5><i class="bi bi-diagram-2"></i> Pasang Graph ke Tenant</h5></div>
+  <div class="km-card mb-3" id="nmsBindingCard">
+    <div class="km-vpn-card__head">
+      <h5 id="nmsBindingTitle"><i class="bi bi-diagram-2"></i> Pasang Graph ke Tenant</h5>
+    </div>
     <form id="nmsBindingForm" class="row g-3">
       <div class="col-md-6 col-xl-3">
         <label class="form-label" for="nmsTenant"><span class="km-infra-step" aria-hidden="true">1</span>Tenant</label>
@@ -59,11 +61,71 @@
             <label class="form-check-label" for="nmsShowTenant">Tampil di dashboard tenant</label>
           </div>
           <div class="km-infra-formbar__end">
-            <button type="submit" class="btn btn-km-primary btn-sm px-3"><i class="bi bi-check-lg"></i> Simpan Pemetaan</button>
+            <button type="submit" class="btn btn-km-primary btn-sm px-3" id="nmsBindingSubmit"><i class="bi bi-check-lg"></i> <span>Simpan Pemetaan</span></button>
           </div>
         </div>
       </div>
     </form>
+  </div>
+
+  <div class="modal fade km-modal" id="nmsEditBindingModal" tabindex="-1" aria-labelledby="nmsEditBindingTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
+      <form id="nmsEditBindingForm" class="modal-content km-package-modal">
+        <div class="modal-header km-package-modal__header">
+          <div class="km-package-modal__head-text">
+            <div class="km-package-modal__kicker">Pemetaan MRTG</div>
+            <h5 class="modal-title" id="nmsEditBindingTitle">Edit Pemetaan Graph</h5>
+          </div>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Tutup"></button>
+        </div>
+        <div class="modal-body km-package-modal__body">
+          <input type="hidden" id="nmsEditBindingId" value="">
+          <div id="nmsEditAlert" class="alert d-none" role="status"></div>
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label" for="nmsEditTenant">Tenant</label>
+              <select id="nmsEditTenant" class="form-select" required>
+                <option value="">Pilih tenant</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="nmsEditRouter">Router <span class="text-muted small">(opsional)</span></label>
+              <select id="nmsEditRouter" class="form-select" disabled>
+                <option value="">Pilih tenant dulu</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="nmsEditDevice">Perangkat NMS</label>
+              <select id="nmsEditDevice" class="form-select" required>
+                <option value="">Pilih perangkat</option>
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="nmsEditGraph">Graph / interface</label>
+              <select id="nmsEditGraph" class="form-select" required disabled>
+                <option value="">Pilih graph</option>
+              </select>
+            </div>
+            <div class="col-12">
+              <div class="d-flex flex-wrap gap-4">
+                <div class="form-check form-switch">
+                  <input class="form-check-input" type="checkbox" role="switch" id="nmsEditShowManagement" checked>
+                  <label class="form-check-label" for="nmsEditShowManagement">Tampil di menu MRTG</label>
+                </div>
+                <div class="form-check form-switch">
+                  <input class="form-check-input" type="checkbox" role="switch" id="nmsEditShowTenant" checked>
+                  <label class="form-check-label" for="nmsEditShowTenant">Tampil di dashboard tenant</label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer km-package-modal__footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+          <button type="submit" class="btn btn-km-primary" id="nmsEditBindingSubmit"><i class="bi bi-save me-1"></i> Simpan Perubahan</button>
+        </div>
+      </form>
+    </div>
   </div>
 
   <div class="km-card mb-3">
@@ -107,6 +169,6 @@
     </div>
   </div>
 </main>
-<script src="/js/management-nms.js?v=4"></script>
-<script src="/js/infra-modern.js?v=1"></script>
+<script src="/js/management-nms.js?v=10"></script>
+<script src="/js/infra-modern.js?v=2"></script>
 <%- include('../partials/footer') %>

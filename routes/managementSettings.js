@@ -228,14 +228,19 @@ router.post('/company', async (req, res) => {
 // ── Payment Manager ──
 router.get('/payment', async (req, res) => {
     try {
-        const payment = await platformSettingsService.getPlatformPaymentGateway();
+        const healed = await platformSettingsService.healPlatformPaymentGatewayActive();
+        const payment = healed.payment;
+        const flash = { ...(req.query || {}) };
+        if (healed.healed && !flash.error) {
+            flash.info = `Gateway utama diganti ke ${healed.to} karena ${healed.from} belum siap.`;
+        }
         res.render('platform/settings/payment', {
             title: 'Payment Manager',
             active: 'settings-payment',
             settingsSection: 'payment',
             payment,
             adminName: req.session.platformAdminName,
-            flash: req.query,
+            flash,
         });
     } catch (err) {
         console.error('[platform] settings payment:', err);

@@ -110,13 +110,13 @@ router.post('/routers', adminAuth, async (req, res) => {
         setImmediate(async () => {
           try {
             const { upsertRadiusNasFromRouter } = require('../config/radiusClients');
+            // Jangan kirim password API — itu bukan secret RADIUS (mencegah secret berganti sendiri)
             await upsertRadiusNasFromRouter({
               id: newId,
               name: safeName,
               nas_ip: safeIp,
               nas_identifier: (nas_identifier || '').trim(),
               location: (location || '').trim(),
-              password,
               tenant_id: tenantId
             }, tenantId);
           } catch (e) {
@@ -175,13 +175,13 @@ router.post('/routers/:id', adminAuth, async (req, res) => {
           setImmediate(async () => {
             try {
               const { upsertRadiusNasFromRouter } = require('../config/radiusClients');
+              // Jangan kirim password API — secret RADIUS di tabel nas dipertahankan
               await upsertRadiusNasFromRouter({
                 id: parseInt(id, 10),
                 name: safeName,
                 nas_ip: safeIp,
                 nas_identifier,
                 location,
-                password: passwordToSave,
                 tenant_id: tenantId
               }, tenantId);
             } catch (e) {
